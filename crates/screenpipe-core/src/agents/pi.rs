@@ -514,7 +514,10 @@ pub fn kill_process_group(pid: u32) -> Result<()> {
             unsafe {
                 // Check if process still exists before sending SIGKILL
                 if libc::kill(-pgid, 0) == 0 {
-                    warn!("process group {} did not exit after SIGTERM, sending SIGKILL", pgid);
+                    warn!(
+                        "process group {} did not exit after SIGTERM, sending SIGKILL",
+                        pgid
+                    );
                     libc::kill(-pgid, libc::SIGKILL);
                 }
             }
@@ -557,7 +560,10 @@ mod tests {
         let providers = config.get("providers").unwrap().as_object().unwrap();
 
         // Should have both screenpipe and ollama providers
-        assert!(providers.contains_key("screenpipe"), "missing screenpipe provider");
+        assert!(
+            providers.contains_key("screenpipe"),
+            "missing screenpipe provider"
+        );
         assert!(providers.contains_key("ollama"), "missing ollama provider");
 
         let ollama = &providers["ollama"];

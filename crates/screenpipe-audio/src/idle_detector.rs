@@ -50,7 +50,12 @@ impl IdleDetector {
                 cpu_usage, self.cpu_threshold
             ));
         } else {
-            let secs_below = self.last_above_threshold.read().unwrap().elapsed().as_secs();
+            let secs_below = self
+                .last_above_threshold
+                .read()
+                .unwrap()
+                .elapsed()
+                .as_secs();
             if secs_below >= self.stable_secs {
                 *self.paused_reason.write().unwrap() = None;
             } else {
@@ -71,7 +76,12 @@ impl IdleDetector {
 
     /// Returns true if the system is idle (CPU below threshold for `stable_secs`).
     pub fn is_idle(&self) -> bool {
-        let elapsed = self.last_above_threshold.read().unwrap().elapsed().as_secs();
+        let elapsed = self
+            .last_above_threshold
+            .read()
+            .unwrap()
+            .elapsed()
+            .as_secs();
         elapsed >= self.stable_secs
     }
 

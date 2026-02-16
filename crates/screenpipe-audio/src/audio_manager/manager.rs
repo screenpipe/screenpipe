@@ -94,8 +94,7 @@ impl AudioManager {
         whisper_rs::install_logging_hooks();
 
         // Only create idle detector for Smart mode with local Whisper engines
-        let is_local_whisper =
-            *options.transcription_engine != AudioTranscriptionEngine::Deepgram;
+        let is_local_whisper = *options.transcription_engine != AudioTranscriptionEngine::Deepgram;
         let idle_detector = if options.transcription_mode == TranscriptionMode::Smart
             && is_local_whisper
         {

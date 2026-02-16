@@ -144,14 +144,20 @@ pub async fn start_device_monitor(
                         if !has_output {
                             if let Ok(default_output) = default_output_device().await {
                                 let device_name = default_output.to_string();
-                                info!("no output device running, starting default: {}", device_name);
+                                info!(
+                                    "no output device running, starting default: {}",
+                                    device_name
+                                );
                                 match audio_manager.start_device(&default_output).await {
                                     Ok(()) => {
                                         default_tracker.last_output = Some(device_name.clone());
                                         info!("started missing output device: {}", device_name);
                                     }
                                     Err(e) => {
-                                        debug!("could not start output device {}: {}", device_name, e);
+                                        debug!(
+                                            "could not start output device {}: {}",
+                                            device_name, e
+                                        );
                                     }
                                 }
                             }

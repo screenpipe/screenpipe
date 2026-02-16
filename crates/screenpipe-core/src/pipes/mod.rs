@@ -264,7 +264,11 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    Some(ResolvedPreset { model, provider, url })
+    Some(ResolvedPreset {
+        model,
+        provider,
+        url,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -516,9 +520,8 @@ impl PipeManager {
             let last_log = pipe_logs.and_then(|l| l.back());
             let last_error = last_log.filter(|l| !l.success).map(|l| l.stderr.clone());
             // Read raw file from disk for editing
-            let raw_content =
-                std::fs::read_to_string(self.pipes_dir.join(name).join("pipe.md"))
-                    .unwrap_or_else(|_| serialize_pipe(config, body).unwrap_or_default());
+            let raw_content = std::fs::read_to_string(self.pipes_dir.join(name).join("pipe.md"))
+                .unwrap_or_else(|_| serialize_pipe(config, body).unwrap_or_default());
             let mut cfg = config.clone();
             cfg.name = name.clone(); // always use directory name
             result.push(PipeStatus {
@@ -625,7 +628,8 @@ impl PipeManager {
         let pipe_dir = self.pipes_dir.join(name);
 
         // Resolve preset → model/provider overrides
-        let (run_model, run_provider, run_provider_url) = if let Some(ref preset_id) = config.preset {
+        let (run_model, run_provider, run_provider_url) = if let Some(ref preset_id) = config.preset
+        {
             match resolve_preset(&self.pipes_dir, preset_id) {
                 Some(resolved) => {
                     info!(
@@ -718,7 +722,13 @@ impl PipeManager {
         let timeout_duration = std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         let run_result = tokio::time::timeout(
             timeout_duration,
-            executor.run(&prompt, &run_model, &pipe_dir, run_provider.as_deref(), Some(pid_tx)),
+            executor.run(
+                &prompt,
+                &run_model,
+                &pipe_dir,
+                run_provider.as_deref(),
+                Some(pid_tx),
+            ),
         )
         .await;
 
@@ -744,7 +754,11 @@ impl PipeManager {
                     (None, None)
                 };
 
-                let status = if output.success { "completed" } else { "failed" };
+                let status = if output.success {
+                    "completed"
+                } else {
+                    "failed"
+                };
                 if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                     let _ = store
                         .finish_execution(
@@ -839,10 +853,7 @@ impl PipeManager {
                     finished_at,
                     success: false,
                     stdout: String::new(),
-                    stderr: format!(
-                        "execution timed out after {}s",
-                        DEFAULT_TIMEOUT_SECS
-                    ),
+                    stderr: format!("execution timed out after {}s", DEFAULT_TIMEOUT_SECS),
                 }
             }
         };
@@ -1207,7 +1218,8 @@ impl PipeManager {
                     }
 
                     // Resolve preset → model/provider overrides (same as run_pipe)
-                    let (model, provider, provider_url) = if let Some(ref preset_id) = config.preset {
+                    let (model, provider, provider_url) = if let Some(ref preset_id) = config.preset
+                    {
                         match resolve_preset(&pipes_dir, preset_id) {
                             Some(resolved) => {
                                 info!("scheduler: pipe '{}' using preset '{}' → model={}, provider={:?}",
@@ -1248,7 +1260,12 @@ impl PipeManager {
                         // Create DB execution row
                         let exec_id = if let Some(ref store) = store_ref {
                             match store
-                                .create_execution(&pipe_name, "scheduled", &model, provider.as_deref())
+                                .create_execution(
+                                    &pipe_name,
+                                    "scheduled",
+                                    &model,
+                                    provider.as_deref(),
+                                )
                                 .await
                             {
                                 Ok(id) => {
@@ -1288,7 +1305,9 @@ impl PipeManager {
                                         handle.pid = pid;
                                     }
                                 }
-                                if let (Some(ref store), Some(id)) = (&store_for_pid, exec_id_for_pid) {
+                                if let (Some(ref store), Some(id)) =
+                                    (&store_for_pid, exec_id_for_pid)
+                                {
                                     let _ = store.set_execution_running(id, Some(pid)).await;
                                 }
                             }
@@ -1298,7 +1317,13 @@ impl PipeManager {
                         let timeout_duration = std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS);
                         let run_result = tokio::time::timeout(
                             timeout_duration,
-                            executor.run(&prompt, &model, &pipe_dir, provider.as_deref(), Some(pid_tx)),
+                            executor.run(
+                                &prompt,
+                                &model,
+                                &pipe_dir,
+                                provider.as_deref(),
+                                Some(pid_tx),
+                            ),
                         )
                         .await;
 
@@ -1321,7 +1346,11 @@ impl PipeManager {
                                 } else {
                                     (None, None)
                                 };
-                                let status = if output.success { "completed" } else { "failed" };
+                                let status = if output.success {
+                                    "completed"
+                                } else {
+                                    "failed"
+                                };
 
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
@@ -1337,7 +1366,9 @@ impl PipeManager {
                                         .await;
                                 }
                                 if let Some(ref store) = store_ref {
-                                    let _ = store.upsert_scheduler_state(&pipe_name, output.success).await;
+                                    let _ = store
+                                        .upsert_scheduler_state(&pipe_name, output.success)
+                                        .await;
                                 }
 
                                 if output.success {
@@ -1359,8 +1390,13 @@ impl PipeManager {
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
-                                            id, "failed", "", &e.to_string(), None,
-                                            Some("crash"), Some(&e.to_string()),
+                                            id,
+                                            "failed",
+                                            "",
+                                            &e.to_string(),
+                                            None,
+                                            Some("crash"),
+                                            Some(&e.to_string()),
                                         )
                                         .await;
                                 }
@@ -1377,7 +1413,10 @@ impl PipeManager {
                                 }
                             }
                             Err(_elapsed) => {
-                                warn!("pipe '{}' timed out after {}s", pipe_name, DEFAULT_TIMEOUT_SECS);
+                                warn!(
+                                    "pipe '{}' timed out after {}s",
+                                    pipe_name, DEFAULT_TIMEOUT_SECS
+                                );
                                 if let Some(handle) = removed_handle {
                                     if handle.pid != 0 {
                                         let _ = crate::agents::pi::kill_process_group(handle.pid);
@@ -1386,9 +1425,16 @@ impl PipeManager {
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
-                                            id, "timed_out", "", "", None,
+                                            id,
+                                            "timed_out",
+                                            "",
+                                            "",
+                                            None,
                                             Some("timeout"),
-                                            Some(&format!("execution timed out after {}s", DEFAULT_TIMEOUT_SECS)),
+                                            Some(&format!(
+                                                "execution timed out after {}s",
+                                                DEFAULT_TIMEOUT_SECS
+                                            )),
                                         )
                                         .await;
                                 }
@@ -1401,7 +1447,10 @@ impl PipeManager {
                                     finished_at,
                                     success: false,
                                     stdout: String::new(),
-                                    stderr: format!("execution timed out after {}s", DEFAULT_TIMEOUT_SECS),
+                                    stderr: format!(
+                                        "execution timed out after {}s",
+                                        DEFAULT_TIMEOUT_SECS
+                                    ),
                                 }
                             }
                         };

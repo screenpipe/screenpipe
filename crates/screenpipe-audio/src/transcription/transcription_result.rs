@@ -115,10 +115,7 @@ pub async fn process_transcription_result(
         None
     };
 
-    match db
-        .get_or_insert_audio_chunk(&result.path, capture_ts)
-        .await
-    {
+    match db.get_or_insert_audio_chunk(&result.path, capture_ts).await {
         Ok(audio_chunk_id) => {
             if transcription.is_empty() {
                 return Ok(Some(audio_chunk_id));

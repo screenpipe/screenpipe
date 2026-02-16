@@ -264,9 +264,7 @@ mod tests {
     use screenpipe_core::pipes::PipeStore;
 
     async fn setup_test_store() -> SqlitePipeStore {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         // Create only the tables we need (avoids needing sqlite-vec extension
         // that full migrations require for speaker tables).
         sqlx::query(
@@ -579,7 +577,12 @@ mod tests {
 
         // 1. Create
         let id = store
-            .create_execution("lifecycle-pipe", "manual", "claude-haiku", Some("screenpipe"))
+            .create_execution(
+                "lifecycle-pipe",
+                "manual",
+                "claude-haiku",
+                Some("screenpipe"),
+            )
             .await
             .unwrap();
 

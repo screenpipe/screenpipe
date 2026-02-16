@@ -94,10 +94,7 @@ pub async fn run_pipe_now(
 }
 
 /// POST /pipes/:id/stop — stop a running pipe.
-pub async fn stop_pipe(
-    State(pm): State<SharedPipeManager>,
-    Path(id): Path<String>,
-) -> Json<Value> {
+pub async fn stop_pipe(State(pm): State<SharedPipeManager>, Path(id): Path<String>) -> Json<Value> {
     let mgr = pm.lock().await;
     match mgr.stop_pipe(&id).await {
         Ok(()) => Json(json!({ "success": true })),

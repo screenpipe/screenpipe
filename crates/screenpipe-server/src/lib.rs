@@ -31,6 +31,7 @@ pub use axum::Json as JsonResponse;
 pub use cli::Cli;
 pub use core::{record_video, start_continuous_recording};
 
+pub use cloud_search::{CloudSearchClient, CloudSearchMetadata, CloudStatus};
 pub use resource_monitor::{ResourceMonitor, RestartSignal};
 pub use screenpipe_core::Language;
 pub use server::health_check_handler as health_check;
@@ -41,9 +42,8 @@ pub use server::PaginatedResponse;
 pub use server::SCServer;
 pub use server::{api_list_monitors_handler as api_list_monitors, MonitorInfo};
 pub use sleep_monitor::start_sleep_monitor;
+pub use ui_recorder::{start_ui_recording, UiRecorderConfig, UiRecorderHandle};
 pub use video::{
     video_quality_to_crf, video_quality_to_jpeg_q, video_quality_to_preset, FrameWriteInfo,
     FrameWriteTracker, VideoCapture,
 };
-pub use cloud_search::{CloudSearchClient, CloudSearchMetadata, CloudStatus};
-pub use ui_recorder::{start_ui_recording, UiRecorderConfig, UiRecorderHandle};

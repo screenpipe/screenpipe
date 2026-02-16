@@ -47,7 +47,7 @@ pub fn start_fts_indexer(db: Arc<DatabaseManager>) -> tokio::task::JoinHandle<()
 }
 
 /// Index all FTS tables, returning total rows indexed.
-/// 
+///
 /// This function is public to allow tests to trigger FTS indexing on demand
 /// instead of waiting for the background indexer.
 pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
@@ -70,12 +70,10 @@ pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
             0
         });
 
-    total += index_ui_monitoring_fts(db)
-        .await
-        .unwrap_or_else(|e| {
-            warn!("FTS indexer: ui_monitoring error: {}", e);
-            0
-        });
+    total += index_ui_monitoring_fts(db).await.unwrap_or_else(|e| {
+        warn!("FTS indexer: ui_monitoring error: {}", e);
+        0
+    });
 
     // ui_events_fts is not indexed — the /ui-events/search endpoint uses LIKE,
     // so maintaining that FTS table is wasted work.
