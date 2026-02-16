@@ -1589,34 +1589,74 @@ async fn main() {
             //   user finishes clicking through permissions (~15-20s).
             // - The whisper model (834MB) may or may not complete, but any progress
             //   reduces wait time after the final restart.
+            //
+            // Cloud bootstrap: we ALWAYS download the whisper model regardless of
+            // the current engine setting. When bootstrap_cloud_until_model_ready is
+            // active, the server starts with screenpipe-cloud but we need the local
+            // model ready so we can switch back to it once the download finishes.
             {
                 let store_for_download = store.clone();
+                let app_handle_for_download = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    // Determine which whisper model the user's config needs
-                    let engine = match store_for_download.audio_transcription_engine.as_str() {
-                        "deepgram" | "screenpipe-cloud" => None, // Cloud engines don't need local model
-                        _ => {
-                            use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-                            Some(std::sync::Arc::new(match store_for_download.audio_transcription_engine.as_str() {
+                    // Always resolve the target whisper engine — even when running
+                    // on screenpipe-cloud temporarily during bootstrap.
+                    let engine = {
+                        use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+                        let engine_str = store_for_download.audio_transcription_engine.as_str();
+
+                        // If the user explicitly chose a cloud engine (not via bootstrap),
+                        // skip the whisper download — they don't need a local model.
+                        if !store_for_download.bootstrap_cloud_until_model_ready
+                            && matches!(engine_str, "deepgram" | "screenpipe-cloud")
+                        {
+                            None
+                        } else {
+                            // Resolve the whisper variant to download. During bootstrap
+                            // the stored engine is still a whisper-* variant.
+                            Some(std::sync::Arc::new(match engine_str {
                                 "whisper-tiny" => AudioTranscriptionEngine::WhisperTiny,
                                 "whisper-tiny-quantized" => AudioTranscriptionEngine::WhisperTinyQuantized,
                                 "whisper-large-v3" => AudioTranscriptionEngine::WhisperLargeV3,
                                 "whisper-large-v3-quantized" => AudioTranscriptionEngine::WhisperLargeV3Quantized,
                                 "whisper-large-v3-turbo" => AudioTranscriptionEngine::WhisperLargeV3Turbo,
-                                _ => AudioTranscriptionEngine::WhisperLargeV3TurboQuantized, // default
+                                // Default + any cloud engine during bootstrap
+                                _ => AudioTranscriptionEngine::WhisperLargeV3TurboQuantized,
                             }))
                         }
                     };
 
                     // Download whisper model (834MB default) — biggest download, start first
+                    let bootstrap_active = store_for_download.bootstrap_cloud_until_model_ready;
                     if let Some(engine) = engine {
                         let engine_clone = engine.clone();
-                        tokio::task::spawn_blocking(move || {
-                            match screenpipe_audio::transcription::whisper::model::download_whisper_model(engine_clone) {
-                                Ok(path) => info!("whisper model pre-download complete: {:?}", path),
-                                Err(e) => warn!("whisper model pre-download failed (will retry at server start): {}", e),
+                        let download_result = tokio::task::spawn_blocking(move || {
+                            screenpipe_audio::transcription::whisper::model::download_whisper_model(engine_clone)
+                        }).await;
+
+                        match download_result {
+                            Ok(Ok(path)) => {
+                                info!("whisper model pre-download complete: {:?}", path);
+
+                                // If cloud bootstrap was active, the model is now ready.
+                                // Clear the flag and tell the frontend to restart the
+                                // server so it switches to local whisper.
+                                if bootstrap_active {
+                                    info!("cloud bootstrap: whisper model ready, signaling frontend to restart server");
+                                    match store::SettingsStore::get(&app_handle_for_download) {
+                                        Ok(Some(mut s)) => {
+                                            s.bootstrap_cloud_until_model_ready = false;
+                                            if let Err(e) = s.save(&app_handle_for_download) {
+                                                warn!("failed to persist bootstrap flag: {}", e);
+                                            }
+                                        }
+                                        _ => warn!("failed to read settings to clear bootstrap flag"),
+                                    }
+                                    let _ = app_handle_for_download.emit("whisper-model-ready", ());
+                                }
                             }
-                        });
+                            Ok(Err(e)) => warn!("whisper model pre-download failed (will retry at server start): {}", e),
+                            Err(e) => warn!("whisper model download task panicked: {}", e),
+                        }
                     }
 
                     // Download small ONNX models in parallel — these complete in seconds

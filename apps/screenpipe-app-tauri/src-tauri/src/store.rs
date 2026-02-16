@@ -224,6 +224,18 @@ pub struct SettingsStore {
     #[serde(rename = "videoQuality", default = "default_video_quality")]
     pub video_quality: String,
 
+    /// Cloud bootstrap: temporarily use screenpipe-cloud while the whisper model
+    /// downloads in the background. When true *and* the user is logged in *and*
+    /// the model is not yet cached, the embedded server overrides the engine to
+    /// screenpipe-cloud at runtime (the persisted setting stays whisper-*).
+    /// Once the download completes, Rust sets this to false and emits
+    /// `whisper-model-ready` so the frontend can restart the server on local whisper.
+    ///
+    /// New installs: true (via Default impl).
+    /// Existing installs: false (field absent in stored JSON → serde default).
+    #[serde(rename = "bootstrapCloudUntilModelReady", default)]
+    pub bootstrap_cloud_until_model_ready: bool,
+
     /// Catch-all for fields added by the frontend (e.g. chatHistory, deviceId)
     /// that the Rust struct doesn't know about. Without this, `save()` would
     /// serialize only known fields and silently wipe frontend-only data.
@@ -531,6 +543,7 @@ impl Default for SettingsStore {
             overlay_mode: "fullscreen".to_string(),
             show_overlay_in_screen_recording: false,
             video_quality: "balanced".to_string(),
+            bootstrap_cloud_until_model_ready: true,
             extra: std::collections::HashMap::new(),
         }
     }

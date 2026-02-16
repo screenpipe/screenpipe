@@ -5,6 +5,32 @@ use std::{path::PathBuf, sync::Arc};
 use tracing::info;
 use whisper_rs::WhisperContextParameters;
 
+/// Map an engine string (from settings store) to the whisper model filename.
+fn whisper_model_filename(engine_str: &str) -> &'static str {
+    match engine_str {
+        "whisper-large-v3-turbo" => "ggml-large-v3-turbo.bin",
+        "whisper-tiny" => "ggml-tiny.bin",
+        "whisper-tiny-quantized" => "ggml-tiny-q8_0.bin",
+        "whisper-large-v3" => "ggml-large-v3.bin",
+        "whisper-large-v3-quantized" => "ggml-large-v3-q5_0.bin",
+        _ => "ggml-large-v3-turbo-q8_0.bin", // default: quantized turbo
+    }
+}
+
+/// Check whether the whisper model for the given engine string is already
+/// present in the HuggingFace cache. This is a cheap filesystem stat — no
+/// network, no download. Safe to call from synchronous config construction.
+pub fn is_whisper_model_cached(engine_str: &str) -> bool {
+    let model_name = whisper_model_filename(engine_str);
+    let cache = Cache::default();
+    let repo = Repo::with_revision(
+        "ggerganov/whisper.cpp".to_string(),
+        RepoType::Model,
+        "main".to_string(),
+    );
+    cache.repo(repo).get(model_name).is_some()
+}
+
 pub fn download_whisper_model(engine: Arc<AudioTranscriptionEngine>) -> Result<PathBuf> {
     let model_name = match *engine {
         AudioTranscriptionEngine::WhisperLargeV3Turbo => "ggml-large-v3-turbo.bin",

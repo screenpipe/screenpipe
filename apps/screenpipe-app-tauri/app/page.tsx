@@ -4,6 +4,7 @@ import { getStore, useSettings } from "@/lib/hooks/use-settings";
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import NotificationHandler from "@/components/notification-handler";
+import CloudBootstrapHandler from "@/components/cloud-bootstrap-handler";
 import { useToast } from "@/components/ui/use-toast";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { ChangelogDialog } from "@/components/changelog-dialog";
@@ -207,6 +208,7 @@ export default function Home() {
       <div className="h-8 bg-gradient-to-b from-black/15 to-transparent w-full fixed top-0 left-0 z-[1000] pointer-events-none" />
       
       <NotificationHandler />
+      <CloudBootstrapHandler />
       <PermissionBanner />
       {/* Only render content after settings are loaded */}
       {isSettingsLoaded ? (
