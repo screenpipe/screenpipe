@@ -47,7 +47,10 @@ pub fn start_fts_indexer(db: Arc<DatabaseManager>) -> tokio::task::JoinHandle<()
 }
 
 /// Index all FTS tables, returning total rows indexed.
-async fn index_all_tables(db: &DatabaseManager) -> i64 {
+/// 
+/// This function is public to allow tests to trigger FTS indexing on demand
+/// instead of waiting for the background indexer.
+pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
     let mut total = 0;
 
     total += index_frames_fts(db).await.unwrap_or_else(|e| {
@@ -64,6 +67,13 @@ async fn index_all_tables(db: &DatabaseManager) -> i64 {
         .await
         .unwrap_or_else(|e| {
             warn!("FTS indexer: audio_transcriptions error: {}", e);
+            0
+        });
+
+    total += index_ui_monitoring_fts(db)
+        .await
+        .unwrap_or_else(|e| {
+            warn!("FTS indexer: ui_monitoring error: {}", e);
             0
         });
 
@@ -228,3 +238,44 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
     Ok(count)
 }
 
+/// Index new rows from `ui_monitoring` into `ui_monitoring_fts` using bulk INSERT...SELECT.
+async fn index_ui_monitoring_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+    let last = get_last_indexed(db, "ui_monitoring").await?;
+
+    // Fetch rowid range
+    let rows = sqlx::query_as::<_, (i64,)>(
+        "SELECT rowid FROM ui_monitoring WHERE rowid > ?1 \
+         AND text_output IS NOT NULL AND text_output != '' \
+         ORDER BY rowid LIMIT ?2",
+    )
+    .bind(last)
+    .bind(FTS_BATCH_SIZE)
+    .fetch_all(&db.pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let max_rowid = rows.last().unwrap().0;
+    let count = rows.len() as i64;
+
+    // Single bulk INSERT...SELECT
+    let mut tx = db.begin_immediate_with_retry().await?;
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO ui_monitoring_fts(ui_id, text_output, app, window) \
+         SELECT id, text_output, COALESCE(app, ''), COALESCE(window, '') \
+         FROM ui_monitoring WHERE rowid > ?1 AND rowid <= ?2 \
+         AND text_output IS NOT NULL AND text_output != ''",
+    )
+    .bind(last)
+    .bind(max_rowid)
+    .execute(&mut **tx.conn())
+    .await?;
+
+    tx.commit().await?;
+    update_last_indexed(db, "ui_monitoring", max_rowid).await?;
+
+    Ok(count)
+}

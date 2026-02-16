@@ -38,3 +38,6 @@ SELECT 'audio_transcriptions', COALESCE(MAX(rowid), 0) FROM audio_transcriptions
 
 INSERT OR REPLACE INTO fts_index_progress (table_name, last_indexed_rowid)
 SELECT 'ui_events', COALESCE(MAX(rowid), 0) FROM ui_events;
+
+INSERT OR IGNORE INTO fts_index_progress (table_name, last_indexed_rowid)
+SELECT 'ui_monitoring', COALESCE(MAX(rowid), 0) FROM ui_monitoring;

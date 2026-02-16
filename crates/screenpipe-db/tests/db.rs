@@ -8,7 +8,8 @@ mod tests {
 
     use chrono::Utc;
     use screenpipe_db::{
-        AudioDevice, ContentType, DatabaseManager, DeviceType, Frame, OcrEngine, SearchResult,
+        fts_indexer::index_all_tables, AudioDevice, ContentType, DatabaseManager, DeviceType, Frame,
+        OcrEngine, SearchResult,
     };
 
     async fn setup_test_db() -> DatabaseManager {
@@ -61,6 +62,9 @@ mod tests {
         .await
         .unwrap();
 
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
+
         let results = db
             .search(
                 "Hello",
@@ -110,6 +114,9 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
 
         let em_results = db
             .search(
@@ -309,6 +316,9 @@ mod tests {
         .await
         .unwrap();
 
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
+
         let one_result = db
             .search(
                 "Hello",
@@ -501,6 +511,9 @@ mod tests {
                 .await
                 .unwrap();
         println!("Raw transcriptions in DB: {:?}", raw_transcriptions);
+
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
@@ -743,6 +756,9 @@ mod tests {
         .unwrap();
 
         let end_time = Utc::now();
+
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
 
         // Test search with limited time range
         let results = db
@@ -1222,6 +1238,9 @@ mod tests {
         .await
         .unwrap();
 
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
+
         // Test searching OCR with frame_name filter
         let results = db
             .search(
@@ -1353,6 +1372,9 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
+
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
 
         // Test search with app name filter
         let results = db
@@ -1523,6 +1545,9 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
+
+        // Trigger FTS indexing since synchronous triggers were removed
+        index_all_tables(&db).await;
 
         // Test count with All content types
         let count = db
