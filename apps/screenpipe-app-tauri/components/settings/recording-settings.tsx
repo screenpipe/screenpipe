@@ -182,7 +182,27 @@ export function RecordingSettings() {
 
   // OpenAI Compatible model fetching state
   const [openAIModels, setOpenAIModels] = useState<string[]>([]);
+  const [allOpenAIModels, setAllOpenAIModels] = useState<string[]>([]); // Store all models
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [filterTranscriptionModels, setFilterTranscriptionModels] = useState(true); // Default to filtered
+
+  // Transcription model name patterns
+  const TRANSCRIPTION_MODEL_PATTERNS = [
+    /^whisper/i,
+    /whisper/i,
+    /^canary/i,
+    /^parakeet/i,
+    /^speech/i,
+    /audio.*transcri/i,
+    /^transcribe/i,
+    /stt/i,
+    /^moonshine/i,
+    /^sensevoice/i,
+  ];
+
+  const isLikelyTranscriptionModel = (modelId: string): boolean => {
+    return TRANSCRIPTION_MODEL_PATTERNS.some(pattern => pattern.test(modelId));
+  };
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -387,14 +407,33 @@ export function RecordingSettings() {
       
       const data = await response.json();
       const models = data.data?.map((m: any) => m.id) || [];
-      setOpenAIModels(models);
+      setAllOpenAIModels(models); // Store all models
+      // Filtered models will be set by the useEffect below
     } catch (error) {
       console.error('Failed to fetch OpenAI models:', error);
+      setAllOpenAIModels(['!API_Error']);
       setOpenAIModels(['!API_Error']);
     } finally {
       setIsLoadingModels(false);
     }
   }, []);
+
+  // Update displayed models when filter toggle or all models change
+  useEffect(() => {
+    if (allOpenAIModels.length === 0) return;
+    
+    if (allOpenAIModels.includes('!API_Error')) {
+      setOpenAIModels(allOpenAIModels);
+      return;
+    }
+    
+    if (filterTranscriptionModels) {
+      const filtered = allOpenAIModels.filter(isLikelyTranscriptionModel);
+      setOpenAIModels(filtered.length > 0 ? filtered : allOpenAIModels);
+    } else {
+      setOpenAIModels(allOpenAIModels);
+    }
+  }, [allOpenAIModels, filterTranscriptionModels]);
 
   // Fetch models when OpenAI Compatible is selected and endpoint changes
   useEffect(() => {
@@ -1164,13 +1203,23 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   </Button>
                 </div>
                 
+                {/* Model Filter Toggle */}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Show only transcription models</span>
+                  <Switch
+                    checked={filterTranscriptionModels}
+                    onCheckedChange={setFilterTranscriptionModels}
+                    className="data-[state=checked]:bg-primary"
+                  />
+                </div>
+                
                 {/* Model Selection */}
                 <Select
                   value={(settings as any).openaiCompatibleModel || ""}
                   onValueChange={(value) => handleSettingsChange({ openaiCompatibleModel: value } as any, true)}
                 >
                   <SelectTrigger className="w-full h-7 text-xs">
-                    <SelectValue placeholder="Select model" />
+                    <SelectValue placeholder={isLoadingModels ? "Loading models..." : "Select model"} />
                   </SelectTrigger>
                   <SelectContent>
                     {openAIModels.map((model) => (
@@ -1178,6 +1227,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     ))}
                   </SelectContent>
                 </Select>
+                {filterTranscriptionModels && openAIModels.length === 0 && allOpenAIModels.length > 0 && (
+                  <p className="text-xs text-muted-foreground">No transcription models found. Toggle off the filter to see all models.</p>
+                )}
               </div>
             )}
           </CardContent>
