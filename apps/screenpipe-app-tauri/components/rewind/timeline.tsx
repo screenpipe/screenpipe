@@ -538,7 +538,7 @@ export default function Timeline() {
 	useEffect(() => {
 		const handleChatShortcut = (e: KeyboardEvent) => {
 			// Check for Ctrl+Cmd+L (macOS) or Alt+L (Windows)
-			const isMac = navigator.platform.toLowerCase().includes("mac");
+			const isMac = usePlatform().isMac;
 			const isChatShortcut = isMac
 				? e.ctrlKey && e.metaKey && e.key.toLowerCase() === "l"
 				: e.altKey && e.key.toLowerCase() === "l";

@@ -97,7 +97,15 @@ export function AIPanel({
 			// Try using modern API first
 			if ("userAgentData" in navigator) {
 				// @ts-ignore - userAgentData is not yet in all TypeScript definitions
-				return navigator.userAgentData.platform;
+				if (navigator.userAgentData) {
+    return navigator.userAgentData.platform;
+} else {
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    if (userAgent.includes("mac")) return "macos";
+    if (userAgent.includes("win")) return "windows";
+    if (userAgent.includes("linux")) return "linux";
+    return "unknown";
+}
 			}
 			// Fallback to user agent string parsing
 			const userAgent = window.navigator.userAgent.toLowerCase();
