@@ -100,22 +100,26 @@ pub struct OCRResult {
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
     #[default]
+    #[serde(alias = "All")]
     All,
 
     // === New API (Three Pillars) ===
     /// Screen content: OCR text + accessibility text
+    #[serde(alias = "Vision")]
     Vision,
     /// User input actions: clicks, keystrokes, clipboard, app switches
+    #[serde(alias = "Input")]
     Input,
 
     // === Deprecated (backwards compatible) ===
     /// @deprecated Use `vision` instead
-    #[serde(alias = "ocr")]
+    #[serde(alias = "ocr", alias = "OCR")]
     OCR,
     /// Audio transcriptions (not deprecated, same name)
+    #[serde(alias = "Audio")]
     Audio,
     /// @deprecated Use `vision` for text, `input` for events
-    #[serde(alias = "ui")]
+    #[serde(alias = "ui", alias = "UI")]
     UI,
 
     // === Combinations ===
@@ -606,4 +610,30 @@ pub struct InsertUiEvent {
     pub element_automation_id: Option<String>,
     pub element_bounds: Option<String>,
     pub frame_id: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content_type_case_insensitive() {
+        // Test lowercase (original behavior)
+        assert_eq!(ContentType::Audio, serde_json::from_str(r#""audio""#).unwrap());
+        assert_eq!(ContentType::Vision, serde_json::from_str(r#""vision""#).unwrap());
+        assert_eq!(ContentType::Input, serde_json::from_str(r#""input""#).unwrap());
+        assert_eq!(ContentType::All, serde_json::from_str(r#""all""#).unwrap());
+        
+        // Test uppercase (new behavior with aliases)
+        assert_eq!(ContentType::Audio, serde_json::from_str(r#""Audio""#).unwrap());
+        assert_eq!(ContentType::Vision, serde_json::from_str(r#""Vision""#).unwrap());
+        assert_eq!(ContentType::Input, serde_json::from_str(r#""Input""#).unwrap());
+        assert_eq!(ContentType::All, serde_json::from_str(r#""All""#).unwrap());
+        
+        // Test OCR/UI aliases (both cases)
+        assert_eq!(ContentType::OCR, serde_json::from_str(r#""ocr""#).unwrap());
+        assert_eq!(ContentType::OCR, serde_json::from_str(r#""OCR""#).unwrap());
+        assert_eq!(ContentType::UI, serde_json::from_str(r#""ui""#).unwrap());
+        assert_eq!(ContentType::UI, serde_json::from_str(r#""UI""#).unwrap());
+    }
 }

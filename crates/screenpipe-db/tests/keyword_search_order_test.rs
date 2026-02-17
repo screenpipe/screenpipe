@@ -2,6 +2,7 @@
 mod tests {
     use chrono::{Duration, Utc};
     use screenpipe_db::{DatabaseManager, OcrEngine, Order};
+    use screenpipe_db::fts_indexer::index_all_tables;
     use std::sync::Arc;
 
     async fn setup_test_db() -> DatabaseManager {
@@ -73,6 +74,9 @@ mod tests {
         // Frame C: 30 min ago
         let _frame_c = insert_frame_with_ocr(&db, "Cursor", "editor", "println hello", 30).await;
 
+        // Index FTS tables before searching
+        index_all_tables(&db).await;
+
         let results = db
             .search_with_text_positions(
                 "hello",
@@ -125,6 +129,9 @@ mod tests {
 
         let _frame_new =
             insert_frame_with_ocr(&db, "WezTerm", "terminal", "new content hello world", 5).await;
+
+        // Index FTS tables before searching
+        index_all_tables(&db).await;
 
         let results = db
             .search_with_text_positions(
@@ -179,6 +186,9 @@ mod tests {
             10, // same time
         )
         .await;
+
+        // Index FTS tables before searching
+        index_all_tables(&db).await;
 
         let results = db
             .search_with_text_positions(
