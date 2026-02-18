@@ -238,6 +238,7 @@ impl PiExecutor {
         model: &str,
         working_dir: &Path,
         resolved_provider: &str,
+        provider_api_key: Option<&str>,
         pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
@@ -248,6 +249,18 @@ impl PiExecutor {
 
         if let Some(ref token) = self.user_token {
             cmd.env("SCREENPIPE_API_KEY", token);
+        }
+
+        // Pi resolves apiKey values in models.json as env var names.
+        // Set the actual key so the subprocess can find it.
+        if let Some(key) = provider_api_key {
+            if !key.is_empty() {
+                match resolved_provider {
+                    "openai" | "openai-byok" => { cmd.env("OPENAI_API_KEY", key); }
+                    "custom" => { cmd.env("CUSTOM_API_KEY", key); }
+                    _ => {}
+                }
+            }
         }
 
         cmd.stdout(std::process::Stdio::piped());
@@ -299,6 +312,8 @@ impl AgentExecutor for PiExecutor {
         model: &str,
         working_dir: &Path,
         provider: Option<&str>,
+        provider_url: Option<&str>,
+        provider_api_key: Option<&str>,
         pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     ) -> Result<AgentOutput> {
         Self::ensure_pi_config(
@@ -306,7 +321,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
             provider,
             Some(model),
-            None, // URL resolved from provider name defaults
+            provider_url,
         )?;
         Self::ensure_screenpipe_skill(working_dir)?;
         Self::ensure_web_search_extension(working_dir)?;
@@ -331,6 +346,7 @@ impl AgentExecutor for PiExecutor {
                 model,
                 working_dir,
                 &resolved_provider,
+                provider_api_key,
                 pid_tx,
             )
             .await?;
@@ -350,7 +366,7 @@ impl AgentExecutor for PiExecutor {
                 &self.api_url,
                 provider,
                 Some(model),
-                None,
+                provider_url,
             )?;
             return self
                 .spawn_pi(
@@ -359,6 +375,7 @@ impl AgentExecutor for PiExecutor {
                     model,
                     working_dir,
                     &resolved_provider,
+                    provider_api_key,
                     None,
                 )
                 .await;
