@@ -2410,28 +2410,70 @@ impl DatabaseManager {
         }
 
         // Process audio data with proper synchronization
+        // Audio chunks can span multiple frames, so we assign audio to ALL frames
+        // that fall within the audio's time range (timestamp + start_time to timestamp + end_time)
         for row in audio_rows {
-            let timestamp: DateTime<Utc> = row.get("timestamp");
+            let audio_timestamp: DateTime<Utc> = row.get("timestamp");
+            let start_offset: Option<f64> = row.try_get("start_time").ok();
+            let end_offset: Option<f64> = row.try_get("end_time").ok();
 
-            // Find the closest frame
-            if let Some((&key, _)) = frames_map
-                .range(..=(timestamp, i64::MAX))
-                .next_back()
-                .or_else(|| frames_map.iter().next())
-            {
+            // Calculate audio time range
+            // start_time and end_time are offsets in seconds from the audio timestamp
+            let audio_start = if let Some(start) = start_offset {
+                audio_timestamp + chrono::Duration::milliseconds((start * 1000.0) as i64)
+            } else {
+                audio_timestamp
+            };
+            
+            let audio_end = if let Some(end) = end_offset {
+                audio_timestamp + chrono::Duration::milliseconds((end * 1000.0) as i64)
+            } else {
+                // If no end_time, use duration_secs to calculate end
+                let duration: f64 = row.try_get("duration_secs").unwrap_or(5.0);
+                audio_timestamp + chrono::Duration::milliseconds((duration * 1000.0) as i64)
+            };
+
+            // Create the audio entry once
+            let audio_entry = AudioEntry {
+                transcription: row.get("transcription"),
+                device_name: row.get("audio_device"),
+                is_input: row.get("is_input_device"),
+                audio_file_path: row.get("audio_path"),
+                duration_secs: row.get("duration_secs"),
+                audio_chunk_id: row.get("audio_chunk_id"),
+                speaker_id: row.try_get("speaker_id").ok(),
+                speaker_name: row.try_get("speaker_name").ok(),
+                start_time: start_offset,
+                end_time: end_offset,
+            };
+
+            // Find ALL frames within the audio time range
+            // First, collect the keys of matching frames (need to collect since we can't mutate while iterating)
+            let matching_keys: Vec<(DateTime<Utc>, i64)> = frames_map
+                .range((audio_start, i64::MIN)..=(audio_end, i64::MAX))
+                .filter(|((frame_ts, _), _)| *frame_ts >= audio_start && *frame_ts <= audio_end)
+                .map(|(key, _)| *key)
+                .collect();
+
+            // Then, add the audio entry to each matching frame
+            let matched_any = !matching_keys.is_empty();
+            for key in matching_keys {
                 if let Some(frame_data) = frames_map.get_mut(&key) {
-                    frame_data.audio_entries.push(AudioEntry {
-                        transcription: row.get("transcription"),
-                        device_name: row.get("audio_device"),
-                        is_input: row.get("is_input_device"),
-                        audio_file_path: row.get("audio_path"),
-                        duration_secs: row.get("duration_secs"),
-                        audio_chunk_id: row.get("audio_chunk_id"),
-                        speaker_id: row.try_get("speaker_id").ok(),
-                        speaker_name: row.try_get("speaker_name").ok(),
-                        start_time: row.try_get("start_time").ok(),
-                        end_time: row.try_get("end_time").ok(),
-                    });
+                    frame_data.audio_entries.push(audio_entry.clone());
+                }
+            }
+
+            // Fallback: If no frames matched (audio outside frame range), assign to closest frame
+            // This handles edge cases where audio timestamp is slightly outside the frame range
+            if !matched_any {
+                if let Some((&key, _)) = frames_map
+                    .range(..=(audio_timestamp, i64::MAX))
+                    .next_back()
+                    .or_else(|| frames_map.iter().next())
+                {
+                    if let Some(frame_data) = frames_map.get_mut(&key) {
+                        frame_data.audio_entries.push(audio_entry);
+                    }
                 }
             }
         }

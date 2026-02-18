@@ -554,6 +554,206 @@ mod timeline_performance_tests {
     }
 
     // =========================================================================
+    // TEST: Multi-frame audio assignment
+    // =========================================================================
+
+    /// Test that audio is assigned to ALL frames within its time range
+    /// This verifies the fix for the timeline scrollbar not flagging transcriptions
+    #[tokio::test]
+    async fn test_audio_assigned_to_multiple_frames() {
+        let db = setup_test_db().await;
+
+        println!("\n=== MULTI-FRAME AUDIO ASSIGNMENT TEST ===");
+
+        // Create frames at 2-second intervals
+        let start_time = Utc::now() - Duration::minutes(5);
+        let frame_count = 10; // 10 frames, 2 seconds apart = 20 seconds of frames
+
+        // Insert video chunk first
+        let _ = db
+            .insert_video_chunk("test_video.mp4", "test_device")
+            .await
+            .unwrap();
+
+        for i in 0..frame_count {
+            let timestamp = start_time + Duration::seconds(i as i64 * 2);
+            let frame_id = db
+                .insert_frame(
+                    "test_device",
+                    Some(timestamp),
+                    None,
+                    Some("TestApp"),
+                    Some("TestWindow"),
+                    false,
+                    None,
+                )
+                .await
+                .unwrap();
+
+            db.insert_ocr_text(frame_id, &format!("OCR text for frame {}", i), "", Arc::new(OcrEngine::Tesseract))
+                .await
+                .unwrap();
+        }
+
+        // Insert an audio transcription that spans 6 seconds (should cover ~3 frames)
+        // Audio starts at frame 2's timestamp and ends at frame 5's timestamp
+        let audio_start_time = start_time + Duration::seconds(4); // Frame 2 timestamp
+        let audio_chunk_id = db
+            .insert_audio_chunk("audio_test.mp4", Some(audio_start_time))
+            .await
+            .unwrap();
+
+        // Insert transcription with start_time=0 and end_time=6 (6 seconds duration)
+        // This should match frames 2, 3, and 4 (timestamps at 4s, 6s, 8s from start_time)
+        db.insert_audio_transcription(
+            audio_chunk_id,
+            "This is a test transcription that spans multiple frames",
+            0,
+            "",
+            &AudioDevice {
+                name: "default".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            Some(0.0),  // start_time offset
+            Some(6.0),  // end_time offset (6 seconds)
+            Some(audio_start_time),
+        )
+        .await
+        .unwrap();
+
+        // Query the frames
+        let end_time = start_time + Duration::seconds(30);
+        let result = db.find_video_chunks(start_time, end_time).await.unwrap();
+
+        println!("Total frames: {}", result.frames.len());
+
+        // Count how many frames have audio
+        let frames_with_audio: Vec<_> = result
+            .frames
+            .iter()
+            .filter(|f| !f.audio_entries.is_empty())
+            .collect();
+
+        println!("Frames with audio: {}", frames_with_audio.len());
+
+        for frame in &result.frames {
+            let has_audio = !frame.audio_entries.is_empty();
+            println!(
+                "Frame at {:?}: {} audio entries",
+                frame.timestamp,
+                frame.audio_entries.len()
+            );
+        }
+
+        // Assert that multiple frames have audio
+        // With 6 seconds of audio and frames at 2-second intervals, we expect at least 3 frames
+        assert!(
+            frames_with_audio.len() >= 3,
+            "Expected at least 3 frames to have audio, but only {} did",
+            frames_with_audio.len()
+        );
+
+        // Verify the audio is on the correct frames (frames 2, 3, 4 based on timestamps)
+        let frame_timestamps_with_audio: Vec<_> = frames_with_audio
+            .iter()
+            .map(|f| f.timestamp)
+            .collect();
+
+        let expected_start = audio_start_time;
+        let expected_end = audio_start_time + Duration::seconds(6);
+
+        for frame in &frames_with_audio {
+            assert!(
+                frame.timestamp >= expected_start && frame.timestamp <= expected_end,
+                "Frame at {:?} has audio but is outside expected range [{:?}, {:?}]",
+                frame.timestamp,
+                expected_start,
+                expected_end
+            );
+        }
+    }
+
+    /// Test that audio with no matching frames falls back to closest frame
+    #[tokio::test]
+    async fn test_audio_fallback_to_closest_frame() {
+        let db = setup_test_db().await;
+
+        println!("\n=== AUDIO FALLBACK TEST ===");
+
+        // Create frames at the beginning of the time range
+        let start_time = Utc::now() - Duration::minutes(5);
+        
+        let _ = db
+            .insert_video_chunk("test_video.mp4", "test_device")
+            .await
+            .unwrap();
+
+        // Insert 3 frames at the start
+        for i in 0..3 {
+            let timestamp = start_time + Duration::seconds(i as i64 * 2);
+            let frame_id = db
+                .insert_frame(
+                    "test_device",
+                    Some(timestamp),
+                    None,
+                    Some("TestApp"),
+                    Some("TestWindow"),
+                    false,
+                    None,
+                )
+                .await
+                .unwrap();
+
+            db.insert_ocr_text(frame_id, &format!("OCR text for frame {}", i), "", Arc::new(OcrEngine::Tesseract))
+                .await
+                .unwrap();
+        }
+
+        // Insert audio that's AFTER all frames (should fall back to closest frame)
+        let audio_time = start_time + Duration::seconds(30); // Way after the frames
+        let audio_chunk_id = db
+            .insert_audio_chunk("audio_late.mp4", Some(audio_time))
+            .await
+            .unwrap();
+
+        db.insert_audio_transcription(
+            audio_chunk_id,
+            "This audio is after all frames",
+            0,
+            "",
+            &AudioDevice {
+                name: "default".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            Some(0.0),
+            Some(2.0),
+            Some(audio_time),
+        )
+        .await
+        .unwrap();
+
+        // Query
+        let end_time = start_time + Duration::minutes(10);
+        let result = db.find_video_chunks(start_time, end_time).await.unwrap();
+
+        // At least one frame should have the audio (fallback)
+        let frames_with_audio: Vec<_> = result
+            .frames
+            .iter()
+            .filter(|f| !f.audio_entries.is_empty())
+            .collect();
+
+        println!("Frames with audio (fallback): {}", frames_with_audio.len());
+
+        assert!(
+            !frames_with_audio.is_empty(),
+            "Expected at least one frame to have audio via fallback"
+        );
+    }
+
+    // =========================================================================
     // TEST: Stress test to find breaking point
     // =========================================================================
 
