@@ -62,7 +62,7 @@ search through recorded screen content, audio transcriptions, and user input eve
 | parameter | type | description |
 |-----------|------|-------------|
 | `q` | string | search query (optional - omit to get recent content) |
-| `content_type` | string | `all`, `vision`, `audio`, or `input` (default: `all`) |
+| `content_type` | string | `all`, `ocr`, `audio`, `input`, or `accessibility` (default: `all`) |
 | `limit` | integer | max results (default: 10) |
 | `offset` | integer | pagination offset (default: 0) |
 | `start_time` | string | ISO 8601 UTC start time (e.g., `2024-01-15T10:00:00Z`) |
@@ -74,41 +74,6 @@ search through recorded screen content, audio transcriptions, and user input eve
 | `include_frames` | boolean | include base64 screenshots (OCR only) |
 | `speaker_ids` | string | comma-separated speaker IDs for audio filtering (e.g., `1,2,3`) |
 | `speaker_name` | string | filter audio by speaker name (case-insensitive partial match) |
-
-### search-ui-events
-
-search UI input events captured via accessibility APIs. this is the third data modality alongside vision and audio.
-
-| parameter | type | description |
-|-----------|------|-------------|
-| `q` | string | search text content, app name, window title |
-| `event_type` | string | `click`, `text`, `scroll`, `key`, `app_switch`, `window_focus`, `clipboard` |
-| `app_name` | string | filter by application |
-| `window_name` | string | filter by window title |
-| `start_time` | string | ISO 8601 UTC start time |
-| `end_time` | string | ISO 8601 UTC end time |
-| `limit` | integer | max results (default: 50) |
-| `offset` | integer | pagination offset |
-
-**event types:**
-- `text` - aggregated keyboard input (what was typed)
-- `click` - mouse clicks with accessibility element context
-- `app_switch` / `window_focus` - app and window switching
-- `clipboard` - copy/paste operations with content
-- `scroll` - scroll events with delta values
-
-<Note>
-UI events require Accessibility permissions (macOS) or appropriate permissions (Windows) and "UI Events" enabled in screenpipe settings.
-</Note>
-
-### get-ui-event-stats
-
-get aggregated statistics of UI events by app and event type for productivity analysis:
-
-| parameter | type | description |
-|-----------|------|-------------|
-| `start_time` | string | ISO 8601 UTC start time |
-| `end_time` | string | ISO 8601 UTC end time |
 
 ### export-video
 
@@ -129,10 +94,8 @@ try these in Claude or Cursor:
 - "show me what was on my screen in VS Code yesterday"
 - "export a video of my screen from 10am to 11am today"
 - "find what John said in our meeting about the API"
-- "what did I type in Slack today?" (uses search-ui-events)
-- "show me my app usage statistics for the past 3 hours"
-- "what did I copy to my clipboard recently?"
-- "which apps did I switch between most during my work session?"
+- "what did I type in Slack today?" (uses content_type=input)
+- "what did I copy to my clipboard recently?" (uses content_type=input)
 
 ## testing
 

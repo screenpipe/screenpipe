@@ -65,24 +65,14 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 ## Available Tools
 
 ### search-content
-Search through recorded screen content (OCR) and audio transcriptions:
-- Full text search with content type filtering (OCR/Audio/UI)
-- Time range and app/window filtering
-- Speaker filtering (by ID or name)
+Search through recorded content with content type filtering:
+- `all` — OCR + Audio + Accessibility (default)
+- `ocr` — Screen text from screenshots
+- `audio` — Audio transcriptions
+- `input` — User actions (clicks, keystrokes, clipboard, app switches)
+- `accessibility` — Accessibility tree text
+- Time range, app/window, and speaker filtering
 - Pagination support
-
-### search-ui-events (macOS)
-Search UI input events captured via accessibility APIs. This is the third data modality alongside vision and audio:
-- **Event types**: `click`, `text`, `scroll`, `key`, `app_switch`, `window_focus`, `clipboard`
-- Filter by app, window, time range
-- `text` events show aggregated keyboard input (what was typed)
-- `click` events include accessibility element labels
-- `clipboard` events show copy/paste content
-
-### get-ui-event-stats (macOS)
-Get aggregated statistics of UI events:
-- Event counts grouped by app and event type
-- Useful for productivity analysis and app usage tracking
 
 ### export-video
 Export screen recordings as video files:
@@ -96,10 +86,9 @@ Export screen recordings as video files:
 - "Show me what was on my screen in VSCode yesterday"
 - "Export a video of my screen from 2-3pm today"
 - "Find what John said in our meeting about the database"
-- "What did I type in Slack today?" (uses search-ui-events)
-- "Show me my app usage statistics for the past 3 hours"
-- "What did I copy to clipboard recently?"
-- "Which apps did I switch between most today?"
+- "What did I type in Slack today?" (uses content_type=input)
+- "What did I copy to clipboard recently?" (uses content_type=input)
+- "Show me accessibility text from Chrome" (uses content_type=accessibility)
 
 ## Requirements
 

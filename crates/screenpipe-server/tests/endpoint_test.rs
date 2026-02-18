@@ -64,9 +64,18 @@ mod tests {
         let (app, db) = setup_test_app().await;
 
         // Insert some test data
-        let _ = db.insert_audio_chunk("test_audio1.wav", None).await.unwrap();
-        let audio_chunk_id1 = db.insert_audio_chunk("test_audio2.wav", None).await.unwrap();
-        let audio_chunk_id2 = db.insert_audio_chunk("test_audio3.wav", None).await.unwrap();
+        let _ = db
+            .insert_audio_chunk("test_audio1.wav", None)
+            .await
+            .unwrap();
+        let audio_chunk_id1 = db
+            .insert_audio_chunk("test_audio2.wav", None)
+            .await
+            .unwrap();
+        let audio_chunk_id2 = db
+            .insert_audio_chunk("test_audio3.wav", None)
+            .await
+            .unwrap();
 
         let _ = db
             .insert_audio_transcription(
@@ -209,8 +218,14 @@ mod tests {
         .await
         .unwrap();
 
-        let audio_chunk_id1 = db.insert_audio_chunk("test_audio1.wav", None).await.unwrap();
-        let audio_chunk_id2 = db.insert_audio_chunk("test_audio2.wav", None).await.unwrap();
+        let audio_chunk_id1 = db
+            .insert_audio_chunk("test_audio1.wav", None)
+            .await
+            .unwrap();
+        let audio_chunk_id2 = db
+            .insert_audio_chunk("test_audio2.wav", None)
+            .await
+            .unwrap();
         let _ = db
             .insert_audio_transcription(
                 audio_chunk_id1,
@@ -408,7 +423,10 @@ mod tests {
             .insert_frame("test_device", None, None, None, None, true, None)
             .await
             .unwrap();
-        let audio_chunk_id1 = db.insert_audio_chunk("test_audio1.wav", None).await.unwrap();
+        let audio_chunk_id1 = db
+            .insert_audio_chunk("test_audio1.wav", None)
+            .await
+            .unwrap();
 
         let now = DateTime::parse_from_rfc3339("2024-09-21T10:49:23.240367Z")
             .unwrap()

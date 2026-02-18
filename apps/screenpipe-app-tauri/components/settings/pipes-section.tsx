@@ -77,7 +77,7 @@ curl "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601
 
 ### query parameters
 - q: text search query (optional)
-- content_type: "ocr" | "audio" | "ui" | "all" | "ocr+audio" | "ocr+ui" | "audio+ui"
+- content_type: "all" | "ocr" | "audio" | "input" | "accessibility"
 - limit: max results (default 20)
 - offset: pagination offset
 - start_time / end_time: ISO 8601 timestamps

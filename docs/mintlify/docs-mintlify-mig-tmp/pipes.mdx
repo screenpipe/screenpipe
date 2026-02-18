@@ -53,7 +53,7 @@ curl "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601
 
 ### query parameters
 - q: text search query (optional)
-- content_type: "vision" | "audio" | "input" | "all" | "vision+audio+input" | "vision+input" | "audio+input"
+- content_type: "all" | "ocr" | "audio" | "input" | "accessibility"
 - limit: max results (default 20)
 - offset: pagination offset
 - start_time / end_time: ISO 8601 timestamps
@@ -81,8 +81,15 @@ each result contains:
 - device_name: which audio device (mic or system audio)
 - device_type: "input" (microphone) or "output" (system audio)
 
+### accessibility results (accessibility tree text)
+each result contains:
+- text: text from the accessibility tree
+- app_name: which app was active
+- window_name: the window title
+- timestamp: when it was captured
+
 ### input results (user actions)
-query via: curl "http://localhost:3030/ui-events?app_name=Slack&limit=50&start_time=<ISO8601>&end_time=<ISO8601>"
+query via: curl "http://localhost:3030/search?content_type=input&app_name=Slack&limit=50&start_time=<ISO8601>&end_time=<ISO8601>"
 event types: text (keyboard input), click, app_switch, window_focus, clipboard, scroll
 
 ## secrets

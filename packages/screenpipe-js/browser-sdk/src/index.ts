@@ -6,7 +6,7 @@
  *
  *   import { ScreenpipeClient } from "@screenpipe/browser";
  *   const client = new ScreenpipeClient();
- *   const results = await client.search({ contentType: "vision", limit: 10 });
+ *   const results = await client.search({ contentType: "ocr", limit: 10 });
  */
 
 export { ScreenpipeClient } from "../../common/client";

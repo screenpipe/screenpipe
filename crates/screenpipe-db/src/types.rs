@@ -88,62 +88,25 @@ pub struct OCRResult {
 
 /// Content type for search queries.
 ///
-/// ## New API (recommended):
-/// - `vision` - Screen content (OCR text + accessibility)
+/// - `all` - OCR + Audio + Accessibility
+/// - `ocr` - Screen text from screenshots
 /// - `audio` - Transcribed speech
 /// - `input` - User actions (clicks, keystrokes, clipboard)
-///
-/// ## Deprecated (still supported):
-/// - `ocr` - Use `vision` instead
-/// - `ui` - Use `vision` instead (for accessibility text) or `input` (for events)
+/// - `accessibility` - Accessibility tree text
 #[derive(OaSchema, Debug, Deserialize, PartialEq, Default, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
     #[default]
     #[serde(alias = "All")]
     All,
-
-    // === New API (Three Pillars) ===
-    /// Screen content: OCR text + accessibility text
-    #[serde(alias = "Vision")]
-    Vision,
-    /// User input actions: clicks, keystrokes, clipboard, app switches
-    #[serde(alias = "Input")]
-    Input,
-
-    // === Deprecated (backwards compatible) ===
-    /// @deprecated Use `vision` instead
-    #[serde(alias = "ocr", alias = "OCR")]
+    /// Screen text from screenshots
     OCR,
-    /// Audio transcriptions (not deprecated, same name)
-    #[serde(alias = "Audio")]
+    /// Audio transcriptions
     Audio,
-    /// @deprecated Use `vision` for text, `input` for events
-    #[serde(alias = "ui", alias = "UI")]
-    UI,
-
-    // === Combinations ===
-    #[serde(rename = "audio+ui")]
-    #[serde(alias = "audio ui")]
-    AudioAndUi,
-    #[serde(rename = "ocr+ui")]
-    #[serde(alias = "ocr ui")]
-    #[serde(alias = "vision+ui")]
-    OcrAndUi,
-    #[serde(rename = "audio+ocr")]
-    #[serde(alias = "audio ocr")]
-    #[serde(alias = "audio+vision")]
-    AudioAndOcr,
-    /// Vision + Audio + Input (everything)
-    #[serde(rename = "vision+audio+input")]
-    #[serde(alias = "all_modalities")]
-    VisionAudioInput,
-    /// Vision + Input
-    #[serde(rename = "vision+input")]
-    VisionAndInput,
-    /// Audio + Input
-    #[serde(rename = "audio+input")]
-    AudioAndInput,
+    /// User input actions: clicks, keystrokes, clipboard, app switches
+    Input,
+    /// Accessibility tree text
+    Accessibility,
 }
 
 #[derive(FromRow)]

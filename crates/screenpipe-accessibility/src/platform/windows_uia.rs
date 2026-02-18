@@ -25,13 +25,13 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
-    IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
-    IUIAutomationTreeWalker, AutomationElementMode_None, TreeScope_Subtree,
-    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
-    UIA_ClassNamePropertyId, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
-    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId,
-    UIA_NamePropertyId, UIA_PROPERTY_ID, UIA_ValueValuePropertyId,
+    AutomationElementMode_None, CUIAutomation, IUIAutomation, IUIAutomationCacheRequest,
+    IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationTreeWalker, TreeScope_Subtree,
+    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId,
+    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsEnabledPropertyId,
+    UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_ValueValuePropertyId,
+    UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
@@ -63,8 +63,7 @@ impl UiaContext {
     /// Initialize UI Automation COM objects. Must be called on a COM-initialized thread.
     pub(crate) fn new() -> windows::core::Result<Self> {
         unsafe {
-            let automation: IUIAutomation =
-                CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)?;
+            let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)?;
 
             // Create cache request with all properties we need
             let cache_request = automation.CreateCacheRequest()?;
@@ -233,7 +232,11 @@ impl UiaContext {
     }
 
     /// Get a cached boolean property (defaults to false on failure)
-    fn get_cached_bool(&self, element: &IUIAutomationElement, property_id: UIA_PROPERTY_ID) -> bool {
+    fn get_cached_bool(
+        &self,
+        element: &IUIAutomationElement,
+        property_id: UIA_PROPERTY_ID,
+    ) -> bool {
         unsafe {
             element
                 .GetCachedPropertyValue(property_id)
@@ -303,10 +306,7 @@ impl UiaContext {
         &self,
         handler: &IUIAutomationFocusChangedEventHandler,
     ) -> windows::core::Result<()> {
-        unsafe {
-            self.automation
-                .AddFocusChangedEventHandler(None, handler)
-        }
+        unsafe { self.automation.AddFocusChangedEventHandler(None, handler) }
     }
 
     /// Unsubscribe from focus change events
@@ -314,9 +314,7 @@ impl UiaContext {
         &self,
         handler: &IUIAutomationFocusChangedEventHandler,
     ) -> windows::core::Result<()> {
-        unsafe {
-            self.automation.RemoveFocusChangedEventHandler(handler)
-        }
+        unsafe { self.automation.RemoveFocusChangedEventHandler(handler) }
     }
 }
 
@@ -462,9 +460,7 @@ pub fn run_uia_thread(
             }
 
             // Periodic safety-net re-capture
-            if config.tree_capture_interval_ms > 0
-                && last_capture_time.elapsed() >= interval_dur
-            {
+            if config.tree_capture_interval_ms > 0 && last_capture_time.elapsed() >= interval_dur {
                 let hwnd = unsafe { GetForegroundWindow() };
                 if !hwnd.is_invalid() {
                     capture_and_send(
@@ -628,10 +624,8 @@ fn get_window_info(hwnd: HWND) -> (String, Option<String>, u32) {
 /// Get text content from the Windows clipboard
 pub fn get_clipboard_text_impl() -> Option<String> {
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, OpenClipboard,
-    };
     use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
     use windows::Win32::System::Ole::CF_UNICODETEXT;
 
@@ -872,8 +866,7 @@ mod tests {
         }
 
         // Collect all visible windows with titles
-        let windows: Arc<StdMutex<Vec<(HWND, String, u32)>>> =
-            Arc::new(StdMutex::new(Vec::new()));
+        let windows: Arc<StdMutex<Vec<(HWND, String, u32)>>> = Arc::new(StdMutex::new(Vec::new()));
         let windows_clone = windows.clone();
 
         unsafe {
@@ -907,8 +900,14 @@ mod tests {
         }
 
         let windows_list = windows.lock().unwrap().clone();
-        println!("\n=== Found {} visible windows with titles ===\n", windows_list.len());
-        assert!(windows_list.len() >= 1, "Should find at least 1 visible window");
+        println!(
+            "\n=== Found {} visible windows with titles ===\n",
+            windows_list.len()
+        );
+        assert!(
+            windows_list.len() >= 1,
+            "Should find at least 1 visible window"
+        );
 
         let uia = UiaContext::new().expect("UIA init failed");
 
@@ -965,13 +964,13 @@ mod tests {
 
                     // Verify tree integrity - node_count should be consistent
                     assert!(count >= 1, "Tree should have at least root node");
-                    assert!(
-                        count <= 10000,
-                        "Tree should not exceed max_elements cap"
-                    );
+                    assert!(count <= 10000, "Tree should not exceed max_elements cap");
                 }
                 None => {
-                    println!("  [FAILED  {:>4}ms] {} | {} (pid: {})", elapsed, app, title, pid);
+                    println!(
+                        "  [FAILED  {:>4}ms] {} | {} (pid: {})",
+                        elapsed, app, title, pid
+                    );
                     failed_count += 1;
                 }
             }
@@ -983,7 +982,11 @@ mod tests {
         println!("Capture failures:  {}", failed_count);
         println!("Total elements:    {}", total_elements);
         println!("Total capture time: {}ms", total_capture_ms);
-        let avg = if captured_count > 0 { total_capture_ms / captured_count as u128 } else { 0 };
+        let avg = if captured_count > 0 {
+            total_capture_ms / captured_count as u128
+        } else {
+            0
+        };
         println!("Avg capture time:  {}ms", avg);
         println!("Max capture time:  {}ms", max_capture_ms);
         println!("Max elements:      {} ({})", max_elements, max_elements_app);
@@ -1040,8 +1043,12 @@ mod tests {
             let indent = "  ".repeat(depth);
             println!(
                 "{}{} - {:?} (id: {:?}, class: {:?}, bounds: {:?})",
-                indent, node.control_type, node.name, node.automation_id,
-                node.class_name, node.bounds
+                indent,
+                node.control_type,
+                node.name,
+                node.automation_id,
+                node.class_name,
+                node.bounds
             );
             for child in &node.children {
                 print_tree(child, depth + 1, max_depth);
@@ -1151,7 +1158,10 @@ mod tests {
             }
 
             if i == 0 {
-                let name = root.as_ref().and_then(|r| r.name.clone()).unwrap_or_default();
+                let name = root
+                    .as_ref()
+                    .and_then(|r| r.name.clone())
+                    .unwrap_or_default();
                 println!("Window: {:?}", name);
             }
         }
@@ -1181,7 +1191,10 @@ mod tests {
         println!("Max:  {:?}", max);
         println!("P50:  {:?}", p50);
         println!("P95:  {:?}", p95);
-        println!("Unique hashes: {} (1 = perfectly stable)", unique_hashes.len());
+        println!(
+            "Unique hashes: {} (1 = perfectly stable)",
+            unique_hashes.len()
+        );
         println!("Total time for {} captures: {:?}", iterations, total);
 
         // Performance assertions
@@ -1251,7 +1264,10 @@ mod tests {
 
         // Focused element should be populated
         let fe = focused_element.lock();
-        println!("Focused element after capture: {:?}", fe.as_ref().map(|e| &e.role));
+        println!(
+            "Focused element after capture: {:?}",
+            fe.as_ref().map(|e| &e.role)
+        );
 
         unsafe { CoUninitialize() };
     }
@@ -1292,7 +1308,10 @@ mod tests {
             "Should receive initial tree snapshot within 5s"
         );
         let snap = snapshot.unwrap();
-        println!("Initial snapshot: {} | {:?}", snap.app_name, snap.window_title);
+        println!(
+            "Initial snapshot: {} | {:?}",
+            snap.app_name, snap.window_title
+        );
         println!("  Elements: {}", snap.element_count);
         println!("  Hash: {}", snap.tree_hash);
         assert!(snap.element_count >= 1, "Should have elements");
@@ -1344,10 +1363,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_live_cpu_usage() {
-        use windows::Win32::System::Threading::{
-            GetCurrentProcess, GetProcessTimes,
-        };
         use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
         fn get_process_cpu_time() -> u64 {
             unsafe {
@@ -1359,8 +1376,7 @@ mod tests {
                 let _ = GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user);
                 let kernel_100ns =
                     (kernel.dwHighDateTime as u64) << 32 | kernel.dwLowDateTime as u64;
-                let user_100ns =
-                    (user.dwHighDateTime as u64) << 32 | user.dwLowDateTime as u64;
+                let user_100ns = (user.dwHighDateTime as u64) << 32 | user.dwLowDateTime as u64;
                 kernel_100ns + user_100ns
             }
         }
@@ -1452,8 +1468,7 @@ mod tests {
         }
 
         // Find all visible windows
-        let windows: Arc<StdMutex<Vec<(HWND, String, u32)>>> =
-            Arc::new(StdMutex::new(Vec::new()));
+        let windows: Arc<StdMutex<Vec<(HWND, String, u32)>>> = Arc::new(StdMutex::new(Vec::new()));
         let windows_clone = windows.clone();
 
         unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -1482,10 +1497,7 @@ mod tests {
         }
 
         unsafe {
-            let _ = EnumWindows(
-                Some(enum_cb),
-                LPARAM(Arc::as_ptr(&windows_clone) as isize),
-            );
+            let _ = EnumWindows(Some(enum_cb), LPARAM(Arc::as_ptr(&windows_clone) as isize));
         }
 
         let uia = UiaContext::new().expect("UIA init failed");
@@ -1525,9 +1537,7 @@ mod tests {
                 match node.control_type.as_str() {
                     "Text" | "Edit" => *text += 1,
                     "Button" | "Hyperlink" | "CheckBox" | "RadioButton" | "ComboBox"
-                    | "MenuItem" | "ListItem" | "TabItem" | "Slider" => {
-                        *interactive += 1
-                    }
+                    | "MenuItem" | "ListItem" | "TabItem" | "Slider" => *interactive += 1,
                     _ => {}
                 }
                 // Count named nodes as content-bearing
@@ -1550,10 +1560,7 @@ mod tests {
                 max_depth = depth;
             }
 
-            println!(
-                "  {} | {} (pid: {})",
-                app, title, pid
-            );
+            println!("  {} | {} (pid: {})", app, title, pid);
             println!(
                 "    Elements: {}, Depth: {}, Text/Named: {}, Interactive: {}",
                 count, depth, text, interactive

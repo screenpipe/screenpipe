@@ -6,18 +6,18 @@
 /**
  * Types of content that can be queried in Screenpipe.
  *
- * - `vision` — Screen content (OCR text + accessibility text)
+ * - `ocr` — Screen text from screenshots
  * - `audio` — Transcribed speech
  * - `input` — User actions (clicks, keystrokes, clipboard)
+ * - `accessibility` — Accessibility tree text
+ * - `all` — OCR + Audio + Accessibility
  */
 export type ContentType =
   | "all"
-  | "vision"
+  | "ocr"
   | "audio"
   | "input"
-  | "vision+input"
-  | "audio+input"
-  | "vision+audio+input";
+  | "accessibility";
 
 // ─── Search / Query ──────────────────────────────────────────────────────────
 
@@ -400,34 +400,6 @@ export interface UiEventRecord {
   frameId?: number;
 }
 
-/** Parameters for `GET /ui-events` */
-export interface UiEventsSearchParams {
-  q?: string;
-  eventType?: UiEventType;
-  appName?: string;
-  windowName?: string;
-  startTime?: string;
-  endTime?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/** Response from `GET /ui-events` */
-export interface UiEventsResponse {
-  data: UiEventRecord[];
-  pagination: {
-    limit: number;
-    offset: number;
-    total: number;
-  };
-}
-
-/** UI event stats entry from `GET /ui-events/stats` */
-export interface UiEventStats {
-  appName: string;
-  eventType: string;
-  count: number;
-}
 
 // ─── Streaming / WebSocket ───────────────────────────────────────────────────
 

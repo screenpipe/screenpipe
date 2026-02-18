@@ -335,7 +335,15 @@ pub async fn start_ui_recording(
             let join_handle = std::thread::Builder::new()
                 .name("tree-walker".to_string())
                 .spawn(move || {
-                    run_tree_walker(tree_db, tree_stop, walk_interval, rt_handle, tree_wake, ignored_windows_clone, included_windows_clone);
+                    run_tree_walker(
+                        tree_db,
+                        tree_stop,
+                        walk_interval,
+                        rt_handle,
+                        tree_wake,
+                        ignored_windows_clone,
+                        included_windows_clone,
+                    );
                 })
                 .expect("failed to spawn tree-walker thread");
             // Wrap in a JoinHandle<()> compatible with the tokio handle used on other platforms
@@ -346,7 +354,15 @@ pub async fn start_ui_recording(
         #[cfg(not(target_os = "windows"))]
         {
             Some(tokio::task::spawn_blocking(move || {
-                run_tree_walker(tree_db, tree_stop, walk_interval, rt_handle, tree_wake, ignored_windows_clone, included_windows_clone);
+                run_tree_walker(
+                    tree_db,
+                    tree_stop,
+                    walk_interval,
+                    rt_handle,
+                    tree_wake,
+                    ignored_windows_clone,
+                    included_windows_clone,
+                );
             }))
         }
     } else {

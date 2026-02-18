@@ -6,7 +6,7 @@ exclude = ["apps/screenpipe-app-tauri/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.150"
+version = "0.3.151"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"

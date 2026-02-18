@@ -216,7 +216,12 @@ impl AccessibilityNode {
         if self.children.is_empty() {
             0
         } else {
-            1 + self.children.iter().map(|c| c.max_depth()).max().unwrap_or(0)
+            1 + self
+                .children
+                .iter()
+                .map(|c| c.max_depth())
+                .max()
+                .unwrap_or(0)
         }
     }
 
@@ -333,27 +338,54 @@ impl AccessibilityNode {
         } else {
             0
         };
-        self_count + self.children.iter().map(|c| c.named_node_count()).sum::<usize>()
+        self_count
+            + self
+                .children
+                .iter()
+                .map(|c| c.named_node_count())
+                .sum::<usize>()
     }
 
     /// Count interactive elements (Button, Edit, Document, ComboBox, CheckBox, RadioButton, Slider, Tab, MenuItem, Hyperlink).
     pub fn interactive_count(&self) -> usize {
         let interactive_types = [
-            "Button", "Edit", "Document", "ComboBox", "CheckBox",
-            "RadioButton", "Slider", "Tab", "TabItem", "MenuItem", "Hyperlink",
+            "Button",
+            "Edit",
+            "Document",
+            "ComboBox",
+            "CheckBox",
+            "RadioButton",
+            "Slider",
+            "Tab",
+            "TabItem",
+            "MenuItem",
+            "Hyperlink",
         ];
-        let self_count = if interactive_types.iter().any(|t| self.control_type.eq_ignore_ascii_case(t)) {
+        let self_count = if interactive_types
+            .iter()
+            .any(|t| self.control_type.eq_ignore_ascii_case(t))
+        {
             1
         } else {
             0
         };
-        self_count + self.children.iter().map(|c| c.interactive_count()).sum::<usize>()
+        self_count
+            + self
+                .children
+                .iter()
+                .map(|c| c.interactive_count())
+                .sum::<usize>()
     }
 
     /// Count nodes that have bounding rectangles.
     pub fn bounds_count(&self) -> usize {
         let self_count = if self.bounds.is_some() { 1 } else { 0 };
-        self_count + self.children.iter().map(|c| c.bounds_count()).sum::<usize>()
+        self_count
+            + self
+                .children
+                .iter()
+                .map(|c| c.bounds_count())
+                .sum::<usize>()
     }
 
     /// Compute a hash for diffing (ignores children — diff by comparing node-by-node)

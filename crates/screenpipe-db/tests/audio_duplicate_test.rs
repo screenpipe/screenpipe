@@ -53,7 +53,10 @@ mod tests {
         let db = setup_test_db().await;
 
         // Simulate system output capturing "It was the first computer with beautiful typography."
-        let chunk_output = db.insert_audio_chunk("output_audio.mp4", None).await.unwrap();
+        let chunk_output = db
+            .insert_audio_chunk("output_audio.mp4", None)
+            .await
+            .unwrap();
         let id1 = db
             .insert_audio_transcription(
                 chunk_output,
@@ -71,7 +74,10 @@ mod tests {
         assert!(id1 > 0, "First insert should succeed");
 
         // Simulate microphone picking up the SAME content (different chunk, different device)
-        let chunk_input = db.insert_audio_chunk("input_audio.mp4", None).await.unwrap();
+        let chunk_input = db
+            .insert_audio_chunk("input_audio.mp4", None)
+            .await
+            .unwrap();
         let id2 = db
             .insert_audio_transcription(
                 chunk_input,                                            // Different chunk!
@@ -194,7 +200,10 @@ mod tests {
         let db = setup_test_db().await;
 
         // From production logs at 14:17:22 - Display 4 (output)
-        let chunk1 = db.insert_audio_chunk("output_14_17.mp4", None).await.unwrap();
+        let chunk1 = db
+            .insert_audio_chunk("output_14_17.mp4", None)
+            .await
+            .unwrap();
         let id1 = db
             .insert_audio_transcription(
                 chunk1,
@@ -216,7 +225,10 @@ mod tests {
 
         // From production logs at 14:17:54 - MacBook Pro Microphone (input)
         // Contains the same phrase in a longer transcription
-        let chunk2 = db.insert_audio_chunk("input_14_17.mp4", None).await.unwrap();
+        let chunk2 = db
+            .insert_audio_chunk("input_14_17.mp4", None)
+            .await
+            .unwrap();
         let id2 = db
             .insert_audio_transcription(
                 chunk2,
@@ -502,7 +514,9 @@ mod tests {
             };
 
             let id = db
-                .insert_audio_transcription(chunk, text, 0, "whisper", &device, None, None, None, None)
+                .insert_audio_transcription(
+                    chunk, text, 0, "whisper", &device, None, None, None, None,
+                )
                 .await
                 .unwrap();
 
@@ -568,8 +582,14 @@ mod tests {
 
         // Scenario 2: Different device, different chunk, SAME content - Cross-device dedup
         println!("\nScenario 2: Different devices, same content (THE BUG WE FIXED)");
-        let chunk2a = db.insert_audio_chunk("output_chunk.mp4", None).await.unwrap();
-        let chunk2b = db.insert_audio_chunk("input_chunk.mp4", None).await.unwrap();
+        let chunk2a = db
+            .insert_audio_chunk("output_chunk.mp4", None)
+            .await
+            .unwrap();
+        let chunk2b = db
+            .insert_audio_chunk("input_chunk.mp4", None)
+            .await
+            .unwrap();
         let id2a = db
             .insert_audio_transcription(
                 chunk2a,
@@ -606,8 +626,14 @@ mod tests {
 
         // Scenario 3: Different devices, DIFFERENT content - Should both succeed
         println!("\nScenario 3: Different devices, different content");
-        let chunk3a = db.insert_audio_chunk("output_different.mp4", None).await.unwrap();
-        let chunk3b = db.insert_audio_chunk("input_different.mp4", None).await.unwrap();
+        let chunk3a = db
+            .insert_audio_chunk("output_different.mp4", None)
+            .await
+            .unwrap();
+        let chunk3b = db
+            .insert_audio_chunk("input_different.mp4", None)
+            .await
+            .unwrap();
         let id3a = db
             .insert_audio_transcription(
                 chunk3a,

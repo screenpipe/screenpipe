@@ -20,9 +20,7 @@
 
 #[cfg(target_os = "macos")]
 mod e2e {
-    use screenpipe_accessibility::tree::{
-        cache::TreeCache, create_tree_walker, TreeWalkerConfig,
-    };
+    use screenpipe_accessibility::tree::{cache::TreeCache, create_tree_walker, TreeWalkerConfig};
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -84,8 +82,7 @@ mod e2e {
             libc::getrusage(libc::RUSAGE_SELF, &mut usage);
             let user_ms =
                 usage.ru_utime.tv_sec as u64 * 1000 + usage.ru_utime.tv_usec as u64 / 1000;
-            let sys_ms =
-                usage.ru_stime.tv_sec as u64 * 1000 + usage.ru_stime.tv_usec as u64 / 1000;
+            let sys_ms = usage.ru_stime.tv_sec as u64 * 1000 + usage.ru_stime.tv_usec as u64 / 1000;
             user_ms + sys_ms
         }
     }
@@ -264,7 +261,9 @@ mod e2e {
 
         println!(
             "  First walk: app={}, hash={}, text_len={}",
-            snap.app_name, snap.content_hash, snap.text_content.len()
+            snap.app_name,
+            snap.content_hash,
+            snap.text_content.len()
         );
         assert!(cache.should_store(&snap), "first walk should store");
         cache.record_store(&snap.app_name, &snap.window_name, snap.content_hash);
@@ -284,9 +283,7 @@ mod e2e {
                 println!("  Cache dedup confirmed working!");
             } else if snap.app_name == snap2.app_name {
                 // Same app but content changed (dynamic app like Finder with timestamps)
-                println!(
-                    "  [info] Same app but content changed between walks (dynamic content)"
-                );
+                println!("  [info] Same app but content changed between walks (dynamic content)");
             } else {
                 println!("  [warn] App changed between walks (focus issue)");
             }
@@ -382,11 +379,7 @@ mod e2e {
             "  CPU per walk:   {:.2}ms",
             cpu_used_ms as f64 / iterations as f64
         );
-        println!(
-            "  Successful:     {}/{}",
-            durations.len(),
-            iterations
-        );
+        println!("  Successful:     {}/{}", durations.len(), iterations);
 
         // Assertions
         assert!(
@@ -460,7 +453,10 @@ mod e2e {
         let elapsed = start.elapsed();
         let cpu_used = process_cpu_time_ms() - cpu_before;
 
-        println!("\n  === Rapid Switch Stress ({} switches) ===", switch_count);
+        println!(
+            "\n  === Rapid Switch Stress ({} switches) ===",
+            switch_count
+        );
         println!("  Wall time:  {:?}", elapsed);
         println!("  CPU time:   {}ms", cpu_used);
         println!("  Stored:     {}", stored);
@@ -567,7 +563,10 @@ mod e2e {
         let cpu_used_ms = cpu_after - cpu_before;
         let cpu_percent = (cpu_used_ms as f64 / test_duration.as_millis() as f64) * 100.0;
 
-        println!("\n  === Sustained CPU Load ({}s) ===", test_duration.as_secs());
+        println!(
+            "\n  === Sustained CPU Load ({}s) ===",
+            test_duration.as_secs()
+        );
         println!("  Walks:      {}", walk_count);
         println!("  CPU time:   {}ms", cpu_used_ms);
         println!("  CPU load:   {:.1}%", cpu_percent);

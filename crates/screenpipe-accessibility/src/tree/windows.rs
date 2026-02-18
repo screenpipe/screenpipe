@@ -110,10 +110,8 @@ impl WindowsTreeWalker {
             state.com_initialized = true;
         }
         if state.uia.is_none() {
-            state.uia = Some(
-                UiaContext::new()
-                    .map_err(|e| anyhow::anyhow!("UIA init failed: {:?}", e))?,
-            );
+            state.uia =
+                Some(UiaContext::new().map_err(|e| anyhow::anyhow!("UIA init failed: {:?}", e))?);
         }
         Ok(state.uia.as_ref().unwrap())
     }
@@ -204,7 +202,11 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         debug!(
             "tree walk: app={}, window={}, nodes={}, text_len={}, duration={:?}",
-            app_name, window_name, node_count, text_buffer.len(), walk_duration
+            app_name,
+            window_name,
+            node_count,
+            text_buffer.len(),
+            walk_duration
         );
 
         Ok(Some(TreeSnapshot {
@@ -291,7 +293,9 @@ mod tests {
 
     #[test]
     fn test_skip_types() {
-        assert!(SKIP_TYPES.iter().any(|&s| "ScrollBar".eq_ignore_ascii_case(s)));
+        assert!(SKIP_TYPES
+            .iter()
+            .any(|&s| "ScrollBar".eq_ignore_ascii_case(s)));
         assert!(SKIP_TYPES.iter().any(|&s| "Image".eq_ignore_ascii_case(s)));
         assert!(!SKIP_TYPES.iter().any(|&s| "Button".eq_ignore_ascii_case(s)));
     }
@@ -301,7 +305,9 @@ mod tests {
         assert!(TEXT_TYPES.iter().any(|&t| "Text".eq_ignore_ascii_case(t)));
         assert!(TEXT_TYPES.iter().any(|&t| "Button".eq_ignore_ascii_case(t)));
         assert!(TEXT_TYPES.iter().any(|&t| "Edit".eq_ignore_ascii_case(t)));
-        assert!(!TEXT_TYPES.iter().any(|&t| "ScrollBar".eq_ignore_ascii_case(t)));
+        assert!(!TEXT_TYPES
+            .iter()
+            .any(|&t| "ScrollBar".eq_ignore_ascii_case(t)));
     }
 
     #[test]
@@ -373,11 +379,23 @@ mod tests {
         extract_text_from_tree(&tree, 0, 10, &mut buf);
 
         // Text node's name should be captured
-        assert!(buf.contains("Hello World"), "missing Text node, got: {}", buf);
+        assert!(
+            buf.contains("Hello World"),
+            "missing Text node, got: {}",
+            buf
+        );
         // Edit's value should be captured (not its name)
-        assert!(buf.contains("typed text"), "missing Edit value, got: {}", buf);
+        assert!(
+            buf.contains("typed text"),
+            "missing Edit value, got: {}",
+            buf
+        );
         // Image should be skipped
-        assert!(!buf.contains("icon.png"), "Image should be skipped, got: {}", buf);
+        assert!(
+            !buf.contains("icon.png"),
+            "Image should be skipped, got: {}",
+            buf
+        );
     }
 
     #[test]
@@ -388,8 +406,12 @@ mod tests {
 
     #[test]
     fn test_sensitive_titles() {
-        assert!(SENSITIVE_TITLES.iter().any(|s| "enter password".contains(s)));
-        assert!(SENSITIVE_TITLES.iter().any(|s| "private browsing".contains(s)));
+        assert!(SENSITIVE_TITLES
+            .iter()
+            .any(|s| "enter password".contains(s)));
+        assert!(SENSITIVE_TITLES
+            .iter()
+            .any(|s| "private browsing".contains(s)));
         assert!(!SENSITIVE_TITLES.iter().any(|s| "calculator".contains(s)));
     }
 }

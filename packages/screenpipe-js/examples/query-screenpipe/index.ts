@@ -14,7 +14,7 @@ async function queryScreenpipe() {
   const results = await client.search({
     startTime: fiveMinutesAgo,
     limit: 10,
-    contentType: "all", // can be "vision", "audio", "input", or "all"
+    contentType: "all", // can be "ocr", "audio", "input", "accessibility", or "all"
   });
 
   console.log(`found ${results.pagination.total} items`);

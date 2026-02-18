@@ -22,7 +22,7 @@ The Screenpipe server runs at `http://localhost:3030`. Use curl to query:
 # Search all content (OCR + audio)
 curl "http://localhost:3030/search?q=QUERY&limit=20"
 
-# Filter by content type: ocr, audio, ui, all
+# Filter by content type: ocr, audio, input, accessibility, all
 curl "http://localhost:3030/search?q=QUERY&content_type=ocr"
 
 # Filter by time range (ISO 8601 UTC)
@@ -31,29 +31,17 @@ curl "http://localhost:3030/search?q=QUERY&start_time=2024-01-01T00:00:00Z&end_t
 # Filter by app/window
 curl "http://localhost:3030/search?q=QUERY&app_name=Chrome&window_name=GitHub"
 
+# Search input events (clicks, keystrokes, clipboard, app switches)
+curl "http://localhost:3030/search?content_type=input&limit=50"
+
+# Search accessibility text
+curl "http://localhost:3030/search?content_type=accessibility&limit=50"
+
 # Pagination
 curl "http://localhost:3030/search?q=QUERY&limit=50&offset=0"
 
 # Health check
 curl "http://localhost:3030/health"
-
-# === UI Events API (Accessibility data - macOS) ===
-
-# Search UI events (keyboard input, clicks, app switches, clipboard)
-curl "http://localhost:3030/ui-events?limit=50"
-
-# Filter by event type: click, text, scroll, key, app_switch, window_focus, clipboard
-curl "http://localhost:3030/ui-events?event_type=text&limit=50"
-
-# Filter UI events by app
-curl "http://localhost:3030/ui-events?app_name=Slack&limit=50"
-
-# Filter UI events by time range
-curl "http://localhost:3030/ui-events?start_time=2024-01-01T10:00:00Z&end_time=2024-01-01T12:00:00Z"
-
-# Get UI event statistics (app usage, event counts)
-curl "http://localhost:3030/ui-events/stats"
-curl "http://localhost:3030/ui-events/stats?start_time=2024-01-01T00:00:00Z"
 ```
 
 ### Method 2: Direct SQL (if CLI available)

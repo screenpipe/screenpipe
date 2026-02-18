@@ -406,7 +406,11 @@ impl SafeMonitor {
     /// If the monitor name is empty, falls back to "Display" to avoid ambiguous IDs.
     pub fn stable_id(&self) -> String {
         let d = &self.monitor_data;
-        let name = if d.name.is_empty() { "Display" } else { &d.name };
+        let name = if d.name.is_empty() {
+            "Display"
+        } else {
+            &d.name
+        };
         format!("{}_{}x{}_{},{}", name, d.width, d.height, d.x, d.y)
     }
 
@@ -632,7 +636,14 @@ mod tests {
     use super::*;
 
     /// Create a SafeMonitor for testing without requiring real OS monitors
-    fn make_test_monitor(id: u32, name: &str, width: u32, height: u32, x: i32, y: i32) -> SafeMonitor {
+    fn make_test_monitor(
+        id: u32,
+        name: &str,
+        width: u32,
+        height: u32,
+        x: i32,
+        y: i32,
+    ) -> SafeMonitor {
         SafeMonitor {
             monitor_id: id,
             monitor_data: Arc::new(MonitorData {

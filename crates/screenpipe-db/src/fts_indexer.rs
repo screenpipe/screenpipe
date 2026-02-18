@@ -112,7 +112,27 @@ async fn index_all_tables(db: &DatabaseManager) -> i64 {
     }
     total += audio_count;
 
-    // ui_events_fts is not indexed — the /ui-events/search endpoint uses LIKE,
+    // Yield again
+    if audio_count > 0 {
+        tokio::time::sleep(FTS_INTER_TABLE_DELAY).await;
+    }
+
+    let t3 = std::time::Instant::now();
+    let accessibility_count = index_accessibility_fts(db).await.unwrap_or_else(|e| {
+        warn!("FTS indexer: accessibility error: {}", e);
+        0
+    });
+    let accessibility_elapsed = t3.elapsed();
+    if accessibility_elapsed.as_secs() >= 1 {
+        info!(
+            "FTS indexer: accessibility batch took {:.1}s ({} rows)",
+            accessibility_elapsed.as_secs_f64(),
+            accessibility_count
+        );
+    }
+    total += accessibility_count;
+
+    // ui_events_fts is not indexed — input event search uses LIKE,
     // so maintaining that FTS table is wasted work.
 
     total
@@ -273,3 +293,42 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
     Ok(count)
 }
 
+/// Index new rows from `accessibility` into `accessibility_fts` using bulk INSERT...SELECT.
+async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+    let last = get_last_indexed(db, "accessibility").await?;
+
+    let rows = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM accessibility WHERE id > ?1 \
+         AND text_content IS NOT NULL AND text_content != '' \
+         ORDER BY id LIMIT ?2",
+    )
+    .bind(last)
+    .bind(FTS_BATCH_SIZE)
+    .fetch_all(&db.pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let max_rowid = rows.last().unwrap().0;
+    let count = rows.len() as i64;
+
+    let mut tx = db.begin_immediate_with_retry().await?;
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO accessibility_fts(rowid, text_content, app_name, window_name) \
+         SELECT id, text_content, COALESCE(app_name, ''), COALESCE(window_name, '') \
+         FROM accessibility WHERE id > ?1 AND id <= ?2 \
+         AND text_content IS NOT NULL AND text_content != ''",
+    )
+    .bind(last)
+    .bind(max_rowid)
+    .execute(&mut **tx.conn())
+    .await?;
+
+    tx.commit().await?;
+    update_last_indexed(db, "accessibility", max_rowid).await?;
+
+    Ok(count)
+}

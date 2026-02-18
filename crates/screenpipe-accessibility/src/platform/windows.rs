@@ -4,7 +4,7 @@
 
 use crate::activity_feed::{ActivityFeed, ActivityKind};
 use crate::config::UiCaptureConfig;
-use crate::events::{EventData, ElementContext, UiEvent, WindowTreeSnapshot};
+use crate::events::{ElementContext, EventData, UiEvent, WindowTreeSnapshot};
 use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -179,8 +179,15 @@ impl UiRecorder {
         let focused_element1 = focused_element.clone();
         threads.push(thread::spawn(move || {
             run_native_hooks(
-                tx1, stop1, start_time, config1, app1, window1, feed1,
-                click_queue1, focused_element1,
+                tx1,
+                stop1,
+                start_time,
+                config1,
+                app1,
+                window1,
+                feed1,
+                click_queue1,
+                focused_element1,
             );
         }));
 
@@ -192,7 +199,15 @@ impl UiRecorder {
         let window2 = current_window.clone();
         let focused_element2 = focused_element.clone();
         threads.push(thread::spawn(move || {
-            run_app_observer(tx2, stop2, start_time, config2, app2, window2, focused_element2);
+            run_app_observer(
+                tx2,
+                stop2,
+                start_time,
+                config2,
+                app2,
+                window2,
+                focused_element2,
+            );
         }));
 
         // Thread 3: UI Automation worker (tree capture, element context, clipboard)
@@ -649,11 +664,9 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 
                         // Queue ElementFromPoint request for precise element context
                         if s.config.capture_context {
-                            s.click_queue.lock().push(ClickElementRequest {
-                                x,
-                                y,
-                                timestamp,
-                            });
+                            s.click_queue
+                                .lock()
+                                .push(ClickElementRequest { x, y, timestamp });
                         }
                     }
 

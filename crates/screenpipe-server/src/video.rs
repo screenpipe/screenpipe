@@ -454,7 +454,10 @@ impl VideoCapture {
             }
 
             if disable_ocr {
-                info!("OCR disabled for monitor {} — passing frames through without text extraction", monitor_id);
+                info!(
+                    "OCR disabled for monitor {} — passing frames through without text extraction",
+                    monitor_id
+                );
             } else {
                 info!("Starting OCR worker for monitor {}", monitor_id);
             }
@@ -469,11 +472,7 @@ impl VideoCapture {
                             captured_at: raw_frame.captured_at,
                             window_ocr_results: Vec::new(),
                         };
-                        push_to_ocr_queue(
-                            &ocr_frame_queue_clone,
-                            &Arc::new(capture),
-                            "OCR-out",
-                        );
+                        push_to_ocr_queue(&ocr_frame_queue_clone, &Arc::new(capture), "OCR-out");
                     } else {
                         let ocr_start = std::time::Instant::now();
                         match process_ocr_task(
@@ -1280,9 +1279,7 @@ mod tests {
         let tracker = FrameWriteTracker::new();
         tracker.record_write(7, 3, "/tmp/test.mp4".to_string());
 
-        let result = tracker
-            .wait_for_offset(7, Duration::from_secs(5))
-            .await;
+        let result = tracker.wait_for_offset(7, Duration::from_secs(5)).await;
         assert!(result.is_some(), "Expected Some for written frame");
         let info = result.unwrap();
         assert_eq!(info.offset, 3);
@@ -1303,12 +1300,13 @@ mod tests {
 
         // Wait should succeed well before the 5s timeout
         let start = std::time::Instant::now();
-        let result = tracker
-            .wait_for_offset(99, Duration::from_secs(5))
-            .await;
+        let result = tracker.wait_for_offset(99, Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
 
-        assert!(result.is_some(), "Expected Some for concurrently written frame");
+        assert!(
+            result.is_some(),
+            "Expected Some for concurrently written frame"
+        );
         assert!(
             elapsed < Duration::from_secs(1),
             "Should have woken up quickly, took {:?}",

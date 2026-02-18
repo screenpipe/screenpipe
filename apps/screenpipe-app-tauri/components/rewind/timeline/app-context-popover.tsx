@@ -203,9 +203,11 @@ export function AppContextPopover({
 				left: `clamp(144px, ${anchor.x}px, calc(100vw - 144px))`,
 				top: `${anchor.y}px`,
 				transform: "translate(-50%, -100%) translateY(-8px)",
+				maxHeight: `${Math.max(200, anchor.y - 16)}px`,
 			}}
 			onClick={(e) => e.stopPropagation()}
 			onMouseDown={(e) => e.stopPropagation()}
+			onWheel={(e) => e.stopPropagation()}
 		>
 			{/* Header */}
 			<div className="flex items-center justify-between px-3 py-2 border-b border-border">
@@ -232,7 +234,7 @@ export function AppContextPopover({
 			</div>
 
 			{/* Content */}
-			<div className="px-3 py-2 space-y-2 max-h-64 overflow-y-auto">
+			<div className="px-3 py-2 space-y-2 overflow-y-auto" style={{ maxHeight: `${Math.max(150, anchor.y - 100)}px` }}>
 				{/* Time summary */}
 				{timeRange && (
 					<div className="flex items-center gap-1.5 text-muted-foreground">

@@ -21,9 +21,6 @@ import type {
   NextValidFrameParams,
   NextValidFrameResponse,
   FrameOcrResponse,
-  UiEventsSearchParams,
-  UiEventsResponse,
-  UiEventStats,
   NotificationOptions,
   AddContentRequest,
   RawSqlRequest,
@@ -338,34 +335,6 @@ export class ScreenpipeClient {
         propagate_similar: params.propagateSimilar ?? true,
       });
       return convertObjectToCamelCase(raw) as ReassignSpeakerResponse;
-    },
-  };
-
-  // ── UI Events (Input Events) ─────────────────────────────────────────────
-
-  readonly uiEvents = {
-    /**
-     * Search UI events (input events).
-     * `GET /ui-events`
-     */
-    search: async (params: UiEventsSearchParams = {}): Promise<UiEventsResponse> => {
-      const raw = await this.get<unknown>("/ui-events", toRecord(params));
-      return convertObjectToCamelCase(raw) as UiEventsResponse;
-    },
-
-    /**
-     * Get UI event statistics.
-     * `GET /ui-events/stats`
-     */
-    stats: async (
-      startTime?: string,
-      endTime?: string
-    ): Promise<UiEventStats[]> => {
-      const raw = await this.get<unknown>("/ui-events/stats", {
-        startTime,
-        endTime,
-      });
-      return convertObjectToCamelCase(raw) as UiEventStats[];
     },
   };
 

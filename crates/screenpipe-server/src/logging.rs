@@ -109,12 +109,22 @@ impl SizedRollingWriter {
 
     #[cfg(test)]
     fn current_path(&self) -> PathBuf {
-        self.dir
-            .join(Self::filename(&self.prefix, &self.suffix, &self.date_str, self.index))
+        self.dir.join(Self::filename(
+            &self.prefix,
+            &self.suffix,
+            &self.date_str,
+            self.index,
+        ))
     }
 
     /// Open (or create) a log file in append mode and return it with its size.
-    fn open(dir: &Path, prefix: &str, suffix: &str, date: &str, index: u32) -> io::Result<(File, u64)> {
+    fn open(
+        dir: &Path,
+        prefix: &str,
+        suffix: &str,
+        date: &str,
+        index: u32,
+    ) -> io::Result<(File, u64)> {
         let path = dir.join(Self::filename(prefix, suffix, date, index));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let size = file.metadata()?.len();
@@ -128,7 +138,13 @@ impl SizedRollingWriter {
         self.estimated_total += self.size;
         self.index += 1;
 
-        let (file, size) = Self::open(&self.dir, &self.prefix, &self.suffix, &self.date_str, self.index)?;
+        let (file, size) = Self::open(
+            &self.dir,
+            &self.prefix,
+            &self.suffix,
+            &self.date_str,
+            self.index,
+        )?;
         self.file = file;
         self.size = size;
 
@@ -144,7 +160,13 @@ impl SizedRollingWriter {
         self.index = 0;
         self.next_date = next_midnight();
 
-        let (file, size) = Self::open(&self.dir, &self.prefix, &self.suffix, &self.date_str, self.index)?;
+        let (file, size) = Self::open(
+            &self.dir,
+            &self.prefix,
+            &self.suffix,
+            &self.date_str,
+            self.index,
+        )?;
         self.file = file;
         self.size = size;
 
@@ -209,7 +231,7 @@ impl Default for Builder {
             directory: None,
             prefix: "app".into(),
             suffix: "log".into(),
-            max_file_size: 50 * 1024 * 1024,  // 50 MB
+            max_file_size: 50 * 1024 * 1024,   // 50 MB
             max_total_size: 200 * 1024 * 1024, // 200 MB
         }
     }
@@ -247,9 +269,9 @@ impl Builder {
     }
 
     pub fn build(self) -> io::Result<SizedRollingWriter> {
-        let dir = self.directory.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "directory is required")
-        })?;
+        let dir = self
+            .directory
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory is required"))?;
 
         fs::create_dir_all(&dir)?;
 
@@ -650,17 +672,9 @@ mod tests {
         let today = today_string();
 
         // File for a different date.
-        fs::write(
-            tmp.path().join("test.1999-01-01.0.log"),
-            &[0u8; 100],
-        )
-        .unwrap();
+        fs::write(tmp.path().join("test.1999-01-01.0.log"), &[0u8; 100]).unwrap();
         // File for today.
-        fs::write(
-            tmp.path().join(format!("test.{}.3.log", today)),
-            &[0u8; 10],
-        )
-        .unwrap();
+        fs::write(tmp.path().join(format!("test.{}.3.log", today)), &[0u8; 10]).unwrap();
 
         let (max_idx, total) = scan_existing(tmp.path(), "test", "log", &today);
         assert_eq!(max_idx, 3);

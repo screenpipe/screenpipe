@@ -330,7 +330,7 @@ async fn test_search_by_multiple_tags() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/search?content_type=audio+ocr")
+                .uri("/search?content_type=audio")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -397,7 +397,10 @@ async fn insert_test_data(db: &Arc<DatabaseManager>) {
     .unwrap();
 
     // Insert test audio chunk
-    let audio_chunk_id = db.insert_audio_chunk("test_audio_file.wav", None).await.unwrap();
+    let audio_chunk_id = db
+        .insert_audio_chunk("test_audio_file.wav", None)
+        .await
+        .unwrap();
 
     // Insert test audio data
     db.insert_audio_transcription(

@@ -70,10 +70,7 @@ impl TestApp {
         // Poll for a NEW window matching the title
         loop {
             if Instant::now() > deadline {
-                eprintln!(
-                    "[TestApp] Timeout waiting for {} (pid {})",
-                    spec.exe, pid
-                );
+                eprintln!("[TestApp] Timeout waiting for {} (pid {})", spec.exe, pid);
                 let mut child = child;
                 let _ = child.kill();
                 return None;
@@ -114,7 +111,11 @@ impl TestApp {
 
 impl Drop for TestApp {
     fn drop(&mut self) {
-        println!("[TestApp] Closing {} (pid {})", self.name, self.process.id());
+        println!(
+            "[TestApp] Closing {} (pid {})",
+            self.name,
+            self.process.id()
+        );
         let _ = self.process.kill();
         let _ = self.process.wait();
         // Also close the window by sending WM_CLOSE in case the process re-parented
@@ -156,10 +157,7 @@ fn list_windows_matching(pattern: &str) -> Vec<HWND> {
 
     let mut data = (pattern_lower, results);
     unsafe {
-        let _ = EnumWindows(
-            Some(callback),
-            LPARAM(&mut data as *mut _ as isize),
-        );
+        let _ = EnumWindows(Some(callback), LPARAM(&mut data as *mut _ as isize));
     }
     results = data.1;
     results
@@ -268,8 +266,7 @@ fn get_window_title(hwnd: HWND) -> String {
 #[ignore]
 fn test_notepad_tree_structure() {
     com_init();
-    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
+    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
     app.focus();
 
     let uia = UiaContext::new().expect("UIA init failed");
@@ -284,8 +281,16 @@ fn test_notepad_tree_structure() {
     root.print_tree(4);
 
     // Verify tree structure
-    assert!(count >= 5, "Notepad should have at least 5 elements, got {}", count);
-    assert!(depth >= 2, "Notepad tree should be at least 2 deep, got {}", depth);
+    assert!(
+        count >= 5,
+        "Notepad should have at least 5 elements, got {}",
+        count
+    );
+    assert!(
+        depth >= 2,
+        "Notepad tree should be at least 2 deep, got {}",
+        depth
+    );
 
     // Should have a menu bar
     let menus = root.find_all_by_type("MenuBar");
@@ -293,8 +298,7 @@ fn test_notepad_tree_structure() {
     assert!(!menus.is_empty(), "Notepad should have a MenuBar");
 
     // Should have an edit area (RichEdit or Document or Edit)
-    let has_edit = root.find_by_type("Edit").is_some()
-        || root.find_by_type("Document").is_some();
+    let has_edit = root.find_by_type("Edit").is_some() || root.find_by_type("Document").is_some();
     assert!(has_edit, "Notepad should have an Edit or Document control");
 
     // Should have a title bar
@@ -305,8 +309,18 @@ fn test_notepad_tree_structure() {
 
     // Verify some buttons exist (Minimize, Maximize, Close)
     let buttons = root.find_all_by_type("Button");
-    println!("Buttons: {} ({:?})", buttons.len(), buttons.iter().map(|b| b.name.as_deref().unwrap_or("?")).collect::<Vec<_>>());
-    assert!(buttons.len() >= 3, "Should have at least 3 buttons (min/max/close)");
+    println!(
+        "Buttons: {} ({:?})",
+        buttons.len(),
+        buttons
+            .iter()
+            .map(|b| b.name.as_deref().unwrap_or("?"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        buttons.len() >= 3,
+        "Should have at least 3 buttons (min/max/close)"
+    );
 
     // Verify window name in root
     assert_eq!(root.control_type, "Window");
@@ -320,8 +334,7 @@ fn test_notepad_tree_structure() {
 #[ignore]
 fn test_notepad_text_capture() {
     com_init();
-    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
+    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
     app.focus();
 
     let test_text = "Hello screenpipe accessibility test 12345";
@@ -364,8 +377,8 @@ fn test_notepad_text_capture() {
 #[ignore]
 fn test_calculator_tree_structure() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     // Calculator takes a moment to fully render
     std::thread::sleep(Duration::from_secs(1));
@@ -395,10 +408,7 @@ fn test_calculator_tree_structure() {
 
     // Should have number buttons
     let buttons = root.find_all_by_type("Button");
-    let button_names: Vec<&str> = buttons
-        .iter()
-        .filter_map(|b| b.name.as_deref())
-        .collect();
+    let button_names: Vec<&str> = buttons.iter().filter_map(|b| b.name.as_deref()).collect();
     println!("Buttons ({}):", buttons.len());
     for name in &button_names {
         print!("  [{}]", name);
@@ -409,9 +419,11 @@ fn test_calculator_tree_structure() {
     let number_buttons: Vec<&&str> = button_names
         .iter()
         .filter(|n| {
-            ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
-                .iter()
-                .any(|num| n.contains(num))
+            [
+                "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+            ]
+            .iter()
+            .any(|num| n.contains(num))
         })
         .collect();
     println!("Number buttons found: {}", number_buttons.len());
@@ -422,8 +434,12 @@ fn test_calculator_tree_structure() {
     );
 
     // Check for operator buttons
-    let has_operators = button_names.iter().any(|n| n.contains("Plus") || n.contains("Add"))
-        || button_names.iter().any(|n| n.contains("Minus") || n.contains("Subtract"));
+    let has_operators = button_names
+        .iter()
+        .any(|n| n.contains("Plus") || n.contains("Add"))
+        || button_names
+            .iter()
+            .any(|n| n.contains("Minus") || n.contains("Subtract"));
     println!("Has operator buttons: {}", has_operators);
 
     // Verify bounds are captured for interactive elements
@@ -447,10 +463,10 @@ fn test_calculator_tree_structure() {
 #[ignore]
 fn test_multi_app_tree_isolation() {
     com_init();
-    let notepad = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
-    let calc = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let notepad =
+        TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
+    let calc =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
 
     std::thread::sleep(Duration::from_secs(1));
 
@@ -505,8 +521,7 @@ fn test_full_pipeline_with_app() {
     let (element_tx, _element_rx) =
         bounded::<(ClickElementRequest, crate::events::ElementContext)>(64);
     let click_queue = Arc::new(Mutex::new(Vec::<ClickElementRequest>::new()));
-    let focused_element =
-        Arc::new(Mutex::new(None::<crate::events::ElementContext>));
+    let focused_element = Arc::new(Mutex::new(None::<crate::events::ElementContext>));
     let stop = Arc::new(AtomicBool::new(false));
 
     // Start UIA worker thread
@@ -515,7 +530,14 @@ fn test_full_pipeline_with_app() {
     let click_queue2 = click_queue.clone();
     let focused_element2 = focused_element.clone();
     let thread = std::thread::spawn(move || {
-        windows_uia::run_uia_thread(tree_tx, element_tx, click_queue2, focused_element2, stop2, config2);
+        windows_uia::run_uia_thread(
+            tree_tx,
+            element_tx,
+            click_queue2,
+            focused_element2,
+            stop2,
+            config2,
+        );
     });
 
     // Wait for initial snapshot
@@ -524,14 +546,11 @@ fn test_full_pipeline_with_app() {
         .expect("Should receive initial snapshot");
     println!(
         "\n=== Initial Snapshot ===\nApp: {} | Title: {:?}\nElements: {}",
-        snap.app_name,
-        snap.window_title,
-        snap.element_count
+        snap.app_name, snap.window_title, snap.element_count
     );
 
     // Now launch Notepad — should trigger a new snapshot when we focus it
-    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
+    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
     app.focus();
 
     // Wait for the UIA thread to pick up the focus change
@@ -575,8 +594,7 @@ fn test_full_pipeline_with_app() {
 #[ignore]
 fn test_focusable_state_capture() {
     com_init();
-    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
+    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
     app.focus();
 
     let uia = UiaContext::new().expect("UIA init failed");
@@ -613,8 +631,8 @@ fn test_focusable_state_capture() {
 #[ignore]
 fn test_real_app_capture_perf() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     std::thread::sleep(Duration::from_secs(1));
 
@@ -648,7 +666,10 @@ fn test_real_app_capture_perf() {
     let min = times.iter().min().unwrap();
     let max = times.iter().max().unwrap();
 
-    println!("\n=== Calculator Capture Perf ({} iterations) ===", iterations);
+    println!(
+        "\n=== Calculator Capture Perf ({} iterations) ===",
+        iterations
+    );
     println!("Elements: {}", element_counts.first().unwrap_or(&0));
     println!("Avg:  {:?}", avg);
     println!("P50:  {:?}", p50);
@@ -716,8 +737,8 @@ fn collect_focusable_inner<'a>(node: &'a AccessibilityNode, out: &mut Vec<&'a Ac
 #[ignore]
 fn test_memory_footprint() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     std::thread::sleep(Duration::from_secs(1));
 
@@ -734,9 +755,17 @@ fn test_memory_footprint() {
 
     println!("\n=== Memory Footprint (Calculator) ===");
     println!("Nodes:          {}", node_count);
-    println!("Heap estimate:  {} bytes ({:.1} KB)", byte_size, byte_size as f64 / 1024.0);
+    println!(
+        "Heap estimate:  {} bytes ({:.1} KB)",
+        byte_size,
+        byte_size as f64 / 1024.0
+    );
     println!("Bytes/node:     {:.1}", bytes_per_node);
-    println!("JSON size:      {} bytes ({:.1} KB)", json_size, json_size as f64 / 1024.0);
+    println!(
+        "JSON size:      {} bytes ({:.1} KB)",
+        json_size,
+        json_size as f64 / 1024.0
+    );
     println!("JSON/node:      {:.1}", json_per_node);
 
     // Bounds: each node should be < 1KB average (struct + strings + overhead)
@@ -768,8 +797,8 @@ fn test_memory_footprint() {
 #[ignore]
 fn test_memory_stability() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     std::thread::sleep(Duration::from_secs(1));
 
@@ -824,8 +853,8 @@ fn test_memory_stability() {
 #[ignore]
 fn test_calculator_completeness() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     std::thread::sleep(Duration::from_secs(1));
 
@@ -836,10 +865,25 @@ fn test_calculator_completeness() {
 
     // Ground truth: every standard Calculator button that MUST be captured
     let required_buttons = [
-        "Zero", "One", "Two", "Three", "Four",
-        "Five", "Six", "Seven", "Eight", "Nine",
-        "Plus", "Minus", "Multiply by", "Divide by", "Equals",
-        "Decimal separator", "Backspace", "Clear", "Clear entry",
+        "Zero",
+        "One",
+        "Two",
+        "Three",
+        "Four",
+        "Five",
+        "Six",
+        "Seven",
+        "Eight",
+        "Nine",
+        "Plus",
+        "Minus",
+        "Multiply by",
+        "Divide by",
+        "Equals",
+        "Decimal separator",
+        "Backspace",
+        "Clear",
+        "Clear entry",
     ];
 
     let all_buttons = root.find_all_by_type("Button");
@@ -861,7 +905,10 @@ fn test_calculator_completeness() {
 
     println!("\n=== Calculator Data Completeness ===");
     println!("Required buttons: {}", required_buttons.len());
-    println!("Found:            {}", required_buttons.len() - missing.len());
+    println!(
+        "Found:            {}",
+        required_buttons.len() - missing.len()
+    );
     println!("Missing:          {} {:?}", missing.len(), missing);
     println!("Completeness:     {:.1}%", completeness_pct);
 
@@ -907,8 +954,8 @@ fn test_calculator_completeness() {
 #[ignore]
 fn test_capture_consistency() {
     com_init();
-    let app = TestApp::launch(&CALCULATOR, Duration::from_secs(10))
-        .expect("Failed to launch Calculator");
+    let app =
+        TestApp::launch(&CALCULATOR, Duration::from_secs(10)).expect("Failed to launch Calculator");
     app.focus();
     std::thread::sleep(Duration::from_secs(1));
 
@@ -929,19 +976,23 @@ fn test_capture_consistency() {
         }
     }
 
-    let mode_count = *node_counts.iter().max_by_key(|&&c| {
-        node_counts.iter().filter(|&&x| x == c).count()
-    }).unwrap();
+    let mode_count = *node_counts
+        .iter()
+        .max_by_key(|&&c| node_counts.iter().filter(|&&x| x == c).count())
+        .unwrap();
 
     let consistent = node_counts.iter().filter(|&&c| c == mode_count).count();
     let consistency_pct = consistent as f64 / iterations as f64 * 100.0;
 
     let unique_hashes: std::collections::HashSet<u64> = hashes.iter().cloned().collect();
-    let hash_stability_pct = if unique_hashes.len() == 1 { 100.0 } else {
+    let hash_stability_pct = if unique_hashes.len() == 1 {
+        100.0
+    } else {
         // Percentage of captures that match the most common hash
-        let mode_hash = *hashes.iter().max_by_key(|&&h| {
-            hashes.iter().filter(|&&x| x == h).count()
-        }).unwrap();
+        let mode_hash = *hashes
+            .iter()
+            .max_by_key(|&&h| hashes.iter().filter(|&&x| x == h).count())
+            .unwrap();
         hashes.iter().filter(|&&h| h == mode_hash).count() as f64 / iterations as f64 * 100.0
     };
 
@@ -952,11 +1003,25 @@ fn test_capture_consistency() {
     let max_bytes = *byte_sizes.iter().max().unwrap();
 
     println!("\n=== Capture Consistency ({} iterations) ===", iterations);
-    println!("Node counts:     min={}, max={}, avg={}, mode={}", min_nodes, max_nodes, avg_nodes, mode_count);
+    println!(
+        "Node counts:     min={}, max={}, avg={}, mode={}",
+        min_nodes, max_nodes, avg_nodes, mode_count
+    );
     println!("Byte sizes:      min={}, max={}", min_bytes, max_bytes);
-    println!("Consistency:     {:.1}% ({}/{} match mode)", consistency_pct, consistent, iterations);
-    println!("Hash stability:  {:.1}% ({} unique hashes)", hash_stability_pct, unique_hashes.len());
-    println!("Named nodes:     min={}, max={}", named_counts.iter().min().unwrap(), named_counts.iter().max().unwrap());
+    println!(
+        "Consistency:     {:.1}% ({}/{} match mode)",
+        consistency_pct, consistent, iterations
+    );
+    println!(
+        "Hash stability:  {:.1}% ({} unique hashes)",
+        hash_stability_pct,
+        unique_hashes.len()
+    );
+    println!(
+        "Named nodes:     min={}, max={}",
+        named_counts.iter().min().unwrap(),
+        named_counts.iter().max().unwrap()
+    );
 
     // Consistency: at least 90% of captures should produce the same node count
     assert!(
@@ -988,8 +1053,7 @@ fn test_capture_consistency() {
 #[ignore]
 fn test_serialization_fidelity() {
     com_init();
-    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10))
-        .expect("Failed to launch Notepad");
+    let app = TestApp::launch(&NOTEPAD, Duration::from_secs(10)).expect("Failed to launch Notepad");
     app.focus();
 
     let uia = UiaContext::new().expect("UIA init failed");

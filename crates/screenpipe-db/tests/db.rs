@@ -723,7 +723,10 @@ mod tests {
         .await
         .unwrap();
 
-        let audio_chunk_id2 = db.insert_audio_chunk("test_audio2.mp4", None).await.unwrap();
+        let audio_chunk_id2 = db
+            .insert_audio_chunk("test_audio2.mp4", None)
+            .await
+            .unwrap();
 
         db.insert_audio_transcription(
             audio_chunk_id2,
@@ -1124,7 +1127,10 @@ mod tests {
         db.update_speaker_name(speaker.id, "test name")
             .await
             .unwrap();
-        let audio_chunk_id = db.insert_audio_chunk("test_audio1.mp4", None).await.unwrap();
+        let audio_chunk_id = db
+            .insert_audio_chunk("test_audio1.mp4", None)
+            .await
+            .unwrap();
         db.insert_audio_transcription(
             audio_chunk_id,
             "similar speakers test transcription one",
@@ -1145,7 +1151,10 @@ mod tests {
         // Create second speaker with audio data
         let speaker2 = db.insert_speaker(&vec![0.2; 512]).await.unwrap();
         db.update_speaker_name(speaker2.id, "name").await.unwrap();
-        let audio_chunk_id2 = db.insert_audio_chunk("test_audio2.mp4", None).await.unwrap();
+        let audio_chunk_id2 = db
+            .insert_audio_chunk("test_audio2.mp4", None)
+            .await
+            .unwrap();
         db.insert_audio_transcription(
             audio_chunk_id2,
             "similar speakers test transcription two",
@@ -1358,7 +1367,7 @@ mod tests {
         let results = db
             .search(
                 "Hello",
-                ContentType::UI,
+                ContentType::Accessibility,
                 100,
                 0,
                 None,
@@ -1388,7 +1397,7 @@ mod tests {
         let results = db
             .search(
                 "Hello",
-                ContentType::UI,
+                ContentType::Accessibility,
                 100,
                 0,
                 None,
@@ -1411,7 +1420,7 @@ mod tests {
         let results = db
             .search(
                 "nonexistent",
-                ContentType::UI,
+                ContentType::Accessibility,
                 100,
                 0,
                 None,
@@ -1434,7 +1443,7 @@ mod tests {
         let results = db
             .search(
                 "",
-                ContentType::UI,
+                ContentType::Accessibility,
                 100,
                 0,
                 None,
@@ -1593,7 +1602,10 @@ mod tests {
         let db = setup_test_db().await;
 
         // Insert an audio chunk via a committed transaction (baseline)
-        let chunk_id = db.insert_audio_chunk("rollback_test.mp4", None).await.unwrap();
+        let chunk_id = db
+            .insert_audio_chunk("rollback_test.mp4", None)
+            .await
+            .unwrap();
         assert!(chunk_id > 0);
 
         // Start a transaction, insert a row, then DROP without committing.
@@ -1608,17 +1620,492 @@ mod tests {
         }
 
         // Verify the uncommitted row was rolled back
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audio_chunks WHERE file_path = 'should_not_exist.mp4'")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM audio_chunks WHERE file_path = 'should_not_exist.mp4'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(row.0, 0, "Uncommitted row should have been rolled back");
 
         // Verify the pool is still healthy — we can acquire connections and do work.
         // If the connection was leaked (detached), the pool would eventually exhaust.
         for i in 0..5 {
-            let id = db.insert_audio_chunk(&format!("pool_health_{}.mp4", i), None).await.unwrap();
+            let id = db
+                .insert_audio_chunk(&format!("pool_health_{}.mp4", i), None)
+                .await
+                .unwrap();
             assert!(id > 0, "Pool should still be healthy after rollback");
         }
+    }
+
+    /// Manually index accessibility rows into FTS for tests.
+    /// The background FTS indexer doesn't run in tests, so we do it inline.
+    async fn index_accessibility_fts(db: &DatabaseManager) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO accessibility_fts(rowid, text_content, app_name, window_name) \
+             SELECT id, text_content, COALESCE(app_name, ''), COALESCE(window_name, '') \
+             FROM accessibility WHERE text_content IS NOT NULL AND text_content != ''",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    // =========================================================================
+    // Accessibility table tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_insert_and_search_accessibility() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text(
+            "Safari",
+            "Wikipedia",
+            "Hello from accessibility tree",
+            Some("https://en.wikipedia.org"),
+        )
+        .await
+        .unwrap();
+
+        index_accessibility_fts(&db).await;
+
+        let results = db
+            .search(
+                "Hello",
+                ContentType::Accessibility,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        if let SearchResult::UI(ui) = &results[0] {
+            assert_eq!(ui.text, "Hello from accessibility tree");
+            assert_eq!(ui.app_name, "Safari");
+            assert_eq!(ui.window_name, "Wikipedia");
+        } else {
+            panic!("Expected UI result from accessibility search");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_app_filter() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text("Chrome", "Google", "chrome text", None)
+            .await
+            .unwrap();
+        db.insert_accessibility_text("Firefox", "MDN", "firefox text", None)
+            .await
+            .unwrap();
+
+        index_accessibility_fts(&db).await;
+
+        let results = db
+            .search_accessibility("", Some("Chrome"), None, None, None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].app_name, "Chrome");
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_window_filter() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text("Chrome", "Gmail", "gmail text", None)
+            .await
+            .unwrap();
+        db.insert_accessibility_text("Chrome", "GitHub", "github text", None)
+            .await
+            .unwrap();
+
+        index_accessibility_fts(&db).await;
+
+        let results = db
+            .search_accessibility("", None, Some("GitHub"), None, None, 100, 0)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].window_name, "GitHub");
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_time_range() {
+        let db = setup_test_db().await;
+
+        let before = Utc::now();
+        // Sleep >1s because accessibility.timestamp uses CURRENT_TIMESTAMP (second precision)
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        db.insert_accessibility_text("App1", "Win1", "first entry", None)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+        let mid = Utc::now();
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+
+        db.insert_accessibility_text("App2", "Win2", "second entry", None)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
+        let after = Utc::now();
+
+        // Full range should return both (empty query bypasses FTS)
+        let results = db
+            .search(
+                "",
+                ContentType::Accessibility,
+                100,
+                0,
+                Some(before),
+                Some(after),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        // After mid should return only second
+        let results = db
+            .search(
+                "",
+                ContentType::Accessibility,
+                100,
+                0,
+                Some(mid),
+                Some(after),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        if let SearchResult::UI(ui) = &results[0] {
+            assert_eq!(ui.text, "second entry");
+        } else {
+            panic!("Expected UI result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_fts() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text(
+            "App",
+            "Win",
+            "the quick brown fox jumps over the lazy dog",
+            None,
+        )
+        .await
+        .unwrap();
+        db.insert_accessibility_text("App", "Win", "hello world greeting message", None)
+            .await
+            .unwrap();
+
+        index_accessibility_fts(&db).await;
+
+        let results = db
+            .search(
+                "fox",
+                ContentType::Accessibility,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        if let SearchResult::UI(ui) = &results[0] {
+            assert!(ui.text.contains("fox"));
+        } else {
+            panic!("Expected UI result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_empty_query() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text("App1", "Win1", "text one", None)
+            .await
+            .unwrap();
+        db.insert_accessibility_text("App2", "Win2", "text two", None)
+            .await
+            .unwrap();
+
+        let results = db
+            .search(
+                "",
+                ContentType::Accessibility,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_search_accessibility_no_matches() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text("App", "Win", "some text here", None)
+            .await
+            .unwrap();
+
+        index_accessibility_fts(&db).await;
+
+        let results = db
+            .search(
+                "nonexistentxyzquery",
+                ContentType::Accessibility,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_content_type_all_includes_accessibility() {
+        let db = setup_test_db().await;
+
+        // Insert Accessibility data (use empty query so FTS is not needed)
+        db.insert_accessibility_text("TestApp", "TestWin", "Hello from accessibility", None)
+            .await
+            .unwrap();
+
+        // ContentType::All with empty query returns all content types
+        let results = db
+            .search(
+                "",
+                ContentType::All,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let ui_count = results
+            .iter()
+            .filter(|r| matches!(r, SearchResult::UI(_)))
+            .count();
+        assert_eq!(ui_count, 1, "Expected 1 Accessibility result in All");
+    }
+
+    #[tokio::test]
+    async fn test_content_type_vision_includes_accessibility() {
+        let db = setup_test_db().await;
+
+        // Insert Accessibility data
+        db.insert_accessibility_text("App", "Win", "Vision accessibility text", None)
+            .await
+            .unwrap();
+
+        // All = OCR + Audio + Accessibility, empty query bypasses FTS
+        let results = db
+            .search(
+                "",
+                ContentType::All,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let ui_count = results
+            .iter()
+            .filter(|r| matches!(r, SearchResult::UI(_)))
+            .count();
+        assert_eq!(ui_count, 1, "Expected 1 Accessibility result in All");
+    }
+
+    #[tokio::test]
+    async fn test_content_type_ui_routes_to_accessibility() {
+        let db = setup_test_db().await;
+
+        // Insert into accessibility table (not ui_monitoring)
+        db.insert_accessibility_text(
+            "DeprecatedApp",
+            "DeprecatedWin",
+            "deprecated UI query text",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // ContentType::Accessibility should return accessibility data (empty query)
+        let results = db
+            .search(
+                "",
+                ContentType::Accessibility,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        if let SearchResult::UI(ui) = &results[0] {
+            assert_eq!(ui.text, "deprecated UI query text");
+        } else {
+            panic!("Expected UI result from ContentType::Accessibility");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_count_accessibility() {
+        let db = setup_test_db().await;
+
+        db.insert_accessibility_text("App1", "Win1", "count test one", None)
+            .await
+            .unwrap();
+        db.insert_accessibility_text("App2", "Win2", "count test two", None)
+            .await
+            .unwrap();
+        db.insert_accessibility_text("App3", "Win3", "count test three", None)
+            .await
+            .unwrap();
+
+        // Empty query count (bypasses FTS)
+        let count = db
+            .count_search_results(
+                "",
+                ContentType::Accessibility,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 3, "Should count all 3 accessibility entries");
+
+        // FTS query count
+        index_accessibility_fts(&db).await;
+
+        let count = db
+            .count_search_results(
+                "nonexistent",
+                ContentType::Accessibility,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "Should count 0 for non-matching query");
     }
 }

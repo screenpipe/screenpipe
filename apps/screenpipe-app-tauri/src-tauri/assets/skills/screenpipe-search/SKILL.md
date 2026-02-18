@@ -20,7 +20,7 @@ curl "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `q` | string | No | Search keywords. Be specific. |
-| `content_type` | string | No | `all` (default), `ocr`, `audio`, `vision`, `input` |
+| `content_type` | string | No | `all` (default), `ocr`, `audio`, `input`, `accessibility` |
 | `limit` | integer | No | Max results 1-20. Default: 10 |
 | `offset` | integer | No | Pagination offset. Default: 0 |
 | `start_time` | ISO 8601 | **Yes** | Start of time range. ALWAYS include this. |
@@ -32,10 +32,11 @@ curl "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=
 
 ### Content Types
 
-- `vision` or `ocr` — Screen text captured via OCR
+- `ocr` — Screen text captured via OCR
 - `audio` — Audio transcriptions (meetings, voice)
 - `input` — UI events: clicks, keystrokes, clipboard, app switches
-- `all` — Everything (default)
+- `accessibility` — Accessibility tree text
+- `all` — OCR + Audio + Accessibility (default)
 
 ### CRITICAL RULES
 
@@ -203,3 +204,18 @@ Do NOT use markdown links or multi-line code blocks for videos.
 - If asked about meetings, use `content_type=audio`.
 - If asked about a specific app, always use the `app_name` filter.
 - Combine multiple searches to build a complete picture (e.g., screen + audio for a meeting).
+- **For aggregation over large datasets**, use raw SQL instead of paginating through search results. The `/search` endpoint returns paginated results (default limit 20), so summarizing thousands of events requires raw SQL. Examples:
+
+```bash
+# Count accessibility events by app (last 24h)
+curl -X POST http://localhost:3030/raw_sql -H "Content-Type: application/json" \
+  -d '{"query": "SELECT app_name, COUNT(*) as count FROM accessibility WHERE timestamp > datetime(\"now\", \"-24 hours\") GROUP BY app_name ORDER BY count DESC"}'
+
+# Count input events by type and app (last 24h)
+curl -X POST http://localhost:3030/raw_sql -H "Content-Type: application/json" \
+  -d '{"query": "SELECT app_name, event_type, COUNT(*) as count FROM ui_events WHERE timestamp > datetime(\"now\", \"-24 hours\") GROUP BY app_name, event_type ORDER BY count DESC"}'
+
+# App usage summary from OCR frames (last 24h)
+curl -X POST http://localhost:3030/raw_sql -H "Content-Type: application/json" \
+  -d '{"query": "SELECT app_name, COUNT(*) as frames FROM frames WHERE timestamp > datetime(\"now\", \"-24 hours\") GROUP BY app_name ORDER BY frames DESC"}'
+```
