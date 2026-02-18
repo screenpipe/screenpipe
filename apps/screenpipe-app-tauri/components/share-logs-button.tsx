@@ -412,7 +412,7 @@ export const ShareLogsButton = ({
               variant="default"
               size="sm"
               onClick={sendLogs}
-              disabled={isSending || !feedbackText.trim()}
+              disabled={isSending}
               className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
             >
               {isSending ? (
@@ -423,7 +423,7 @@ export const ShareLogsButton = ({
               ) : (
                 <>
                   <Upload className="h-3 w-3" />
-                  <span>send feedback</span>
+                  <span>send logs & feedback</span>
                 </>
               )}
             </Button>

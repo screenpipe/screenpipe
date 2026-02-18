@@ -131,6 +131,10 @@ async fn test_transcription_accuracy() {
             .await
             .unwrap();
 
+            let mut whisper_state = whisper_context
+                .create_state()
+                .expect("failed to create whisper state");
+
             let mut transcription = String::new();
             while let Some(segment) = segments.recv().await {
                 let transcript = stt(
@@ -140,7 +144,7 @@ async fn test_transcription_accuracy() {
                     Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
                     None,
                     vec![Language::English],
-                    whisper_context.clone(),
+                    &mut whisper_state,
                 )
                 .await
                 .unwrap();

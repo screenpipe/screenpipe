@@ -146,12 +146,12 @@ export function CliCommandDialog({ settings }: CliCommandDialogProps) {
       settings.languages.forEach((id) => args.push(`--language ${id}`));
     }
 
-    if (settings.enableFrameCache) {
-      args.push("--enable-frame-cache");
+    if (settings.enableInputCapture) {
+      args.push("--enable-input-capture");
     }
 
-    if (settings.enableRealtimeAudioTranscription) {
-      args.push("--enable-realtime-audio-transcription");
+    if (settings.enableAccessibility) {
+      args.push("--enable-accessibility");
     }
 
     const envVarsStr =

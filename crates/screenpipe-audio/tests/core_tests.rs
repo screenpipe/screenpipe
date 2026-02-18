@@ -272,6 +272,10 @@ mod tests {
         .await
         .unwrap();
 
+        let mut whisper_state = whisper_context
+            .create_state()
+            .expect("failed to create whisper state");
+
         let mut transcription_result = String::new();
         while let Some(segment) = segments.recv().await {
             let transcript = stt(
@@ -281,7 +285,7 @@ mod tests {
                 Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
                 None,
                 vec![Language::Arabic],
-                whisper_context.clone(),
+                &mut whisper_state,
             )
             .await
             .unwrap();
@@ -374,6 +378,10 @@ mod tests {
         .await
         .unwrap();
 
+        let mut whisper_state = whisper_context
+            .create_state()
+            .expect("failed to create whisper state");
+
         let mut transcription = String::new();
         while let Some(segment) = segments.recv().await {
             let transcript = stt(
@@ -383,7 +391,7 @@ mod tests {
                 Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
                 None,
                 vec![Language::English],
-                whisper_context.clone(),
+                &mut whisper_state,
             )
             .await
             .unwrap();

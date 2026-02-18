@@ -5598,12 +5598,10 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
- "tower 0.5.3",
  "tower-http",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "url",
  "uuid",
  "windows 0.58.0",
 ]
@@ -9023,8 +9021,3 @@ dependencies = [
  "syn 2.0.116",
  "winnow",
 ]
-
-[[patch.unused]]
-name = "half"
-version = "2.5.0"
-source = "git+https://github.com/starkat99/half-rs.git?tag=v2.5.0#989d2700376b311a4765f43eaec8e9661bfa579a"

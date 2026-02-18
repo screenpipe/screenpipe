@@ -14,13 +14,14 @@ use screenpipe_audio::audio_manager::builder::TranscriptionMode;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_audio::core::device::{default_input_device, default_output_device, parse_audio_device};
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::vad::{VadEngineEnum, VadSensitivity};
 use screenpipe_core::Language;
 use screenpipe_db::DatabaseManager;
 use screenpipe_server::{
     analytics,
-    ResourceMonitor, SCServer, start_continuous_recording, start_sleep_monitor,
-    start_ui_recording, UiRecorderConfig,
+    ResourceMonitor, SCServer, start_continuous_recording, start_meeting_watcher,
+    start_sleep_monitor, start_ui_recording, UiRecorderConfig,
     vision_manager::{VisionManager, VisionManagerConfig, start_monitor_watcher, stop_monitor_watcher},
 };
 use screenpipe_vision::OcrEngine;
@@ -36,7 +37,6 @@ pub struct EmbeddedServerConfig {
     pub data_dir: PathBuf,
     pub fps: f64,
     pub audio_chunk_duration: u64,
-    pub video_chunk_duration: u64,
     pub disable_audio: bool,
     pub disable_vision: bool,
     pub disable_ocr: bool,
@@ -51,10 +51,10 @@ pub struct EmbeddedServerConfig {
     pub languages: Vec<String>,
     pub vad_sensitivity: String,
     pub deepgram_api_key: Option<String>,
-    pub enable_frame_cache: bool,
     pub analytics_enabled: bool,
     pub analytics_id: String,
-    pub enable_ui_events: bool,
+    pub enable_input_capture: bool,
+    pub enable_accessibility: bool,
     pub use_all_monitors: bool,
     pub use_chinese_mirror: bool,
     pub user_id: Option<String>,
@@ -66,8 +66,8 @@ pub struct EmbeddedServerConfig {
 
 impl EmbeddedServerConfig {
     pub fn from_store(store: &SettingsStore, data_dir: PathBuf) -> Self {
-        info!("Building EmbeddedServerConfig from store: enable_ui_events={}, disable_audio={}, disable_vision={}",
-              store.enable_ui_events, store.disable_audio, store.disable_vision);
+        info!("Building EmbeddedServerConfig from store: enable_input_capture={}, enable_accessibility={}, disable_audio={}, disable_vision={}",
+              store.enable_input_capture, store.enable_accessibility, store.disable_audio, store.disable_vision);
 
         // Fallback: if engine requires cloud auth but user is not logged in, use local whisper
         let audio_transcription_engine = {
@@ -94,7 +94,6 @@ impl EmbeddedServerConfig {
             data_dir,
             fps: if store.fps > 0.0 { store.fps as f64 } else { 1.0 },
             audio_chunk_duration: store.audio_chunk_duration as u64,
-            video_chunk_duration: 30,
             disable_audio: store.disable_audio,
             disable_vision: store.disable_vision,
             disable_ocr: store.disable_ocr,
@@ -119,10 +118,10 @@ impl EmbeddedServerConfig {
             } else {
                 Some(store.deepgram_api_key.clone())
             },
-            enable_frame_cache: store.enable_frame_cache,
             analytics_enabled: store.analytics_enabled,
             analytics_id: store.analytics_id.clone(),
-            enable_ui_events: store.enable_ui_events,
+            enable_input_capture: store.enable_input_capture,
+            enable_accessibility: store.enable_accessibility,
             use_all_monitors: store.use_all_monitors,
             use_chinese_mirror: store.use_chinese_mirror,
             ignored_urls: store.ignored_urls.clone(),
@@ -314,8 +313,19 @@ pub async fn start_embedded_server(
         }
     }
 
+    // Create meeting detector for smart transcription mode.
+    // Shared between audio manager (checks state) and UI recorder (feeds events).
+    let meeting_detector: Option<Arc<MeetingDetector>> =
+        if config.transcription_mode == TranscriptionMode::Smart {
+            let detector = Arc::new(MeetingDetector::new());
+            info!("smart mode: meeting detector enabled — will defer Whisper during meetings");
+            Some(detector)
+        } else {
+            None
+        };
+
     // Build audio manager
-    let audio_manager = AudioManagerBuilder::new()
+    let mut audio_manager_builder = AudioManagerBuilder::new()
         .audio_chunk_duration(Duration::from_secs(config.audio_chunk_duration))
         .vad_engine(VadEngineEnum::Silero)
         .vad_sensitivity(match config.vad_sensitivity.as_str() {
@@ -332,7 +342,13 @@ pub async fn start_embedded_server(
         .use_system_default_audio(config.use_system_default_audio)
         .deepgram_api_key(config.deepgram_api_key.clone())
         .output_path(data_path.clone())
-        .transcription_mode(config.transcription_mode.clone())
+        .transcription_mode(config.transcription_mode.clone());
+
+    if let Some(ref detector) = meeting_detector {
+        audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
+    }
+
+    let audio_manager = audio_manager_builder
         .build(db.clone())
         .await
         .map_err(|e| format!("Failed to build audio manager: {}", e))?;
@@ -369,7 +385,7 @@ pub async fn start_embedded_server(
         let db_clone = db.clone();
         let output_path = data_path.to_string_lossy().into_owned();
         let fps = config.fps;
-        let video_chunk_duration = Duration::from_secs(config.video_chunk_duration);
+        let video_chunk_duration = Duration::from_secs(60);
         let ocr_engine = Arc::new(ocr_engine);
         let use_pii_removal = config.use_pii_removal;
         let ignored_windows = config.ignored_windows.clone();
@@ -432,8 +448,6 @@ pub async fn start_embedded_server(
                 included_windows,
                 ignored_urls,
                 languages: languages_clone,
-                capture_unfocused_windows: false,
-                realtime_vision: false,
                 activity_feed,
                 video_quality,
                 vision_metrics: vision_metrics.clone(),
@@ -547,8 +561,6 @@ pub async fn start_embedded_server(
                         &included_windows,
                         &ignored_urls,
                         languages_clone.clone(),
-                        false,
-                        false,
                         None,
                         video_quality.clone(),
                         recording_metrics.clone(),
@@ -598,11 +610,14 @@ pub async fn start_embedded_server(
         });
     }
 
-    // Start UI event recording (accessibility events)
-    info!("UI events setting: enable_ui_events={}", config.enable_ui_events);
-    if config.enable_ui_events {
+    // Start UI event recording (database recording of accessibility events)
+    let ui_enabled = config.enable_input_capture || config.enable_accessibility;
+    info!("UI events setting: enable_input_capture={}, enable_accessibility={}", config.enable_input_capture, config.enable_accessibility);
+    if ui_enabled {
         let ui_config = UiRecorderConfig {
             enabled: true,
+            enable_tree_walker: config.enable_accessibility,
+            record_input_events: config.enable_input_capture,
             excluded_windows: config.ignored_windows.clone(),
             ignored_windows: config.ignored_windows.clone(),
             included_windows: config.included_windows.clone(),
@@ -621,6 +636,15 @@ pub async fn start_embedded_server(
                 }
             }
         });
+    }
+
+    // Start meeting watcher (standalone accessibility listener for smart mode)
+    // Independent of enable_input_capture/enable_accessibility toggles — only needs accessibility permission
+    if let Some(ref detector) = meeting_detector {
+        let detector_clone = detector.clone();
+        let _meeting_watcher = start_meeting_watcher(detector_clone);
+        // Handle kept alive by the spawned task — no need to store it
+        info!("meeting watcher started for smart transcription mode");
     }
 
     // Start background FTS indexer (replaces synchronous INSERT triggers)
@@ -709,9 +733,8 @@ pub async fn start_embedded_server(
     info!("HTTP server bound to port {}", config.port);
 
     // Start serving in background with the pre-bound listener
-    let enable_frame_cache = config.enable_frame_cache;
     tokio::spawn(async move {
-        if let Err(e) = server.start_with_listener(listener, enable_frame_cache).await {
+        if let Err(e) = server.start_with_listener(listener).await {
             error!("Server error: {:?}", e);
         }
     });

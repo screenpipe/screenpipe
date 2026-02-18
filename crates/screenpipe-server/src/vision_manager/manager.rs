@@ -27,8 +27,6 @@ pub struct VisionManagerConfig {
     pub included_windows: Vec<String>,
     pub ignored_urls: Vec<String>,
     pub languages: Vec<Language>,
-    pub capture_unfocused_windows: bool,
-    pub realtime_vision: bool,
     pub activity_feed: screenpipe_vision::ActivityFeedOption,
     pub video_quality: String,
     pub vision_metrics: Arc<PipelineMetrics>,
@@ -166,8 +164,6 @@ impl VisionManager {
         let included_windows = self.config.included_windows.clone();
         let ignored_urls = self.config.ignored_urls.clone();
         let languages = self.config.languages.clone();
-        let capture_unfocused_windows = self.config.capture_unfocused_windows;
-        let realtime_vision = self.config.realtime_vision;
         let activity_feed = self.config.activity_feed.clone();
         let video_quality = self.config.video_quality.clone();
         let vision_metrics = self.config.vision_metrics.clone();
@@ -189,8 +185,6 @@ impl VisionManager {
                     &ignored_urls,
                     video_chunk_duration,
                     languages.clone(),
-                    capture_unfocused_windows,
-                    realtime_vision,
                     activity_feed.clone(),
                     video_quality.clone(),
                     vision_metrics.clone(),

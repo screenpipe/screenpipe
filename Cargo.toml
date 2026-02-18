@@ -15,14 +15,6 @@ edition = "2021"
 
 [workspace.dependencies]
 # AI
-# candle = { version = "0.8.3", package = "candle-core" }
-# candle-nn = { version = "0.8.3", package = "candle-nn" }
-# candle-transformers = { version = "0.8.3", package = "candle-transformers" }
-
-candle = { git = "https://github.com/huggingface/candle.git", rev = "c930ab7e1a234f02a0f49350bf38f03f45e53757", package = "candle-core" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", rev = "c930ab7e1a234f02a0f49350bf38f03f45e53757", package = "candle-nn" }
-candle-transformers = { git = "https://github.com/huggingface/candle.git", rev = "c930ab7e1a234f02a0f49350bf38f03f45e53757", package = "candle-transformers" }
-
 tokenizers = "0.21.0"
 hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", features = [
     "native-tls",
@@ -49,9 +41,7 @@ reqwest-middleware = "0.4.1"
 
 [patch.crates-io]
 # enables chinese mirror (hf is banned in china) and native-tls
-hf-hub = { git = "https://github.com/neo773/hf-hub", features = ["native-tls"] }
-# Patch half to use a version compatible with both candle and ort
-half = { git = "https://github.com/starkat99/half-rs.git", tag = "v2.5.0" }
+hf-hub = { git = "https://github.com/neo773/hf-hub" }
 
 [workspace.metadata.vcpkg]
 git = "https://github.com/microsoft/vcpkg"

@@ -10,9 +10,9 @@ use crate::DatabaseManager;
 
 /// Batch size for FTS indexing. Process this many rows per table per cycle.
 /// Kept small to minimize write-lock hold time: each batch acquires
-/// BEGIN IMMEDIATE which blocks frame inserts. 500 rows ≈ a few hundred ms
-/// vs 2000 rows which could hold the lock for seconds on large monitors.
-const FTS_BATCH_SIZE: i64 = 500;
+/// BEGIN IMMEDIATE which blocks frame inserts. 100 rows ≈ tens of ms
+/// vs 500 rows which could hold the lock for hundreds of ms on large monitors.
+const FTS_BATCH_SIZE: i64 = 100;
 
 /// Delay between indexing each table to let frame inserts interleave.
 const FTS_INTER_TABLE_DELAY: Duration = Duration::from_millis(200);
@@ -150,9 +150,11 @@ async fn get_last_indexed(db: &DatabaseManager, table_name: &str) -> Result<i64,
     Ok(result.unwrap_or(0))
 }
 
-/// Update the last indexed rowid for a table.
+/// Update the last indexed rowid for a table, within an existing transaction.
+/// This avoids bypassing the write semaphore (which would create a third
+/// uncontrolled writer competing at the SQLite level).
 async fn update_last_indexed(
-    db: &DatabaseManager,
+    conn: &mut sqlx::SqliteConnection,
     table_name: &str,
     last_rowid: i64,
 ) -> Result<(), sqlx::Error> {
@@ -162,7 +164,7 @@ async fn update_last_indexed(
     )
     .bind(table_name)
     .bind(last_rowid)
-    .execute(&db.pool)
+    .execute(conn)
     .await?;
     Ok(())
 }
@@ -201,8 +203,8 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     .execute(&mut **tx.conn())
     .await?;
 
+    update_last_indexed(&mut **tx.conn(), "frames", max_rowid).await?;
     tx.commit().await?;
-    update_last_indexed(db, "frames", max_rowid).await?;
 
     Ok(count)
 }
@@ -243,8 +245,8 @@ async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     .execute(&mut **tx.conn())
     .await?;
 
+    update_last_indexed(&mut **tx.conn(), "ocr_text", max_rowid).await?;
     tx.commit().await?;
-    update_last_indexed(db, "ocr_text", max_rowid).await?;
 
     Ok(count)
 }
@@ -287,8 +289,8 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
     .execute(&mut **tx.conn())
     .await?;
 
+    update_last_indexed(&mut **tx.conn(), "audio_transcriptions", max_rowid).await?;
     tx.commit().await?;
-    update_last_indexed(db, "audio_transcriptions", max_rowid).await?;
 
     Ok(count)
 }
@@ -327,8 +329,8 @@ async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Erro
     .execute(&mut **tx.conn())
     .await?;
 
+    update_last_indexed(&mut **tx.conn(), "accessibility", max_rowid).await?;
     tx.commit().await?;
-    update_last_indexed(db, "accessibility", max_rowid).await?;
 
     Ok(count)
 }

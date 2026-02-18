@@ -64,7 +64,6 @@ export const settingsStoreSchema = z.object({
   // Audio Settings
   audioTranscriptionEngine: z.string().min(1, "Audio transcription engine is required"),
   realtimeAudioTranscriptionEngine: z.string(),
-  enableRealtimeAudioTranscription: z.boolean(),
   audioDevices: z.array(z.string()),
   disableAudio: z.boolean(),
   vadSensitivity: z.enum(["low", "medium", "high"]),
@@ -79,20 +78,15 @@ export const settingsStoreSchema = z.object({
   ignoredUrls: z.array(z.string()),
   disableVision: z.boolean(),
   useAllMonitors: z.boolean(),
-  enableRealtimeVision: z.boolean(),
   fps: z.number().min(0.1, "FPS must be at least 0.1").max(60, "FPS cannot exceed 60"),
-  enableFrameCache: z.boolean(),
 
   // System Settings
   dataDir: z.string().min(1, "Data directory is required"),
   port: z.number().int().min(1024, "Port must be at least 1024").max(65535, "Port cannot exceed 65535"),
-  restartInterval: z.number().int().min(0, "Restart interval cannot be negative"),
   analyticsEnabled: z.boolean(),
   useChineseMirror: z.boolean(),
   usePiiRemoval: z.boolean(),
   devMode: z.boolean(),
-  enableBeta: z.boolean(),
-  isFirstTimeUser: z.boolean(),
   autoStartEnabled: z.boolean(),
   platform: z.string(),
   
@@ -179,7 +173,6 @@ export const validateSettings = (settings: Partial<SettingsStore>): ValidationRe
 export const sanitizeValue = (field: ExtendedSettingsKeys, value: any): any => {
   switch (field) {
     case "port":
-    case "restartInterval":
     case "audioChunkDuration":
       return Math.max(0, parseInt(String(value)) || 0);
     
@@ -293,9 +286,7 @@ export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldV
       }
       break;
     case "custom":
-      if (apiKey.length < 10) {
-        return { isValid: false, error: "API key seems too short" };
-      }
+      // No length check — local providers (e.g. Ollama) use short keys
       break;
   }
   

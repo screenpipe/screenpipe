@@ -534,23 +534,6 @@ export function PipesSection() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {settings.user?.credits_balance != null && (
-            <div className="flex items-center gap-1.5 mr-2">
-              <Badge variant="outline" className="text-xs font-mono">
-                {settings.user.credits_balance} credits
-              </Badge>
-              {settings.user.credits_balance <= 10 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-xs h-7"
-                  onClick={() => setShowUpgrade(true)}
-                >
-                  buy more
-                </Button>
-              )}
-            </div>
-          )}
           <Button variant="outline" size="sm" disabled={refreshing} onClick={async () => {
             setRefreshing(true);
             await fetchPipes();

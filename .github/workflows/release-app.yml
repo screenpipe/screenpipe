@@ -738,6 +738,45 @@ jobs:
           echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
           echo "Setting MACOSX_DEPLOYMENT_TARGET=10.15 for std::filesystem support"
 
+      - name: Fix codesign cert chain on self-hosted runners
+        if: matrix.os_type == 'macos'
+        shell: bash
+        run: |
+          # On macOS 26 self-hosted runners, Tauri's bundler creates a temp keychain
+          # and sets the search list to just login+temp, dropping System.keychain.
+          # codesign then can't find Apple intermediate certs for chain verification.
+          # Fix: create a codesign wrapper that re-adds System.keychain before signing.
+          security unlock-keychain -p '' ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+
+          # Download Apple intermediate certs if not cached
+          mkdir -p ~/apple-certs
+          if [ ! -f ~/apple-certs/DeveloperIDG2CA.cer ]; then
+            curl -sL -o ~/apple-certs/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+            curl -sL -o ~/apple-certs/AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+            curl -sL -o ~/apple-certs/AppleIncRootCertificate.cer https://www.apple.com/appleca/AppleIncRootCertificate.cer
+          fi
+
+          # Create a codesign wrapper that injects System.keychain into the search list
+          # before each codesign call, so intermediate certs are always findable
+          mkdir -p ~/bin
+          cat > ~/bin/codesign << 'WRAPPER'
+          #!/bin/bash
+          # Re-add System.keychain to search list before every codesign call
+          current=$(/usr/bin/security list-keychains -d user 2>/dev/null | tr -d '"' | tr -d ' ')
+          if ! echo "$current" | grep -q "System.keychain"; then
+            keychains=()
+            while IFS= read -r kc; do
+              [ -n "$kc" ] && keychains+=("$kc")
+            done <<< "$current"
+            keychains+=("/Library/Keychains/System.keychain")
+            /usr/bin/security list-keychains -d user -s "${keychains[@]}" 2>/dev/null
+          fi
+          exec /usr/bin/codesign "$@"
+          WRAPPER
+          chmod +x ~/bin/codesign
+          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "Installed codesign wrapper to inject System.keychain"
+
       - name: Compute Tauri build args
         id: tauri-args
         shell: bash

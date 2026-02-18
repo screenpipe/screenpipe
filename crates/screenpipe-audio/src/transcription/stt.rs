@@ -15,14 +15,12 @@ use crate::utils::audio::resample;
 use crate::utils::ffmpeg::{get_new_file_path, write_audio_to_file};
 use crate::vad::VadEngine;
 use anyhow::Result;
-#[cfg(target_os = "macos")]
-use objc::rc::autoreleasepool;
 use screenpipe_core::Language;
 use std::path::PathBuf;
 use std::{sync::Arc, sync::Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tracing::error;
-use whisper_rs::WhisperContext;
+use whisper_rs::WhisperState;
 
 use crate::{AudioInput, TranscriptionResult};
 
@@ -36,7 +34,7 @@ pub async fn stt_sync(
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
     languages: Vec<Language>,
-    whisper_context: Arc<WhisperContext>,
+    whisper_state: &mut WhisperState,
 ) -> Result<String> {
     let audio = audio.to_vec();
 
@@ -49,7 +47,7 @@ pub async fn stt_sync(
         audio_transcription_engine,
         deepgram_api_key,
         languages,
-        whisper_context,
+        whisper_state,
     )
     .await
 }
@@ -62,7 +60,7 @@ pub async fn stt(
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
     languages: Vec<Language>,
-    whisper_context: Arc<WhisperContext>,
+    whisper_state: &mut WhisperState,
 ) -> Result<String> {
     let transcription: Result<String> =
         if audio_transcription_engine == AudioTranscriptionEngine::Deepgram.into() {
@@ -79,12 +77,12 @@ pub async fn stt(
                         device, e
                     );
                     // Fallback to Whisper
-                    process_with_whisper(audio, languages.clone(), whisper_context).await
+                    process_with_whisper(audio, languages.clone(), whisper_state).await
                 }
             }
         } else {
             // Existing Whisper implementation
-            process_with_whisper(audio, languages, whisper_context).await
+            process_with_whisper(audio, languages, whisper_state).await
         };
 
     transcription
@@ -102,7 +100,7 @@ pub async fn process_audio_input(
     deepgram_api_key: Option<String>,
     languages: Vec<Language>,
     output_sender: &crossbeam::channel::Sender<TranscriptionResult>,
-    whisper_context: Arc<WhisperContext>,
+    whisper_state: &mut WhisperState,
     metrics: Arc<AudioPipelineMetrics>,
 ) -> Result<()> {
     // Use the capture timestamp from when audio was recorded, not processing time.
@@ -153,41 +151,17 @@ pub async fn process_audio_input(
 
     while let Some(segment) = segments.recv().await {
         let path = new_file_path.clone();
-        let transcription_result = if cfg!(target_os = "macos") {
-            #[cfg(target_os = "macos")]
-            {
-                let timestamp = timestamp + segment.start.round() as u64;
-                autoreleasepool(|| {
-                    run_stt(
-                        segment,
-                        audio.device.clone(),
-                        audio_transcription_engine.clone(),
-                        deepgram_api_key.clone(),
-                        languages.clone(),
-                        path,
-                        timestamp,
-                        whisper_context.clone(),
-                    )
-                })
-                .await?
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                unreachable!("This code should not be reached on non-macOS platforms")
-            }
-        } else {
-            run_stt(
-                segment,
-                audio.device.clone(),
-                audio_transcription_engine.clone(),
-                deepgram_api_key.clone(),
-                languages.clone(),
-                path,
-                timestamp,
-                whisper_context.clone(),
-            )
-            .await?
-        };
+        let transcription_result = run_stt(
+            segment,
+            audio.device.clone(),
+            audio_transcription_engine.clone(),
+            deepgram_api_key.clone(),
+            languages.clone(),
+            path,
+            timestamp,
+            whisper_state,
+        )
+        .await?;
 
         if output_sender.send(transcription_result).is_err() {
             break;
@@ -206,7 +180,7 @@ pub async fn run_stt(
     languages: Vec<Language>,
     path: String,
     timestamp: u64,
-    whisper_context: Arc<WhisperContext>,
+    whisper_state: &mut WhisperState,
 ) -> Result<TranscriptionResult> {
     let audio = segment.samples.clone();
     let sample_rate = segment.sample_rate;
@@ -217,7 +191,7 @@ pub async fn run_stt(
         audio_transcription_engine.clone(),
         deepgram_api_key.clone(),
         languages.clone(),
-        whisper_context,
+        whisper_state,
     )
     .await
     {

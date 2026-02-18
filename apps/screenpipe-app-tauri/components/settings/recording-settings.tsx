@@ -1334,12 +1334,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
               {(isMacOS || platform() === "windows") && <Separator />}
 
-              {/* Element capture (accessibility tree walker) */}
+              {/* Accessibility text capture (AX tree walker) */}
               {(isMacOS || platform() === "windows") && (
                 <div className="flex items-center justify-between ml-[26px] gap-3">
                   <div className="min-w-0">
                     <h4 className="text-sm text-foreground flex items-center gap-1.5">
-                      Element capture
+                      Accessibility text
                       <Badge variant="outline" className="text-[10px] px-1 py-0">beta</Badge>
                       <HelpTooltip text="Reads text directly from UI elements using macOS/Windows accessibility APIs. Much lower CPU usage (~2-5%) than OCR. Works great for native apps, browsers, and standard UI. May miss text in images, games, terminals with GPU rendering, or custom-drawn content. Both methods can run together for best coverage." />
                     </h4>
@@ -1347,9 +1347,30 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   </div>
                   <Switch
                     className="shrink-0"
-                    id="enableUiEvents"
-                    checked={settings.enableUiEvents ?? false}
-                    onCheckedChange={(checked) => handleSettingsChange({ enableUiEvents: checked }, true)}
+                    id="enableAccessibility"
+                    checked={settings.enableAccessibility ?? true}
+                    onCheckedChange={(checked) => handleSettingsChange({ enableAccessibility: checked }, true)}
+                  />
+                </div>
+              )}
+
+              {(isMacOS || platform() === "windows") && <Separator />}
+
+              {/* Input capture (keyboard, mouse, clipboard) */}
+              {(isMacOS || platform() === "windows") && (
+                <div className="flex items-center justify-between ml-[26px] gap-3">
+                  <div className="min-w-0">
+                    <h4 className="text-sm text-foreground flex items-center gap-1.5">
+                      Input capture
+                      <HelpTooltip text="Records clicks, keystrokes, and clipboard events. Useful for detailed activity tracking and workflow analysis. Requires input monitoring permission on macOS." />
+                    </h4>
+                    <p className="text-xs text-muted-foreground">Records clicks, keystrokes, and clipboard</p>
+                  </div>
+                  <Switch
+                    className="shrink-0"
+                    id="enableInputCapture"
+                    checked={settings.enableInputCapture ?? false}
+                    onCheckedChange={(checked) => handleSettingsChange({ enableInputCapture: checked }, true)}
                   />
                 </div>
               )}

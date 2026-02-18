@@ -169,9 +169,9 @@ impl SCServer {
         self
     }
 
-    pub async fn start(self, enable_frame_cache: bool) -> Result<(), std::io::Error> {
+    pub async fn start(self) -> Result<(), std::io::Error> {
         // Create the OpenAPI server
-        let app = self.create_router(enable_frame_cache).await;
+        let app = self.create_router().await;
 
         // Create the listener
         let listener = TcpListener::bind(&self.addr).await?;
@@ -193,9 +193,8 @@ impl SCServer {
     pub async fn start_with_listener(
         self,
         listener: TcpListener,
-        enable_frame_cache: bool,
     ) -> Result<(), std::io::Error> {
-        let app = self.create_router(enable_frame_cache).await;
+        let app = self.create_router().await;
         info!("Server listening on {}", self.addr);
 
         serve(
@@ -208,7 +207,7 @@ impl SCServer {
         Ok(())
     }
 
-    pub async fn create_router(&self, enable_frame_cache: bool) -> Router {
+    pub async fn create_router(&self) -> Router {
         let api_request_count = Arc::new(AtomicUsize::new(0));
 
         // Spawn periodic API usage reporter (every 5 minutes)
@@ -302,29 +301,21 @@ impl SCServer {
             screenpipe_dir: self.screenpipe_dir.clone(),
             vision_disabled: self.vision_disabled,
             audio_disabled: self.audio_disabled,
-            frame_cache: if enable_frame_cache {
-                match FrameCache::new(self.screenpipe_dir.clone().join("data"), self.db.clone())
-                    .await
-                {
-                    Ok(cache) => Some(Arc::new(cache)),
-                    Err(e) => {
-                        error!("Failed to create frame cache, starting without it: {:?}", e);
-                        None
-                    }
+            frame_cache: match FrameCache::new(self.screenpipe_dir.clone().join("data"), self.db.clone())
+                .await
+            {
+                Ok(cache) => Some(Arc::new(cache)),
+                Err(e) => {
+                    error!("Failed to create frame cache, starting without it: {:?}", e);
+                    None
                 }
-            } else {
-                None
             },
             // Frame image cache: increased from 100 to 1000 for better timeline scrolling performance.
             // Each entry is just a file path (~100 bytes) + Instant, so 1000 entries ≈ 100KB.
             // This dramatically reduces FFmpeg extraction calls when scrolling through timeline.
-            frame_image_cache: if enable_frame_cache {
-                Some(Arc::new(Mutex::new(LruCache::new(
-                    NonZeroUsize::new(1000).unwrap(),
-                ))))
-            } else {
-                None
-            },
+            frame_image_cache: Some(Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(1000).unwrap(),
+            )))),
             ws_connection_count: Arc::new(AtomicUsize::new(0)),
             // Search cache: 1000 entries, 60 second TTL
             search_cache: MokaCache::builder()

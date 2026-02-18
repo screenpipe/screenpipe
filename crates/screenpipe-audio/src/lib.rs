@@ -14,4 +14,5 @@ pub use utils::audio::resample;
 pub mod audio_manager;
 mod device;
 pub mod idle_detector;
+pub mod meeting_detector;
 mod segmentation;

@@ -15,6 +15,7 @@ use screenpipe_audio::{
     core::device::{
         default_input_device, default_output_device, list_audio_devices, parse_audio_device,
     },
+    meeting_detector::MeetingDetector,
 };
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::find_ffmpeg_path;
@@ -30,7 +31,7 @@ use screenpipe_server::{
     },
     cli_pipe::handle_pipe_command,
     cli_status::handle_status_command,
-    start_continuous_recording, start_sleep_monitor, start_ui_recording,
+    start_continuous_recording, start_meeting_watcher, start_sleep_monitor, start_ui_recording,
     sync_provider::ScreenpipeSyncProvider,
     vision_manager::{
         start_monitor_watcher, stop_monitor_watcher, VisionManager, VisionManagerConfig,
@@ -311,14 +312,6 @@ async fn main() -> anyhow::Result<()> {
                         "audio_transcription_engine".into(),
                         json!(format!("{:?}", cli.audio_transcription_engine)),
                     );
-                    map.insert(
-                        "enable_realtime_audio_transcription".into(),
-                        json!(cli.enable_realtime_audio_transcription),
-                    );
-                    map.insert(
-                        "enable_realtime_vision".into(),
-                        json!(cli.enable_realtime_vision),
-                    );
                     map.insert("ocr_engine".into(), json!(format!("{:?}", cli.ocr_engine)));
                     map.insert("monitor_ids".into(), json!(cli.monitor_id));
                     map.insert("use_all_monitors".into(), json!(cli.use_all_monitors));
@@ -337,26 +330,13 @@ async fn main() -> anyhow::Result<()> {
                         "vad_sensitivity".into(),
                         json!(format!("{:?}", cli.vad_sensitivity)),
                     );
-                    map.insert(
-                        "video_chunk_duration".into(),
-                        json!(cli.video_chunk_duration),
-                    );
-                    map.insert("enable_frame_cache".into(), json!(cli.enable_frame_cache));
-                    map.insert(
-                        "capture_unfocused_windows".into(),
-                        json!(cli.capture_unfocused_windows),
-                    );
-
-                    map.insert("enable_ui_events".into(), json!(cli.enable_ui_events));
+                    map.insert("enable_input_capture".into(), json!(cli.enable_input_capture));
+                    map.insert("enable_accessibility".into(), json!(cli.enable_accessibility));
                     map.insert("enable_sync".into(), json!(cli.enable_sync));
                     map.insert("sync_interval_secs".into(), json!(cli.sync_interval_secs));
                     map.insert("debug".into(), json!(cli.debug));
                     // Only send counts for privacy-sensitive lists (not actual values)
                     map.insert("audio_device_count".into(), json!(cli.audio_device.len()));
-                    map.insert(
-                        "realtime_audio_device_count".into(),
-                        json!(cli.realtime_audio_device.len()),
-                    );
                     map.insert(
                         "ignored_windows_count".into(),
                         json!(cli.ignored_windows.len()),
@@ -497,12 +477,9 @@ async fn main() -> anyhow::Result<()> {
     cli.disable_audio = record_args.disable_audio;
     cli.audio_device = record_args.audio_device.clone();
     cli.use_system_default_audio = record_args.use_system_default_audio;
-    cli.realtime_audio_device = record_args.realtime_audio_device.clone();
     cli.data_dir = record_args.data_dir.clone();
     cli.debug = record_args.debug;
     cli.audio_transcription_engine = record_args.audio_transcription_engine.clone();
-    cli.enable_realtime_audio_transcription = record_args.enable_realtime_audio_transcription;
-    cli.enable_realtime_vision = record_args.enable_realtime_vision;
     cli.ocr_engine = record_args.ocr_engine.clone();
     cli.monitor_id = record_args.monitor_id.clone();
     cli.use_all_monitors = record_args.use_all_monitors;
@@ -513,15 +490,13 @@ async fn main() -> anyhow::Result<()> {
     cli.ignored_windows = record_args.ignored_windows.clone();
     cli.included_windows = record_args.included_windows.clone();
     cli.ignored_urls = record_args.ignored_urls.clone();
-    cli.video_chunk_duration = record_args.video_chunk_duration;
     cli.deepgram_api_key = record_args.deepgram_api_key.clone();
     cli.auto_destruct_pid = record_args.auto_destruct_pid;
     cli.vad_sensitivity = record_args.vad_sensitivity.clone();
     cli.disable_telemetry = record_args.disable_telemetry;
-    cli.enable_frame_cache = record_args.enable_frame_cache;
-    cli.capture_unfocused_windows = record_args.capture_unfocused_windows;
     cli.video_quality = record_args.video_quality.clone();
-    cli.enable_ui_events = record_args.enable_ui_events;
+    cli.enable_input_capture = record_args.enable_input_capture;
+    cli.enable_accessibility = record_args.enable_accessibility;
     cli.enable_sync = record_args.enable_sync;
     cli.sync_token = record_args.sync_token.clone();
     cli.sync_password = record_args.sync_password.clone();
@@ -554,7 +529,11 @@ async fn main() -> anyhow::Result<()> {
 
     let mut audio_devices = Vec::new();
 
-    let mut realtime_audio_devices = Vec::new();
+    // Auto-detect realtime audio: enable for cloud engines (Deepgram)
+    let enable_realtime_audio = matches!(
+        cli.audio_transcription_engine,
+        CliAudioTranscriptionEngine::Deepgram
+    );
 
     if !cli.disable_audio {
         if cli.audio_device.is_empty() {
@@ -578,34 +557,10 @@ async fn main() -> anyhow::Result<()> {
         if audio_devices.is_empty() {
             warn!("no audio devices available.");
         }
-
-        if cli.enable_realtime_audio_transcription {
-            if cli.realtime_audio_device.is_empty() {
-                // Use default devices
-                if let Ok(input_device) = default_input_device() {
-                    realtime_audio_devices.push(Arc::new(input_device.clone()));
-                }
-                if let Ok(output_device) = default_output_device().await {
-                    realtime_audio_devices.push(Arc::new(output_device.clone()));
-                }
-            } else {
-                for d in &cli.realtime_audio_device {
-                    match parse_audio_device(d) {
-                        Ok(device) => realtime_audio_devices.push(Arc::new(device.clone())),
-                        Err(e) => {
-                            warn!("skipping unparseable realtime audio device '{}': {}", d, e)
-                        }
-                    }
-                }
-            }
-
-            if realtime_audio_devices.is_empty() {
-                eprintln!("no realtime audio devices available. realtime audio transcription will be disabled.");
-            }
-        }
     }
 
     let audio_devices_clone = audio_devices.clone();
+
     let resource_monitor = ResourceMonitor::new(!cli.disable_telemetry);
     resource_monitor.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
 
@@ -672,7 +627,6 @@ async fn main() -> anyhow::Result<()> {
     let monitor_ids_clone = monitor_ids.clone();
     let ignored_windows_clone = cli.ignored_windows.clone();
     let included_windows_clone = cli.included_windows.clone();
-    let realtime_audio_devices_clone = realtime_audio_devices.clone();
     // Create UI recorder config early before cli is moved
     let ui_recorder_config = cli.to_ui_recorder_config();
 
@@ -685,19 +639,36 @@ async fn main() -> anyhow::Result<()> {
 
     let audio_chunk_duration = Duration::from_secs(cli.audio_chunk_duration);
 
+    // Create meeting detector for smart transcription mode.
+    // Shared between audio manager (checks state) and UI recorder (feeds events).
+    let transcription_mode: screenpipe_audio::audio_manager::TranscriptionMode =
+        cli.transcription_mode.into();
+    let meeting_detector: Option<Arc<MeetingDetector>> =
+        if transcription_mode == screenpipe_audio::audio_manager::TranscriptionMode::Smart {
+            let detector = Arc::new(MeetingDetector::new());
+            info!("smart mode: meeting detector enabled — will defer Whisper during meetings");
+            Some(detector)
+        } else {
+            None
+        };
+
     let mut audio_manager_builder = AudioManagerBuilder::new()
         .audio_chunk_duration(audio_chunk_duration)
         .vad_engine(vad_engine.into())
         .vad_sensitivity(cli.vad_sensitivity.into())
         .languages(languages.clone())
         .transcription_engine(cli.audio_transcription_engine.into())
-        .realtime(cli.enable_realtime_audio_transcription)
+        .realtime(enable_realtime_audio)
         .enabled_devices(audio_devices)
         .deepgram_api_key(cli.deepgram_api_key.clone())
         .output_path(PathBuf::from(output_path_clone.clone().to_string()))
         .use_pii_removal(cli.use_pii_removal)
         .use_system_default_audio(cli.use_system_default_audio)
-        .transcription_mode(cli.transcription_mode.into());
+        .transcription_mode(transcription_mode);
+
+    if let Some(ref detector) = meeting_detector {
+        audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
+    }
 
     let audio_manager = match audio_manager_builder.build(db.clone()).await {
         Ok(manager) => Arc::new(manager),
@@ -742,15 +713,13 @@ async fn main() -> anyhow::Result<()> {
         let config = VisionManagerConfig {
             output_path: output_path_clone.to_string(),
             fps,
-            video_chunk_duration: Duration::from_secs(cli.video_chunk_duration),
+            video_chunk_duration: Duration::from_secs(60),
             ocr_engine: Arc::new(cli.ocr_engine.clone().into()),
             use_pii_removal: cli.use_pii_removal,
             ignored_windows: cli.ignored_windows.clone(),
             included_windows: cli.included_windows.clone(),
             ignored_urls: cli.ignored_urls.clone(),
             languages: languages_clone.clone(),
-            capture_unfocused_windows: cli.capture_unfocused_windows,
-            realtime_vision: cli.enable_realtime_audio_transcription,
             activity_feed,
             video_quality: cli.video_quality.clone(),
             vision_metrics: vision_metrics.clone(),
@@ -831,7 +800,7 @@ async fn main() -> anyhow::Result<()> {
                     db_clone.clone(),
                     output_path_clone.clone(),
                     fps,
-                    Duration::from_secs(cli.video_chunk_duration),
+                    Duration::from_secs(60),
                     Arc::new(cli.ocr_engine.clone().into()),
                     monitor_ids_clone.clone(),
                     cli.use_pii_removal,
@@ -841,8 +810,6 @@ async fn main() -> anyhow::Result<()> {
                     &cli.included_windows,
                     &cli.ignored_urls,
                     languages_clone.clone(),
-                    cli.capture_unfocused_windows,
-                    cli.enable_realtime_audio_transcription,
                     activity_feed_legacy,
                     cli.video_quality.clone(),
                     vision_metrics_for_recording.clone(),
@@ -957,15 +924,7 @@ async fn main() -> anyhow::Result<()> {
         "│ audio chunk duration   │ {:<34} │",
         format!("{} seconds", cli.audio_chunk_duration)
     );
-    println!(
-        "│ video chunk duration   │ {:<34} │",
-        format!("{} seconds", cli.video_chunk_duration)
-    );
     println!("│ port                   │ {:<34} │", cli.port);
-    println!(
-        "│ realtime audio enabled │ {:<34} │",
-        cli.enable_realtime_audio_transcription
-    );
     println!("│ audio disabled         │ {:<34} │", cli.disable_audio);
     println!("│ vision disabled        │ {:<34} │", cli.disable_vision);
     println!(
@@ -1002,14 +961,6 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "│ included windows       │ {:<34} │",
         format_cell(&format!("{:?}", &included_windows_clone), VALUE_WIDTH)
-    );
-    println!(
-        "│ frame cache            │ {:<34} │",
-        cli.enable_frame_cache
-    );
-    println!(
-        "│ capture unfocused wins │ {:<34} │",
-        cli.capture_unfocused_windows
     );
     println!(
         "│ cloud sync             │ {:<34} │",
@@ -1133,35 +1084,6 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
-    // Realtime Audio devices section
-    println!("├────────────────────────┼────────────────────────────────────┤");
-    println!("│ realtime audio devices │                                    │");
-
-    if cli.disable_audio || !cli.enable_realtime_audio_transcription {
-        println!("│ {:<22} │ {:<34} │", "", "disabled");
-    } else if realtime_audio_devices_clone.is_empty() {
-        println!("│ {:<22} │ {:<34} │", "", "no devices available");
-    } else {
-        let total_devices = realtime_audio_devices_clone.len();
-        for (_, device) in realtime_audio_devices_clone
-            .iter()
-            .enumerate()
-            .take(MAX_ITEMS_TO_DISPLAY)
-        {
-            let device_str = device.deref().to_string();
-            let formatted_device = format_cell(&device_str, VALUE_WIDTH);
-
-            println!("│ {:<22} │ {:<34} │", "", formatted_device);
-        }
-        if total_devices > MAX_ITEMS_TO_DISPLAY {
-            println!(
-                "│ {:<22} │ {:<34} │",
-                "",
-                format!("... and {} more", total_devices - MAX_ITEMS_TO_DISPLAY)
-            );
-        }
-    }
-
     println!("└────────────────────────┴────────────────────────────────────┘");
 
     // Add warning for cloud arguments and telemetry
@@ -1213,7 +1135,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Start UI event recording
+    // Start UI event recording (database recording of accessibility events)
     let ui_recorder_handle = {
         if ui_recorder_config.enabled {
             info!("starting UI event capture");
@@ -1230,13 +1152,21 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Start meeting watcher (standalone accessibility listener for smart mode)
+    // Independent of enable_input_capture/enable_accessibility — only needs accessibility permission
+    let _meeting_watcher_handle = if let Some(ref detector) = meeting_detector {
+        Some(start_meeting_watcher(detector.clone()))
+    } else {
+        None
+    };
+
     // Start background FTS indexer (replaces synchronous INSERT triggers)
     let _fts_handle = screenpipe_db::fts_indexer::start_fts_indexer(db.clone());
 
     // Periodic WAL checkpoint to prevent unbounded WAL growth
     db.start_wal_maintenance();
 
-    let server_future = server.start(cli.enable_frame_cache);
+    let server_future = server.start();
     pin_mut!(server_future);
 
     // Add auto-destruct watcher

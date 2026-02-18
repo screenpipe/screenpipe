@@ -1,8 +1,7 @@
 use super::detect_language;
 use anyhow::Result;
 use screenpipe_core::Language;
-use std::sync::Arc;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperState};
 /// Processes audio data using the Whisper model to generate transcriptions.
 ///
 /// # Returns
@@ -10,11 +9,8 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 pub async fn process_with_whisper(
     audio: &[f32],
     languages: Vec<Language>,
-    whisper_context: Arc<WhisperContext>,
+    whisper_state: &mut WhisperState,
 ) -> Result<String> {
-    let mut whisper_state = whisper_context
-        .create_state()
-        .map_err(|e| anyhow::anyhow!("failed to create whisper state: {}", e))?;
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
 

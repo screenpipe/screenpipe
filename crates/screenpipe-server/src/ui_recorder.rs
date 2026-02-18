@@ -69,6 +69,8 @@ pub struct UiRecorderConfig {
     pub enable_tree_walker: bool,
     /// Tree walk interval in milliseconds
     pub tree_walk_interval_ms: u64,
+    /// Record input events to DB (false = still capture for wake signal but don't write)
+    pub record_input_events: bool,
 }
 
 #[cfg(feature = "ui-events")]
@@ -93,6 +95,7 @@ impl Default for UiRecorderConfig {
             batch_timeout_ms: 1000,
             enable_tree_walker: true,
             tree_walk_interval_ms: 3000,
+            record_input_events: true,
         }
     }
 }
@@ -203,6 +206,7 @@ pub async fn start_ui_recording(
     let stop_flag_clone = stop_flag.clone();
     let batch_size = config.batch_size;
     let batch_timeout = Duration::from_millis(config.batch_timeout_ms);
+    let record_input_events = config.record_input_events;
 
     // Start the recording
     let handle = match recorder.start() {
@@ -253,7 +257,9 @@ pub async fn start_ui_recording(
                         }
                     }
 
-                    batch.push(db_event);
+                    if record_input_events {
+                        batch.push(db_event);
+                    }
 
                     // Flush if batch is full
                     if batch.len() >= batch_size {

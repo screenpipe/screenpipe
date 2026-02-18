@@ -94,6 +94,11 @@ pub struct AudioPipelineHealthInfo {
     pub segments_batch_processed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_paused_reason: Option<String>,
+    // Meeting detection fields (smart mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meeting_detected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meeting_app: Option<String>,
 }
 
 #[oasgen]
@@ -305,6 +310,21 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                 .audio_manager
                 .transcription_paused
                 .load(Ordering::Relaxed);
+
+            // Query meeting detector state
+            let (meeting_detected, meeting_app) =
+                if let Some(detector) = state.audio_manager.meeting_detector() {
+                    let in_meeting = detector.is_in_meeting();
+                    let app = if in_meeting {
+                        detector.current_meeting_app().await
+                    } else {
+                        None
+                    };
+                    (Some(in_meeting), app)
+                } else {
+                    (None, None)
+                };
+
             Some(AudioPipelineHealthInfo {
                 uptime_secs: snap.uptime_secs,
                 chunks_sent: snap.chunks_sent,
@@ -340,6 +360,8 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                     None
                 },
                 batch_paused_reason: None, // populated by idle detector if available
+                meeting_detected,
+                meeting_app,
             })
         } else {
             None

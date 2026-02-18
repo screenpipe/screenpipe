@@ -407,6 +407,88 @@ impl DatabaseManager {
         }
     }
 
+    /// Combined audio chunk + transcription insert in a single transaction.
+    /// This halves the number of BEGIN IMMEDIATE acquisitions compared to
+    /// calling get_or_insert_audio_chunk() + insert_audio_transcription() separately.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_audio_chunk_and_transcription(
+        &self,
+        file_path: &str,
+        transcription: &str,
+        offset_index: i64,
+        transcription_engine: &str,
+        device: &AudioDevice,
+        speaker_id: Option<i64>,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
+        timestamp: Option<DateTime<Utc>>,
+    ) -> Result<i64, sqlx::Error> {
+        // Skip empty transcriptions early (no lock needed)
+        let trimmed = transcription.trim();
+        if trimmed.is_empty() {
+            // Still need to ensure the audio chunk exists
+            return self.get_or_insert_audio_chunk(file_path, timestamp).await;
+        }
+
+        // Read phase: no write lock needed
+        let existing_chunk_id = self.get_audio_chunk_id(file_path).await?;
+
+        if self
+            .has_similar_recent_transcription(trimmed, DEDUP_TIME_WINDOW_SECS)
+            .await?
+        {
+            debug!(
+                "Skipping duplicate transcription (cross-device): {:?}",
+                &trimmed[..trimmed.len().min(50)]
+            );
+            // Still return the chunk id
+            if existing_chunk_id != 0 {
+                return Ok(existing_chunk_id);
+            }
+            // Need to insert the chunk even if transcription is skipped
+            return self.insert_audio_chunk(file_path, timestamp).await;
+        }
+
+        // Write phase: single transaction for both chunk + transcription
+        let ts = timestamp.unwrap_or_else(Utc::now);
+        let text_length = transcription.len() as i64;
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        // Insert audio chunk if it doesn't exist yet
+        let audio_chunk_id = if existing_chunk_id != 0 {
+            existing_chunk_id
+        } else {
+            sqlx::query("INSERT INTO audio_chunks (file_path, timestamp) VALUES (?1, ?2)")
+                .bind(file_path)
+                .bind(ts)
+                .execute(&mut **tx.conn())
+                .await?
+                .last_insert_rowid()
+        };
+
+        // Insert the transcription
+        sqlx::query(
+            "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )
+        .bind(audio_chunk_id)
+        .bind(transcription)
+        .bind(offset_index)
+        .bind(ts)
+        .bind(transcription_engine)
+        .bind(&device.name)
+        .bind(device.device_type == DeviceType::Input)
+        .bind(speaker_id)
+        .bind(start_time)
+        .bind(end_time)
+        .bind(text_length)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(audio_chunk_id)
+    }
+
     /// Check if a similar transcription exists in the recent time window.
     /// Used for cross-device deduplication.
     async fn has_similar_recent_transcription(
@@ -2078,6 +2160,7 @@ impl DatabaseManager {
         LEFT JOIN ocr_text ot ON f.id = ot.frame_id
         WHERE f.timestamp >= ?1 AND f.timestamp <= ?2
         ORDER BY f.timestamp DESC, f.offset_index DESC
+        LIMIT 10000
     "#;
 
         // Get audio data with proper time windows for synchronization
@@ -2101,6 +2184,7 @@ impl DatabaseManager {
         LEFT JOIN speakers s ON at.speaker_id = s.id
         WHERE at.timestamp >= ?1 AND at.timestamp <= ?2
         ORDER BY at.timestamp DESC
+        LIMIT 10000
         "#;
 
         // Execute queries in parallel
@@ -3748,6 +3832,8 @@ LIMIT ? OFFSET ?
     pub async fn insert_ui_event(&self, event: &InsertUiEvent) -> Result<i64, sqlx::Error> {
         let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
 
+        let mut tx = self.begin_immediate_with_retry().await?;
+
         let result = sqlx::query(
             r#"
             INSERT INTO ui_events (
@@ -3794,10 +3880,13 @@ LIMIT ? OFFSET ?
         .bind(&event.element_automation_id)
         .bind(&event.element_bounds)
         .bind(event.frame_id)
-        .execute(&self.pool)
+        .execute(&mut **tx.conn())
         .await?;
 
-        Ok(result.last_insert_rowid())
+        let id = result.last_insert_rowid();
+        tx.commit().await?;
+
+        Ok(id)
     }
 
     /// Insert multiple UI events in a batch

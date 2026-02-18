@@ -21,6 +21,7 @@ mod server;
 pub mod sleep_monitor;
 mod sync_api;
 pub mod sync_provider;
+pub mod meeting_watcher;
 pub mod ui_recorder;
 mod video;
 pub mod video_cache;
@@ -42,6 +43,7 @@ pub use server::PaginatedResponse;
 pub use server::SCServer;
 pub use server::{api_list_monitors_handler as api_list_monitors, MonitorInfo};
 pub use sleep_monitor::start_sleep_monitor;
+pub use meeting_watcher::start_meeting_watcher;
 pub use ui_recorder::{start_ui_recording, UiRecorderConfig, UiRecorderHandle};
 pub use video::{
     video_quality_to_crf, video_quality_to_jpeg_q, video_quality_to_preset, FrameWriteInfo,

@@ -276,7 +276,8 @@ impl AnalyticsManager {
             "setting_video_quality": get_str("videoQuality").unwrap_or("balanced"),
 
             // Element capture / accessibility
-            "setting_enable_ui_events": get_bool("enableUiEvents").unwrap_or(true),
+            "setting_enable_input_capture": get_bool("enableInputCapture").unwrap_or(false),
+            "setting_enable_accessibility": get_bool("enableAccessibility").unwrap_or(true),
 
             // Audio
             "setting_disable_audio": get_bool("disableAudio").unwrap_or(false),
@@ -292,12 +293,8 @@ impl AnalyticsManager {
             "setting_ignored_urls_count": get_arr_len("ignoredUrls"),
 
             // Other features
-            "setting_enable_frame_cache": get_bool("enableFrameCache").unwrap_or(true),
             "setting_use_pii_removal": get_bool("usePiiRemoval").unwrap_or(true),
-            "setting_enable_beta": get_bool("enableBeta").unwrap_or(false),
             "setting_auto_update": get_bool("autoUpdate").unwrap_or(true),
-            "setting_enable_realtime_audio": get_bool("enableRealtimeAudioTranscription").unwrap_or(false),
-            "setting_enable_realtime_vision": get_bool("enableRealtimeVision").unwrap_or(true),
             "setting_languages_count": get_arr_len("languages"),
         })
     }

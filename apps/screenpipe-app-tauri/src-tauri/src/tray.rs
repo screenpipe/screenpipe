@@ -255,7 +255,7 @@ fn create_dynamic_menu(
     // Full menu after onboarding is complete
     // Get shortcuts from store (must match frontend defaults in use-settings.tsx)
     let (default_show, default_search, default_chat) = if cfg!(target_os = "windows") {
-        ("Alt+S", "Control+Alt+K", "Alt+L")
+        ("Alt+S", "Alt+K", "Alt+L")
     } else {
         ("Control+Super+S", "Control+Super+K", "Control+Super+L")
     };

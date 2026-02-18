@@ -614,9 +614,48 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let x = mouse_struct.pt.x;
         let y = mouse_struct.pt.y;
+        let msg = wparam.0 as u32;
 
         HOOK_STATE.with(|state| {
             if let Some(ref mut s) = *state.borrow_mut() {
+                // Fast path for WM_MOUSEMOVE — no mutex locks to avoid blocking
+                // the system-wide mouse input pipeline (critical for RDP cursor rendering)
+                if msg == WM_MOUSEMOVE {
+                    let (last_x, last_y) = s.last_mouse_pos;
+                    let dx = (x - last_x).abs();
+                    let dy = (y - last_y).abs();
+                    let moved = dx > 10 || dy > 10;
+
+                    if moved {
+                        if let Some(ref feed) = s.activity_feed {
+                            feed.record(ActivityKind::MouseMove);
+                        }
+                        s.last_mouse_pos = (x, y);
+
+                        if s.config.capture_mouse_move {
+                            let timestamp = Utc::now();
+                            let t = s.start.elapsed().as_millis() as u64;
+                            // Use try_lock to avoid blocking — skip if contended
+                            let app_name = s.current_app.try_lock().map(|g| g.clone());
+                            let window_title = s.current_window.try_lock().map(|g| g.clone());
+                            let event = UiEvent {
+                                id: None,
+                                timestamp,
+                                relative_ms: t,
+                                data: EventData::Move { x, y },
+                                app_name: app_name.unwrap_or(None),
+                                window_title: window_title.unwrap_or(None),
+                                browser_url: None,
+                                element: None,
+                                frame_id: None,
+                            };
+                            let _ = s.tx.try_send(event);
+                        }
+                    }
+                    return;
+                }
+
+                // Slow path for clicks/scroll — these are infrequent, mutex locks OK
                 let timestamp = Utc::now();
                 let t = s.start.elapsed().as_millis() as u64;
 
@@ -630,7 +669,7 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                     }
                 }
 
-                match wparam.0 as u32 {
+                match msg {
                     WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
                         // Record activity
                         if let Some(ref feed) = s.activity_feed {
@@ -641,7 +680,7 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             return;
                         }
 
-                        let button = match wparam.0 as u32 {
+                        let button = match msg {
                             WM_LBUTTONDOWN => 0,
                             WM_RBUTTONDOWN => 1,
                             WM_MBUTTONDOWN => 2,
@@ -667,36 +706,6 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             s.click_queue
                                 .lock()
                                 .push(ClickElementRequest { x, y, timestamp });
-                        }
-                    }
-
-                    WM_MOUSEMOVE => {
-                        // Record activity (throttled)
-                        let (last_x, last_y) = s.last_mouse_pos;
-                        let dx = (x - last_x).abs();
-                        let dy = (y - last_y).abs();
-                        let moved = dx > 10 || dy > 10;
-
-                        if moved {
-                            if let Some(ref feed) = s.activity_feed {
-                                feed.record(ActivityKind::MouseMove);
-                            }
-                            s.last_mouse_pos = (x, y);
-
-                            if s.config.capture_mouse_move {
-                                let event = UiEvent {
-                                    id: None,
-                                    timestamp,
-                                    relative_ms: t,
-                                    data: EventData::Move { x, y },
-                                    app_name,
-                                    window_title,
-                                    browser_url: None,
-                                    element: None,
-                                    frame_id: None,
-                                };
-                                let _ = s.tx.try_send(event);
-                            }
                         }
                     }
 

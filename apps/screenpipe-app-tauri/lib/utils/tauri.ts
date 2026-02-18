@@ -856,21 +856,26 @@ analyticsId: string; devMode: boolean; audioTranscriptionEngine: string; ocrEngi
 /**
  * When true, automatically follow system default audio devices
  */
-useSystemDefaultAudio?: boolean; usePiiRemoval: boolean; restartInterval: number; port: number; dataDir: string; disableAudio: boolean; ignoredWindows: string[]; includedWindows: string[]; ignoredUrls?: string[]; fps: number; vadSensitivity: string; analyticsEnabled: boolean; audioChunkDuration: number; useChineseMirror: boolean; languages: string[]; embeddedLLM: EmbeddedLLM; enableBeta: boolean; isFirstTimeUser: boolean; autoStartEnabled: boolean; enableFrameCache: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; enableRealtimeAudioTranscription: boolean; realtimeAudioTranscriptionEngine: string; disableVision: boolean; 
+useSystemDefaultAudio?: boolean; usePiiRemoval: boolean; port: number; dataDir: string; disableAudio: boolean; ignoredWindows: string[]; includedWindows: string[]; ignoredUrls?: string[]; fps: number; vadSensitivity: string; analyticsEnabled: boolean; audioChunkDuration: number; useChineseMirror: boolean; languages: string[]; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; realtimeAudioTranscriptionEngine: string; disableVision: boolean; 
 /**
  * When true, screen capture continues but OCR text extraction is skipped.
  * Reduces CPU usage significantly while still recording video.
  */
-disableOcr?: boolean; useAllMonitors: boolean; adaptiveFps?: boolean; enableRealtimeVision: boolean; showShortcutOverlay?: boolean; 
+disableOcr?: boolean; useAllMonitors: boolean; adaptiveFps?: boolean; showShortcutOverlay?: boolean; 
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
 deviceId?: string; 
 /**
- * Enable UI event capture (keyboard, mouse, clipboard).
- * Requires accessibility and input monitoring permissions on macOS.
+ * Enable input event capture (keyboard, mouse, clipboard).
+ * Requires input monitoring permission on macOS.
  */
-enableUiEvents?: boolean; 
+enableInputCapture?: boolean; 
+/**
+ * Enable accessibility text capture (AX tree walker).
+ * Requires accessibility permission on macOS.
+ */
+enableAccessibility?: boolean; 
 /**
  * Auto-install updates and restart when a new version is available.
  * When disabled, users must click "update now" in the tray menu.

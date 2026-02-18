@@ -32,8 +32,6 @@ pub async fn start_continuous_recording(
     include_windows: &[String],
     ignored_urls: &[String],
     languages: Vec<Language>,
-    capture_unfocused_windows: bool,
-    realtime_vision: bool,
     activity_feed: screenpipe_vision::ActivityFeedOption,
     video_quality: String,
     vision_metrics: Arc<PipelineMetrics>,
@@ -75,8 +73,6 @@ pub async fn start_continuous_recording(
                             &ignored_urls_video,
                             video_chunk_duration,
                             languages.clone(),
-                            capture_unfocused_windows,
-                            realtime_vision,
                             activity_feed.clone(),
                             video_quality.clone(),
                             vision_metrics.clone(),
@@ -158,8 +154,6 @@ pub async fn record_video(
     ignored_urls: &[String],
     video_chunk_duration: Duration,
     languages: Vec<Language>,
-    capture_unfocused_windows: bool,
-    realtime_vision: bool,
     activity_feed: screenpipe_vision::ActivityFeedOption,
     video_quality: String,
     vision_metrics: Arc<PipelineMetrics>,
@@ -215,7 +209,7 @@ pub async fn record_video(
         include_windows,
         ignored_urls,
         languages,
-        capture_unfocused_windows,
+        false, // capture_unfocused_windows: hardcoded off
         activity_feed,
         video_quality,
         vision_metrics,
@@ -363,8 +357,8 @@ pub async fn record_video(
                     );
                     consecutive_db_errors = 0;
 
-                    // Send realtime events after successful DB insert
-                    if realtime_vision {
+                    // Send realtime events after successful DB insert (always enabled)
+                    {
                         for (frame_id, idx) in &results {
                             let (ref text, ref sanitized_text_json, _, window_result) =
                                 window_metadata[*idx];
