@@ -28,6 +28,8 @@ use super::AudioStream;
 const AUDIO_RECEIVE_TIMEOUT_INPUT_SECS: u64 = 30;
 const AUDIO_RECEIVE_TIMEOUT_OUTPUT_SECS: u64 = 10 * 60;
 const OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART: u32 = 6;
+const OUTPUT_RESTART_WINDOW_SECS: u64 =
+    AUDIO_RECEIVE_TIMEOUT_OUTPUT_SECS * OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART as u64;
 
 fn should_force_reconnect(device_type: &DeviceType, consecutive_timeouts: u32) -> bool {
     match device_type {
@@ -111,10 +113,11 @@ pub async fn run_record_and_transcribe(
                     }
 
                     debug!(
-                        "no audio received from {} for {}s ({} consecutive timeouts) - triggering reconnect",
+                        "no audio received from {} for {}s ({} consecutive timeouts, {}s total idle) - triggering reconnect",
                         device_name,
                         receive_timeout.as_secs(),
-                        consecutive_timeouts
+                        consecutive_timeouts,
+                        OUTPUT_RESTART_WINDOW_SECS
                     );
                     // Mark stream as disconnected so device monitor can restart it
                     audio_stream.is_disconnected.store(true, Ordering::Relaxed);
@@ -180,6 +183,19 @@ mod tests {
             &DeviceType::Output,
             OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART
         ));
+    }
+
+    #[test]
+    fn output_device_does_not_disconnect_before_threshold() {
+        assert!(!should_force_reconnect(
+            &DeviceType::Output,
+            OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART - 1
+        ));
+    }
+
+    #[test]
+    fn output_device_restart_window_is_one_hour() {
+        assert_eq!(OUTPUT_RESTART_WINDOW_SECS, 60 * 60);
     }
 
     #[test]
