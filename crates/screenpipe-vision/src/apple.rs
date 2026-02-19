@@ -171,9 +171,11 @@ pub fn perform_ocr_apple(
                     };
                     let bbox = bbox_result.bounding_box();
                     let x = bbox.origin.x;
-                    let y = bbox.origin.y;
+                    let y_vision = bbox.origin.y; // Vision: bottom-left origin, Y up
                     let height = bbox.size.height;
                     let width = bbox.size.width;
+                    // Convert to top-left origin (same as other OCR engines) so pipeline/DB stay consistent
+                    let top = 1.0 - y_vision - height;
 
                     ocr_results_vec.push(serde_json::json!({
                         "level": "0",
@@ -183,7 +185,7 @@ pub fn perform_ocr_apple(
                         "line_num": "0",
                         "word_num": "0",
                         "left": x.to_string(),
-                        "top": y.to_string(),
+                        "top": top.to_string(),
                         "width": width.to_string(),
                         "height": height.to_string(),
                         "conf": confidence.to_string(),

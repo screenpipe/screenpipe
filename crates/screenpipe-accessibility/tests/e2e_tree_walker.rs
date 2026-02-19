@@ -262,11 +262,11 @@ mod e2e {
         println!(
             "  First walk: app={}, hash={}, text_len={}",
             snap.app_name,
-            snap.content_hash,
+            snap.simhash,
             snap.text_content.len()
         );
         assert!(cache.should_store(&snap), "first walk should store");
-        cache.record_store(&snap.app_name, &snap.window_name, snap.content_hash);
+        cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
 
         // Walk again immediately — no user interaction, content should be stable
         let snap2 = walker.walk_focused_window().unwrap();
@@ -439,7 +439,7 @@ mod e2e {
             match walker.walk_focused_window() {
                 Ok(Some(snap)) => {
                     if cache.should_store(&snap) {
-                        cache.record_store(&snap.app_name, &snap.window_name, snap.content_hash);
+                        cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
                         stored += 1;
                     } else {
                         deduped += 1;

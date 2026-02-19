@@ -43,7 +43,7 @@ mod tests {
         }];
 
         let raw = RawCaptureResult {
-            image: image.clone(),
+            image: std::sync::Arc::new(image.clone()),
             window_images,
             frame_number,
             timestamp,

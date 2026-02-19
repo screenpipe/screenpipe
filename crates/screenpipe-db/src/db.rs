@@ -1008,7 +1008,31 @@ impl DatabaseManager {
         let mut tx = self.begin_immediate_with_retry().await?;
 
         for (timestamp, offset_index, windows) in frames {
-            let mut frame_results = Vec::with_capacity(windows.len());
+            let mut frame_results = Vec::with_capacity(windows.len().max(1));
+
+            if windows.is_empty() {
+                // Insert a bare frame even without window/OCR data so the
+                // timeline has something to display (e.g. when OCR is disabled
+                // and no windows were detected).
+                let frame_id = sqlx::query(
+                    "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, browser_url, app_name, window_name, focused, device_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )
+                .bind(video_chunk_id)
+                .bind(offset_index)
+                .bind(timestamp)
+                .bind(&file_path)
+                .bind(Option::<&str>::None)
+                .bind(Option::<&str>::None)
+                .bind(Option::<&str>::None)
+                .bind(false)
+                .bind(device_name)
+                .execute(&mut **tx.conn())
+                .await?
+                .last_insert_rowid();
+
+                frame_results.push((frame_id, 0));
+            }
+
             for (idx, window) in windows.iter().enumerate() {
                 let frame_id = sqlx::query(
                     "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, browser_url, app_name, window_name, focused, device_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -1026,17 +1050,20 @@ impl DatabaseManager {
                 .await?
                 .last_insert_rowid();
 
-                let text_length = window.text.len() as i64;
-                sqlx::query(
-                    "INSERT INTO ocr_text (frame_id, text, text_json, ocr_engine, text_length) VALUES (?1, ?2, ?3, ?4, ?5)",
-                )
-                .bind(frame_id)
-                .bind(&window.text)
-                .bind(&window.text_json)
-                .bind(&ocr_engine_str)
-                .bind(text_length)
-                .execute(&mut **tx.conn())
-                .await?;
+                // Only insert ocr_text if there's actual text content
+                if !window.text.is_empty() {
+                    let text_length = window.text.len() as i64;
+                    sqlx::query(
+                        "INSERT INTO ocr_text (frame_id, text, text_json, ocr_engine, text_length) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    )
+                    .bind(frame_id)
+                    .bind(&window.text)
+                    .bind(&window.text_json)
+                    .bind(&ocr_engine_str)
+                    .bind(text_length)
+                    .execute(&mut **tx.conn())
+                    .await?;
+                }
 
                 frame_results.push((frame_id, idx));
             }
@@ -2316,6 +2343,15 @@ impl DatabaseManager {
         // Process audio data with proper synchronization
         // Audio chunks can span multiple frames, so we assign audio to ALL frames
         // that fall within the audio's time range (timestamp + start_time to timestamp + end_time)
+        //
+        // We pad the search window by 15s on each side because:
+        // - Frames can be 5-15s apart depending on capture rate
+        // - Audio offsets (start_time/end_time) are relative to the chunk timestamp,
+        //   so the actual speech window can be narrow (2-5s) and fall between frames
+        // - Without padding, audio with no frames in its exact window only gets assigned
+        //   to one fallback frame, making it invisible on most of the timeline
+        const AUDIO_FRAME_PAD_SECS: i64 = 15;
+
         for row in audio_rows {
             let audio_timestamp: DateTime<Utc> = row.get("timestamp");
             let start_offset: Option<f64> = row.try_get("start_time").ok();
@@ -2337,6 +2373,10 @@ impl DatabaseManager {
                 audio_timestamp + chrono::Duration::milliseconds((duration * 1000.0) as i64)
             };
 
+            // Pad the search range so nearby frames also get the audio indicator
+            let search_start = audio_start - chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS);
+            let search_end = audio_end + chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS);
+
             // Create the audio entry once
             let audio_entry = AudioEntry {
                 transcription: row.get("transcription"),
@@ -2351,25 +2391,22 @@ impl DatabaseManager {
                 end_time: end_offset,
             };
 
-            // Find ALL frames within the audio time range
-            // First, collect the keys of matching frames (need to collect since we can't mutate while iterating)
+            // Find ALL frames within the padded audio time range
             let matching_keys: Vec<(DateTime<Utc>, i64)> = frames_map
-                .range((audio_start, i64::MIN)..=(audio_end, i64::MAX))
-                .filter(|((frame_ts, _), _)| *frame_ts >= audio_start && *frame_ts <= audio_end)
+                .range((search_start, i64::MIN)..=(search_end, i64::MAX))
+                .filter(|((frame_ts, _), _)| *frame_ts >= search_start && *frame_ts <= search_end)
                 .map(|(key, _)| *key)
                 .collect();
 
-            // Then, add the audio entry to each matching frame
-            let matched_any = !matching_keys.is_empty();
-            for key in matching_keys {
-                if let Some(frame_data) = frames_map.get_mut(&key) {
+            // Add the audio entry to each matching frame
+            for key in &matching_keys {
+                if let Some(frame_data) = frames_map.get_mut(key) {
                     frame_data.audio_entries.push(audio_entry.clone());
                 }
             }
 
-            // Fallback: If no frames matched (audio outside frame range), assign to closest frame
-            // This handles edge cases where audio timestamp is slightly outside the frame range
-            if !matched_any {
+            // Fallback: If still no frames matched, assign to closest frame
+            if matching_keys.is_empty() {
                 if let Some((&key, _)) = frames_map
                     .range(..=(audio_timestamp, i64::MAX))
                     .next_back()
@@ -4196,20 +4233,15 @@ pub fn find_matching_positions(blocks: &[OcrTextBlock], query: &str) -> Vec<Text
                 || query_words.iter().any(|&word| text_lower.contains(word));
 
             if matches {
-                let vision_top = block.top.parse::<f32>().unwrap_or(0.0);
-                let height = block.height.parse::<f32>().unwrap_or(0.0);
-                // Convert from Apple Vision coordinates (bottom-left origin, Y up)
-                // to screen coordinates (top-left origin, Y down)
-                let screen_top = 1.0 - vision_top - height;
-
+                // Stored coords are already screen space (top-left origin); use as-is.
                 Some(TextPosition {
                     text: block.text.clone(),
                     confidence: block.conf.parse::<f32>().unwrap_or(0.0),
                     bounds: TextBounds {
                         left: block.left.parse::<f32>().unwrap_or(0.0),
-                        top: screen_top,
+                        top: block.top.parse::<f32>().unwrap_or(0.0),
                         width: block.width.parse::<f32>().unwrap_or(0.0),
-                        height,
+                        height: block.height.parse::<f32>().unwrap_or(0.0),
                     },
                 })
             } else {
@@ -4230,9 +4262,9 @@ fn calculate_confidence(positions: &[TextPosition]) -> f32 {
 /// Parse all OCR text blocks into TextPosition objects with bounding boxes.
 /// Unlike `find_matching_positions`, this returns ALL text positions without filtering.
 ///
-/// Note: Apple Vision framework uses a coordinate system with origin at bottom-left,
-/// where Y increases upward. We convert to standard screen coordinates (origin at
-/// top-left, Y increases downward) by flipping the Y axis: screen_top = 1 - vision_top - height
+/// Stored text_json comes from the vision pipeline after `transform_ocr_coordinates_to_screen`:
+/// coordinates are already screen-relative normalized (0–1) with top-left origin (Y down).
+/// We use bounds as-is; no Y-flip is applied.
 pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
     blocks
         .iter()
@@ -4250,9 +4282,9 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
                 return None;
             }
 
-            // Parse bounding box coordinates (Apple Vision uses bottom-left origin)
+            // Parse bounding box (already screen space, top-left origin, normalized 0–1)
             let left = block.left.parse::<f32>().unwrap_or(0.0);
-            let vision_top = block.top.parse::<f32>().unwrap_or(0.0);
+            let top = block.top.parse::<f32>().unwrap_or(0.0);
             let width = block.width.parse::<f32>().unwrap_or(0.0);
             let height = block.height.parse::<f32>().unwrap_or(0.0);
 
@@ -4261,16 +4293,12 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
                 return None;
             }
 
-            // Convert from Apple Vision coordinates (bottom-left origin, Y up)
-            // to screen coordinates (top-left origin, Y down)
-            let screen_top = 1.0 - vision_top - height;
-
             Some(TextPosition {
                 text: block.text.clone(),
                 confidence,
                 bounds: TextBounds {
                     left,
-                    top: screen_top,
+                    top,
                     width,
                     height,
                 },
@@ -4309,12 +4337,10 @@ mod tests {
 
     #[test]
     fn test_parse_all_text_positions_basic() {
-        // Using normalized coordinates (0-1 range) like Apple Vision returns
-        // vision_top=0.9 means 90% up from bottom, with height=0.02
-        // screen_top = 1 - 0.9 - 0.02 = 0.08 (8% from top)
+        // Stored text_json uses screen coords (top-left origin, normalized 0–1); use as-is.
         let blocks = vec![
-            create_test_block("Hello", "95.5", "0.1", "0.9", "0.08", "0.02"),
-            create_test_block("World", "90.0", "0.2", "0.7", "0.1", "0.02"),
+            create_test_block("Hello", "95.5", "0.1", "0.08", "0.08", "0.02"),
+            create_test_block("World", "90.0", "0.2", "0.28", "0.1", "0.02"),
         ];
 
         let positions = parse_all_text_positions(&blocks);
@@ -4323,21 +4349,19 @@ mod tests {
         assert_eq!(positions[0].text, "Hello");
         assert!((positions[0].confidence - 95.5).abs() < 0.01);
         assert!((positions[0].bounds.left - 0.1).abs() < 0.01);
-        // Y-flip: screen_top = 1 - 0.9 - 0.02 = 0.08
         assert!((positions[0].bounds.top - 0.08).abs() < 0.01);
         assert!((positions[0].bounds.width - 0.08).abs() < 0.01);
         assert!((positions[0].bounds.height - 0.02).abs() < 0.01);
 
         assert_eq!(positions[1].text, "World");
         assert!((positions[1].confidence - 90.0).abs() < 0.01);
-        // Y-flip: screen_top = 1 - 0.7 - 0.02 = 0.28
         assert!((positions[1].bounds.top - 0.28).abs() < 0.01);
     }
 
     #[test]
     fn test_parse_all_text_positions_filters_empty_text() {
         let blocks = vec![
-            create_test_block("Hello", "95.5", "0.1", "0.9", "0.08", "0.02"),
+            create_test_block("Hello", "95.5", "0.1", "0.08", "0.08", "0.02"),
             create_test_block("", "90.0", "0.2", "0.5", "0.1", "0.02"),
             create_test_block("   ", "90.0", "0.3", "0.5", "0.1", "0.02"),
         ];

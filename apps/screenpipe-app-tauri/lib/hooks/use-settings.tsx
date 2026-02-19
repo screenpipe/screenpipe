@@ -249,6 +249,12 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
 
+		if (p === "windows") {
+			DEFAULT_SETTINGS.enableAccessibility = true;
+			DEFAULT_SETTINGS.enableInputCapture = true;
+			DEFAULT_SETTINGS.disableOcr = true;
+		}
+
 		return DEFAULT_SETTINGS;
 	} catch (e) {
 		// Fallback if platform detection fails

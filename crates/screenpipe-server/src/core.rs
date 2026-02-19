@@ -237,7 +237,7 @@ pub async fn record_video(
         captured_at: chrono::DateTime<chrono::Utc>,
         offset_index: i64,
         windows: Vec<FrameWindowData>,
-        image: image::DynamicImage,
+        image: std::sync::Arc<image::DynamicImage>,
         timestamp: std::time::Instant,
         window_metadata: Vec<(
             String,
@@ -375,9 +375,12 @@ pub async fn record_video(
                     monitor_id
                 );
             }
-            // Don't sleep if we have pending frames that need flushing
+            // Sleep before checking flush — without this, the loop busy-spins
+            // when pending_frames exist but aren't ready to flush yet (e.g. at
+            // 0.5 FPS there's a 2s gap between frames, causing millions of
+            // no-op iterations that burn CPU and bloat logs).
+            tokio::time::sleep(Duration::from_millis(50)).await;
             if pending_frames.is_empty() {
-                tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }
         }
@@ -422,6 +425,11 @@ pub async fn record_video(
                     for (frame_idx, frame_results) in all_results.iter().enumerate() {
                         let pf = &pending_frames[frame_idx];
                         for (frame_id, win_idx) in frame_results {
+                            // Skip event for bare frames inserted without window data
+                            // (e.g. OCR disabled + no windows detected)
+                            if *win_idx >= pf.window_metadata.len() {
+                                continue;
+                            }
                             let (ref text, ref sanitized_text_json, _, ref window_result) =
                                 pf.window_metadata[*win_idx];
                             let send_event_start = std::time::Instant::now();

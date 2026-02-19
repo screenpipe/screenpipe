@@ -18,8 +18,8 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 use screenpipe_vision::capture_screenshot_by_window::CapturedWindow;
 use screenpipe_vision::core::RawCaptureResult;
 use screenpipe_vision::ocr_cache::WindowOcrCache;
-use screenpipe_vision::{process_ocr_task, OcrEngine};
 use std::sync::Arc;
+use screenpipe_vision::{process_ocr_task, OcrEngine};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -54,7 +54,7 @@ fn create_test_raw_capture(frame_number: u64, num_windows: usize) -> RawCaptureR
         .collect();
 
     RawCaptureResult {
-        image,
+        image: Arc::new(image),
         window_images,
         frame_number,
         timestamp: Instant::now(),

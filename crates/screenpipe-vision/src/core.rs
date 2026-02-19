@@ -37,11 +37,12 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 
-fn serialize_image<S>(image: &Option<DynamicImage>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_image<S>(image: &Option<Arc<DynamicImage>>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    if let Some(image) = image {
+    if let Some(ref image) = image {
+        let image: &DynamicImage = image.as_ref();
         let mut webp_buffer = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut webp_buffer);
 
@@ -62,7 +63,7 @@ where
     }
 }
 
-fn deserialize_image<'de, D>(deserializer: D) -> Result<Option<DynamicImage>, D::Error>
+fn deserialize_image<'de, D>(deserializer: D) -> Result<Option<Arc<DynamicImage>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -84,7 +85,7 @@ where
 
     // Decode the JPEG data back into an image
     let image = image::load(cursor, image::ImageFormat::Jpeg).map_err(serde::de::Error::custom)?;
-    Ok(Some(image))
+    Ok(Some(Arc::new(image)))
 }
 
 fn serialize_instant<S>(instant: &Instant, serializer: S) -> Result<S::Ok, S::Error>
@@ -106,7 +107,7 @@ where
 }
 
 pub struct CaptureResult {
-    pub image: DynamicImage,
+    pub image: Arc<DynamicImage>,
     pub frame_number: u64,
     pub timestamp: Instant,
     /// Wall-clock timestamp captured atomically with the screenshot
@@ -126,7 +127,7 @@ pub struct WindowOcrResult {
 }
 
 pub struct RawCaptureResult {
-    pub image: DynamicImage,
+    pub image: Arc<DynamicImage>,
     pub window_images: Vec<CapturedWindow>,
     pub frame_number: u64,
     pub timestamp: Instant,
@@ -324,12 +325,17 @@ pub async fn continuous_capture(
         // 4b. Capture windows only for frames that passed the change threshold.
         //     This avoids expensive per-window screenshots + CGWindowList enumeration
         //     on unchanged frames (major CPU savings on multi-monitor setups).
+        //     Note: window capture is still needed even when OCR is disabled because
+        //     the metadata (app_name, window_name, browser_url, focused) is used by
+        //     the timeline and DB frame insertion.
         let window_images =
             capture_windows(&monitor, &window_filters, capture_unfocused_windows).await;
 
         // Send raw capture result (OCR happens in separate worker)
+        // Wrap image in Arc to avoid expensive full-bitmap clones downstream.
+        // The image is never mutated after capture — all consumers only read it.
         let raw = RawCaptureResult {
-            image: image.clone(),
+            image: Arc::new(image),
             window_images,
             frame_number: frame_counter,
             timestamp: Instant::now(),
@@ -678,7 +684,7 @@ pub struct WindowOcr {
         serialize_with = "serialize_image",
         deserialize_with = "deserialize_image"
     )]
-    pub image: Option<DynamicImage>,
+    pub image: Option<Arc<DynamicImage>>,
     pub window_name: String,
     pub app_name: String,
     pub text: String,

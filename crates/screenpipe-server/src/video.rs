@@ -8,9 +8,9 @@ use dashmap::DashMap;
 use image::ImageFormat::{self};
 use screenpipe_core::{find_ffmpeg_path, Language};
 use screenpipe_vision::{
-    capture_screenshot_by_window::WindowFilters, continuous_capture, monitor::get_monitor_by_id,
-    ocr_cache::WindowOcrCache, process_ocr_task, CaptureResult, OcrEngine, PipelineMetrics,
-    RawCaptureResult,
+    capture_screenshot_by_window::WindowFilters, continuous_capture, core::WindowOcrResult,
+    monitor::get_monitor_by_id, ocr_cache::WindowOcrCache, process_ocr_task, CaptureResult,
+    OcrEngine, PipelineMetrics, RawCaptureResult,
 };
 
 use std::path::PathBuf;
@@ -464,13 +464,30 @@ impl VideoCapture {
             loop {
                 if let Some(raw_frame) = ocr_work_queue_clone.pop() {
                     if disable_ocr {
-                        // Skip OCR, create result with empty window_ocr_results
+                        // Skip OCR but still populate window metadata from the raw
+                        // capture so frames are inserted into the DB. Without this,
+                        // the timeline is completely empty when OCR is disabled because
+                        // insert_multi_frames_with_ocr_batch only creates frame rows
+                        // when window_ocr_results is non-empty.
+                        let window_ocr_results: Vec<WindowOcrResult> = raw_frame
+                            .window_images
+                            .iter()
+                            .map(|w| WindowOcrResult {
+                                app_name: w.app_name.clone(),
+                                window_name: w.window_name.clone(),
+                                text: String::new(),
+                                text_json: Vec::new(),
+                                focused: w.is_focused,
+                                confidence: 0.0,
+                                browser_url: w.browser_url.clone(),
+                            })
+                            .collect();
                         let capture = CaptureResult {
                             image: raw_frame.image.clone(),
                             frame_number: raw_frame.frame_number,
                             timestamp: raw_frame.timestamp,
                             captured_at: raw_frame.captured_at,
-                            window_ocr_results: Vec::new(),
+                            window_ocr_results,
                         };
                         push_to_ocr_queue(&ocr_frame_queue_clone, &Arc::new(capture), "OCR-out");
                     } else {
@@ -1350,7 +1367,7 @@ mod tests {
 
         let make_frame = |n: u64| -> Arc<RawCaptureResult> {
             Arc::new(RawCaptureResult {
-                image: DynamicImage::new_rgb8(1, 1),
+                image: std::sync::Arc::new(DynamicImage::new_rgb8(1, 1)),
                 window_images: vec![],
                 frame_number: n,
                 timestamp: std::time::Instant::now(),
@@ -1403,7 +1420,7 @@ mod tests {
         // Push a frame into the queue
         assert!(frame_queue
             .push(Arc::new(RawCaptureResult {
-                image: DynamicImage::new_rgb8(64, 64),
+                image: std::sync::Arc::new(DynamicImage::new_rgb8(64, 64)),
                 window_images: vec![],
                 frame_number: 0,
                 timestamp: std::time::Instant::now(),

@@ -198,6 +198,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         let node_count = root.node_count();
         let content_hash = TreeSnapshot::compute_hash(&text_buffer);
+        let simhash = TreeSnapshot::compute_simhash(&text_buffer);
         let walk_duration = start.elapsed();
 
         debug!(
@@ -218,6 +219,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             node_count,
             walk_duration,
             content_hash,
+            simhash,
         }))
     }
 }

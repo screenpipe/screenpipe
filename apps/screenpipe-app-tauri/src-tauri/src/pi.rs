@@ -412,10 +412,14 @@ fn ensure_pi_config(user_token: Option<&str>, provider_config: Option<&PiProvide
     };
 
     // Always add screenpipe cloud provider
+    // Use actual token value in apiKey (not env var name) — Pi v0.51.1+ may not
+    // resolve env var names reliably, causing tier=anonymous on the gateway.
+    // Falls back to env var name for backwards compatibility when token is absent.
+    let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
     let screenpipe_provider = json!({
         "baseUrl": SCREENPIPE_API_URL,
         "api": "openai-completions",
-        "apiKey": "SCREENPIPE_API_KEY",
+        "apiKey": api_key_value,
         "authHeader": true,
         "models": screenpipe_cloud_models()
     });
@@ -595,6 +599,77 @@ const PI_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 
 /// How often the watchdog checks for idle / dead Pi processes.
 const PI_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Resolve a model name against the screenpipe cloud models list.
+/// Handles mismatches like "claude-haiku-4-5@20251001" when the list only has
+/// "claude-haiku-4-5" (or vice versa) by stripping date suffixes and finding
+/// the closest match by shared prefix.
+fn resolve_screenpipe_model(requested: &str, provider: &str) -> String {
+    // Only resolve for screenpipe provider — other providers use their own model names
+    if provider != "screenpipe" {
+        return requested.to_string();
+    }
+
+    let models = screenpipe_cloud_models();
+    let model_ids: Vec<&str> = models
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Exact match — no resolution needed
+    if model_ids.contains(&requested) {
+        return requested.to_string();
+    }
+
+    // Strip date suffix (@20251001 or -20251001) and try again
+    let base = requested
+        .split('@')
+        .next()
+        .unwrap_or(requested);
+    // Also strip trailing -YYYYMMDD pattern
+    let base = if base.len() > 9 && base.as_bytes()[base.len() - 9] == b'-' {
+        let suffix = &base[base.len() - 8..];
+        if suffix.chars().all(|c| c.is_ascii_digit()) {
+            &base[..base.len() - 9]
+        } else {
+            base
+        }
+    } else {
+        base
+    };
+
+    // Find the best match: exact base match first, then longest shared prefix
+    if let Some(exact) = model_ids.iter().find(|id| {
+        let id_base = id.split('@').next().unwrap_or(id);
+        id_base == base
+    }) {
+        info!(
+            "resolved model '{}' -> '{}' (stripped date suffix)",
+            requested, exact
+        );
+        return exact.to_string();
+    }
+
+    // Fallback: find model whose id starts with the same base
+    if let Some(prefix_match) = model_ids.iter().find(|id| id.starts_with(base)) {
+        info!(
+            "resolved model '{}' -> '{}' (prefix match)",
+            requested, prefix_match
+        );
+        return prefix_match.to_string();
+    }
+
+    // No match found — return as-is and let Pi report the error
+    warn!(
+        "could not resolve model '{}' against available models: {:?}",
+        requested, model_ids
+    );
+    requested.to_string()
+}
+
 /// Core Pi start logic — callable from both Tauri commands and Rust boot code.
 pub async fn pi_start_inner(
     app: AppHandle,
@@ -630,7 +705,8 @@ pub async fn pi_start_inner(
                 "custom" => "custom",
                 "screenpipe-cloud" | "pi" | _ => "screenpipe",
             };
-            (provider_name.to_string(), config.model.clone())
+            let model = resolve_screenpipe_model(&config.model, provider_name);
+            (provider_name.to_string(), model)
         }
         None => ("screenpipe".to_string(), "claude-haiku-4-5".to_string()),
     };

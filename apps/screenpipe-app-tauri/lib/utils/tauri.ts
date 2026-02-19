@@ -743,6 +743,17 @@ async trainVoice(name: string, startTime: string, endTime: string) : Promise<Res
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Return cached suggestions or default idle suggestions if cache is empty.
+ */
+async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_cached_suggestions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -759,6 +770,7 @@ async trainVoice(name: string, startTime: string, endTime: string) : Promise<Res
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number }
 export type AIProviderType = "openai" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
+export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean }
 export type Credits = { amount: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
@@ -898,6 +910,7 @@ showOverlayInScreenRecording?: boolean;
  */
 videoQuality?: string }
 export type ShowRewindWindow = "Main" | { Settings: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
+export type Suggestion = { text: string }
 /**
  * Sync configuration.
  */

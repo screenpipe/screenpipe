@@ -61,6 +61,7 @@ mod obsidian_sync;
 mod reminders;
 mod pi;
 mod embedded_server;
+mod suggestions;
 mod voice_training;
 
 pub use server::*;
@@ -1192,6 +1193,8 @@ async fn main() {
                 reminders::reminders_set_audio_only,
                 // Voice training
                 voice_training::train_voice,
+                // Suggestions
+                suggestions::get_cached_suggestions,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -1202,7 +1205,9 @@ async fn main() {
             .typ::<obsidian_sync::ObsidianSyncStatus>()
             .typ::<reminders::RemindersStatus>()
             .typ::<reminders::ReminderItem>()
-            .typ::<reminders::ScanResult>();
+            .typ::<reminders::ScanResult>()
+            .typ::<suggestions::CachedSuggestions>()
+            .typ::<suggestions::Suggestion>();
 
         if let Err(e) = builder
             .export(
@@ -1221,6 +1226,7 @@ async fn main() {
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(None)));
     let obsidian_sync_state = obsidian_sync::ObsidianSyncState::new();
     let reminders_state = reminders::RemindersState::new();
+    let suggestions_state = suggestions::SuggestionsState::new();
     #[allow(clippy::single_match)]
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1285,6 +1291,7 @@ async fn main() {
         .manage(pi_state)
         .manage(obsidian_sync_state)
         .manage(reminders_state)
+        .manage(suggestions_state)
         .invoke_handler(tauri::generate_handler![
             spawn_screenpipe,
             stop_screenpipe,
@@ -1384,7 +1391,9 @@ async fn main() {
             // OCR commands
             commands::perform_ocr_on_image,
             // Voice training
-            voice_training::train_voice
+            voice_training::train_voice,
+            // Suggestions
+            suggestions::get_cached_suggestions
         ])
         .setup(move |app| {
             //deep link register_all
@@ -1927,6 +1936,16 @@ async fn main() {
                 // Small delay to ensure everything is ready
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 obsidian_sync::auto_start_scheduler(app_handle_clone, &obsidian_state_clone).await;
+            });
+
+            // Auto-start suggestions scheduler (always on)
+            let suggestions_state = app_handle.state::<suggestions::SuggestionsState>();
+            let suggestions_state_clone = suggestions::SuggestionsState {
+                cache: suggestions_state.cache.clone(),
+                scheduler_handle: suggestions_state.scheduler_handle.clone(),
+            };
+            tauri::async_runtime::spawn(async move {
+                suggestions::auto_start_scheduler(&suggestions_state_clone).await;
             });
 
             // Auto-start reminders scheduler if it was enabled

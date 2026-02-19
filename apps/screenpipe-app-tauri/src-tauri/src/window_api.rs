@@ -383,7 +383,7 @@ impl RewindWindowId {
             RewindWindowId::Settings => (1200.0, 850.0),
             RewindWindowId::Search => (1200.0, 850.0),
             RewindWindowId::Onboarding => (450.0, 500.0),
-            RewindWindowId::Chat => (500.0, 600.0),
+            RewindWindowId::Chat => (600.0, 750.0),
             RewindWindowId::PermissionRecovery => (500.0, 400.0),
         })
     }
@@ -1344,8 +1344,8 @@ impl ShowRewindWindow {
                     // NOTE: Do NOT switch to Accessory mode here — it hides dock icon
                     // and tray on notched MacBooks. NSPanel handles fullscreen visibility.
                     let builder = self.window_builder(app, "/chat")
-                        .inner_size(500.0, 650.0)
-                        .min_inner_size(400.0, 500.0)
+                        .inner_size(650.0, 800.0)
+                        .min_inner_size(500.0, 600.0)
                         .focused(false)
                         .visible(false)
                         .always_on_top(true)
@@ -1410,8 +1410,8 @@ impl ShowRewindWindow {
                 #[cfg(not(target_os = "macos"))]
                 let window = {
                     let builder = self.window_builder(app, "/chat")
-                        .inner_size(500.0, 650.0)
-                        .min_inner_size(400.0, 500.0)
+                        .inner_size(650.0, 800.0)
+                        .min_inner_size(500.0, 600.0)
                         .focused(true)
                         .always_on_top(true);
                     builder.build()?

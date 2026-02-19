@@ -500,7 +500,7 @@ fn run_tree_walker(
                             cache.record_store(
                                 &snap.app_name,
                                 &snap.window_name,
-                                snap.content_hash,
+                                snap.simhash,
                             );
                             metrics.walks_stored += 1;
                         }

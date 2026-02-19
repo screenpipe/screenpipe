@@ -198,6 +198,8 @@ struct ResolvedPreset {
     provider: Option<String>,
     /// Provider base URL (e.g. `http://localhost:11434/v1` for Ollama).
     url: Option<String>,
+    /// API key for the provider (custom / openai BYOK).
+    api_key: Option<String>,
 }
 
 /// Read `~/.screenpipe/store.bin` and find the preset by id.
@@ -254,7 +256,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
             "pi" => Some("screenpipe"),
             "native-ollama" => Some("ollama"),
             "openai" => Some("openai"),
-            "custom" => Some("openai"), // custom uses openai-compatible API
+            "custom" => Some("custom"), // custom uses openai-compatible API at a user-specified URL
             _ => None,
         })
         .map(|s| s.to_string());
@@ -265,10 +267,17 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
+    let api_key = preset
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     Some(ResolvedPreset {
         model,
         provider,
         url,
+        api_key,
     })
 }
 
@@ -629,15 +638,15 @@ impl PipeManager {
         }
 
         // Resolve preset
-        let (run_model, run_provider, run_provider_url) = if let Some(ref preset_id) = config.preset
-        {
-            match resolve_preset(&self.pipes_dir, preset_id) {
-                Some(resolved) => (resolved.model, resolved.provider, resolved.url),
-                None => (config.model.clone(), config.provider.clone(), None),
-            }
-        } else {
-            (config.model.clone(), config.provider.clone(), None)
-        };
+        let (run_model, run_provider, run_provider_url, run_api_key) =
+            if let Some(ref preset_id) = config.preset {
+                match resolve_preset(&self.pipes_dir, preset_id) {
+                    Some(resolved) => (resolved.model, resolved.provider, resolved.url, resolved.api_key),
+                    None => (config.model.clone(), config.provider.clone(), None, None),
+                }
+            } else {
+                (config.model.clone(), config.provider.clone(), None, None)
+            };
 
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
@@ -727,6 +736,8 @@ impl PipeManager {
                     &run_model,
                     &pipe_dir,
                     run_provider.as_deref(),
+                    run_provider_url.as_deref(),
+                    run_api_key.as_deref(),
                     Some(pid_tx),
                 ),
             )
@@ -914,7 +925,7 @@ impl PipeManager {
         let pipe_dir = self.pipes_dir.join(name);
 
         // Resolve preset → model/provider overrides
-        let (run_model, run_provider, run_provider_url) = if let Some(ref preset_id) = config.preset
+        let (run_model, run_provider, run_provider_url, run_api_key) = if let Some(ref preset_id) = config.preset
         {
             match resolve_preset(&self.pipes_dir, preset_id) {
                 Some(resolved) => {
@@ -922,16 +933,16 @@ impl PipeManager {
                         "pipe '{}': using preset '{}' → model={}, provider={:?}",
                         name, preset_id, resolved.model, resolved.provider
                     );
-                    (resolved.model, resolved.provider, resolved.url)
+                    (resolved.model, resolved.provider, resolved.url, resolved.api_key)
                 }
                 None => {
                     warn!("pipe '{}': preset '{}' not found in store.bin, falling back to pipe config",
                         name, preset_id);
-                    (config.model.clone(), config.provider.clone(), None)
+                    (config.model.clone(), config.provider.clone(), None, None)
                 }
             }
         } else {
-            (config.model.clone(), config.provider.clone(), None)
+            (config.model.clone(), config.provider.clone(), None, None)
         };
 
         // Create DB execution row
@@ -1013,6 +1024,8 @@ impl PipeManager {
                 &run_model,
                 &pipe_dir,
                 run_provider.as_deref(),
+                run_provider_url.as_deref(),
+                run_api_key.as_deref(),
                 Some(pid_tx),
             ),
         )
@@ -1504,18 +1517,18 @@ impl PipeManager {
                     }
 
                     // Resolve preset → model/provider overrides (same as run_pipe)
-                    let (model, provider, provider_url) = if let Some(ref preset_id) = config.preset
+                    let (model, provider, provider_url, api_key) = if let Some(ref preset_id) = config.preset
                     {
                         match resolve_preset(&pipes_dir, preset_id) {
                             Some(resolved) => {
                                 info!("scheduler: pipe '{}' using preset '{}' → model={}, provider={:?}",
                                     name, preset_id, resolved.model, resolved.provider);
-                                (resolved.model, resolved.provider, resolved.url)
+                                (resolved.model, resolved.provider, resolved.url, resolved.api_key)
                             }
-                            None => (config.model.clone(), config.provider.clone(), None),
+                            None => (config.model.clone(), config.provider.clone(), None, None),
                         }
                     } else {
-                        (config.model.clone(), config.provider.clone(), None)
+                        (config.model.clone(), config.provider.clone(), None, None)
                     };
 
                     // Pre-configure pi with the pipe's provider
@@ -1608,6 +1621,8 @@ impl PipeManager {
                                 &model,
                                 &pipe_dir,
                                 provider.as_deref(),
+                                provider_url.as_deref(),
+                                api_key.as_deref(),
                                 Some(pid_tx),
                             ),
                         )

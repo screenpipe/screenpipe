@@ -47,6 +47,8 @@ pub trait AgentExecutor: Send + Sync {
         model: &str,
         working_dir: &Path,
         provider: Option<&str>,
+        provider_url: Option<&str>,
+        provider_api_key: Option<&str>,
         pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     ) -> Result<AgentOutput>;
 

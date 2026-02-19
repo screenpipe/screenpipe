@@ -9,18 +9,24 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use super::TreeSnapshot;
+use super::{hamming_distance, TreeSnapshot};
 
 const MAX_ENTRIES: usize = 100;
 const DEFAULT_TTL: Duration = Duration::from_secs(60);
 
-/// Cache entry tracking the last stored content hash for a window.
+/// Hamming distance threshold for fuzzy dedup: if distance <= this, content is "similar enough" to skip.
+/// Real accessibility text is typically hundreds of words; scrolling changes ~10-20% of content,
+/// which corresponds to roughly 5-10 bit differences in a 64-bit SimHash.
+const SIMHASH_THRESHOLD: u32 = 10;
+
+/// Cache entry tracking the last stored simhash for a window.
 struct CacheEntry {
-    content_hash: u64,
+    simhash: u64,
     last_stored: Instant,
 }
 
-/// Content-hash dedup cache keyed on (app_name, window_name).
+/// Fuzzy-dedup cache keyed on (app_name, window_name).
+/// Uses SimHash with Hamming distance to detect near-duplicate content.
 pub struct TreeCache {
     entries: HashMap<(String, String), CacheEntry>,
     ttl: Duration,
@@ -35,12 +41,13 @@ impl TreeCache {
         }
     }
 
-    /// Check if a snapshot should be stored (hash differs or TTL expired).
+    /// Check if a snapshot should be stored (content differs enough or TTL expired).
+    /// Uses SimHash hamming distance for fuzzy comparison.
     pub fn should_store(&self, snapshot: &TreeSnapshot) -> bool {
         let key = (snapshot.app_name.clone(), snapshot.window_name.clone());
         match self.entries.get(&key) {
             Some(entry) => {
-                entry.content_hash != snapshot.content_hash
+                hamming_distance(entry.simhash, snapshot.simhash) > SIMHASH_THRESHOLD
                     || entry.last_stored.elapsed() >= self.ttl
             }
             None => true,
@@ -48,12 +55,12 @@ impl TreeCache {
     }
 
     /// Record that a snapshot was stored.
-    pub fn record_store(&mut self, app_name: &str, window_name: &str, content_hash: u64) {
+    pub fn record_store(&mut self, app_name: &str, window_name: &str, simhash: u64) {
         let key = (app_name.to_string(), window_name.to_string());
         self.entries.insert(
             key,
             CacheEntry {
-                content_hash,
+                simhash,
                 last_stored: Instant::now(),
             },
         );
@@ -97,40 +104,106 @@ mod tests {
             node_count: 1,
             walk_duration: Duration::from_millis(10),
             content_hash: TreeSnapshot::compute_hash(text),
+            simhash: TreeSnapshot::compute_simhash(text),
         }
     }
 
     #[test]
-    fn test_cache_dedup_same_hash() {
+    fn test_cache_dedup_same_content() {
         let mut cache = TreeCache::new();
-        let snap = make_snapshot("Chrome", "Tab 1", "hello world");
+        let snap = make_snapshot("Chrome", "Tab 1", "hello world foo bar baz");
 
         assert!(cache.should_store(&snap));
-        cache.record_store(&snap.app_name, &snap.window_name, snap.content_hash);
+        cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
 
         // Same content — should NOT store
         assert!(!cache.should_store(&snap));
     }
 
     #[test]
-    fn test_cache_different_hash() {
+    fn test_cache_fuzzy_rejects_similar() {
         let mut cache = TreeCache::new();
-        let snap1 = make_snapshot("Chrome", "Tab 1", "hello world");
-        cache.record_store(&snap1.app_name, &snap1.window_name, snap1.content_hash);
+        let base_text = "Welcome to the documentation site\n\
+            Getting started with the framework\n\
+            Installation guide for new users\n\
+            Configure your development environment\n\
+            Set up the database connection\n\
+            Create your first application\n\
+            Understanding the project structure\n\
+            Working with models and controllers\n\
+            Routing and middleware configuration\n\
+            Authentication and authorization setup\n\
+            Testing your application thoroughly\n\
+            Deployment best practices guide\n\
+            Performance optimization techniques\n\
+            Monitoring and logging setup\n\
+            Troubleshooting common issues here\n\
+            Community support and resources\n\
+            Contributing to the project\n\
+            License and copyright information";
+        let snap1 = make_snapshot("Chrome", "Tab 1", base_text);
+        cache.record_store(&snap1.app_name, &snap1.window_name, snap1.simhash);
 
-        let snap2 = make_snapshot("Chrome", "Tab 1", "different content");
-        assert!(cache.should_store(&snap2));
+        // Scroll: last 2 lines change
+        let scrolled_text = "Welcome to the documentation site\n\
+            Getting started with the framework\n\
+            Installation guide for new users\n\
+            Configure your development environment\n\
+            Set up the database connection\n\
+            Create your first application\n\
+            Understanding the project structure\n\
+            Working with models and controllers\n\
+            Routing and middleware configuration\n\
+            Authentication and authorization setup\n\
+            Testing your application thoroughly\n\
+            Deployment best practices guide\n\
+            Performance optimization techniques\n\
+            Monitoring and logging setup\n\
+            Troubleshooting common issues here\n\
+            Community support and resources\n\
+            Frequently asked questions page\n\
+            API reference documentation here";
+        let snap2 = make_snapshot("Chrome", "Tab 1", scrolled_text);
+        assert!(
+            !cache.should_store(&snap2),
+            "fuzzy dedup should reject similar content (hamming dist: {})",
+            super::hamming_distance(snap1.simhash, snap2.simhash)
+        );
     }
 
     #[test]
-    fn test_cache_ttl_expiry() {
+    fn test_cache_accepts_different() {
+        let mut cache = TreeCache::new();
+        let snap1 = make_snapshot(
+            "Chrome",
+            "Tab 1",
+            "the quick brown fox jumps over the lazy dog and runs through the forest \
+             chasing rabbits while the sun sets behind the mountains creating beautiful colors",
+        );
+        cache.record_store(&snap1.app_name, &snap1.window_name, snap1.simhash);
+
+        let snap2 = make_snapshot(
+            "Chrome",
+            "Tab 1",
+            "rust programming language provides memory safety without garbage collection \
+             enabling developers to build reliable and efficient software systems today",
+        );
+        assert!(
+            cache.should_store(&snap2),
+            "different content should be stored (hamming dist: {})",
+            super::hamming_distance(snap1.simhash, snap2.simhash)
+        );
+    }
+
+    #[test]
+    fn test_cache_ttl_overrides_similarity() {
         let mut cache = TreeCache {
             entries: HashMap::new(),
             ttl: Duration::from_millis(0), // immediate expiry
         };
 
-        let snap = make_snapshot("Chrome", "Tab 1", "hello world");
-        cache.record_store(&snap.app_name, &snap.window_name, snap.content_hash);
+        let snap = make_snapshot("Chrome", "Tab 1", "hello world foo bar baz");
+        cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
 
         // Even same hash — TTL expired so should store
         std::thread::sleep(Duration::from_millis(1));
@@ -151,10 +224,10 @@ mod tests {
     #[test]
     fn test_cache_different_windows() {
         let mut cache = TreeCache::new();
-        let snap1 = make_snapshot("Chrome", "Tab 1", "content A");
-        let snap2 = make_snapshot("Chrome", "Tab 2", "content A");
+        let snap1 = make_snapshot("Chrome", "Tab 1", "content A foo bar baz");
+        let snap2 = make_snapshot("Chrome", "Tab 2", "content A foo bar baz");
 
-        cache.record_store(&snap1.app_name, &snap1.window_name, snap1.content_hash);
+        cache.record_store(&snap1.app_name, &snap1.window_name, snap1.simhash);
 
         // Different window — separate cache entry, should store
         assert!(cache.should_store(&snap2));
