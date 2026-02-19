@@ -13,7 +13,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
-import { tempDir, join, homeDir } from "@tauri-apps/api/path";
+import { join, homeDir } from "@tauri-apps/api/path";
 import { ObsidianSyncCard } from "./obsidian-sync-card";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
 
@@ -99,27 +99,31 @@ async function findClaudeExeOnWindows(): Promise<string | null> {
   return null;
 }
 
-async function getInstalledMcpVersion(): Promise<string | null> {
+async function getClaudeConfigPath(): Promise<string | null> {
   try {
     const os = platform();
     const home = await homeDir();
 
-    let configPath: string;
     if (os === "macos") {
-      configPath = await join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+      return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
     } else if (os === "windows") {
-      configPath = await join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
-    } else {
-      return null;
+      return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
     }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function getInstalledMcpVersion(): Promise<string | null> {
+  try {
+    const configPath = await getClaudeConfigPath();
+    if (!configPath) return null;
 
     const configContent = await readTextFile(configPath);
     const config = JSON.parse(configContent);
 
-    // Check if screenpipe is configured
     if (config?.mcpServers?.screenpipe) {
-      // Try to get version from the installed package
-      // For now, just return "installed" if configured
       return "installed";
     }
 
@@ -127,6 +131,31 @@ async function getInstalledMcpVersion(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function installClaudeMcp(): Promise<void> {
+  const configPath = await getClaudeConfigPath();
+  if (!configPath) throw new Error("unsupported platform");
+
+  let config: Record<string, unknown> = {};
+  try {
+    const content = await readTextFile(configPath);
+    config = JSON.parse(content);
+  } catch {
+    // file doesn't exist or invalid JSON — start fresh
+  }
+
+  if (!config.mcpServers || typeof config.mcpServers !== "object") {
+    config.mcpServers = {};
+  }
+
+  (config.mcpServers as Record<string, unknown>).screenpipe = {
+    command: "npx",
+    args: ["-y", "screenpipe-mcp"],
+  };
+
+  const encoder = new TextEncoder();
+  await writeFile(configPath, encoder.encode(JSON.stringify(config, null, 2)));
 }
 
 function CursorLogo({ className }: { className?: string }) {
@@ -411,114 +440,37 @@ export function ConnectionsSection() {
   }, [downloadState]);
 
   const handleClaudeConnect = async () => {
-    let mcpbUrl: string | null = null;
-
     try {
       setDownloadState("downloading");
 
-      // Get the latest mcpb URL dynamically
-      const release = await getLatestMcpRelease();
-      mcpbUrl = release.url;
-
-      // Use Tauri's HTTP client to avoid CORS issues
-      const response = await tauriFetch(mcpbUrl, {
-        method: "GET",
-      });
-
-      if (!response.ok) throw new Error("Failed to download");
-
-      const arrayBuffer = await response.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-
-      // Save to temp directory automatically (no dialog)
-      const tmpDir = await tempDir();
-      const filePath = await join(tmpDir, "screenpipe-mcp.mcpb");
-
-      await writeFile(filePath, uint8Array);
-
-      // Open Claude first, wait for it to be ready, then trigger the .mcpb install
-      const os = platform();
-      if (os === "macos") {
-        // Open Claude Desktop
-        const openClaude = Command.create("open", ["-a", "Claude"]);
-        await openClaude.execute();
-
-        // Poll until Claude is actually running (up to 15s)
-        for (let i = 0; i < 30; i++) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          try {
-            const check = Command.create("sh", ["-c", "pgrep -x Claude"]);
-            const result = await check.execute();
-            if (result.code === 0) break;
-          } catch { /* keep waiting */ }
-        }
-        // Extra grace period for the UI to finish loading
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Open the .mcpb file — retry up to 3 times in case Claude isn't ready
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const openFile = Command.create("open", [filePath]);
-          await openFile.execute();
-          // Wait and check if Claude config was updated (install modal accepted)
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const installed = await getInstalledMcpVersion();
-          if (installed) break;
-        }
-      } else if (os === "windows") {
-        // Find Claude Desktop at known install location
-        const claudeExe = await findClaudeExeOnWindows();
-
-        if (claudeExe) {
-          // Launch Claude Desktop
-          const openClaude = Command.create("cmd", ["/c", "start", "", claudeExe]);
-          await openClaude.execute();
-
-          // Poll until Claude process is running (up to 15s)
-          for (let i = 0; i < 30; i++) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            try {
-              const check = Command.create("cmd", ["/c", "tasklist /FI \"IMAGENAME eq Claude.exe\" /NH"]);
-              const result = await check.execute();
-              if (result.stdout.includes("Claude.exe")) break;
-            } catch { /* keep waiting */ }
-          }
-          // Extra grace period for UI to finish loading
-          await new Promise(resolve => setTimeout(resolve, 2000));
-
-          // Open the .mcpb file — retry up to 3 times
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const openFile = Command.create("cmd", ["/c", "start", "", filePath]);
-            await openFile.execute();
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            const installed = await getInstalledMcpVersion();
-            if (installed) break;
-          }
-        } else {
-          // Claude not found — tell user where the file is
-          await message(
-            `Claude Desktop was not found.\n\nThe extension was saved to:\n${filePath}\n\nOpen this file with Claude Desktop to install the screenpipe extension.`,
-            { title: "Open with Claude Desktop", kind: "info" }
-          );
-        }
-      }
+      // Write directly to Claude's config file (no .mcpb dance)
+      await installClaudeMcp();
 
       setDownloadState("downloaded");
-    } catch (error) {
-      console.error("Failed to download mcpb:", error instanceof Error ? error.message : String(error));
 
-      if (mcpbUrl) {
-        // Download failed but we have the URL — give it to the user
-        await message(
-          `Download failed (firewall or network issue?).\n\nYou can download manually:\n${mcpbUrl}\n\nThen open the .mcpb file with Claude Desktop.`,
-          { title: "Download Failed", kind: "error" }
-        );
-      } else {
-        // Couldn't even fetch release info
-        await message(
-          "Could not fetch the extension. Check your internet connection.\n\nYou can download manually from:\nhttps://github.com/screenpipe/screenpipe/releases\n\nLook for the latest mcp-v* release and download the .mcpb file.",
-          { title: "Download Failed", kind: "error" }
-        );
-      }
+      // Try to open Claude Desktop so user can start using it
+      const os = platform();
+      try {
+        if (os === "macos") {
+          const cmd = Command.create("open", ["-a", "Claude"]);
+          await cmd.execute();
+        } else if (os === "windows") {
+          const claudeExe = await findClaudeExeOnWindows();
+          if (claudeExe) {
+            const cmd = Command.create("cmd", ["/c", "start", "", claudeExe]);
+            await cmd.execute();
+          }
+        }
+      } catch { /* ignore — Claude will pick it up next launch */ }
+    } catch (error) {
+      console.error("failed to install claude mcp:", error instanceof Error ? error.message : String(error));
+
+      await message(
+        "Failed to write Claude config.\n\nYou can manually add screenpipe to Claude Desktop config:\n\n" +
+        JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp"] } } }, null, 2) +
+        "\n\nConfig location:\n• macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\n• Windows: %APPDATA%/Claude/claude_desktop_config.json",
+        { title: "Claude MCP Setup", kind: "error" }
+      );
       setDownloadState("idle");
     }
   };
@@ -612,17 +564,17 @@ export function ConnectionsSection() {
                     {downloadState === "downloading" ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Downloading...
+                        Connecting...
                       </>
-                    ) : downloadState === "downloaded" ? (
+                    ) : downloadState === "downloaded" || versionInfo.installed ? (
                       <>
                         <Check className="h-4 w-4" />
-                        Installed
+                        {downloadState === "downloaded" ? "Connected" : "Reconnect"}
                       </>
                     ) : (
                       <>
                         <Download className="h-4 w-4" />
-                        Install Extension
+                        Connect
                       </>
                     )}
                   </Button>
@@ -645,8 +597,7 @@ export function ConnectionsSection() {
               <div className="px-4 pb-4">
                 <div className="p-3 bg-muted border border-border rounded-lg">
                   <p className="text-xs text-foreground">
-                    <strong>Screenpipe is now connected to Claude!</strong> Try asking Claude:
-                    &quot;What did I do in the last 5 minutes?&quot; or &quot;Search my screen for meetings today&quot;
+                    <strong>Screenpipe is now connected to Claude!</strong> If Claude was already running, restart it to pick up the changes. Try asking: &quot;What did I do in the last 5 minutes?&quot;
                   </p>
                 </div>
               </div>

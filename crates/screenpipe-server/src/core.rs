@@ -229,6 +229,26 @@ pub async fn record_video(
     let mut consecutive_db_errors = 0;
     const MAX_CONSECUTIVE_DB_ERRORS: u32 = 100; // Threshold before reporting unhealthy state
 
+    // Batch buffer: accumulate frames and flush together in one DB transaction.
+    // This reduces write semaphore acquisitions from ~10/min to ~2/min.
+    const BATCH_MAX_FRAMES: usize = 5;
+    const BATCH_MAX_AGE: Duration = Duration::from_secs(3);
+    struct PendingFrame {
+        captured_at: chrono::DateTime<chrono::Utc>,
+        offset_index: i64,
+        windows: Vec<FrameWindowData>,
+        image: image::DynamicImage,
+        timestamp: std::time::Instant,
+        window_metadata: Vec<(
+            String,
+            Vec<std::collections::HashMap<String, String>>,
+            String,
+            screenpipe_vision::core::WindowOcrResult,
+        )>,
+    }
+    let mut pending_frames: Vec<PendingFrame> = Vec::with_capacity(BATCH_MAX_FRAMES);
+    let mut batch_started_at = std::time::Instant::now();
+
     loop {
         // Increment and check heartbeat
         heartbeat_counter += 1;
@@ -284,19 +304,21 @@ pub async fn record_video(
                 time_since_last_frame.as_millis()
             );
 
-            // Wait for the video encoder to write this frame (up to 5s).
+            // Wait for the video encoder to write this frame (up to 30s).
             // OCR often finishes before video encoding; Notify wakes us immediately
             // once the frame is recorded instead of blindly sleeping.
+            // 30s accommodates DB contention spikes (avg 4-6s, peaks at 30s+)
+            // without dropping frames that would otherwise be saved.
             let frame_write_info = video_capture
                 .frame_write_tracker
-                .wait_for_offset(frame.frame_number, Duration::from_secs(5))
+                .wait_for_offset(frame.frame_number, Duration::from_secs(30))
                 .await;
             let video_frame_offset = match frame_write_info {
                 Some(info) => info.offset as i64,
                 None => {
                     video_capture.metrics.record_drop();
                     warn!(
-                        "Skipping frame {} - not written to video within 5s timeout",
+                        "Skipping frame {} - not written to video within 30s timeout",
                         frame.frame_number
                     );
                     continue;
@@ -327,55 +349,93 @@ pub async fn record_video(
                 });
 
                 // Store metadata for realtime events (sent after DB insert)
-                window_metadata.push((text, sanitized_text_json, text_json, window_result));
+                window_metadata.push((text, sanitized_text_json, text_json, window_result.clone()));
             }
 
-            // Batch insert all frames + OCR in a single transaction
+            // Accumulate into batch buffer instead of inserting immediately
+            if pending_frames.is_empty() {
+                batch_started_at = std::time::Instant::now();
+            }
+            pending_frames.push(PendingFrame {
+                captured_at: frame.captured_at,
+                offset_index: video_frame_offset,
+                windows: batch_windows,
+                image: frame.image.clone(),
+                timestamp: frame.timestamp,
+                window_metadata,
+            });
+        } else {
+            // Queue is empty — short poll sleep.
+            // We intentionally do NOT use 1/fps here. The consumer must drain
+            // the queue as fast as frames arrive. The *producer* (continuous_capture)
+            // is the one that rate-limits capture to the target FPS.
+            if heartbeat_counter.is_multiple_of(200) {
+                debug!(
+                    "record_video: No frames in queue for monitor {}",
+                    monitor_id
+                );
+            }
+            // Don't sleep if we have pending frames that need flushing
+            if pending_frames.is_empty() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        }
+
+        // Flush batch when full OR when aged out (even with 1 frame)
+        let should_flush = pending_frames.len() >= BATCH_MAX_FRAMES
+            || (!pending_frames.is_empty() && batch_started_at.elapsed() >= BATCH_MAX_AGE);
+
+        if should_flush {
+            let frames_to_insert: Vec<_> = pending_frames
+                .iter()
+                .map(|pf| (pf.captured_at, pf.offset_index, pf.windows.clone()))
+                .collect();
+
             let batch_start = std::time::Instant::now();
             match db
-                .insert_frames_with_ocr_batch(
+                .insert_multi_frames_with_ocr_batch(
                     &device_name,
-                    Some(frame.captured_at),
-                    video_frame_offset,
-                    &batch_windows,
+                    &frames_to_insert,
                     Arc::new((*ocr_engine).clone().into()),
                 )
                 .await
             {
-                Ok(results) => {
+                Ok(all_results) => {
                     let batch_duration = batch_start.elapsed();
                     video_capture.metrics.record_db_write(batch_duration);
                     if batch_duration.as_millis() > 200 {
                         warn!(
-                            "Slow DB batch insert: {}ms for {} windows",
+                            "Slow DB multi-frame batch: {}ms for {} frames",
                             batch_duration.as_millis(),
-                            results.len()
+                            pending_frames.len()
                         );
                     }
                     debug!(
-                        "Batch inserted {} frames in {}ms",
-                        results.len(),
+                        "Multi-frame batch inserted {} frames in {}ms",
+                        pending_frames.len(),
                         batch_duration.as_millis()
                     );
                     consecutive_db_errors = 0;
 
-                    // Send realtime events after successful DB insert (always enabled)
-                    {
-                        for (frame_id, idx) in &results {
-                            let (ref text, ref sanitized_text_json, _, window_result) =
-                                window_metadata[*idx];
+                    // Send realtime events after successful DB insert
+                    for (frame_idx, frame_results) in all_results.iter().enumerate() {
+                        let pf = &pending_frames[frame_idx];
+                        for (frame_id, win_idx) in frame_results {
+                            let (ref text, ref sanitized_text_json, _, ref window_result) =
+                                pf.window_metadata[*win_idx];
                             let send_event_start = std::time::Instant::now();
                             match send_event(
                                 "ocr_result",
                                 WindowOcr {
-                                    image: Some(frame.image.clone()),
+                                    image: Some(pf.image.clone()),
                                     text: text.clone(),
                                     text_json: sanitized_text_json.clone(),
                                     app_name: window_result.app_name.clone(),
                                     window_name: window_result.window_name.clone(),
                                     focused: window_result.focused,
                                     confidence: window_result.confidence,
-                                    timestamp: frame.timestamp,
+                                    timestamp: pf.timestamp,
                                     browser_url: window_result.browser_url.clone(),
                                 },
                             ) {
@@ -393,31 +453,16 @@ pub async fn record_video(
                             }
                         }
                     }
+                    pending_frames.clear();
                 }
                 Err(e) => {
-                    warn!("Failed to batch insert frames: {}", e);
+                    warn!("Failed to multi-frame batch insert: {}", e);
                     consecutive_db_errors += 1;
+                    // On error, drop the batch to avoid infinite retry loops
+                    pending_frames.clear();
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
-        } else {
-            // Queue is empty — short poll sleep.
-            // We intentionally do NOT use 1/fps here. The consumer must drain
-            // the queue as fast as frames arrive. The *producer* (continuous_capture)
-            // is the one that rate-limits capture to the target FPS.
-            //
-            // Previously this slept for 1/fps (2 seconds at 0.5 FPS) on EVERY
-            // iteration, including after processing a frame. This caused the
-            // queue to back up during adaptive FPS bursts (up to 10 FPS),
-            // leading to frame drops and missing screenshots in the timeline.
-            if heartbeat_counter.is_multiple_of(200) {
-                debug!(
-                    "record_video: No frames in queue for monitor {}",
-                    monitor_id
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            continue;
         }
 
         // Check if we're seeing too many consecutive DB errors

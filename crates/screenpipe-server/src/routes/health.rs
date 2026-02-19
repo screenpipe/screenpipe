@@ -163,7 +163,9 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     let last_audio_ts = audio_snap.last_db_write_ts;
 
     let now = Utc::now();
-    let threshold_secs = 1800u64; // 30 minutes
+    // 60 seconds — tight enough to detect real stalls, loose enough to
+    // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
+    let threshold_secs = 60u64;
 
     let frame_status = if state.vision_disabled {
         "disabled"
@@ -207,9 +209,33 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         None
     };
 
+    // Check pipeline metrics for degradation beyond simple timestamp staleness.
+    // High drop rate or DB latency indicates the pipeline is struggling even if
+    // frames are still technically arriving.
+    let vision_degraded = if !state.vision_disabled && vision_snap.uptime_secs > 120.0 {
+        let high_drop_rate = vision_snap.frame_drop_rate > 0.5;
+        let high_db_latency = vision_snap.avg_db_latency_ms > 10_000.0;
+        if high_drop_rate {
+            warn!(
+                "health_check: vision drop rate {:.1}% exceeds 50% threshold",
+                vision_snap.frame_drop_rate * 100.0
+            );
+        }
+        if high_db_latency {
+            warn!(
+                "health_check: vision avg DB latency {:.0}ms exceeds 10s threshold",
+                vision_snap.avg_db_latency_ms
+            );
+        }
+        high_drop_rate || high_db_latency
+    } else {
+        false
+    };
+
     let (overall_status, message, verbose_instructions, status_code) = if (frame_status == "ok"
         || frame_status == "disabled")
         && (audio_status == "ok" || audio_status == "disabled")
+        && !vision_degraded
     {
         (
             "healthy",
@@ -222,14 +248,42 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         if frame_status != "ok" && frame_status != "disabled" {
             unhealthy_systems.push("vision");
         }
+        if vision_degraded && !unhealthy_systems.contains(&"vision") {
+            unhealthy_systems.push("vision");
+        }
         if audio_status != "ok" && audio_status != "disabled" {
             unhealthy_systems.push("audio");
         }
 
+        let mut detail_parts = Vec::new();
+        if vision_degraded {
+            if vision_snap.frame_drop_rate > 0.5 {
+                detail_parts.push(format!(
+                    "high frame drop rate ({:.0}%)",
+                    vision_snap.frame_drop_rate * 100.0
+                ));
+            }
+            if vision_snap.avg_db_latency_ms > 10_000.0 {
+                detail_parts.push(format!(
+                    "high DB latency ({:.0}ms)",
+                    vision_snap.avg_db_latency_ms
+                ));
+            }
+        }
+
         let systems_str = unhealthy_systems.join(", ");
+        let msg = if detail_parts.is_empty() {
+            format!("some systems are not healthy: {}", systems_str)
+        } else {
+            format!(
+                "some systems are not healthy: {} ({})",
+                systems_str,
+                detail_parts.join(", ")
+            )
+        };
         (
             "degraded",
-            format!("some systems are not healthy: {}", systems_str),
+            msg,
             Some(get_verbose_instructions(&unhealthy_systems)),
             503,
         )

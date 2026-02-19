@@ -463,6 +463,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         config.is_disabled("show_chat"),
         |app| {
             info!("show chat shortcut triggered");
+            let _ = app.emit("shortcut-show-chat", ());
             // Toggle the chat window - hide if visible, show if not.
             // Use order_out (not close) to preserve the pre-created panel
             // so it can reappear on fullscreen Spaces without re-creation.

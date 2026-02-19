@@ -967,6 +967,92 @@ impl DatabaseManager {
         Ok(results)
     }
 
+    /// Insert multiple frames (each with their own offset and windows) in a single
+    /// transaction. This acquires the write semaphore once instead of once-per-frame,
+    /// reducing contention from ~10 acquisitions/min to ~2/min.
+    ///
+    /// Returns one Vec<(frame_id, window_idx)> per input frame, in order.
+    pub async fn insert_multi_frames_with_ocr_batch(
+        &self,
+        device_name: &str,
+        frames: &[(chrono::DateTime<chrono::Utc>, i64, Vec<FrameWindowData>)],
+        ocr_engine: Arc<OcrEngine>,
+    ) -> Result<Vec<Vec<(i64, usize)>>, sqlx::Error> {
+        if frames.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Read the latest video_chunk OUTSIDE the write transaction.
+        let video_chunk: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, file_path FROM video_chunks WHERE device_name = ?1 ORDER BY id DESC LIMIT 1",
+        )
+        .bind(device_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let (video_chunk_id, file_path) = match video_chunk {
+            Some((id, path)) => (id, path),
+            None => {
+                tracing::warn!(
+                    "No video chunk found for device '{}' — frames will not be inserted",
+                    device_name
+                );
+                return Ok(vec![]);
+            }
+        };
+
+        let ocr_engine_str = format!("{:?}", *ocr_engine);
+        let mut all_results = Vec::with_capacity(frames.len());
+
+        // Single transaction for all frames — one semaphore acquisition.
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        for (timestamp, offset_index, windows) in frames {
+            let mut frame_results = Vec::with_capacity(windows.len());
+            for (idx, window) in windows.iter().enumerate() {
+                let frame_id = sqlx::query(
+                    "INSERT INTO frames (video_chunk_id, offset_index, timestamp, name, browser_url, app_name, window_name, focused, device_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )
+                .bind(video_chunk_id)
+                .bind(offset_index)
+                .bind(timestamp)
+                .bind(&file_path)
+                .bind(window.browser_url.as_deref())
+                .bind(window.app_name.as_deref())
+                .bind(window.window_name.as_deref())
+                .bind(window.focused)
+                .bind(device_name)
+                .execute(&mut **tx.conn())
+                .await?
+                .last_insert_rowid();
+
+                let text_length = window.text.len() as i64;
+                sqlx::query(
+                    "INSERT INTO ocr_text (frame_id, text, text_json, ocr_engine, text_length) VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
+                .bind(frame_id)
+                .bind(&window.text)
+                .bind(&window.text_json)
+                .bind(&ocr_engine_str)
+                .bind(text_length)
+                .execute(&mut **tx.conn())
+                .await?;
+
+                frame_results.push((frame_id, idx));
+            }
+            all_results.push(frame_results);
+        }
+
+        tx.commit().await?;
+        debug!(
+            "Multi-frame batch inserted {} frames with OCR for device {}",
+            frames.len(),
+            device_name
+        );
+
+        Ok(all_results)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,

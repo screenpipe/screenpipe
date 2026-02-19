@@ -403,15 +403,18 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         "show" => {
             show_main_window(app_handle, false);
+            let _ = app_handle.emit("tray-show-timeline", ());
         }
         "show_search" => {
             // Search is a modal on the main window, not a separate window.
             // Show main window first, then emit event to open the search modal.
             show_main_window(app_handle, false);
             let _ = app_handle.emit("open-search", ());
+            let _ = app_handle.emit("tray-show-search", ());
         }
         "show_chat" => {
             let _ = ShowRewindWindow::Chat.show(app_handle);
+            let _ = app_handle.emit("tray-show-chat", ());
         }
         "start_recording" => {
             let _ = app_handle.emit("shortcut-start-recording", ());

@@ -114,6 +114,7 @@ pub struct CaptureResult {
     pub window_ocr_results: Vec<WindowOcrResult>,
 }
 
+#[derive(Clone)]
 pub struct WindowOcrResult {
     pub window_name: String,
     pub app_name: String,
