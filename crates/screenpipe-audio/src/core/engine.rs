@@ -14,6 +14,7 @@ pub enum AudioTranscriptionEngine {
     WhisperLargeV3TurboQuantized,
     WhisperLargeV3,
     WhisperLargeV3Quantized,
+    OpenAICompatible,
 }
 
 impl std::str::FromStr for AudioTranscriptionEngine {
@@ -27,6 +28,7 @@ impl std::str::FromStr for AudioTranscriptionEngine {
             "whisper-large-quantized" => Ok(Self::WhisperLargeV3Quantized),
             "whisper-large-v3-turbo" => Ok(Self::WhisperLargeV3Turbo),
             "whisper-large-v3-turbo-quantized" => Ok(Self::WhisperLargeV3TurboQuantized),
+            "openai-compatible" => Ok(Self::OpenAICompatible),
             _ => Err(format!("unknown audio engine: {s}")),
         }
     }
@@ -46,6 +48,7 @@ impl fmt::Display for AudioTranscriptionEngine {
             AudioTranscriptionEngine::WhisperLargeV3TurboQuantized => {
                 write!(f, "WhisperLargeV3TurboQuantized")
             }
+            AudioTranscriptionEngine::OpenAICompatible => write!(f, "OpenAICompatible"),
         }
     }
 }

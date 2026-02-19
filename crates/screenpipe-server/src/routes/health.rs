@@ -181,7 +181,7 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     } else if last_audio_ts == 0 {
         "not_started".to_string()
     } else if now.timestamp() as u64 - last_audio_ts < threshold_secs {
-        "stale".to_string()
+        "ok".to_string()
     } else {
         "stale".to_string()
     };

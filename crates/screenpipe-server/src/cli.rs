@@ -28,6 +28,8 @@ pub enum CliAudioTranscriptionEngine {
     WhisperLargeV3Turbo,
     #[clap(name = "whisper-large-v3-turbo-quantized")]
     WhisperLargeV3TurboQuantized,
+    #[clap(name = "openai-compatible")]
+    OpenAICompatible,
 }
 
 impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
@@ -49,6 +51,9 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
             }
             CliAudioTranscriptionEngine::WhisperLargeV3TurboQuantized => {
                 CoreAudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+            }
+            CliAudioTranscriptionEngine::OpenAICompatible => {
+                CoreAudioTranscriptionEngine::OpenAICompatible
             }
         }
     }
@@ -644,6 +649,10 @@ impl RecordArgs {
             languages,
             deepgram_api_key: self.deepgram_api_key,
             user_id: None,
+            // OpenAI Compatible transcription
+            openai_compatible_endpoint: None,
+            openai_compatible_api_key: None,
+            openai_compatible_model: None,
             video_quality: self.video_quality,
             use_chinese_mirror: false,
             analytics_enabled: !self.disable_telemetry,

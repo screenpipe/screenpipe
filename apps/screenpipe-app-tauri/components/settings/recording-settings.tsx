@@ -176,8 +176,13 @@ export function RecordingSettings() {
   const isDisabled = health?.status_code === 500;
   const [isMacOS, setIsMacOS] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
+
+  // OpenAI Compatible model fetching state
+  const [openAIModels, setOpenAIModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   // Add new state to track if settings have changed
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -359,6 +364,46 @@ export function RecordingSettings() {
 
     loadDevices();
   }, []);
+
+  // Fetch OpenAI Compatible models when endpoint changes
+  const fetchOpenAIModels = useCallback(async (endpoint: string, apiKey?: string) => {
+    setIsLoadingModels(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+      
+      const response = await fetch(`${endpoint}/v1/models`, {
+        method: 'GET',
+        headers,
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch models');
+      }
+      
+      const data = await response.json();
+      const models = data.data?.map((m: any) => m.id) || [];
+      setOpenAIModels(models);
+    } catch (error) {
+      console.error('Failed to fetch OpenAI models:', error);
+      setOpenAIModels(['!API_Error']);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }, []);
+
+  // Fetch models when OpenAI Compatible is selected and endpoint changes
+  useEffect(() => {
+    if (settings.audioTranscriptionEngine === 'openai-compatible') {
+      const endpoint = (settings as any).openaiCompatibleEndpoint || 'http://127.0.0.1:8080';
+      const apiKey = (settings as any).openaiCompatibleApiKey;
+      fetchOpenAIModels(endpoint, apiKey);
+    }
+  }, [settings.audioTranscriptionEngine, (settings as any).openaiCompatibleEndpoint, (settings as any).openaiCompatibleApiKey, fetchOpenAIModels]);
 
   // Enhanced validation for specific fields
   const validateDeepgramApiKey = useCallback((apiKey: string): FieldValidationResult => {
@@ -1048,7 +1093,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Transcription engine
-                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower." />
+                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower. OpenAI Compatible: use any OpenAI-compatible API endpoint." />
                 </h3>
               </div>
               <Select
@@ -1068,6 +1113,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectItem value="whisper-large-quantized">Whisper Large V3 Quantized</SelectItem>
                   <SelectItem value="whisper-large-v3-turbo">Whisper Large V3 Turbo</SelectItem>
                   <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Large V3 Turbo Quantized</SelectItem>
+                  <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
                   <SelectItem value="deepgram">Deepgram</SelectItem>
                 </SelectContent>
               </Select>
@@ -1090,12 +1136,57 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </Button>
               </div>
             )}
+            {settings.audioTranscriptionEngine === "openai-compatible" && (
+              <div className="mt-2 ml-[26px] space-y-2">
+                {/* API Endpoint Input */}
+                <ValidatedInput
+                  id="openaiCompatibleEndpoint"
+                  label=""
+                  value={(settings as any).openaiCompatibleEndpoint || "http://127.0.0.1:8080"}
+                  onChange={(value: string) => handleSettingsChange({ openaiCompatibleEndpoint: value } as any, true)}
+                  placeholder="API Endpoint (e.g., http://127.0.0.1:8080)"
+                  className="h-7 text-xs"
+                />
+                
+                {/* API Key Input */}
+                <div className="relative">
+                  <ValidatedInput
+                    id="openaiCompatibleApiKey"
+                    label=""
+                    type={showOpenAIApiKey ? "text" : "password"}
+                    value={(settings as any).openaiCompatibleApiKey || ""}
+                    onChange={(value: string) => handleSettingsChange({ openaiCompatibleApiKey: value } as any, true)}
+                    placeholder="API Key (optional)"
+                    className="pr-8 h-7 text-xs"
+                  />
+                  <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-7 w-7" onClick={() => setShowOpenAIApiKey(!showOpenAIApiKey)}>
+                    {showOpenAIApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  </Button>
+                </div>
+                
+                {/* Model Selection */}
+                <Select
+                  value={(settings as any).openaiCompatibleModel || ""}
+                  onValueChange={(value) => handleSettingsChange({ openaiCompatibleModel: value } as any, true)}
+                >
+                  <SelectTrigger className="w-full h-7 text-xs">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {openAIModels.map((model) => (
+                      <SelectItem key={model} value={model}>{model}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {/* Transcription Mode - only for local Whisper engines */}
         {settings.audioTranscriptionEngine !== "deepgram" &&
-         settings.audioTranscriptionEngine !== "screenpipe-cloud" && (
+         settings.audioTranscriptionEngine !== "screenpipe-cloud" &&
+         settings.audioTranscriptionEngine !== "openai-compatible" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
