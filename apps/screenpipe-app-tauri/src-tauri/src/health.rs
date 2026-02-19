@@ -57,20 +57,20 @@ static RECORDING_INFO: Lazy<RwLock<RecordingInfo>> = Lazy::new(|| {
 });
 
 pub fn get_recording_status() -> RecordingStatus {
-    RECORDING_INFO.read().unwrap().status
+    RECORDING_INFO.read().unwrap_or_else(|e| e.into_inner()).status
 }
 
 pub fn get_recording_info() -> RecordingInfo {
-    RECORDING_INFO.read().unwrap().clone()
+    RECORDING_INFO.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[allow(dead_code)]
 fn set_recording_status(status: RecordingStatus) {
-    RECORDING_INFO.write().unwrap().status = status;
+    RECORDING_INFO.write().unwrap_or_else(|e| e.into_inner()).status = status;
 }
 
 fn set_recording_info(status: RecordingStatus, devices: Vec<DeviceInfo>) {
-    let mut info = RECORDING_INFO.write().unwrap();
+    let mut info = RECORDING_INFO.write().unwrap_or_else(|e| e.into_inner());
     info.status = status;
     info.devices = devices;
 }

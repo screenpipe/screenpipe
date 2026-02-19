@@ -281,7 +281,7 @@ pub async fn open_pipe_window(
     let window_clone = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            let mut is_closing = is_closing_clone.lock().unwrap();
+            let mut is_closing = is_closing_clone.lock().unwrap_or_else(|e| e.into_inner());
             if *is_closing {
                 return;
             }

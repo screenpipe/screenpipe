@@ -46,7 +46,7 @@ fn save_frontmost_app() {
         let frontmost: id = msg_send![workspace, frontmostApplication];
         if frontmost != nil {
             let _: () = msg_send![frontmost, retain];
-            let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap();
+            let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap_or_else(|e| e.into_inner());
             if *prev != 0 {
                 let old = *prev as id;
                 let _: () = msg_send![old, release];
@@ -62,7 +62,7 @@ fn save_frontmost_app() {
 pub fn restore_frontmost_app() {
     use objc::{msg_send, sel, sel_impl};
     let ptr = {
-        let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap();
+        let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap_or_else(|e| e.into_inner());
         let p = *prev;
         *prev = 0;
         p
@@ -85,7 +85,7 @@ pub fn restore_frontmost_app() {
 pub fn clear_frontmost_app() {
     use objc::{msg_send, sel, sel_impl};
     let ptr = {
-        let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap();
+        let mut prev = PREVIOUS_FRONTMOST_APP.lock().unwrap_or_else(|e| e.into_inner());
         let p = *prev;
         *prev = 0;
         p
@@ -666,7 +666,7 @@ impl ShowRewindWindow {
 
             // No existing window for this mode — fall through to creation below
             // (record the mode so we know what was created)
-            *MAIN_CREATED_MODE.lock().unwrap() = overlay_mode.clone();
+            *MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()) = overlay_mode.clone();
         // === Other windows: standard show path ===
         } else if let Some(window) = id.get(app) {
 
@@ -795,7 +795,7 @@ impl ShowRewindWindow {
                 #[allow(unused_variables)] // used only on macOS
                 let show_in_recording = settings.show_overlay_in_screen_recording;
                 // Record what mode we're creating so we can detect changes later
-                *MAIN_CREATED_MODE.lock().unwrap() = overlay_mode.clone();
+                *MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()) = overlay_mode.clone();
                 let use_window_mode = overlay_mode == "window";
 
                 if use_window_mode {
@@ -1191,7 +1191,7 @@ impl ShowRewindWindow {
                                 {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
-                                        let mode = MAIN_CREATED_MODE.lock().unwrap().clone();
+                                        let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                         main_label_for_mode(&mode).to_string()
                                     };
                                     if let Ok(panel) = app_clone.get_webview_panel(&lbl) {
@@ -1218,7 +1218,7 @@ impl ShowRewindWindow {
                                     {
                                         let app2 = app.clone();
                                         let lbl = {
-                                            let mode = MAIN_CREATED_MODE.lock().unwrap().clone();
+                                            let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                             main_label_for_mode(&mode).to_string()
                                         };
                                         let _ = app.run_on_main_thread(move || {
@@ -1242,7 +1242,7 @@ impl ShowRewindWindow {
                                 {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
-                                        let mode = MAIN_CREATED_MODE.lock().unwrap().clone();
+                                        let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                         main_label_for_mode(&mode).to_string()
                                     };
                                     if let Ok(panel) = app_clone.get_webview_panel(&lbl) {
