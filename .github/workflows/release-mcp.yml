@@ -32,7 +32,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: crates/screenpipe-integrations/screenpipe-mcp
-        run: npm publish --access public
+        run: npm publish --access public || echo "npm publish failed (version may already exist) — continuing"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -43,18 +43,29 @@ jobs:
         working-directory: crates/screenpipe-integrations/screenpipe-mcp
         run: mcpb pack
 
-      - name: Get version from tag
+      - name: Get version
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        working-directory: crates/screenpipe-integrations/screenpipe-mcp
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            # workflow_dispatch — read version from package.json
+            VER=$(node -p "require('./package.json').version")
+            echo "VERSION=mcp-v${VER}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ steps.version.outputs.VERSION }} \
-            --title "MCP Server ${{ steps.version.outputs.VERSION }}" \
+          TAG="${{ steps.version.outputs.VERSION }}"
+          # create tag if it doesn't exist (workflow_dispatch case)
+          git tag "$TAG" 2>/dev/null && git push origin "$TAG" || true
+          gh release create "$TAG" \
+            --title "MCP Server $TAG" \
             --generate-notes \
             --prerelease \
             crates/screenpipe-integrations/screenpipe-mcp/screenpipe-mcp.mcpb \
-            || gh release upload ${{ steps.version.outputs.VERSION }} \
+            || gh release upload "$TAG" \
             crates/screenpipe-integrations/screenpipe-mcp/screenpipe-mcp.mcpb --clobber

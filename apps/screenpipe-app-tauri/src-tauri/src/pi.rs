@@ -125,11 +125,6 @@ struct RpcResponse {
 pub struct PiManager {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
-    /// PTY master for writing to Pi's stdin (macOS only).
-    /// Bun's readline doesn't emit line events on piped stdin,
-    /// so we use a PTY which makes readline work correctly.
-    #[cfg(target_os = "macos")]
-    pty_master: Option<std::fs::File>,
     project_dir: Option<String>,
     request_id: u64,
     app_handle: AppHandle,
@@ -144,8 +139,6 @@ impl PiManager {
         Self {
             child: None,
             stdin: None,
-            #[cfg(target_os = "macos")]
-            pty_master: None,
             project_dir: None,
             request_id: 0,
             app_handle,
@@ -170,8 +163,6 @@ impl PiManager {
                     info!("Pi process (pid {}) has exited with status: {}", pid, status);
                     self.child = None;
                     self.stdin = None;
-                    #[cfg(target_os = "macos")]
-                    { self.pty_master = None; }
                     // Emit pi_terminated so frontend can auto-restart
                     let _ = self.app_handle.emit("pi_terminated", pid);
                     false
@@ -206,17 +197,9 @@ impl PiManager {
         }
 
         if let Some(mut child) = self.child.take() {
-            // Send abort command first (prefer PTY on Unix)
-            let mut sent = false;
-            #[cfg(target_os = "macos")]
-            if let Some(ref mut pty) = self.pty_master {
-                let _ = writeln!(pty, r#"{{"type":"abort"}}"#);
-                sent = true;
-            }
-            if !sent {
-                if let Some(ref mut stdin) = self.stdin {
-                    let _ = writeln!(stdin, r#"{{"type":"abort"}}"#);
-                }
+            // Send abort command before killing
+            if let Some(ref mut stdin) = self.stdin {
+                let _ = writeln!(stdin, r#"{{"type":"abort"}}"#);
             }
 
             // Kill the process
@@ -226,8 +209,6 @@ impl PiManager {
             let _ = child.wait();
         }
         self.stdin = None;
-        #[cfg(target_os = "macos")]
-        { self.pty_master = None; }
         self.project_dir = None;
     }
 
@@ -235,7 +216,7 @@ impl PiManager {
         self.check_alive()
     }
 
-    /// Send a command to Pi via stdin (PTY on Unix) and return response
+    /// Send a command to Pi via stdin pipe and return response
     pub fn send_command(&mut self, command: Value) -> Result<(), String> {
         // Verify process is actually alive before writing
         if !self.check_alive() {
@@ -253,32 +234,10 @@ impl PiManager {
         let child_pid = self.child.as_ref().map(|c| c.id());
         let cmd_type = cmd.get("type").and_then(|t| t.as_str()).unwrap_or("?").to_string();
 
-        // Use PTY master on macOS if available (bun readline workaround)
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(ref mut pty) = self.pty_master {
-                use std::os::unix::io::AsRawFd;
-                info!("Sending to Pi (req_{}): type={}, pty_fd={}, child_pid={:?}, bytes={}",
-                    self.request_id, cmd_type, pty.as_raw_fd(), child_pid, cmd_str.len() + 1);
-
-                writeln!(pty, "{}", cmd_str).map_err(|e| format!("Failed to write to Pi pty: {}", e))?;
-                pty.flush().map_err(|e| format!("Failed to flush Pi pty: {}", e))?;
-                info!("Sent to Pi (req_{}): flushed ok", self.request_id);
-                return Ok(());
-            }
-        }
-
-        // Fall back to pipe stdin (Windows, or if PTY creation failed)
         let stdin = self.stdin.as_mut().ok_or("Pi not running")?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            info!("Sending to Pi (req_{}): type={}, stdin_fd={}, child_pid={:?}, bytes={}",
-                self.request_id, cmd_type, stdin.as_raw_fd(), child_pid, cmd_str.len() + 1);
-        }
-        #[cfg(not(unix))]
-        info!("Sending to Pi (req_{}): type={}", self.request_id, cmd_type);
+        info!("Sending to Pi (req_{}): type={}, child_pid={:?}, bytes={}",
+            self.request_id, cmd_type, child_pid, cmd_str.len() + 1);
 
         writeln!(stdin, "{}", cmd_str).map_err(|e| format!("Failed to write to Pi stdin: {}", e))?;
         stdin.flush().map_err(|e| format!("Failed to flush Pi stdin: {}", e))?;
@@ -742,34 +701,10 @@ pub async fn pi_start_inner(
         cmd.args(["--append-system-prompt", api_hint]);
     }
 
-    // On macOS, use a PTY for stdin so bun's readline emits line events.
-    // Bun 1.2's readline.createInterface doesn't fire "line" events on piped
-    // stdin — it buffers until EOF. A PTY makes it work line-by-line.
-    #[cfg(target_os = "macos")]
-    let pty_master: Option<std::fs::File> = {
-        use std::os::unix::io::FromRawFd;
-        let mut master_fd: libc::c_int = 0;
-        let mut slave_fd: libc::c_int = 0;
-        let ret = unsafe {
-            libc::openpty(
-                &mut master_fd,
-                &mut slave_fd,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ret == 0 {
-            cmd.stdin(unsafe { Stdio::from_raw_fd(slave_fd) });
-            info!("Using PTY for Pi stdin (master_fd={}, slave_fd={})", master_fd, slave_fd);
-            Some(unsafe { std::fs::File::from_raw_fd(master_fd) })
-        } else {
-            warn!("openpty failed (ret={}), falling back to pipe for Pi stdin", ret);
-            cmd.stdin(Stdio::piped());
-            None
-        }
-    };
-    #[cfg(not(target_os = "macos"))]
+    // Bun 1.3+ fixed the readline pipe bug (bun 1.2 needed a PTY workaround).
+    // The bundled bun is 1.3.7, so piped stdin works correctly.
+    // PTY canonical mode has a ~1024-byte line limit on macOS which silently
+    // drops large JSON commands (prompts are 2500+ bytes), so pipe is required.
     cmd.stdin(Stdio::piped());
 
     cmd.stdout(Stdio::piped())
@@ -808,17 +743,9 @@ pub async fn pi_start_inner(
     let pid = child.id();
     info!("Pi started with PID: {}", pid);
 
-    // Take stdin for writing commands (only when not using PTY)
-    #[cfg(target_os = "macos")]
-    let stdin = if pty_master.is_some() {
-        None // Writing via PTY master
-    } else {
-        Some(child.stdin.take()
-            .ok_or_else(|| "Failed to get pi stdin".to_string())?)
-    };
-    #[cfg(not(target_os = "macos"))]
-    let stdin = Some(child.stdin.take()
-        .ok_or_else(|| "Failed to get pi stdin".to_string())?);
+    // Take stdin for writing commands
+    let stdin = child.stdin.take()
+        .ok_or_else(|| "Failed to get pi stdin".to_string())?;
 
     // Take stdout for reading events
     let stdout = child.stdout.take()
@@ -830,10 +757,11 @@ pub async fn pi_start_inner(
     // Update manager
     if let Some(m) = manager_guard.as_mut() {
         m.child = Some(child);
-        m.stdin = stdin;
-        #[cfg(target_os = "macos")]
-        { m.pty_master = pty_master; }
+        m.stdin = Some(stdin);
         m.project_dir = Some(project_dir.clone());
+        // Reset idle timer so the watchdog doesn't use a stale timestamp
+        // from a previous session and immediately kill this new process
+        m.last_activity = std::time::Instant::now();
     }
 
     // Snapshot the state BEFORE dropping the lock, so we don't hold it during I/O
@@ -887,9 +815,8 @@ pub async fn pi_start_inner(
         let _ = app_handle.emit("pi_terminated", pid);
     });
 
-    // Spawn stderr reader thread
-    // NOTE: Pi (v0.51+) sends RPC JSON responses to stderr, not stdout.
-    // We must parse JSON from stderr and emit pi_event/pi_output just like stdout.
+    // Spawn stderr reader thread — Pi may emit JSON events to stderr in some
+    // configurations, so parse and forward them like stdout.
     if let Some(stderr) = stderr {
         let app_handle = app.clone();
         std::thread::spawn(move || {

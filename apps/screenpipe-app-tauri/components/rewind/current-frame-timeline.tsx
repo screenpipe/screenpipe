@@ -138,10 +138,6 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	const loadedChunkRef = useRef<string | null>(null);
 	// Generation counter to discard stale events
 	const seekGenRef = useRef(0);
-	// Canvas for snapshotting last good frame (back buffer for crossfades)
-	const canvasRef = useRef<HTMLCanvasElement>(null);
-	// Controls crossfade: false during chunk transitions, true when frame is ready
-	const [frameReady, setFrameReady] = useState(true);
 
 	const device = currentFrame?.devices?.[0];
 	const frameId = device?.frame_id;
@@ -237,27 +233,6 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		return derived;
 	}, []);
 
-	// Snapshot the current visible frame onto the canvas back buffer.
-	// Called after every successful seek and before chunk transitions.
-	const snapshotToCanvas = useCallback((source?: CanvasImageSource, w?: number, h?: number) => {
-		const canvas = canvasRef.current;
-		if (!canvas) return;
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-		if (source && w && h) {
-			canvas.width = w;
-			canvas.height = h;
-			ctx.drawImage(source, 0, 0, w, h);
-			return;
-		}
-		const video = videoRef.current;
-		if (video && video.videoWidth > 0 && video.readyState >= 2) {
-			canvas.width = video.videoWidth;
-			canvas.height = video.videoHeight;
-			ctx.drawImage(video, 0, 0);
-		}
-	}, []);
-
 	// Main video seeking effect
 	useEffect(() => {
 		if (!debouncedFrame || !useVideoMode) return;
@@ -278,9 +253,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 			// Load new chunk if needed
 			if (loadedChunkRef.current !== path) {
-				// Snapshot current frame before switching (canvas holds it during transition)
-				snapshotToCanvas();
-				setFrameReady(false);
+	
 
 				const url = await getVideoUrl(path);
 				if (!url || gen !== seekGenRef.current) return;
@@ -339,9 +312,8 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 			if (gen !== seekGenRef.current) return;
 
-			// Frame is ready — snapshot to canvas and crossfade in
-			snapshotToCanvas();
-			setFrameReady(true);
+			// Frame is ready
+
 			setIsLoading(false);
 			setHasError(false);
 			setNaturalDimensions({
@@ -371,12 +343,12 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		doSeek().catch((err) => {
 			if (gen !== seekGenRef.current) return;
 			console.warn("Video seek failed, falling back to ffmpeg:", err);
-			setFrameReady(false);
+
 			markChunkFailed(path);
 			loadedChunkRef.current = null;
 			setUseVideoMode(false);
 		});
-	}, [debouncedFrame, useVideoMode, getVideoUrl, resolveEffectiveFps, snapshotToCanvas]);
+	}, [debouncedFrame, useVideoMode, getVideoUrl, resolveEffectiveFps]);
 
 	// Fallback: ffmpeg <img> mode (same as old behavior)
 	const fallbackImageUrl = useMemo(() => {
@@ -390,8 +362,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		frameLoadStartTimeRef.current = performance.now();
 		const img = new Image();
 		img.onload = () => {
-			snapshotToCanvas(img, img.naturalWidth, img.naturalHeight);
-			setFrameReady(true);
+
 			setDisplayedFallbackUrl(fallbackImageUrl);
 			setIsLoading(false);
 			setHasError(false);
@@ -418,7 +389,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 			img.onload = null;
 			img.onerror = null;
 		};
-	}, [fallbackImageUrl, snapshotToCanvas]);
+	}, [fallbackImageUrl]);
 
 	// OCR data
 	const { textPositions, isLoading: ocrLoading } = useFrameOcrData(
@@ -696,27 +667,18 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				</div>
 			)}
 
-			{/* Canvas snapshot — back buffer holding last good frame for crossfades */}
-			<div className="absolute inset-0 flex items-center justify-center" style={{ zIndex: 0 }}>
-				<canvas ref={canvasRef} className="max-w-full max-h-full" />
-			</div>
-
-			{/* Video element — crossfades in over canvas when frame is ready */}
+			{/* Video element — always visible, no canvas back buffer needed */}
 			<video
 				ref={videoRef}
 				muted
 				playsInline
 				preload="auto"
 				className="absolute inset-0 w-full h-full object-contain"
-				style={{
-					zIndex: 1,
-					opacity: frameReady ? 1 : 0,
-					transition: "opacity 150ms ease-out",
-				}}
+				style={{ zIndex: 1 }}
 				onError={() => {
 					const err = videoRef.current?.error;
 					console.warn("Video error:", err?.code, err?.message);
-					setFrameReady(false);
+		
 					if (debouncedFrame?.filePath) {
 						markChunkFailed(debouncedFrame.filePath);
 					}
@@ -725,16 +687,12 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				}}
 			/>
 
-			{/* Fallback mode: preloaded <img> layered on top of frozen video frame */}
+			{/* Fallback mode: preloaded <img> layered on top of video */}
 			{displayedFallbackUrl && !useVideoMode && (
 				<img
 					src={displayedFallbackUrl}
 					className="absolute inset-0 w-full h-full object-contain"
-					style={{
-						zIndex: 2,
-						opacity: frameReady ? 1 : 0,
-						transition: "opacity 150ms ease-out",
-					}}
+					style={{ zIndex: 2 }}
 					alt="Current frame"
 					draggable={false}
 				/>

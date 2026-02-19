@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
 import { X } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
 import { AudioEqualizer } from "./audio-equalizer";
@@ -138,8 +139,18 @@ export default function ShortcutReminderPage() {
             gridTemplateColumns: "1fr 1fr auto",
           }}
         >
-          {/* Row 1, Col 1: Overlay shortcut */}
-          <div className="flex items-center gap-1 px-1.5 py-1 border-r border-white/20">
+          {/* Row 1, Col 1: Overlay shortcut (clickable) */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              commands.showWindow("Main");
+              posthog.capture("shortcut_reminder_timeline_clicked");
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="flex items-center gap-1 px-1.5 py-1 border-r border-white/20 hover:bg-white/10 transition-colors cursor-pointer"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            title="Open timeline"
+          >
             <svg
               width="8"
               height="8"
@@ -155,10 +166,20 @@ export default function ShortcutReminderPage() {
             <span className="font-mono text-[9px] font-medium text-white/80 tracking-wider">
               {overlayShortcut ?? "..."}
             </span>
-          </div>
+          </button>
 
-          {/* Row 1, Col 2: Chat shortcut */}
-          <div className="flex items-center gap-1 px-1.5 py-1">
+          {/* Row 1, Col 2: Chat shortcut (clickable) */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              commands.showWindow("Chat");
+              posthog.capture("shortcut_reminder_chat_clicked");
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="flex items-center gap-1 px-1.5 py-1 hover:bg-white/10 transition-colors cursor-pointer"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            title="Open chat"
+          >
             <svg
               width="8"
               height="8"
@@ -173,7 +194,7 @@ export default function ShortcutReminderPage() {
             <span className="font-mono text-[9px] font-medium text-white/80 tracking-wider">
               {chatShortcut ?? "..."}
             </span>
-          </div>
+          </button>
 
           {/* Row 1, Col 3: Close button */}
           <button

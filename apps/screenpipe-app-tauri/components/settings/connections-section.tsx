@@ -129,6 +129,202 @@ async function getInstalledMcpVersion(): Promise<string | null> {
   }
 }
 
+function CursorLogo({ className }: { className?: string }) {
+  return (
+    <svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className={className}>
+      <g clipPath="url(#cursor_clip0)">
+        <rect width="512" height="512" rx="122" fill="#000"/>
+        <g clipPath="url(#cursor_clip1)">
+          <mask id="cursor_mask" style={{maskType:"luminance"}} maskUnits="userSpaceOnUse" x="85" y="89" width="343" height="334">
+            <path d="M85 89h343v334H85V89z" fill="#fff"/>
+          </mask>
+          <g mask="url(#cursor_mask)">
+            <path d="M255.428 423l148.991-83.5L255.428 256l-148.99 83.5 148.99 83.5z" fill="url(#cursor_grad0)"/>
+            <path d="M404.419 339.5v-167L255.428 89v167l148.991 83.5z" fill="url(#cursor_grad1)"/>
+            <path d="M255.428 89l-148.99 83.5v167l148.99-83.5V89z" fill="url(#cursor_grad2)"/>
+            <path d="M404.419 172.5L255.428 423V256l148.991-83.5z" fill="#E4E4E4"/>
+            <path d="M404.419 172.5L255.428 256l-148.99-83.5h297.981z" fill="#fff"/>
+          </g>
+        </g>
+      </g>
+      <defs>
+        <linearGradient id="cursor_grad0" x1="255.428" y1="256" x2="255.428" y2="423" gradientUnits="userSpaceOnUse">
+          <stop offset=".16" stopColor="#fff" stopOpacity=".39"/><stop offset=".658" stopColor="#fff" stopOpacity=".8"/>
+        </linearGradient>
+        <linearGradient id="cursor_grad1" x1="404.419" y1="173.015" x2="257.482" y2="261.497" gradientUnits="userSpaceOnUse">
+          <stop offset=".182" stopColor="#fff" stopOpacity=".31"/><stop offset=".715" stopColor="#fff" stopOpacity="0"/>
+        </linearGradient>
+        <linearGradient id="cursor_grad2" x1="255.428" y1="89" x2="112.292" y2="342.802" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fff" stopOpacity=".6"/><stop offset=".667" stopColor="#fff" stopOpacity=".22"/>
+        </linearGradient>
+        <clipPath id="cursor_clip0"><path fill="#fff" d="M0 0h512v512H0z"/></clipPath>
+        <clipPath id="cursor_clip1"><path fill="#fff" transform="translate(85 89)" d="M0 0h343v334H0z"/></clipPath>
+      </defs>
+    </svg>
+  );
+}
+
+async function getCursorMcpConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".cursor", "mcp.json");
+}
+
+async function isCursorMcpInstalled(): Promise<boolean> {
+  try {
+    const configPath = await getCursorMcpConfigPath();
+    const content = await readTextFile(configPath);
+    const config = JSON.parse(content);
+    return !!config?.mcpServers?.screenpipe;
+  } catch {
+    return false;
+  }
+}
+
+async function installCursorMcp(): Promise<void> {
+  const configPath = await getCursorMcpConfigPath();
+
+  let config: Record<string, unknown> = {};
+  try {
+    const content = await readTextFile(configPath);
+    config = JSON.parse(content);
+  } catch {
+    // file doesn't exist or invalid JSON — start fresh
+  }
+
+  if (!config.mcpServers || typeof config.mcpServers !== "object") {
+    config.mcpServers = {};
+  }
+
+  (config.mcpServers as Record<string, unknown>).screenpipe = {
+    command: "npx",
+    args: ["-y", "screenpipe-mcp"],
+  };
+
+  const encoder = new TextEncoder();
+  await writeFile(configPath, encoder.encode(JSON.stringify(config, null, 2)));
+}
+
+function CursorCard() {
+  const [state, setState] = useState<"idle" | "installing" | "installed">("idle");
+
+  useEffect(() => {
+    isCursorMcpInstalled().then((installed) => {
+      if (installed) setState("installed");
+    });
+  }, []);
+
+  const handleConnect = async () => {
+    try {
+      setState("installing");
+      await installCursorMcp();
+      setState("installed");
+    } catch (error) {
+      console.error("failed to install cursor mcp:", error);
+      await message(
+        "Failed to write Cursor MCP config.\n\nYou can manually add screenpipe to ~/.cursor/mcp.json:\n\n" +
+        JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp"] } } }, null, 2),
+        { title: "Cursor MCP Setup", kind: "error" }
+      );
+      setState("idle");
+    }
+  };
+
+  const openCursor = async () => {
+    try {
+      const os = platform();
+      if (os === "macos") {
+        const cmd = Command.create("open", ["-a", "Cursor"]);
+        await cmd.execute();
+      } else if (os === "windows") {
+        const cmd = Command.create("cmd", ["/c", "start", "", "cursor"]);
+        await cmd.execute();
+      } else {
+        await openUrl("https://cursor.com");
+      }
+    } catch {
+      await openUrl("https://cursor.com");
+    }
+  };
+
+  return (
+    <Card className="border-border bg-card overflow-hidden">
+      <CardContent className="p-0">
+        <div className="flex items-start p-4 gap-4">
+          <div className="flex-shrink-0">
+            <CursorLogo className="w-10 h-10 rounded-2xl" />
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="text-sm font-semibold text-foreground">
+                Cursor
+              </h3>
+              <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full">
+                IDE
+              </span>
+              {state === "installed" && (
+                <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
+                  installed
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              Give Cursor access to your screen &amp; audio history via MCP.
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={handleConnect}
+                disabled={state === "installing"}
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+              >
+                {state === "installing" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Installing...
+                  </>
+                ) : state === "installed" ? (
+                  <>
+                    <Check className="h-4 w-4" />
+                    Connected
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4" />
+                    Connect
+                  </>
+                )}
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={openCursor}
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open Cursor
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {state === "installed" && (
+          <div className="px-4 pb-4">
+            <div className="p-3 bg-muted border border-border rounded-lg">
+              <p className="text-xs text-foreground">
+                <strong>Screenpipe is now connected to Cursor!</strong> Try asking in Composer:
+                &quot;What was I working on in the last hour?&quot; or &quot;Find my recent meetings&quot;
+              </p>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 const CLAUDE_CODE_COMMAND = "claude mcp add screenpipe -- npx -y screenpipe-mcp";
 
 function ClaudeCodeCard() {
@@ -240,19 +436,34 @@ export function ConnectionsSection() {
 
       await writeFile(filePath, uint8Array);
 
-      // Open Claude first, then open the .mcpb file to trigger the install modal
+      // Open Claude first, wait for it to be ready, then trigger the .mcpb install
       const os = platform();
       if (os === "macos") {
-        // Open Claude Desktop first
+        // Open Claude Desktop
         const openClaude = Command.create("open", ["-a", "Claude"]);
         await openClaude.execute();
 
-        // Wait for Claude to open
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Poll until Claude is actually running (up to 15s)
+        for (let i = 0; i < 30; i++) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          try {
+            const check = Command.create("sh", ["-c", "pgrep -x Claude"]);
+            const result = await check.execute();
+            if (result.code === 0) break;
+          } catch { /* keep waiting */ }
+        }
+        // Extra grace period for the UI to finish loading
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Then open the .mcpb file - Claude will show the install modal
-        const openFile = Command.create("open", [filePath]);
-        await openFile.execute();
+        // Open the .mcpb file — retry up to 3 times in case Claude isn't ready
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const openFile = Command.create("open", [filePath]);
+          await openFile.execute();
+          // Wait and check if Claude config was updated (install modal accepted)
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const installed = await getInstalledMcpVersion();
+          if (installed) break;
+        }
       } else if (os === "windows") {
         // Find Claude Desktop at known install location
         const claudeExe = await findClaudeExeOnWindows();
@@ -262,12 +473,26 @@ export function ConnectionsSection() {
           const openClaude = Command.create("cmd", ["/c", "start", "", claudeExe]);
           await openClaude.execute();
 
-          // Wait for Claude to initialize
+          // Poll until Claude process is running (up to 15s)
+          for (let i = 0; i < 30; i++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            try {
+              const check = Command.create("cmd", ["/c", "tasklist /FI \"IMAGENAME eq Claude.exe\" /NH"]);
+              const result = await check.execute();
+              if (result.stdout.includes("Claude.exe")) break;
+            } catch { /* keep waiting */ }
+          }
+          // Extra grace period for UI to finish loading
           await new Promise(resolve => setTimeout(resolve, 2000));
 
-          // Open the .mcpb file — Claude handles the install modal
-          const openFile = Command.create("cmd", ["/c", "start", "", filePath]);
-          await openFile.execute();
+          // Open the .mcpb file — retry up to 3 times
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const openFile = Command.create("cmd", ["/c", "start", "", filePath]);
+            await openFile.execute();
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            const installed = await getInstalledMcpVersion();
+            if (installed) break;
+          }
         } else {
           // Claude not found — tell user where the file is
           await message(
@@ -428,6 +653,9 @@ export function ConnectionsSection() {
             )}
           </CardContent>
         </Card>
+
+        {/* Cursor */}
+        <CursorCard />
 
         {/* Claude Code */}
         <ClaudeCodeCard />
