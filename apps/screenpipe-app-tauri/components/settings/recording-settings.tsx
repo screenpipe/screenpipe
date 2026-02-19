@@ -1132,7 +1132,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Transcription engine
-                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower. OpenAI Compatible: use any OpenAI-compatible API endpoint." />
+                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower. OpenAI Compatible: use any OpenAI-compatible API endpoint. Disabled: capture audio only without transcription, useful for external ASR." />
                 </h3>
               </div>
               <Select
@@ -1154,6 +1154,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Large V3 Turbo Quantized</SelectItem>
                   <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
                   <SelectItem value="deepgram">Deepgram</SelectItem>
+                  <SelectItem value="disabled">Disabled (capture only)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1238,7 +1239,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         {/* Transcription Mode - only for local Whisper engines */}
         {settings.audioTranscriptionEngine !== "deepgram" &&
          settings.audioTranscriptionEngine !== "screenpipe-cloud" &&
-         settings.audioTranscriptionEngine !== "openai-compatible" && (
+         settings.audioTranscriptionEngine !== "openai-compatible" &&
+         settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">

@@ -10,7 +10,8 @@ use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{atomic::Ordering, Arc};
-use tracing::debug;
+use std::time::Duration;
+use tracing::{debug, warn};
 
 use crate::server::AppState;
 
@@ -234,18 +235,21 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         )
     };
 
-    // Get active monitors
+    // Get active monitors — timeout so health check stays fast even if
+    // the blocking pool is saturated by DB writes.
     let monitors = if !state.vision_disabled {
-        let monitor_list = list_monitors().await;
-        if monitor_list.is_empty() {
-            None
-        } else {
-            Some(
+        match tokio::time::timeout(Duration::from_secs(2), list_monitors()).await {
+            Ok(monitor_list) if !monitor_list.is_empty() => Some(
                 monitor_list
                     .iter()
                     .map(|m| format!("Display {} ({}x{})", m.id(), m.width(), m.height()))
                     .collect(),
-            )
+            ),
+            Ok(_) => None,
+            Err(_) => {
+                warn!("health_check: list_monitors timed out after 2s");
+                None
+            }
         }
     } else {
         None
@@ -302,12 +306,24 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                 .transcription_paused
                 .load(Ordering::Relaxed);
 
-            // Query meeting detector state
+            // Query meeting detector state — timeout the RwLock read so it
+            // can't stall the health check if writes are contended.
             let (meeting_detected, meeting_app) =
                 if let Some(detector) = state.audio_manager.meeting_detector() {
                     let in_meeting = detector.is_in_meeting();
                     let app = if in_meeting {
-                        detector.current_meeting_app().await
+                        match tokio::time::timeout(
+                            Duration::from_millis(500),
+                            detector.current_meeting_app(),
+                        )
+                        .await
+                        {
+                            Ok(app) => app,
+                            Err(_) => {
+                                warn!("health_check: meeting_detector lock timed out after 500ms");
+                                None
+                            }
+                        }
                     } else {
                         None
                     };

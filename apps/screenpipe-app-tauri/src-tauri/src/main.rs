@@ -1682,89 +1682,9 @@ async fn main() {
                 });
             }
 
-            // Auto-start Pi agent in background with default preset config
-            // All AI providers now route through Pi (OpenAI, Ollama, custom, screenpipe-cloud)
-            if onboarding_store.is_completed && !store.ai_presets.is_empty() {
-                let app_handle_pi_boot = app.handle().clone();
-                let store_for_pi = store.clone();
-                tauri::async_runtime::spawn(async move {
-                    // Wait for Pi to be installed and app to settle
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-                    let default_preset = store_for_pi.ai_presets.iter()
-                        .find(|p| p.default_preset)
-                        .or_else(|| store_for_pi.ai_presets.first());
-
-                    if let Some(preset) = default_preset {
-                        // Normalize model name: old "pi" presets used hyphens (e.g. claude-haiku-4-5-20251001)
-                        // but screenpipe cloud expects @ separator (claude-haiku-4-5@20251001)
-                        let model = if matches!(preset.provider, crate::store::AIProviderType::Pi | crate::store::AIProviderType::ScreenpipeCloud) {
-                            // Fix known model name patterns: last hyphen before date → @
-                            preset.model.replace("4-5-2025", "4-5@2025")
-                                .replace("4-6-2025", "4-6@2025")
-                        } else {
-                            preset.model.clone()
-                        };
-
-                        let provider_config = pi::PiProviderConfig {
-                            provider: match preset.provider {
-                                crate::store::AIProviderType::OpenAI => "openai".to_string(),
-                                crate::store::AIProviderType::NativeOllama => "native-ollama".to_string(),
-                                crate::store::AIProviderType::Custom => "custom".to_string(),
-                                crate::store::AIProviderType::ScreenpipeCloud => "screenpipe-cloud".to_string(),
-                                crate::store::AIProviderType::Pi => "screenpipe-cloud".to_string(),
-                            },
-                            url: preset.url.clone(),
-                            model,
-                            api_key: preset.api_key.clone(),
-                        };
-
-                        let project_dir = dirs::home_dir()
-                            .map(|h| h.join(".screenpipe").join("pi-chat").to_string_lossy().to_string())
-                            .unwrap_or_else(|| "/tmp/screenpipe-pi-chat".to_string());
-
-                        let user_token = store_for_pi.user.token.clone();
-
-                        if let Some(pi_state) = app_handle_pi_boot.try_state::<pi::PiState>() {
-                            let pi_state_clone = pi_state.inner().clone();
-                            // Retry up to 3 times (Pi might still be installing)
-                            for attempt in 1..=3u32 {
-                                // Skip if Pi was already started (e.g. by frontend preset change)
-                                {
-                                    let mut guard = pi_state_clone.0.lock().await;
-                                    if guard.as_mut().map(|m| m.is_running()).unwrap_or(false) {
-                                        info!("Pi already running, skipping auto-start");
-                                        break;
-                                    }
-                                }
-
-                                info!("Auto-starting Pi agent (attempt {}/3) with provider: {}, model: {}", attempt, provider_config.provider, provider_config.model);
-
-                                let result = pi::pi_start_inner(
-                                    app_handle_pi_boot.clone(),
-                                    &pi_state_clone,
-                                    project_dir.clone(),
-                                    user_token.clone(),
-                                    Some(provider_config.clone()),
-                                ).await;
-
-                                match result {
-                                    Ok(info) => {
-                                        info!("Pi auto-started successfully: {:?}", info);
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        warn!("Pi auto-start attempt {} failed: {}", attempt, e);
-                                        if attempt < 3 {
-                                            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // Pi is NOT auto-started at boot — it starts lazily when the user opens
+            // the chat (standalone-chat.tsx calls pi_start). An idle watchdog in pi.rs
+            // auto-stops it after 5 minutes of inactivity to avoid stale processes.
 
             // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
             // Don't show reminder during first-time onboarding to reduce overwhelm

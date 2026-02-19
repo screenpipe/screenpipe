@@ -1194,9 +1194,9 @@ checksum = "f4ad8f11f288f48ca24471bbd51ac257aaeaaa07adae295591266b792902ae64"
 
 [[package]]
 name = "bumpalo"
-version = "3.19.1"
+version = "3.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
+checksum = "5c6f81257d10a0f602a294ae4182251151ff97dbb504ef9afcdda4a64b24d9b4"
 
 [[package]]
 name = "bytemuck"
@@ -1483,7 +1483,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.14.1"
-source = "git+https://github.com/yury/cidre.git#c5d88dd4d9093e96d75787fec7790c32e00a24b3"
+source = "git+https://github.com/yury/cidre.git#ff9afc505fcc1fbe6e3e0fadd459f1f7c6b25acc"
 dependencies = [
  "cidre-macros 0.5.0",
  "half",
@@ -8097,7 +8097,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.0.495"
+version = "2.0.501"
 dependencies = [
  "anyhow",
  "arboard",
@@ -8331,14 +8331,12 @@ dependencies = [
  "eventkit-rs",
  "image 0.25.9",
  "log",
- "mime_guess",
  "objc2 0.6.3",
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
  "reqwest 0.12.12",
  "screenpipe-core",
  "serde_json",
- "tempfile",
  "tokio",
  "tracing",
 ]

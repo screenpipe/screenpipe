@@ -75,7 +75,9 @@ pub async fn stt(
     whisper_state: &mut WhisperState,
 ) -> Result<String> {
     let transcription: Result<String> =
-        if audio_transcription_engine == AudioTranscriptionEngine::Deepgram.into() {
+        if *audio_transcription_engine == AudioTranscriptionEngine::Disabled {
+            Ok(String::new())
+        } else if audio_transcription_engine == AudioTranscriptionEngine::Deepgram.into() {
             // Deepgram implementation
             let api_key = deepgram_api_key.unwrap_or_default();
 

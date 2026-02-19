@@ -15,6 +15,7 @@ pub enum AudioTranscriptionEngine {
     WhisperLargeV3,
     WhisperLargeV3Quantized,
     OpenAICompatible,
+    Disabled,
 }
 
 impl std::str::FromStr for AudioTranscriptionEngine {
@@ -29,6 +30,7 @@ impl std::str::FromStr for AudioTranscriptionEngine {
             "whisper-large-v3-turbo" => Ok(Self::WhisperLargeV3Turbo),
             "whisper-large-v3-turbo-quantized" => Ok(Self::WhisperLargeV3TurboQuantized),
             "openai-compatible" => Ok(Self::OpenAICompatible),
+            "disabled" => Ok(Self::Disabled),
             _ => Err(format!("unknown audio engine: {s}")),
         }
     }
@@ -49,6 +51,7 @@ impl fmt::Display for AudioTranscriptionEngine {
                 write!(f, "WhisperLargeV3TurboQuantized")
             }
             AudioTranscriptionEngine::OpenAICompatible => write!(f, "OpenAICompatible"),
+            AudioTranscriptionEngine::Disabled => write!(f, "Disabled"),
         }
     }
 }
@@ -124,6 +127,14 @@ mod tests {
                 .parse::<AudioTranscriptionEngine>()
                 .unwrap(),
             AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+        );
+    }
+
+    #[test]
+    fn from_str_disabled() {
+        assert_eq!(
+            "disabled".parse::<AudioTranscriptionEngine>().unwrap(),
+            AudioTranscriptionEngine::Disabled
         );
     }
 

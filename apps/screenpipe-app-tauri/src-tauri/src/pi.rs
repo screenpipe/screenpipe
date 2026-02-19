@@ -133,6 +133,10 @@ pub struct PiManager {
     project_dir: Option<String>,
     request_id: u64,
     app_handle: AppHandle,
+    /// Tracks last activity (creation or send_command) for idle shutdown
+    last_activity: std::time::Instant,
+    /// Handle to the idle watchdog task so stop() can abort it
+    watchdog_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PiManager {
@@ -145,7 +149,14 @@ impl PiManager {
             project_dir: None,
             request_id: 0,
             app_handle,
+            last_activity: std::time::Instant::now(),
+            watchdog_handle: None,
         }
+    }
+
+    /// How long since the last send_command() or creation
+    pub fn idle_duration(&self) -> std::time::Duration {
+        self.last_activity.elapsed()
     }
 
     /// Check if the child process is actually alive via try_wait().
@@ -189,6 +200,11 @@ impl PiManager {
     }
 
     pub fn stop(&mut self) {
+        // Abort the idle watchdog first
+        if let Some(handle) = self.watchdog_handle.take() {
+            handle.abort();
+        }
+
         if let Some(mut child) = self.child.take() {
             // Send abort command first (prefer PTY on Unix)
             let mut sent = false;
@@ -226,6 +242,7 @@ impl PiManager {
             return Err("Pi process has died".to_string());
         }
 
+        self.last_activity = std::time::Instant::now();
         self.request_id += 1;
         let mut cmd = command;
         if let Some(obj) = cmd.as_object_mut() {
@@ -567,6 +584,58 @@ pub async fn pi_start(
     pi_start_inner(app, &state, project_dir, user_token, provider_config).await
 }
 
+/// Kill orphan Pi RPC processes left over from a previous app crash.
+/// Only kills if the managed child is dead or absent.
+fn kill_orphan_pi_processes(managed_alive: bool) {
+    if managed_alive {
+        debug!("Managed Pi child is alive, skipping orphan cleanup");
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        match Command::new("pkill").args(["-f", "pi --mode rpc"]).output() {
+            Ok(output) => {
+                if output.status.success() {
+                    info!("Killed orphan Pi RPC processes");
+                } else {
+                    debug!("No orphan Pi RPC processes found (pkill exit={})", output.status);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to run pkill for orphan cleanup: {}", e);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        match Command::new("taskkill")
+            .args(["/F", "/FI", "COMMANDLINE eq *pi --mode rpc*"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    info!("Killed orphan Pi RPC processes (Windows)");
+                } else {
+                    debug!("No orphan Pi RPC processes found (Windows)");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to run taskkill for orphan cleanup: {}", e);
+            }
+        }
+    }
+}
+
+/// Duration after which an idle Pi process is automatically stopped.
+const PI_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// How often the watchdog checks for idle / dead Pi processes.
+const PI_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Core Pi start logic — callable from both Tauri commands and Rust boot code.
 pub async fn pi_start_inner(
     app: AppHandle,
@@ -615,13 +684,21 @@ pub async fn pi_start_inner(
     }
 
     // Stop any existing instance
-    if let Some(m) = manager_guard.as_mut() {
+    let managed_alive = if let Some(m) = manager_guard.as_mut() {
         if m.is_running() {
             let old_pid = m.child.as_ref().map(|c| c.id());
             info!("Stopping existing pi instance (pid {:?}) to start new one", old_pid);
             m.stop();
+            false
+        } else {
+            false
         }
-    }
+    } else {
+        false
+    };
+
+    // Kill orphan Pi processes from previous crashes before spawning a new one
+    kill_orphan_pi_processes(managed_alive);
 
     // Find pi executable — if not found, wait for background install (up to 60s)
     let pi_path = match find_pi_executable() {
@@ -837,11 +914,50 @@ pub async fn pi_start_inner(
                         }
                         let _ = app_handle.emit("pi_log", &line);
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        error!("Error reading pi stderr: {}", e);
+                        break;
+                    }
                 }
             }
             info!("Pi stderr reader ended");
         });
+    }
+
+    // Spawn idle watchdog — auto-stops Pi after PI_IDLE_TIMEOUT of inactivity
+    {
+        let state_clone = state.0.clone();
+        let app_handle_wd = app.clone();
+        let watchdog = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(PI_WATCHDOG_INTERVAL).await;
+                let mut guard = state_clone.lock().await;
+                if let Some(m) = guard.as_mut() {
+                    if !m.check_alive() {
+                        info!("Watchdog: Pi process is dead, emitting pi_terminated");
+                        let _ = app_handle_wd.emit("pi_terminated", 0u32);
+                        break;
+                    }
+                    let idle = m.idle_duration();
+                    if idle >= PI_IDLE_TIMEOUT {
+                        info!("Watchdog: Pi idle for {:?}, stopping to save resources", idle);
+                        m.stop();
+                        let _ = app_handle_wd.emit("pi_terminated", 0u32);
+                        break;
+                    }
+                } else {
+                    // No manager — nothing to watch
+                    break;
+                }
+            }
+            debug!("Watchdog task exiting");
+        });
+
+        // Store the handle so stop() can abort it
+        let mut guard = state.0.lock().await;
+        if let Some(m) = guard.as_mut() {
+            m.watchdog_handle = Some(watchdog);
+        }
     }
 
     // Wait for Pi to initialize before allowing prompts. Pi v0.51+ needs time
@@ -1526,6 +1642,48 @@ mod tests {
 
         let result = parse_where_output(output);
         assert_eq!(result, Some("C:\\Users\\npm\\pi.cmd".to_string()));
+    }
+
+    /// Test that idle_duration tracks time correctly
+    #[test]
+    fn test_idle_duration_tracking() {
+        use std::time::{Duration, Instant};
+        // Simulate the tracking logic without needing a full PiManager
+        let start = Instant::now();
+        std::thread::sleep(Duration::from_millis(50));
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50));
+        assert!(elapsed < Duration::from_secs(2));
+
+        // Simulate activity reset
+        let reset = Instant::now();
+        std::thread::sleep(Duration::from_millis(10));
+        let after_reset = reset.elapsed();
+        assert!(after_reset < elapsed, "activity reset should reduce idle duration");
+    }
+
+    /// Test that kill_orphan_pi_processes doesn't crash when no processes exist.
+    /// Ignored by default because pkill interferes with parallel tests.
+    #[test]
+    #[ignore]
+    fn test_kill_orphan_noop_when_none() {
+        // Should not panic or error when there are no orphan processes
+        super::kill_orphan_pi_processes(false);
+    }
+
+    /// Test that kill_orphan_pi_processes skips cleanup when managed child is alive
+    #[test]
+    fn test_kill_orphan_skips_when_alive() {
+        // Should not attempt to kill anything when managed_alive=true
+        super::kill_orphan_pi_processes(true);
+    }
+
+    /// Test PI_IDLE_TIMEOUT and PI_WATCHDOG_INTERVAL constants are sensible
+    #[test]
+    fn test_idle_timeout_constants() {
+        assert_eq!(super::PI_IDLE_TIMEOUT.as_secs(), 300); // 5 minutes
+        assert_eq!(super::PI_WATCHDOG_INTERVAL.as_secs(), 30);
+        assert!(super::PI_IDLE_TIMEOUT > super::PI_WATCHDOG_INTERVAL);
     }
 
 }

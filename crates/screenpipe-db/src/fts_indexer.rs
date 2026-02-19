@@ -12,13 +12,14 @@ use crate::DatabaseManager;
 /// infrequently — process everything that accumulated since last run.
 const FTS_BATCH_SIZE: i64 = 10_000;
 
-/// Rows per micro-batch inside a write transaction. Larger batches = fewer
-/// semaphore acquisitions = less contention with real-time inserts.
-/// 100 rows per tx keeps lock hold time under ~50ms.
-const FTS_MICRO_BATCH_SIZE: usize = 100;
+/// Rows per micro-batch inside a write transaction. Keep small so each
+/// tx holds the write lock briefly, letting real-time inserts interleave.
+/// 25 rows × ~2KB ≈ sub-millisecond lock hold time.
+const FTS_MICRO_BATCH_SIZE: usize = 25;
 
 /// Delay between micro-batches to let real-time inserts through.
-const FTS_MICRO_BATCH_DELAY: Duration = Duration::from_millis(50);
+/// 200ms gives pending frame/audio inserts a window to acquire the lock.
+const FTS_MICRO_BATCH_DELAY: Duration = Duration::from_millis(200);
 
 /// Delay between indexing each table to let frame inserts interleave.
 const FTS_INTER_TABLE_DELAY: Duration = Duration::from_secs(1);
@@ -45,8 +46,9 @@ pub fn start_fts_indexer(db: Arc<DatabaseManager>) -> tokio::task::JoinHandle<()
     );
 
     tokio::spawn(async move {
-        // Small initial delay to let the app start up
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        // Wait for the app to stabilize before first FTS run.
+        // At startup, frame/audio inserts are heaviest — give them 60s headroom.
+        tokio::time::sleep(Duration::from_secs(60)).await;
 
         let mut interval = tokio::time::interval(FTS_INDEX_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

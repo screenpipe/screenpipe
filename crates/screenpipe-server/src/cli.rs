@@ -30,6 +30,9 @@ pub enum CliAudioTranscriptionEngine {
     WhisperLargeV3TurboQuantized,
     #[clap(name = "openai-compatible")]
     OpenAICompatible,
+    /// Disable transcription (audio capture only, no speech-to-text)
+    #[clap(name = "disabled")]
+    Disabled,
 }
 
 impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
@@ -55,6 +58,7 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
             CliAudioTranscriptionEngine::OpenAICompatible => {
                 CoreAudioTranscriptionEngine::OpenAICompatible
             }
+            CliAudioTranscriptionEngine::Disabled => CoreAudioTranscriptionEngine::Disabled,
         }
     }
 }
