@@ -169,12 +169,12 @@ impl DatabaseManager {
 
         let db_manager = DatabaseManager {
             pool,
-            // 1 permit = writes are serialized at the application level.
-            // SQLite WAL only supports one writer at a time; with 2 permits the
-            // second writer's BEGIN IMMEDIATE would hit SQLITE_BUSY and retry,
-            // adding latency without improving throughput. Serializing here
-            // eliminates those BUSY retries entirely.
-            write_semaphore: Arc::new(Semaphore::new(1)),
+            // 2 permits = allow one writer to do pre-work (reads, prep) while
+            // another holds the SQLite write lock. SQLite WAL only supports one
+            // concurrent writer, but pipelining at the app level avoids idle gaps.
+            // The FTS indexer uses micro-batches (25 rows) with yields between
+            // each, so frame inserts can interleave without starvation.
+            write_semaphore: Arc::new(Semaphore::new(2)),
         };
 
         // Run migrations after establishing the connection

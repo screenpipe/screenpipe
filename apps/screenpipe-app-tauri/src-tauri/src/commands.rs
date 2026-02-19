@@ -583,9 +583,9 @@ pub async fn show_shortcut_reminder(
 
     info!("show_shortcut_reminder called");
 
-    // Window dimensions for dual-shortcut display
+    // Window dimensions: 2-row layout (shortcuts + activity visualization)
     let window_width = 220.0;
-    let window_height = 24.0;
+    let window_height = 40.0;
 
     // Position at top center of the screen where the cursor is
     let (x, y) = {

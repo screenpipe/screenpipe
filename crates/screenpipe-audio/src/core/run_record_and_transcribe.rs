@@ -60,6 +60,7 @@ pub async fn run_record_and_transcribe(
 
             match recv_result {
                 Ok(Ok(chunk)) => {
+                    metrics.update_audio_level(&chunk);
                     collected_audio.extend(chunk);
                     update_device_capture_time(&device_name);
                 }

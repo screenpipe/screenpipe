@@ -34,7 +34,7 @@ use crate::{
             search_speakers_handler, undo_speaker_reassign_handler, update_speaker_handler,
         },
         streaming::{handle_video_export_ws, stream_frames_handler},
-        websocket::{ws_events_handler, ws_health_handler},
+        websocket::{ws_events_handler, ws_health_handler, ws_metrics_handler},
     },
     sync_api::{self, SyncState},
     video_cache::FrameCache,
@@ -454,6 +454,7 @@ impl SCServer {
             .route("/stream/frames", get(stream_frames_handler))
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
+            .route("/ws/metrics", get(ws_metrics_handler))
             .route("/frames/export", get(handle_video_export_ws))
             .with_state(app_state.clone())
             .layer(axum::middleware::from_fn(

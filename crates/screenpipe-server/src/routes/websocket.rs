@@ -201,3 +201,60 @@ async fn handle_health_socket(
     debug!("WebSocket connection closed gracefully");
     // _guard is dropped here, decrementing the connection counter
 }
+
+/// Lightweight real-time metrics WS — reads atomic counters every 500ms.
+/// Zero DB queries, zero CPU work, just atomic loads + JSON serialize.
+pub(crate) async fn ws_metrics_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match try_acquire_ws_connection(&state.ws_connection_count) {
+        Some(guard) => ws.on_upgrade(move |socket| handle_metrics_socket(socket, state, guard)),
+        None => Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::from("Too many WebSocket connections"))
+            .unwrap(),
+    }
+}
+
+async fn handle_metrics_socket(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    _guard: WsConnectionGuard,
+) {
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let audio = state.audio_metrics.snapshot();
+                let vision = state.vision_metrics.snapshot();
+                let payload = serde_json::json!({
+                    "audio": {
+                        "vad_passed": audio.vad_passed,
+                        "vad_rejected": audio.vad_rejected,
+                        "chunks_sent": audio.chunks_sent,
+                        "total_words": audio.total_words,
+                        "audio_level_rms": audio.audio_level_rms,
+                    },
+                    "vision": {
+                        "frames_captured": vision.frames_captured,
+                        "ocr_completed": vision.ocr_completed,
+                        "ocr_queue_depth": vision.ocr_queue_depth,
+                    },
+                });
+                if let Err(e) = socket.send(Message::Text(payload.to_string())).await {
+                    error!("Failed to send metrics: {}", e);
+                    break;
+                }
+            }
+            result = socket.recv() => {
+                if result.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+
+    debug!("Metrics WebSocket connection closed");
+}

@@ -53,6 +53,10 @@ pub struct AudioPipelineMetrics {
     /// Number of times transcription was resumed (transition to idle)
     pub batch_resume_events: AtomicU64,
 
+    // --- Real-time audio level ---
+    /// RMS amplitude × 10000, updated every audio buffer (~50-100ms). 0-10000 range.
+    pub audio_level_rms_x10000: AtomicU64,
+
     // --- Timing ---
     pub started_at: Instant,
     /// Unix timestamp (secs) of most recent DB insert — used by health check to avoid DB queries
@@ -79,6 +83,7 @@ impl AudioPipelineMetrics {
             segments_batch_processed: AtomicU64::new(0),
             batch_pause_events: AtomicU64::new(0),
             batch_resume_events: AtomicU64::new(0),
+            audio_level_rms_x10000: AtomicU64::new(0),
             started_at: Instant::now(),
             last_db_write_ts: AtomicU64::new(0),
         }
@@ -144,6 +149,20 @@ impl AudioPipelineMetrics {
 
     pub fn record_overlap_trimmed(&self) {
         self.db_overlaps_trimmed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // --- Real-time audio level ---
+
+    /// Update RMS audio level from raw f32 samples. Called per audio buffer (~50-100ms).
+    pub fn update_audio_level(&self, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+        let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+        let rms = (sum_sq / samples.len() as f64).sqrt();
+        // Clamp to 0-1 and store as x10000
+        let level = (rms.min(1.0) * 10000.0) as u64;
+        self.audio_level_rms_x10000.store(level, Ordering::Relaxed);
     }
 
     // --- Batch/Smart mode ---
@@ -215,6 +234,7 @@ impl AudioPipelineMetrics {
             } else {
                 0.0
             },
+            audio_level_rms: self.audio_level_rms_x10000.load(Ordering::Relaxed) as f64 / 10000.0,
             last_db_write_ts: self.last_db_write_ts.load(Ordering::Relaxed),
         }
     }
@@ -263,6 +283,8 @@ pub struct AudioMetricsSnapshot {
     pub vad_passthrough_rate: f64,
     /// Transcribed words per minute of uptime
     pub words_per_minute: f64,
+    /// Real-time RMS audio level 0.0-1.0
+    pub audio_level_rms: f64,
     /// Unix timestamp (secs) of most recent DB insert (0 = none yet)
     pub last_db_write_ts: u64,
 }

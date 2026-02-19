@@ -529,13 +529,29 @@ impl Default for SettingsStore {
 }
 
 impl SettingsStore {
+    /// Remove legacy field aliases that conflict with their renamed counterparts.
+    /// e.g. `enableUiEvents` was renamed to `enableAccessibility` — if both exist
+    /// in the stored JSON, serde rejects it as a duplicate field.
+    fn sanitize_legacy_fields(mut val: Value) -> Value {
+        if let Some(obj) = val.as_object_mut() {
+            if obj.contains_key("enableAccessibility") {
+                obj.remove("enableUiEvents");
+            } else if let Some(v) = obj.remove("enableUiEvents") {
+                obj.insert("enableAccessibility".to_string(), v);
+            }
+        }
+        val
+    }
+
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
         let store = get_store(app, None).map_err(|e| format!("Failed to get store: {}", e))?;
 
         match store.is_empty() {
             true => Ok(None),
             false => {
-                let settings = serde_json::from_value(store.get("settings").unwrap_or(Value::Null));
+                let raw = store.get("settings").unwrap_or(Value::Null);
+                let sanitized = Self::sanitize_legacy_fields(raw);
+                let settings = serde_json::from_value(sanitized);
                 match settings {
                     Ok(settings) => Ok(settings),
                     Err(e) => {

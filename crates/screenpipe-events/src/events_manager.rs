@@ -140,6 +140,11 @@ impl EventManager {
     }
 
     pub fn send<T: Serialize + 'static>(&self, event: impl Into<String>, data: T) -> Result<()> {
+        // Skip serialization entirely when nobody is listening
+        if self.sender.receiver_count() == 0 {
+            return Ok(());
+        }
+
         let event_name = event.into();
         let value = serde_json::to_value(data)?;
 
