@@ -8,19 +8,28 @@ use tracing::{debug, info, warn};
 
 use crate::DatabaseManager;
 
-/// Total rows to index per table per cycle.
-const FTS_BATCH_SIZE: i64 = 100;
+/// Total rows to index per table per cycle. Large batch since we run
+/// infrequently — process everything that accumulated since last run.
+const FTS_BATCH_SIZE: i64 = 10_000;
 
-/// Rows per micro-batch inside a write transaction. Each micro-batch
-/// acquires and releases the write lock, so frame inserts can interleave.
-/// 25 rows of ~2KB text ≈ sub-millisecond lock hold time (measured in tests).
-const FTS_MICRO_BATCH_SIZE: usize = 25;
+/// Rows per micro-batch inside a write transaction. Larger batches = fewer
+/// semaphore acquisitions = less contention with real-time inserts.
+/// 100 rows per tx keeps lock hold time under ~50ms.
+const FTS_MICRO_BATCH_SIZE: usize = 100;
+
+/// Delay between micro-batches to let real-time inserts through.
+const FTS_MICRO_BATCH_DELAY: Duration = Duration::from_millis(50);
 
 /// Delay between indexing each table to let frame inserts interleave.
-const FTS_INTER_TABLE_DELAY: Duration = Duration::from_millis(200);
+const FTS_INTER_TABLE_DELAY: Duration = Duration::from_secs(1);
 
-/// Interval between FTS indexing cycles.
-const FTS_INDEX_INTERVAL: Duration = Duration::from_secs(30);
+/// Interval between FTS indexing cycles. Search uses FTS5 MATCH so
+/// unindexed rows won't appear in results until the next cycle.
+/// 30 min is fine — onboarding triggers POST /fts/index explicitly,
+/// and users rarely search for content captured seconds ago.
+/// This eliminates the FTS indexer as a source of write contention
+/// (was 555 slow batches in 3 hours at the old 30s interval).
+const FTS_INDEX_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// Start the background FTS indexer that periodically indexes new rows
 /// into FTS5 tables. This replaces the synchronous AFTER INSERT triggers
@@ -178,9 +187,17 @@ async fn update_last_indexed(
 async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "frames").await?;
 
+    // Cheap existence check — avoid slow full SELECT on 3GB+ DB when nothing to index
+    let has_rows: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM frames WHERE rowid > ?1)")
+            .bind(last)
+            .fetch_one(&db.pool)
+            .await?;
+    if !has_rows {
+        return Ok(0);
+    }
+
     // Pre-read source data OUTSIDE the write transaction.
-    // This is the key optimization: the SELECT (which can be slow on large
-    // tables or disk-bound DBs) doesn't hold the exclusive write lock.
     let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
         "SELECT id, COALESCE(name, ''), COALESCE(browser_url, ''), \
                 COALESCE(app_name, ''), COALESCE(window_name, ''), CAST(COALESCE(focused, 0) AS TEXT) \
@@ -197,7 +214,6 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
 
     let count = rows.len() as i64;
 
-    // Insert into FTS in micro-batches, yielding between each
     for chunk in rows.chunks(FTS_MICRO_BATCH_SIZE) {
         let chunk_max_id = chunk.last().unwrap().0;
 
@@ -219,8 +235,8 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
         update_last_indexed(&mut **tx.conn(), "frames", chunk_max_id).await?;
         tx.commit().await?;
 
-        // Yield to let frame inserts interleave
-        tokio::task::yield_now().await;
+        // Brief delay to let real-time inserts through between micro-batches
+        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
     }
 
     Ok(count)
@@ -230,7 +246,17 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
 async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "ocr_text").await?;
 
-    // Pre-read source data outside write tx
+    // Cheap existence check
+    let has_rows: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ocr_text WHERE rowid > ?1 AND text IS NOT NULL AND text != '' AND frame_id IS NOT NULL)",
+    )
+    .bind(last)
+    .fetch_one(&db.pool)
+    .await?;
+    if !has_rows {
+        return Ok(0);
+    }
+
     let rows: Vec<(i64, i64, String, String, String)> = sqlx::query_as(
         "SELECT rowid, frame_id, text, COALESCE(app_name, ''), COALESCE(window_name, '') \
          FROM ocr_text WHERE rowid > ?1 \
@@ -267,7 +293,7 @@ async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
         update_last_indexed(&mut **tx.conn(), "ocr_text", chunk_max_rowid).await?;
         tx.commit().await?;
 
-        tokio::task::yield_now().await;
+        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
     }
 
     Ok(count)
@@ -277,7 +303,17 @@ async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
 async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "audio_transcriptions").await?;
 
-    // Pre-read source data outside write tx
+    // Cheap existence check
+    let has_rows: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM audio_transcriptions WHERE rowid > ?1 AND transcription IS NOT NULL AND transcription != '' AND audio_chunk_id IS NOT NULL)",
+    )
+    .bind(last)
+    .fetch_one(&db.pool)
+    .await?;
+    if !has_rows {
+        return Ok(0);
+    }
+
     let rows: Vec<(i64, i64, String, String, Option<i64>)> = sqlx::query_as(
         "SELECT rowid, audio_chunk_id, transcription, COALESCE(device, ''), speaker_id \
          FROM audio_transcriptions WHERE rowid > ?1 \
@@ -315,7 +351,7 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
         update_last_indexed(&mut **tx.conn(), "audio_transcriptions", chunk_max_rowid).await?;
         tx.commit().await?;
 
-        tokio::task::yield_now().await;
+        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
     }
 
     Ok(count)
@@ -325,7 +361,17 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
 async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "accessibility").await?;
 
-    // Pre-read source data outside write tx
+    // Cheap existence check
+    let has_rows: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM accessibility WHERE id > ?1 AND text_content IS NOT NULL AND text_content != '')",
+    )
+    .bind(last)
+    .fetch_one(&db.pool)
+    .await?;
+    if !has_rows {
+        return Ok(0);
+    }
+
     let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
         "SELECT id, text_content, COALESCE(app_name, ''), COALESCE(window_name, '') \
          FROM accessibility WHERE id > ?1 \
@@ -362,7 +408,7 @@ async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Erro
         update_last_indexed(&mut **tx.conn(), "accessibility", chunk_max_id).await?;
         tx.commit().await?;
 
-        tokio::task::yield_now().await;
+        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
     }
 
     Ok(count)

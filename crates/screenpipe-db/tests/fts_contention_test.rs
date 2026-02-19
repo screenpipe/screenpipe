@@ -283,7 +283,9 @@ mod fts_contention_tests {
 
         eprintln!(
             "Frame insert latencies during micro-batch FTS: avg={:?}, max={:?}, count={}",
-            avg_latency, max_latency, latencies.len()
+            avg_latency,
+            max_latency,
+            latencies.len()
         );
 
         assert_eq!(latencies.len(), 10, "All 10 frame inserts should complete");

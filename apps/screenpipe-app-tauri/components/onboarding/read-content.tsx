@@ -125,6 +125,8 @@ export default function ReadContent({ handleNextSlide }: ReadContentProps) {
       time_spent_ms: Date.now() - mountTimeRef.current,
       frames_detected: framesDetected,
     });
+    // trigger FTS indexing so the welcome page content is searchable immediately
+    fetch("http://localhost:3030/fts/index", { method: "POST" }).catch(() => {});
     handleNextSlide();
   }, [handleNextSlide, framesDetected]);
 

@@ -169,12 +169,11 @@ impl DatabaseManager {
 
         let db_manager = DatabaseManager {
             pool,
-            // 2 permits = allow one writer to do pre-work (reads, prep) while
-            // another holds the SQLite write lock. SQLite WAL only supports one
-            // concurrent writer, but pipelining at the app level avoids idle gaps.
-            // The FTS indexer uses micro-batches (25 rows) with yields between
-            // each, so frame inserts can interleave without starvation.
-            write_semaphore: Arc::new(Semaphore::new(2)),
+            // 1 permit = serialize writes at the app level. With 2 permits the
+            // second writer's BEGIN IMMEDIATE busy-waits 1-5s inside SQLite,
+            // wasting a connection. With 1 permit, writes queue in Rust (zero
+            // overhead) and BEGIN IMMEDIATE succeeds instantly.
+            write_semaphore: Arc::new(Semaphore::new(1)),
         };
 
         // Run migrations after establishing the connection
@@ -793,14 +792,12 @@ impl DatabaseManager {
         // Calculate offset outside the write tx too (read-only query)
         let offset_index: i64 = match offset_index {
             Some(idx) => idx,
-            None => {
-                sqlx::query_scalar(
-                    "SELECT COALESCE(MAX(offset_index), -1) + 1 FROM frames WHERE video_chunk_id = ?1",
-                )
-                .bind(video_chunk_id)
-                .fetch_one(&self.pool)
-                .await?
-            }
+            None => sqlx::query_scalar(
+                "SELECT COALESCE(MAX(offset_index), -1) + 1 FROM frames WHERE video_chunk_id = ?1",
+            )
+            .bind(video_chunk_id)
+            .fetch_one(&self.pool)
+            .await?,
         };
         debug!("insert_frame Using offset_index: {}", offset_index);
 
@@ -893,6 +890,11 @@ impl DatabaseManager {
         windows: &[FrameWindowData],
         ocr_engine: Arc<OcrEngine>,
     ) -> Result<Vec<(i64, usize)>, sqlx::Error> {
+        // Nothing to insert — skip acquiring the write lock entirely.
+        if windows.is_empty() {
+            return Ok(vec![]);
+        }
+
         // Read the latest video_chunk OUTSIDE the write transaction.
         // This SELECT only needs a shared read lock, not the exclusive write lock.
         // Moving it out reduces write lock hold time significantly.

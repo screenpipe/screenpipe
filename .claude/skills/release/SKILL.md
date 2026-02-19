@@ -1,6 +1,6 @@
 ---
 name: release
-description: "Release the screenpipe monorepo. Bumps versions, generates changelog, triggers GitHub Actions for app, CLI, MCP, and JS packages."
+description: "Release the screenpipe monorepo. Bumps versions, triggers GitHub Actions for app, CLI, MCP, and JS packages."
 allowed-tools: Bash, Read, Edit, Grep, Write
 ---
 
@@ -51,62 +51,23 @@ echo "=== CLI ===" && grep '^version' Cargo.toml | head -1
 echo "=== MCP ===" && grep '"version"' screenpipe-integrations/screenpipe-mcp/package.json | head -1
 ```
 
-### 2. Generate Changelog
-
-Get commits since last release and generate a user-friendly changelog:
-
-```bash
-# Get last release tag
-LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-
-# Get commits since last release (or last 50 if no tag)
-if [ -n "$LAST_TAG" ]; then
-  git log $LAST_TAG..HEAD --oneline --no-merges
-else
-  git log -50 --oneline --no-merges
-fi
-```
-
-Then create changelog at `content/changelogs/vX.Y.Z.md` with format:
-
-```markdown
-## New Features
-- Feature description (from commit context)
-
-## Improvements
-- Improvement description
-
-## Bug Fixes
-- Fix description
-
-#### **Full Changelog:** [abc123..def456](https://github.com/mediar-ai/screenpipe/compare/abc123..def456)
-```
-
-Guidelines:
-- Only include changes that bring clear **customer value**
-- Skip: CI changes, refactors, dependency bumps, merge commits
-- Be concise but descriptive
-- Group related changes together
-
-Also copy to `screenpipe-app-tauri/public/CHANGELOG.md` for in-app display.
-
-### 3. Bump Version
+### 2. Bump Version
 
 Edit `screenpipe-app-tauri/src-tauri/Cargo.toml` to update version.
 
-### 4. Commit & Push
+### 3. Commit & Push
 ```bash
 git add -A && git commit -m "Bump app to vX.Y.Z" && git pull --rebase && git push
 ```
 
-### 5. Trigger Release (Draft Only)
+### 4. Trigger Release (Draft Only)
 ```bash
 gh workflow run release-app.yml
 ```
 
 **Important**: `workflow_dispatch` creates a **draft only** - does NOT auto-publish. This allows manual testing before publishing.
 
-### 6. Monitor Build Status
+### 5. Monitor Build Status
 ```bash
 # Get latest run ID
 gh run list --workflow=release-app.yml --limit=1
@@ -115,13 +76,13 @@ gh run list --workflow=release-app.yml --limit=1
 gh run view <RUN_ID> --json status,conclusion,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: (.name | split(",")[0]), status: .status, conclusion: .conclusion}]}'
 ```
 
-### 7. Test the Draft Release
+### 6. Test the Draft Release
 - Download from https://screenpi.pe (requires purchase token)
 - Test on macOS and Windows
 - Verify updater artifacts exist (.tar.gz, .sig files)
 
-### 8. Publish Release
-After testing, publish manually via CrabNebula Cloud dashboard, OR commit with magic words:
+### 7. Publish Release
+After testing, publish via the Cloudflare R2 / backend dashboard, OR commit with magic words:
 ```bash
 git commit --allow-empty -m "release-app-publish" && git push
 ```
@@ -129,15 +90,14 @@ git commit --allow-empty -m "release-app-publish" && git push
 ## Quick Release (App Only)
 
 ```bash
-# 1. Generate changelog (Claude does this)
-# 2. Bump version in Cargo.toml
-# 3. Commit and push
+# 1. Bump version in Cargo.toml
+# 2. Commit and push
 git add -A && git commit -m "Bump app to vX.Y.Z" && git push
 
-# 4. Trigger release (draft)
+# 3. Trigger release (draft)
 gh workflow run release-app.yml
 
-# 5. Monitor
+# 4. Monitor
 sleep 5 && gh run list --workflow=release-app.yml --limit=1
 ```
 

@@ -394,6 +394,15 @@ impl SCServer {
                 "/sync/download",
                 axum::routing::post(sync_api::sync_download),
             )
+            // Trigger immediate FTS indexing (used by onboarding so search works right away)
+            .route("/fts/index", axum::routing::post({
+                use axum::extract::State;
+                use axum::Json;
+                |State(state): State<Arc<AppState>>| async move {
+                    let count = screenpipe_db::fts_indexer::index_all_tables(&state.db).await;
+                    Json(json!({ "indexed": count }))
+                }
+            }))
             // Vision status endpoint (not in OpenAPI spec to avoid oasgen registration issues)
             .route("/vision/status", get(api_vision_status))
             // Vision pipeline metrics (not in OpenAPI spec)

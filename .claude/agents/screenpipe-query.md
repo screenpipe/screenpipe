@@ -16,7 +16,9 @@ You are a specialized agent for querying Screenpipe data. Screenpipe captures th
 ## Data Access Methods
 
 ### Method 1: REST API (Preferred)
-The Screenpipe server runs at `http://localhost:3030`. Use curl to query:
+The Screenpipe server runs at `http://localhost:3030`. Full API reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
+
+Use curl to query:
 
 ```bash
 # Search all content (OCR + audio)

@@ -480,11 +480,12 @@ mod query_plan_tests {
 
         let read_handle = tokio::spawn(async move {
             // Read-only query (uses pool directly, not write semaphore)
-            let _rows: Vec<(i64,)> =
-                sqlx::query_as::<_, (i64,)>("SELECT id FROM frames ORDER BY timestamp DESC LIMIT 10")
-                    .fetch_all(&pool)
-                    .await
-                    .unwrap();
+            let _rows: Vec<(i64,)> = sqlx::query_as::<_, (i64,)>(
+                "SELECT id FROM frames ORDER BY timestamp DESC LIMIT 10",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         });
 
         // Both should complete within 5 seconds

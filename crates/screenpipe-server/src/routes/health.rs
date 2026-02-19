@@ -284,7 +284,8 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         last_audio_timestamp: if last_audio_ts > 0 {
             Utc.timestamp_opt(last_audio_ts as i64, 0).single()
         } else if most_recent_audio_timestamp > 0 {
-            Utc.timestamp_opt(most_recent_audio_timestamp as i64, 0).single()
+            Utc.timestamp_opt(most_recent_audio_timestamp as i64, 0)
+                .single()
         } else {
             None
         },

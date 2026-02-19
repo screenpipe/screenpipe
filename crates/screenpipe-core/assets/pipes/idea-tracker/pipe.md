@@ -22,6 +22,8 @@ You are an idea scout. Analyze the user's recent screen activity to find what th
 GET http://localhost:3030/search?content_type=all&start_time=<ISO8601>&end_time=<ISO8601>&limit=200
 ```
 
+Full API reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
+
 ## Output Format
 
 Write to ./output/<date>.md:

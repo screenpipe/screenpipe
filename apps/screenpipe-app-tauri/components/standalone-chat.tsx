@@ -95,6 +95,10 @@ Rules for showing videos/audio:
 
 Be concise. Cite timestamps when relevant. Always display times in the user's local timezone.
 
+FULL API REFERENCE:
+For the complete list of 60+ screenpipe API endpoints (frames, audio, vision, tags, speakers, pipes, streaming, etc.), fetch: https://docs.screenpi.pe/llms-full.txt
+Only fetch this when you need endpoints beyond /search (e.g., tags, speakers, pipes, frames, audio control).
+
 VISUALIZATION:
 When the user asks for diagrams, flowcharts, or visualizations, generate Mermaid diagrams using fenced code blocks with the "mermaid" language tag. Example:
 \`\`\`mermaid
@@ -317,7 +321,9 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
     <MemoizedReactMarkdown
       className={cn(
         "prose prose-sm max-w-none break-words overflow-hidden",
-        isUser ? "prose-invert" : "dark:prose-invert"
+        isUser
+          ? "prose-invert dark:prose dark:text-background"
+          : "dark:prose-invert"
       )}
       remarkPlugins={[remarkGfm]}
       components={{

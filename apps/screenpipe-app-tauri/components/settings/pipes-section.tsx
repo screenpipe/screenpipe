@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -294,6 +295,22 @@ export function PipesSection() {
         }
         return changed ? next : prev;
       });
+      // Fetch executions immediately (no waterfall through re-render)
+      if (fetched.length > 0) {
+        const results: Record<string, PipeExecution[]> = {};
+        await Promise.all(
+          fetched.map(async (pipe) => {
+            try {
+              const r = await fetch(`http://localhost:3030/pipes/${pipe.config.name}/executions?limit=5`);
+              const d = await r.json();
+              results[pipe.config.name] = d.data || [];
+            } catch {
+              results[pipe.config.name] = [];
+            }
+          })
+        );
+        setPipeExecutions(results);
+      }
     } catch (e) {
       console.error("failed to fetch pipes:", e);
     } finally {
@@ -348,10 +365,7 @@ export function PipesSection() {
     return () => clearInterval(id);
   }, [pipes, runningPipe, fetchAllExecutions]);
 
-  // Fetch all executions whenever pipes list changes
-  useEffect(() => {
-    if (pipes.length > 0) fetchAllExecutions(pipes);
-  }, [pipes.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Note: executions are fetched inside fetchPipes to avoid waterfall
 
   const fetchLogs = async (name: string) => {
     try {
@@ -498,8 +512,47 @@ export function PipesSection() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="space-y-4">
+        {/* Header skeleton */}
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-5 w-16" />
+            <Skeleton className="h-4 w-64 mt-1" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-8 rounded-md" />
+            <Skeleton className="h-8 w-28 rounded-md" />
+          </div>
+        </div>
+        {/* Input skeleton */}
+        <Skeleton className="h-9 w-full rounded-md" />
+        {/* Pipe card skeletons */}
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-4 w-4" />
+                  <Skeleton className="h-4 w-32" />
+                  <div className="flex-1" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                  <Skeleton className="h-8 w-8 rounded-md" />
+                  <Skeleton className="h-5 w-9 rounded-full" />
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  {[1, 2, 3].map((j) => (
+                    <div key={j} className="flex items-center gap-3">
+                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-3 w-10" />
+                      <Skeleton className="h-3 w-8" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }

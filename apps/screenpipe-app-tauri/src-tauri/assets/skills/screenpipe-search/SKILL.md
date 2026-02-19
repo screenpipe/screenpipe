@@ -9,6 +9,8 @@ Search the user's locally-recorded screen and audio data. Screenpipe continuousl
 
 The API runs at `http://localhost:3030`.
 
+Full API reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
+
 ## Search API
 
 ```bash

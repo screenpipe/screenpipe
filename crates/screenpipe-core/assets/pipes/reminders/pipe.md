@@ -17,6 +17,8 @@ Scan recent screen activity and create Apple Reminders for actionable items.
 GET http://localhost:3030/search?content_type=all&start_time=<ISO8601>&end_time=<ISO8601>&limit=100
 ```
 
+Full API reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
+
 ## Creating Reminders (macOS)
 
 ```bash

@@ -446,8 +446,7 @@ mod tests {
         let detector = MeetingDetector::new();
 
         // Simulate speech that happened longer ago than the detection window
-        let expired_ts =
-            now_millis() - AUDIO_CALL_DETECTION_WINDOW.as_millis() as i64 - 1000;
+        let expired_ts = now_millis() - AUDIO_CALL_DETECTION_WINDOW.as_millis() as i64 - 1000;
         detector
             .last_input_speech_ts
             .store(expired_ts, Ordering::Relaxed);

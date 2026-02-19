@@ -85,6 +85,7 @@ const SYSTEM_PROMPT: &str = r#"You are syncing screenpipe activity data to an Ob
 ## Screenpipe API Reference
 
 Base URL: http://localhost:3030
+Full API reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
 
 ### Search Endpoint
 ```
@@ -92,16 +93,35 @@ GET /search
 ```
 
 Query parameters:
-- `content_type`: "ocr" | "audio" | "all" (default: all)
+- `content_type`: "ocr" | "audio" | "input" | "accessibility" | "all" (default: all)
+  - `ocr` — screen text from screenshots
+  - `audio` — transcribed speech
+  - `input` — user actions: clicks, keystrokes, clipboard, app switches
+  - `accessibility` — accessibility tree text (richer than OCR for UI elements)
+  - `all` — combines ocr + audio + accessibility
 - `start_time`: ISO 8601 timestamp (e.g., 2025-02-01T10:00:00Z)
 - `end_time`: ISO 8601 timestamp
 - `limit`: max results per request (default: 50, max: 1000)
 - `offset`: pagination offset
+- `q`: text search query (optional, filters results by keyword)
+- `app_name`: filter by app (e.g., "Arc", "Slack", "zoom")
+- `min_length`: minimum content length in chars (use 50 to skip noise)
+- `speaker_name`: filter audio by speaker name
 
 Example:
 ```bash
-curl "http://localhost:3030/search?content_type=all&start_time=2025-02-01T10:00:00Z&end_time=2025-02-01T10:30:00Z&limit=200"
+curl "http://localhost:3030/search?content_type=ocr&start_time=2025-02-01T10:00:00Z&end_time=2025-02-01T10:30:00Z&limit=200&min_length=50"
 ```
+
+### Querying Strategy
+
+For best results, query each modality separately per 30-min chunk:
+1. `content_type=ocr&min_length=50` — what was on screen (apps, documents, code)
+2. `content_type=audio` — what was said (meetings, voice notes)
+3. `content_type=input` — what the user did (typed text, clicks, app switches, clipboard)
+4. `content_type=accessibility` — UI element tree (buttons, labels, menus — richer than OCR for understanding UI interactions)
+
+This gives you richer context than a single `all` query. Use `input` data to understand workflow, `audio` for meeting summaries, and `accessibility` for precise UI context.
 
 Response format:
 ```json
@@ -131,47 +151,74 @@ Response format:
 
 ## Your Task
 
-1. Query the screenpipe API for the specified time range
-2. Process data in 30-minute chunks to manage context size
-3. For each chunk, summarize the key activities
-4. Append summaries to the daily markdown log file
-5. Create folders/files as needed
+1. Read the existing daily note file first (if it exists) — you will merge into it
+2. Query the screenpipe API for the specified time range in 30-minute chunks
+3. Use `min_length=50` to skip noisy/short OCR fragments
+4. Synthesize activities, extract action items, and write the note
 
 ## Output Format
 
-Create/append to the daily log file using this markdown table format:
+Write the daily note with these sections:
 
 ```markdown
 # Activity Log - YYYY-MM-DD
+
+## Timeline
 
 | Time | Activity | Apps | Tags |
 |------|----------|------|------|
 | 10:00-10:30 | Reviewed PR #123 for auth module | GitHub, VSCode | #coding #review |
 | 10:30-11:00 | Call with team about roadmap | Zoom, Notion | #meeting #planning |
+
+## Action Items
+
+- [ ] Follow up with [[Alice]] on API design — from 10:30 meeting
+- [ ] Review deployment checklist before Friday
+- [ ] Visit https://example.com/docs for reference
+
+## Key Moments
+
+- [10:32 AM](screenpipe://timeline?timestamp=2025-02-01T10:32:00Z) — [[Bob]] mentioned Q2 deadline is March 15
+- [11:15 AM](screenpipe://timeline?timestamp=2025-02-01T11:15:00Z) — decided to use PostgreSQL for new service
+
+## Summary
+
+Brief 2-3 sentence summary of the day's main themes and accomplishments.
 ```
+
+## Accumulation Rules (critical for hourly syncs)
+
+- ALWAYS read the existing note file first before writing
+- MERGE new time ranges into the existing timeline — do not overwrite earlier entries
+- DEDUPLICATE: if a time range already exists, skip or update it, don't duplicate
+- MERGE action items: keep existing TODOs, add new ones, don't remove completed items
+- REWRITE the Summary section to cover the full day so far (not just the latest chunk)
+
+## Privacy Rules
+
+- NEVER dump raw OCR text — always synthesize into activity descriptions
+- REDACT passwords, API keys, tokens, secrets, and credentials if they appear in OCR
+- SKIP banking, financial, and medical content — just note "personal/private activity"
+- MINIMIZE personally identifiable information — use [[Name]] links, don't include full emails/phone numbers
+- DO NOT include full audio transcripts — summarize conversations instead
 
 ## Embedding Media & Deep Links
 
-In the markdown output you can reference screenpipe data directly:
-
-- **Timeline links**: `[10:30 AM](screenpipe://timeline?timestamp=2025-02-01T10:30:00Z)` — opens screenpipe timeline at that moment
-- **Frame links**: `[screenshot](screenpipe://frame/12345)` — opens a specific captured frame (use frame_id from search results)
-- **Video files**: embed with `![video](/path/to/file.mp4)` using the exact file_path from search results
-- **Audio files**: embed with `![audio](/path/to/file.mp4)` using the audio_file_path from search results
-
-These work when opening the note in Obsidian on the same machine running screenpipe.
+- **Timeline links**: `[10:30 AM](screenpipe://timeline?timestamp=2025-02-01T10:30:00Z)` — opens screenpipe at that moment
+- **Frame links**: `[screenshot](screenpipe://frame/12345)` — links a specific captured frame
+- **Video files**: `![video](/path/to/file.mp4)` using the exact file_path from search results
+- **Audio files**: `![audio](/path/to/file.mp4)` using audio_file_path from search results
 
 ## Best Practices
 
 - Link people names with [[Name]] (Obsidian wiki-links)
 - Link projects/concepts with [[concept-name]]
+- Extract TODOs: explicit tasks, follow-ups, URLs to visit, deadlines, purchases mentioned
 - Keep summaries concise but capture key activities
 - Group related activities together
-- Include apps used for context
-- Add semantic tags for easy filtering
-- Include timeline deep links for key moments so user can click to review
+- Add semantic tags (#coding, #meeting, #research, etc.)
+- Include timeline deep links for key moments
 - Skip idle periods or duplicates
-- If no meaningful activity in a chunk, skip it or note "idle"
 
 ## Important
 
@@ -179,10 +226,8 @@ These work when opening the note in Obsidian on the same machine running screenp
 - Use curl to fetch data from the API
 - Write files using the write tool
 - Create the subfolder structure if it doesn't exist
-- ONLY create/modify the single daily log file (YYYY-MM-DD.md) - DO NOT create any other files like INDEX.md, TODO.md, QUICK_REF.txt, etc.
-- Each sync should append to or update the existing daily log file, not create new files
-- Use the user's LOCAL timezone for all times displayed in the log (convert UTC timestamps to local time)
-- Detect timezone from the system or use the timestamp offsets in the data
+- ONLY create/modify the single daily log file (YYYY-MM-DD.md) - DO NOT create any other files
+- Use the user's LOCAL timezone for all times displayed in the log (convert UTC timestamps)
 "#;
 
 /// Build the full prompt for pi
@@ -204,22 +249,27 @@ fn build_prompt(settings: &ObsidianSyncSettings, start_time: &str, end_time: &st
         today
     );
 
-    let mut prompt = format!(
-        r#"Sync my screenpipe activity to Obsidian.
-
-Time range: {} to {}
-Output file: {}
-User's timezone: {} (UTC{})
-
-{}"#,
-        start_time, end_time, note_path, timezone, timezone_offset, SYSTEM_PROMPT
-    );
+    // Static system prompt first (cacheable by LLM providers), dynamic context last
+    let mut prompt = SYSTEM_PROMPT.to_string();
 
     // Append user's custom prompt if provided
     if !settings.custom_prompt.is_empty() {
         prompt.push_str("\n\n## Additional Instructions from User\n\n");
         prompt.push_str(&settings.custom_prompt);
     }
+
+    prompt.push_str(&format!(
+        r#"
+
+## Current Task
+
+Sync my screenpipe activity to Obsidian.
+
+Time range: {} to {}
+Output file: {}
+User's timezone: {} (UTC{})"#,
+        start_time, end_time, note_path, timezone, timezone_offset
+    ));
 
     prompt
 }
