@@ -62,3 +62,7 @@ __pycache__/
 screenpipe-app-tauri/src-tauri/.next/
 .vercel
 .wrangler/
+
+.kilocode/
+
+.contox.json
