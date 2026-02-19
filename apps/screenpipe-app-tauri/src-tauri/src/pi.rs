@@ -343,23 +343,30 @@ fn find_pi_executable() -> Option<String> {
     None
 }
 
-/// Ensure the screenpipe-search skill exists in the project's .pi/skills directory
+/// Ensure the screenpipe skills exist in the project's .pi/skills directory
 fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
-    let skill_dir = std::path::Path::new(project_dir)
-        .join(".pi")
-        .join("skills")
-        .join("screenpipe-search");
-    let skill_path = skill_dir.join("SKILL.md");
+    let skills: &[(&str, &str)] = &[
+        ("screenpipe-search", include_str!("../assets/skills/screenpipe-search/SKILL.md")),
+        ("screenpipe-pipe-creator", include_str!("../assets/skills/screenpipe-pipe-creator/SKILL.md")),
+    ];
 
-    // Always overwrite to keep skill up-to-date with app version
-    std::fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("Failed to create skill dir: {}", e))?;
+    for (name, content) in skills {
+        let skill_dir = std::path::Path::new(project_dir)
+            .join(".pi")
+            .join("skills")
+            .join(name);
+        let skill_path = skill_dir.join("SKILL.md");
 
-    let skill_content = include_str!("../assets/skills/screenpipe-search/SKILL.md");
-    std::fs::write(&skill_path, skill_content)
-        .map_err(|e| format!("Failed to write screenpipe-search skill: {}", e))?;
+        // Always overwrite to keep skill up-to-date with app version
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed to create skill dir for {}: {}", name, e))?;
 
-    debug!("Screenpipe search skill installed at {:?}", skill_path);
+        std::fs::write(&skill_path, content)
+            .map_err(|e| format!("Failed to write {} skill: {}", name, e))?;
+
+        debug!("Screenpipe {} skill installed at {:?}", name, skill_path);
+    }
+
     Ok(())
 }
 

@@ -68,10 +68,10 @@ const BASE_TOOLS: Tool[] = [
       "Returns timestamped results with app context. " +
       "Call with no parameters to get recent activity. " +
       "Use the 'screenpipe://context' resource for current time when building time-based queries.\n\n" +
-      "DEEP LINKS: When referencing specific moments in results, create clickable timeline links:\n" +
-      "Format: [readable time](screenpipe://timeline?timestamp=ISO8601_TIMESTAMP)\n" +
-      "Example: [10:30 AM](screenpipe://timeline?timestamp=2024-01-15T18:30:00Z)\n" +
-      "Users can click these links to jump directly to that moment in their timeline.",
+      "DEEP LINKS: When referencing specific moments, create clickable links using IDs from search results:\n" +
+      "- OCR results (PREFERRED): [10:30 AM — Chrome](screenpipe://frame/12345) — use content.frame_id from the result\n" +
+      "- Audio results: [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from result\n" +
+      "NEVER fabricate frame IDs or timestamps — only use values from actual search results.",
     annotations: {
       title: "Search Content",
       readOnlyHint: true,
@@ -283,17 +283,16 @@ Screenpipe captures four types of data:
 3. Use content_type=accessibility for accessibility tree text
 4. For large aggregations (e.g. "what apps did I use today?"), paginate with offset or suggest the user run raw SQL via \`curl -X POST http://localhost:3030/raw_sql\` for efficient GROUP BY queries
 
-## Timeline Deep Links
-When showing search results to users, create clickable links to specific moments:
+## Deep Links (Clickable References)
+When showing search results to users, create clickable links so they can jump to that exact moment.
 
-**Format:** \`[readable time](screenpipe://timeline?timestamp=ISO8601_TIMESTAMP)\`
+**ALWAYS prefer frame-based links for OCR results** (frame IDs are exact DB keys):
+- \`[10:30 AM — Chrome](screenpipe://frame/12345)\` — use \`content.frame_id\` from OCR results
 
-**Examples:**
-- \`[10:30 AM](screenpipe://timeline?timestamp=2024-01-15T18:30:00Z)\`
-- \`[yesterday at 3pm](screenpipe://timeline?timestamp=2024-01-14T15:00:00Z)\`
+**Use timestamp links only for audio results** (which have no frame_id):
+- \`[meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z)\` — use exact \`timestamp\` from audio results
 
-Users can click these links to jump directly to that moment in their screenpipe timeline.
-Always use the exact timestamp from search results when creating these links.`,
+**NEVER fabricate frame IDs or timestamps.** Only use values copied from actual search results.`,
           },
         ],
       };

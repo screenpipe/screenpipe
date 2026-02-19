@@ -32,18 +32,24 @@ interface DailySummary {
   oneLiner: string;
 }
 
-const SUMMARY_PROMPT = `Analyze this audio transcript data from the user's day. Respond with ONLY a valid JSON object (no other text).
+const SUMMARY_PROMPT = `Analyze this audio transcript data. Respond with ONLY a single valid JSON object on one line (no other text, no line breaks between fields).
 
-The JSON must have this exact structure:
-{"oneLiner":"casual 1-sentence summary","keyMoments":[{"time":"2:30 PM","description":"what happened"}],"actionItems":[{"text":"thing to do","urgency":"high"}],"peopleMentioned":[{"name":"Name","context":"what about them"}]}
+Format: {"oneLiner":"...","keyMoments":[{"time":"2:30 PM","description":"..."}],"actionItems":[{"text":"...","urgency":"high"}],"peopleMentioned":[{"name":"...","context":"..."}]}
 
-Rules:
-- oneLiner: casual summary of the day in one sentence
-- keyMoments: max 5 most important events from the transcripts
-- actionItems: things to do mentioned in conversations, urgency is "high"/"medium"/"low"
-- peopleMentioned: real people names only (not apps), with context
+CRITICAL rules for oneLiner:
+- MUST be under 15 words, ALL LOWERCASE, no period at the end
+- casual like texting a friend, reference SPECIFIC topics from transcripts
+- Good: "mostly debugging auth, quick call with sarah about launch"
+- Good: "deep api refactor morning, slack catchup afternoon"
+- Bad: "Had a productive day with various activities" (formal, generic)
+- Bad: "Louis brainstorms potential features for the PipeStore, like user-driven sales" (too long, formal)
+
+Other rules:
+- keyMoments: max 5, with real timestamps from the data, specific descriptions
+- actionItems: only real tasks mentioned in speech, urgency "high"/"medium"/"low"
+- peopleMentioned: real people names ONLY (not apps/products), with context
 - Empty arrays are fine if nothing found
-- Output ONLY the JSON object, nothing else`;
+- Output the JSON object on a SINGLE LINE, nothing else`;
 
 function getStorageKey(date: string) {
   return `daily-summary-${date}`;
@@ -124,6 +130,7 @@ export function DailySummaryCard({
   const [isVisible, setIsVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const autoTriggeredRef = useRef<string>("");
+  const isGeneratingRef = useRef(false);
 
   const dateStr =
     currentDate.getFullYear() +
@@ -132,7 +139,14 @@ export function DailySummaryCard({
     "-" +
     String(currentDate.getDate()).padStart(2, "0");
 
-  // Check AI availability
+  // Refs to hold latest values so the auto-trigger interval doesn't need
+  // to re-mount whenever availability or date changes.
+  const aiAvailableRef = useRef(false);
+  const dateStrRef = useRef(dateStr);
+  aiAvailableRef.current = aiAvailable;
+  dateStrRef.current = dateStr;
+
+  // Check AI availability (once on mount)
   useEffect(() => {
     const os = platform();
     if (os !== "macos") return;
@@ -151,42 +165,11 @@ export function DailySummaryCard({
     setError(null);
   }, [dateStr]);
 
-  // Auto-trigger at 6pm for today
-  useEffect(() => {
-    if (!aiAvailable || !isVisible) return;
-
-    const checkAutoTrigger = async () => {
-      const now = new Date();
-      const todayStr =
-        now.getFullYear() +
-        "-" +
-        String(now.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(now.getDate()).padStart(2, "0");
-
-      // Only auto-trigger for today, after 6pm, once per day
-      if (dateStr !== todayStr) return;
-      if (now.getHours() < 18) return;
-      if (autoTriggeredRef.current === todayStr) return;
-      if (loadSummary(todayStr)) return;
-
-      // Check if plugged in
-      const plugged = await isPluggedIn();
-      if (!plugged) return;
-
-      autoTriggeredRef.current = todayStr;
-      generateSummary();
-    };
-
-    checkAutoTrigger();
-    const interval = setInterval(checkAutoTrigger, 60000); // check every minute
-    return () => clearInterval(interval);
-  }, [aiAvailable, isVisible, dateStr]);
-
   // ─── Generate Summary ─────────────────────────────────────────────────
 
   const generateSummary = useCallback(async () => {
-    if (isGenerating) return;
+    if (isGeneratingRef.current) return;
+    isGeneratingRef.current = true;
     setIsGenerating(true);
     setError(null);
 
@@ -288,9 +271,43 @@ export function DailySummaryCard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate summary");
     } finally {
+      isGeneratingRef.current = false;
       setIsGenerating(false);
     }
-  }, [isGenerating, dateStr]);
+  }, [dateStr]);
+
+  // Auto-trigger at 6pm for today — single stable interval that reads
+  // current values via refs to avoid re-mounting on every state change.
+  useEffect(() => {
+    const checkAutoTrigger = async () => {
+      if (!aiAvailableRef.current) return;
+
+      const now = new Date();
+      const todayStr =
+        now.getFullYear() +
+        "-" +
+        String(now.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(now.getDate()).padStart(2, "0");
+
+      // Only auto-trigger for today, after 6pm, once per day
+      if (dateStrRef.current !== todayStr) return;
+      if (now.getHours() < 18) return;
+      if (autoTriggeredRef.current === todayStr) return;
+      if (loadSummary(todayStr)) return;
+
+      // Check if plugged in
+      const plugged = await isPluggedIn();
+      if (!plugged) return;
+
+      autoTriggeredRef.current = todayStr;
+      generateSummary();
+    };
+
+    checkAutoTrigger();
+    const interval = setInterval(checkAutoTrigger, 60000); // check every minute
+    return () => clearInterval(interval);
+  }, [generateSummary]);
 
   // ─── Copy ───────────────────────────────────────────────────────────────
 

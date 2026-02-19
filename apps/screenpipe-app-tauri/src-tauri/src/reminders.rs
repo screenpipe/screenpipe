@@ -650,20 +650,20 @@ async fn fetch_recent_context(audio_only: bool) -> Result<String, String> {
     Ok(parts.join("\n"))
 }
 
-const REMINDERS_PROMPT: &str = r#"You are an assistant that extracts actionable reminders from screen and audio activity.
+const REMINDERS_PROMPT: &str = r#"Extract actionable reminders from screen and audio activity. Respond with ONLY a single-line JSON object.
 
-Analyze the activity data below and extract ONLY clear, actionable items that the user should be reminded about.
+Format: {"reminders":[{"title":"short task","notes":"where this was mentioned","due":"today"}]}
 
 Rules:
-- Only extract things that are clearly tasks, to-dos, or commitments
-- Do NOT extract vague observations or general activity descriptions
-- Include a due date if one is mentioned or clearly implied
-- Due dates: use "today", "tomorrow", a weekday name, or YYYY-MM-DD format
-- Maximum 5 reminders per scan
-- If nothing actionable, return empty array
+- ONLY extract tasks that are EXPLICITLY mentioned in the activity data below
+- NEVER invent tasks — if nothing actionable exists, return {"reminders":[]}
+- titles: short imperative phrases using words from the actual data
+- notes: MUST reference the specific app or conversation where the task was mentioned
+- due dates: only if a deadline was explicitly stated. Omit "due" field if no deadline mentioned.
+- Maximum 5 reminders
+- Output ONLY the JSON on a SINGLE LINE
 
-Respond with ONLY this JSON format, no other text:
-{"reminders":[{"title":"short task description","notes":"additional context from the activity","due":"today"}]}"#;
+IMPORTANT: Do NOT copy these examples. Every reminder must come from the data below."#;
 
 /// Call Apple Intelligence (via local /ai/chat/completions) to extract action items.
 #[cfg(target_os = "macos")]
@@ -779,26 +779,46 @@ pub(crate) fn parse_action_items(response: &str) -> Vec<ActionItemParsed> {
         None => return Vec::new(),
     };
 
-    match serde_json::from_str::<AiRemindersResponse>(json_str) {
-        Ok(parsed) => parsed
+    // Try standard format: {"reminders":[...]}
+    if let Ok(parsed) = serde_json::from_str::<AiRemindersResponse>(json_str) {
+        return parsed
             .reminders
             .into_iter()
             .filter(|item| !item.title.trim().is_empty())
             .take(5)
-            .collect(),
-        Err(e) => {
-            warn!(
-                "reminders: failed to parse AI response: {} | raw: {}",
-                e,
-                {
-                    let mut end = response.len().min(200);
-                    while !response.is_char_boundary(end) { end -= 1; }
-                    &response[..end]
-                }
-            );
-            Vec::new()
+            .collect();
+    }
+
+    // Try single bare object: {"title":"...","notes":"...","due":"..."}
+    if let Ok(item) = serde_json::from_str::<ActionItemParsed>(json_str) {
+        if !item.title.trim().is_empty() {
+            return vec![item];
         }
     }
+
+    // Try comma-separated objects: {"title":"..."},{"title":"..."}
+    let wrapped = format!("{{\"reminders\":[{}]}}", json_str);
+    if let Ok(parsed) = serde_json::from_str::<AiRemindersResponse>(&wrapped) {
+        let items: Vec<ActionItemParsed> = parsed
+            .reminders
+            .into_iter()
+            .filter(|item| !item.title.trim().is_empty())
+            .take(5)
+            .collect();
+        if !items.is_empty() {
+            return items;
+        }
+    }
+
+    warn!(
+        "reminders: failed to parse AI response | raw: {}",
+        {
+            let mut end = response.len().min(200);
+            while !response.is_char_boundary(end) { end -= 1; }
+            &response[..end]
+        }
+    );
+    Vec::new()
 }
 
 /// Strip URLs and emails to reduce safety filter triggers.

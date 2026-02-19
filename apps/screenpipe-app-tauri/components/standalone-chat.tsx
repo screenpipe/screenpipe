@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, Zap, History, Search, Trash2, ChevronLeft, Plus, Copy, Check } from "lucide-react";
+import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, Zap, History, Search, Trash2, ChevronLeft, ChevronDown, ChevronUp, Plus, Copy, Check, Clock } from "lucide-react";
+import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIcon, PipeAIIconLarge } from "@/components/pipe-ai-icon";
@@ -111,10 +112,10 @@ graph TD
 Use flowcharts (graph TD/LR), sequence diagrams, pie charts, etc. as appropriate.
 
 DEEP LINKS & MEDIA:
-- Timeline: [10:30 AM](screenpipe://timeline?timestamp=2024-01-15T18:30:00Z) — clickable jump to that moment
-- Frame: [screenshot](screenpipe://frame/FRAME_ID) — link to a specific captured frame (use frame_id from search results)
+- Frame (PREFERRED): [10:30 AM — Chrome](screenpipe://frame/12345) — use frame_id from OCR search results. NEVER invent frame IDs.
+- Timeline (audio only): [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from audio search results.
 - Video: show .mp4 paths in inline code: \`/path/to/video.mp4\`
-Always use exact timestamps/IDs from search results.
+ALWAYS use screenpipe://frame/{frame_id} for OCR results. Only use screenpipe://timeline for audio results (no frame_id). Copy IDs/timestamps verbatim from search results — NEVER fabricate them.
 
 Current time: ${now.toISOString()}
 User's timezone: ${timezone} (UTC${offsetStr})
@@ -453,9 +454,34 @@ function MessageContent({ message }: { message: Message }) {
   }
 
   // Fallback: plain text message (user messages, non-Pi assistant messages)
-  // For user messages with a display label, show the short label instead of the full prompt
-  const text = isUser && message.displayContent ? message.displayContent : message.content;
-  return <MarkdownBlock text={text} isUser={isUser} />;
+  // For user messages with a display label, show the short label with expand toggle
+  if (isUser && message.displayContent) {
+    return <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />;
+  }
+  return <MarkdownBlock text={message.content} isUser={isUser} />;
+}
+
+function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <span className="flex-1 text-sm font-medium">{label}</span>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/60 hover:text-background/90 transition-colors"
+          title={expanded ? "Collapse prompt" : "Show full prompt"}
+        >
+          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-2 pt-2 border-t border-background/20 text-xs opacity-80 whitespace-pre-wrap break-words">
+          {fullContent}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function StandaloneChat() {
@@ -509,6 +535,7 @@ export function StandaloneChat() {
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<"daily_limit" | "model_not_allowed" | "rate_limit">("daily_limit");
   const [upgradeResetsAt, setUpgradeResetsAt] = useState<string | undefined>();
+  const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
   const [prefillContext, setPrefillContext] = useState<string | null>(null);
   const [prefillSource, setPrefillSource] = useState<string>("search");
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
@@ -907,6 +934,19 @@ export function StandaloneChat() {
       unlisten.then((fn) => fn());
     };
   }, [piInfo]);
+
+  // Listen for chat-load-conversation events from timeline
+  useEffect(() => {
+    const unlisten = listen<{ conversationId: string }>("chat-load-conversation", (event) => {
+      const { conversationId } = event.payload;
+      const convs = settings.chatHistory?.conversations || [];
+      const conv = convs.find((c: any) => c.id === conversationId);
+      if (conv) {
+        loadConversation(conv);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [settings.chatHistory?.conversations]);
 
   const appMentionSuggestions = React.useMemo(
     () => buildAppMentionSuggestions(appItems, APP_SUGGESTION_LIMIT),
@@ -2317,26 +2357,43 @@ export function StandaloneChat() {
                   </button>
                 )}
               </div>
-                {/* Copy button - appears on hover, outside the message box */}
-                <button
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(message.content);
-                    setCopiedMessageId(message.id);
-                    setTimeout(() => setCopiedMessageId(null), 2000);
-                  }}
-                  className={cn(
-                    "self-end mt-1 p-1 rounded-md transition-all duration-200",
-                    "opacity-0 group-hover/message:opacity-100",
-                    "hover:bg-muted text-muted-foreground hover:text-foreground"
+                {/* Action buttons - appear on hover, outside the message box */}
+                <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 transition-all duration-200">
+                  <button
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(message.content);
+                      setCopiedMessageId(message.id);
+                      setTimeout(() => setCopiedMessageId(null), 2000);
+                    }}
+                    className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                    title="Copy message"
+                  >
+                    {copiedMessageId === message.id ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  {message.role === "assistant" && !message.content.includes("used all your free queries") && !message.content.startsWith("Error") && message.content !== "Processing..." && (
+                    <button
+                      onClick={() => {
+                        // Find the user message that triggered this response
+                        const msgIndex = messages.findIndex((m) => m.id === message.id);
+                        const userMsg = messages.slice(0, msgIndex).reverse().find((m) => m.role === "user");
+                        if (userMsg) {
+                          setScheduleDialogMessage({
+                            prompt: userMsg.content,
+                            response: message.content,
+                          });
+                        }
+                      }}
+                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                      title="Run on schedule"
+                    >
+                      <Clock className="h-3 w-3" />
+                    </button>
                   )}
-                  title="Copy message"
-                >
-                  {copiedMessageId === message.id ? (
-                    <Check className="h-3 w-3" />
-                  ) : (
-                    <Copy className="h-3 w-3" />
-                  )}
-                </button>
+                </div>
               </div>
             </motion.div>
           ))}
@@ -2674,6 +2731,21 @@ export function StandaloneChat() {
         resetsAt={upgradeResetsAt}
         source="chat"
       />
+
+      {scheduleDialogMessage && (
+        <SchedulePromptDialog
+          open={!!scheduleDialogMessage}
+          onClose={() => setScheduleDialogMessage(null)}
+          onSchedule={(message, displayLabel) => {
+            setScheduleDialogMessage(null);
+            // Clear any stale Pi message ref so sendMessage doesn't reject
+            piMessageIdRef.current = null;
+            sendMessage(message, displayLabel);
+          }}
+          originalPrompt={scheduleDialogMessage.prompt}
+          responsePreview={scheduleDialogMessage.response}
+        />
+      )}
     </div>
   );
 }
