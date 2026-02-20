@@ -1,14 +1,14 @@
-# ScreenPipe Mac M1 构建指南
+# ScreenPipe M1 Build Guide
 
-## 问题背景
+This guide explains how to build ScreenPipe on Apple Silicon Macs (M1/M2/M3/M4) with proper compatibility settings.
 
-在较新的 Apple Silicon (M2/M3/M4) 上构建的 screenpipe 可能在 M1 设备上运行时出现非法指令错误，原因是 whisper.cpp/ggml 使用了 M2+ 才有的 i8mm 指令集。
+## Problem Statement
 
-## 解决方案
+When building ScreenPipe on newer Apple Silicon hosts (M2/M3/M4), native C/C++ dependencies like `whisper.cpp` and `ggml` may be compiled with host-default capabilities. This can introduce instructions (like ARM i8mm) that are unavailable on baseline M1 devices, causing crashes at runtime.
 
-本分支通过以下方式强制 M1 兼容：
+## Solution
 
-### 1. Cargo 配置 (.cargo/config.toml)
+The project now includes automatic M1-safe build configurations via `.cargo/config.toml`:
 
 ```toml
 [target.aarch64-apple-darwin]
@@ -24,56 +24,110 @@ CFLAGS_aarch64_apple_darwin = "-mcpu=apple-m1"
 CXXFLAGS_aarch64_apple_darwin = "-mcpu=apple-m1"
 ```
 
-### 2. 关键环境变量
+These settings ensure both Rust and native C/C++ compilation use M1 as the baseline target.
 
-构建前设置：
+## Building from Source
 
-```bash
-export MACOSX_DEPLOYMENT_TARGET=10.15
-export CFLAGS="-mmacosx-version-min=10.15 -mcpu=apple-m1"
-export CXXFLAGS="-mmacosx-version-min=10.15 -mcpu=apple-m1"
-```
+### Prerequisites
 
-### 3. 完整构建命令
+- macOS 11.0+ (Big Sur or later)
+- Xcode Command Line Tools
+- Rust toolchain (via rustup)
+- Homebrew
 
-```bash
-# 清理之前的构建
-rm -rf target/
-
-# 设置环境变量
-export MACOSX_DEPLOYMENT_TARGET=10.15
-export CFLAGS="-mmacosx-version-min=10.15 -mcpu=apple-m1"
-export CXXFLAGS="-mmacosx-version-min=10.15 -mcpu=apple-m1"
-
-# 构建
-cargo build --release --target aarch64-apple-darwin
-```
-
-## CI/CD 多架构构建
-
-GitHub Actions 已配置为：
-- 使用 `macos-latest` runner 构建 x86_64
-- 使用 `macos-26` 或 `macos-test` self-hosted runner 构建 aarch64
-- 自动检测 Xcode 版本并启用 Apple Intelligence（如可用）
-
-## 兼容性检查
-
-启动时会自动检测芯片架构，确保二进制与当前系统兼容。
-
-## 测试验证
+### Quick Build Steps
 
 ```bash
-# 验证构建目标
-cargo build --release --target aarch64-apple-darwin
+# 1. Clone the repository
+git clone https://github.com/mediar-ai/screenpipe.git
+cd screenpipe
 
-# 检查生成的二进制文件支持的 CPU 特性
-objdump -d target/aarch64-apple-darwin/release/screenpipe | grep -i "i8mm\|matmul" || echo "✓ 无 i8mm 指令"
+# 2. Install dependencies
+brew install ffmpeg pkg-config cmake
 
-# 在 M1 上运行测试
-./target/aarch64-apple-darwin/release/screenpipe --version
+# 3. Build the project
+cargo build --release
+
+# Or for the Tauri app:
+cd apps/screenpipe-app-tauri
+bun install
+bunx tauri build
 ```
 
-## 已知限制
+### Verification
 
-- Metal 加速需要 macOS 10.15+
-- Apple Intelligence 功能需要 macOS 26+ 和 M1+ 芯片
+After building, verify the binary doesn't contain incompatible instructions:
+
+```bash
+# Check architecture
+file target/release/screenpipe
+
+# Expected output: Mach-O 64-bit executable arm64
+
+# Verify no i8mm instructions (should return nothing)
+otool -tv target/release/screenpipe | grep -i smmla || echo "✓ No i8mm instructions found"
+```
+
+## CI/CD Multi-Architecture Builds
+
+The project includes GitHub Actions workflows for automated multi-architecture builds:
+
+- **macOS ARM64 (M1-compatible)**: Built with `-mcpu=apple-m1` flags
+- **macOS x86_64**: Intel Mac support
+- **Windows x64**: Windows 10/11 support
+
+See `.github/workflows/release-app.yml` for details.
+
+## Runtime Compatibility Checking
+
+Starting from v2.0.x, ScreenPipe includes a runtime compatibility checker that:
+
+1. Detects your CPU model at startup
+2. Warns if potential instruction set mismatches are detected
+3. Provides recommendations for rebuilding if needed
+
+To disable the warning:
+```bash
+SCREENPIPE_SKIP_M1_CHECK=1 screenpipe
+```
+
+## Troubleshooting
+
+### Issue: Illegal instruction crash on M1
+
+**Cause**: Binary was built on M2/M3/M4 without M1 compatibility flags
+
+**Solution**: Rebuild with the provided `.cargo/config.toml` settings
+
+### Issue: Build fails with "unknown target CPU"
+
+**Cause**: Outdated Xcode or Rust toolchain
+
+**Solution**:
+```bash
+# Update Xcode Command Line Tools
+sudo softwareupdate -i "Command Line Tools"
+
+# Update Rust
+rustup update
+```
+
+### Issue: Metal performance warnings
+
+**Cause**: M1 has fewer GPU cores than newer chips
+
+**Solution**: This is expected. The app will automatically adjust quality settings for M1.
+
+## Contributing
+
+When submitting PRs that affect native dependencies:
+
+1. Test builds on both M1 and M2/M3/M4 if possible
+2. Ensure `.cargo/config.toml` changes don't break other platforms
+3. Run the compatibility checker: `cargo test m1_compat`
+
+## References
+
+- [Apple Silicon Architecture Guide](https://developer.apple.com/documentation/apple-silicon)
+- [Rust Target Triples](https://doc.rust-lang.org/nightly/rustc/platform-support.html)
+- [whisper.cpp Build Docs](https://github.com/ggerganov/whisper.cpp/blob/master/README.md)
