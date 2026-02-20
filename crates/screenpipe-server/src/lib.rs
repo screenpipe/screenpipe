@@ -7,6 +7,7 @@ pub mod analytics;
 mod apple_intelligence_api;
 mod auto_destruct;
 pub mod cli;
+pub mod cli_search;
 pub mod cli_pipe;
 pub mod cli_status;
 pub mod cloud_search;

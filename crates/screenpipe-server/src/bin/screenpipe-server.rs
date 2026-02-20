@@ -26,8 +26,9 @@ use screenpipe_server::{
     analytics,
     cli::{
         get_or_create_machine_id, AudioCommand, Cli, CliAudioTranscriptionEngine, CliOcrEngine,
-        Command, McpCommand, OutputFormat, RecordArgs, SyncCommand, VisionCommand,
+        Command, McpCommand, OutputFormat, RecordArgs, ServerArgs, SyncCommand, VisionCommand,
     },
+    cli_search::handle_search_command,
     cli_pipe::handle_pipe_command,
     cli_status::handle_status_command,
     start_continuous_recording, start_meeting_watcher, start_sleep_monitor, start_ui_recording,
@@ -371,6 +372,14 @@ async fn main() -> anyhow::Result<()> {
         match command {
             Command::Record(_) => {
                 // Fall through to recording logic below
+            }
+            Command::Search(args) => {
+                handle_search_command(args).await?;
+                return Ok(());
+            }
+            Command::Server(args) => {
+                run_server_only(args).await?;
+                return Ok(());
             }
             Command::Status {
                 json,
@@ -1193,6 +1202,54 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!("shutdown complete");
+
+    Ok(())
+}
+
+async fn run_server_only(args: &ServerArgs) -> anyhow::Result<()> {
+    let base_dir = get_base_dir(&args.data_dir)?;
+    let data_dir = base_dir.join("data");
+    std::fs::create_dir_all(&data_dir)?;
+
+    let db_path = data_dir.join("db.sqlite");
+    let db = Arc::new(DatabaseManager::new(&db_path.to_string_lossy()).await?);
+
+    // Keep audio manager lightweight: it won't record unless explicitly started via API.
+    let mut audio_manager_builder = AudioManagerBuilder::new().use_pii_removal(args.use_pii_removal);
+    let audio_manager = Arc::new(audio_manager_builder.build(db.clone()).await?);
+
+    // Start background FTS indexer (replaces synchronous INSERT triggers)
+    let _fts_handle = screenpipe_db::fts_indexer::start_fts_indexer(db.clone());
+
+    let mut server = SCServer::new(
+        db.clone(),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), args.port),
+        base_dir,
+        args.disable_vision,
+        args.disable_audio,
+        audio_manager.clone(),
+        args.use_pii_removal,
+        args.video_quality.clone(),
+    );
+    server.audio_metrics = audio_manager.metrics.clone();
+
+    let server_future = server.start(args.enable_frame_cache);
+    pin_mut!(server_future);
+    let ctrl_c_future = signal::ctrl_c();
+    pin_mut!(ctrl_c_future);
+
+    tokio::select! {
+        result = &mut server_future => {
+            match result {
+                Ok(_) => info!("server stopped normally"),
+                Err(e) => error!("server stopped with error: {:?}", e),
+            }
+        }
+        _ = ctrl_c_future => {
+            info!("received ctrl+c, initiating shutdown");
+            audio_manager.shutdown().await?;
+        }
+    }
 
     Ok(())
 }

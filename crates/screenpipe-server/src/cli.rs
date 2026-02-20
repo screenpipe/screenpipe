@@ -6,6 +6,7 @@ use screenpipe_audio::{
     vad::{VadEngineEnum, VadSensitivity},
 };
 use screenpipe_core::Language;
+use screenpipe_db::ContentType;
 use screenpipe_db::CustomOcrConfig as DBCustomOcrConfig;
 use screenpipe_db::OcrEngine as DBOcrEngine;
 use screenpipe_vision::{custom_ocr::CustomOcrConfig, utils::OcrEngine as CoreOcrEngine};
@@ -169,6 +170,31 @@ impl From<CliTranscriptionMode> for TranscriptionMode {
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq)]
+pub enum CliContentType {
+    All,
+    Vision,
+    Audio,
+    Input,
+    /// Deprecated: use `vision`
+    Ocr,
+    /// Deprecated: use `vision` or `input` depending on what you want
+    Ui,
+}
+
+impl From<CliContentType> for ContentType {
+    fn from(v: CliContentType) -> Self {
+        match v {
+            CliContentType::All => ContentType::All,
+            CliContentType::Vision => ContentType::Vision,
+            CliContentType::Audio => ContentType::Audio,
+            CliContentType::Input => ContentType::Input,
+            CliContentType::Ocr => ContentType::OCR,
+            CliContentType::Ui => ContentType::UI,
+        }
+    }
 }
 
 // =============================================================================
@@ -351,6 +377,12 @@ pub enum Command {
     /// Start recording screen, audio, and optionally serve the API
     Record(RecordArgs),
 
+    /// Search screenpipe data directly from the local DB (no API server needed)
+    Search(SearchArgs),
+
+    /// Start the API server only (no recording)
+    Server(ServerArgs),
+
     /// Show screenpipe status (running state, data stats)
     Status {
         /// Output format
@@ -393,6 +425,87 @@ pub enum Command {
         #[command(subcommand)]
         subcommand: McpCommand,
     },
+}
+
+// =============================================================================
+// Search args
+// =============================================================================
+
+#[derive(Parser, Clone, Debug)]
+pub struct SearchArgs {
+    /// Search query (full-text). Use quotes for multi-word queries.
+    pub query: String,
+
+    /// Output machine-readable JSON
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Content type to search
+    #[arg(long, value_enum, default_value_t = CliContentType::All)]
+    pub r#type: CliContentType,
+
+    /// Start time filter. Supports RFC3339 or relative durations like "2h", "30m", "2h ago", "today", "yesterday", "now".
+    #[arg(long)]
+    pub from: Option<String>,
+
+    /// End time filter. Supports RFC3339 or relative durations like "2h", "30m", "2h ago", "today", "yesterday", "now".
+    #[arg(long)]
+    pub to: Option<String>,
+
+    /// Filter by app name (case-insensitive contains match)
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Filter by window name (case-insensitive contains match)
+    #[arg(long)]
+    pub window: Option<String>,
+
+    /// Limit results
+    #[arg(long, default_value_t = 20)]
+    pub limit: u32,
+
+    /// Offset results
+    #[arg(long, default_value_t = 0)]
+    pub offset: u32,
+
+    /// Data directory. Default to $HOME/.screenpipe
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<String>,
+}
+
+// =============================================================================
+// Server args
+// =============================================================================
+
+#[derive(Parser, Clone, Debug)]
+pub struct ServerArgs {
+    /// Port to run the server on
+    #[arg(short = 'p', long, default_value_t = 3030)]
+    pub port: u16,
+
+    /// Data directory. Default to $HOME/.screenpipe
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<String>,
+
+    /// Enable frame cache (faster timeline/search thumbnails)
+    #[arg(long, default_value_t = true)]
+    pub enable_frame_cache: bool,
+
+    /// Enable PII removal from content returned by the API
+    #[arg(long, default_value_t = true)]
+    pub use_pii_removal: bool,
+
+    /// Disable vision-specific endpoints/features
+    #[arg(long, default_value_t = false)]
+    pub disable_vision: bool,
+
+    /// Disable audio-specific endpoints/features
+    #[arg(long, default_value_t = false)]
+    pub disable_audio: bool,
+
+    /// Video quality preset (affects extracted frame JPEG quality)
+    #[arg(long, default_value = "balanced")]
+    pub video_quality: String,
 }
 
 // =============================================================================
