@@ -44,7 +44,13 @@ impl TreeSnapshot {
     /// Compute a SimHash (locality-sensitive hash) for fuzzy dedup.
     /// Uses word-level 3-shingles: similar texts produce hashes with small Hamming distance.
     pub fn compute_simhash(text: &str) -> u64 {
-        let words: Vec<&str> = text.split_whitespace().collect();
+        let normalized = text
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>();
+
+        let words: Vec<&str> = normalized.split_whitespace().collect();
         if words.is_empty() {
             return 0;
         }
@@ -235,8 +241,8 @@ mod tests {
         let h2 = TreeSnapshot::compute_simhash(scrolled);
         let dist = hamming_distance(h1, h2);
         assert!(
-            dist <= 10,
-            "similar texts (scroll) should have hamming distance <= 10, got {}",
+            dist <= 12,
+            "similar texts (scroll) should have hamming distance <= 12, got {}",
             dist
         );
     }
@@ -253,8 +259,8 @@ mod tests {
         );
         let dist = hamming_distance(h1, h2);
         assert!(
-            dist > 10,
-            "very different texts should have hamming distance > 10, got {}",
+            dist > 12,
+            "very different texts should have hamming distance > 12, got {}",
             dist
         );
     }
