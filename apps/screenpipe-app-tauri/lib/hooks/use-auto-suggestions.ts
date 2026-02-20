@@ -25,6 +25,7 @@ type ActivityMode =
 export function useAutoSuggestions() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [mode, setMode] = useState<ActivityMode>("idle");
+  const [tags, setTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -34,6 +35,7 @@ export function useAutoSuggestions() {
       if (result.status === "ok") {
         setSuggestions(result.data.suggestions);
         setMode(result.data.mode as ActivityMode);
+        setTags(result.data.tags || []);
       } else {
         throw new Error("failed");
       }
@@ -45,6 +47,7 @@ export function useAutoSuggestions() {
         { text: "Which apps did I use most today?" },
       ]);
       setMode("idle");
+      setTags([]);
     } finally {
       setLoading(false);
     }
@@ -58,5 +61,5 @@ export function useAutoSuggestions() {
     };
   }, [refresh]);
 
-  return { suggestions, mode, loading, refresh };
+  return { suggestions, mode, tags, loading, refresh };
 }

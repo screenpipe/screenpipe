@@ -116,14 +116,20 @@ fn setup_dock_menu(app_handle: AppHandle) {
         extern "C" fn show_screenpipe(_this: &Object, _sel: Sel, _sender: id) {
             unsafe {
                 if let Some(ref app) = DOCK_APP_HANDLE {
-                    show_main_window(app, false);
+                    let app_for_closure = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        show_main_window(&app_for_closure, false);
+                    });
                 }
             }
         }
         extern "C" fn open_settings(_this: &Object, _sel: Sel, _sender: id) {
             unsafe {
                 if let Some(ref app) = DOCK_APP_HANDLE {
-                    let _ = ShowRewindWindow::Settings { page: None }.show(app);
+                    let app_for_closure = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let _ = ShowRewindWindow::Settings { page: None }.show(&app_for_closure);
+                    });
                 }
             }
         }
@@ -290,9 +296,9 @@ async fn register_shortcut(
 
     global_shortcut
         .on_shortcut(shortcut, move |app, _shortcut, event| {
-            // Only trigger on key press, not release
-            // Wrap in catch_unwind: shortcut handlers are called from tao::send_event
-            // which crosses the Obj-C FFI boundary (nounwind). A panic here would abort().
+            // Only trigger on key press, not release.
+            // Shortcut handlers are called from tao::send_event (Obj-C FFI, nounwind).
+            // Handler must defer heavy work itself (clone + run_on_main_thread) so sync path stays minimal.
             if matches!(event.state, ShortcutState::Pressed) {
                 if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handler(app);
@@ -340,67 +346,69 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         error!("failed to unregister all shortcuts: {}", e);
     }
 
-    // Register show shortcut
+    // Register show shortcut (defer off event stack: handler runs from tao::send_event)
     register_shortcut(app, &config.show, config.is_disabled("show"), |app| {
-        info!("show shortcut triggered - attempting to show/hide main overlay");
-        let _ = app.emit("shortcut-show", ());
-        #[cfg(target_os = "macos")]
-        {
-            use crate::window_api::main_label_for_mode;
-            use crate::store::SettingsStore;
-            // Get current mode to find the right window label
-            let mode = SettingsStore::get(app)
-                .unwrap_or_default()
-                .unwrap_or_default()
-                .overlay_mode;
-            let label = main_label_for_mode(&mode);
+        let app_for_closure = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let app = &app_for_closure;
+            info!("show shortcut triggered - attempting to show/hide main overlay");
+            let _ = app.emit("shortcut-show", ());
+            #[cfg(target_os = "macos")]
+            {
+                use crate::window_api::main_label_for_mode;
+                use crate::store::SettingsStore;
+                // Get current mode to find the right window label
+                let mode = SettingsStore::get(app)
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+                    .overlay_mode;
+                let label = main_label_for_mode(&mode);
 
-            if let Some(window) = app.get_webview_window(label) {
-                match window.is_visible() {
-                    Ok(true) => {
-                        info!("window is visible, hiding main window");
-                        hide_main_window(app)
+                if let Some(window) = app.get_webview_window(label) {
+                    match window.is_visible() {
+                        Ok(true) => {
+                            info!("window is visible, hiding main window");
+                            hide_main_window(app)
+                        }
+                        _ => {
+                            info!("window is not visible, showing main window");
+                            show_main_window(app, false)
+                        }
                     }
-                    _ => {
-                        info!(
-                            "window is not visible, showing main window"
-                        );
-                        show_main_window(app, false)
-                    }
+                } else {
+                    info!("main window not found for mode '{}', creating it", mode);
+                    show_main_window(app, false)
                 }
-            } else {
-                debug!("main window not found for mode '{}', creating it", mode);
-                show_main_window(app, false)
             }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Debug: list all existing windows
-            for (label, _) in app.webview_windows() {
-                info!("existing window: {}", label);
-            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Debug: list all existing windows
+                for (label, _) in app.webview_windows() {
+                    info!("existing window: {}", label);
+                }
 
-            if let Some(window) = app.get_webview_window("main") {
-                info!("found main window, checking visibility");
-                match window.is_visible() {
-                    Ok(true) => {
-                        info!("main window is visible, hiding it");
-                        hide_main_window(app)
+                if let Some(window) = app.get_webview_window("main") {
+                    info!("found main window, checking visibility");
+                    match window.is_visible() {
+                        Ok(true) => {
+                            info!("main window is visible, hiding it");
+                            hide_main_window(app)
+                        }
+                        Ok(false) => {
+                            info!("main window exists but not visible, showing it");
+                            show_main_window(app, false)
+                        }
+                        Err(e) => {
+                            info!("error checking visibility: {}, showing main window anyway", e);
+                            show_main_window(app, false)
+                        }
                     }
-                    Ok(false) => {
-                        info!("main window exists but not visible, showing it");
-                        show_main_window(app, false)
-                    }
-                    Err(e) => {
-                        info!("error checking visibility: {}, showing main window anyway", e);
-                        show_main_window(app, false)
-                    }
+                } else {
+                    info!("main window not found, creating it");
+                    show_main_window(app, false)
                 }
-            } else {
-                info!("main window not found, creating it");
-                show_main_window(app, false)
             }
-        }
+        });
     })
     .await?;
 
@@ -433,9 +441,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.start_audio,
         config.is_disabled("start_audio"),
         |app| {
-            let store = get_store(app, None).unwrap();
-            store.set("disableAudio", false);
-            store.save().unwrap();
+            if let Ok(store) = get_store(app, None) {
+                store.set("disableAudio", false);
+                let _ = store.save();
+            }
             let _ = app.emit("shortcut-start-audio", ());
             info!("start audio shortcut triggered");
         },
@@ -448,88 +457,96 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         &config.stop_audio,
         config.is_disabled("stop_audio"),
         |app| {
-            let store = get_store(app, None).unwrap();
-            store.set("disableAudio", true);
-            store.save().unwrap();
+            if let Ok(store) = get_store(app, None) {
+                store.set("disableAudio", true);
+                let _ = store.save();
+            }
             let _ = app.emit("shortcut-stop-audio", ());
             info!("stop audio shortcut triggered");
         },
     )
     .await?;
 
-    // Register show chat shortcut (global - toggles standalone AI chat window)
+    // Register show chat shortcut (global - toggles standalone AI chat window) (defer off event stack)
     register_shortcut(
         app,
         &config.show_chat,
         config.is_disabled("show_chat"),
         |app| {
-            info!("show chat shortcut triggered");
-            let _ = app.emit("shortcut-show-chat", ());
-            // Toggle the chat window - hide if visible, show if not.
-            // Use order_out (not close) to preserve the pre-created panel
-            // so it can reappear on fullscreen Spaces without re-creation.
-            if let Some(_window) = app.get_webview_window("chat") {
-                #[cfg(target_os = "macos")]
-                {
-                    use tauri_nspanel::ManagerExt;
-                    if let Ok(panel) = app.get_webview_panel("chat") {
-                        if panel.is_visible() {
-                            panel.order_out(None);
+            let app_for_closure = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let app = &app_for_closure;
+                info!("show chat shortcut triggered");
+                let _ = app.emit("shortcut-show-chat", ());
+                // Toggle the chat window - hide if visible, show if not.
+                // Use order_out (not close) to preserve the pre-created panel
+                // so it can reappear on fullscreen Spaces without re-creation.
+                if let Some(_window) = app.get_webview_window("chat") {
+                    #[cfg(target_os = "macos")]
+                    {
+                        use tauri_nspanel::ManagerExt;
+                        if let Ok(panel) = app.get_webview_panel("chat") {
+                            if panel.is_visible() {
+                                panel.order_out(None);
+                                return;
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if _window.is_visible().unwrap_or(false) {
+                            let _ = _window.hide();
                             return;
                         }
                     }
                 }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    if _window.is_visible().unwrap_or(false) {
-                        let _ = _window.hide();
-                        return;
-                    }
-                }
-            }
-            let _ = ShowRewindWindow::Chat.show(app);
+                let _ = ShowRewindWindow::Chat.show(app);
+            });
         },
     )
     .await?;
 
-    // Register search shortcut (global - opens overlay with search focused)
+    // Register search shortcut (global - opens overlay with search focused) (defer off event stack)
     register_shortcut(
         app,
         &config.search,
         config.is_disabled("search"),
         |app| {
-            info!("search shortcut triggered");
-            // Always show the overlay, then emit search event to focus the search input
-            #[cfg(target_os = "macos")]
-            {
-                use crate::window_api::main_label_for_mode;
-                use crate::store::SettingsStore;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-
-                if let Some(window) = app.get_webview_window(label) {
-                    if !window.is_visible().unwrap_or(false) {
+            let app_for_closure = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let app = &app_for_closure;
+                info!("search shortcut triggered");
+                // Always show the overlay, then emit search event to focus the search input
+                #[cfg(target_os = "macos")]
+                {
+                    use crate::window_api::main_label_for_mode;
+                    use crate::store::SettingsStore;
+                    let mode = SettingsStore::get(app)
+                        .unwrap_or_default()
+                        .unwrap_or_default()
+                        .overlay_mode;
+                    let label = main_label_for_mode(&mode);
+                    if let Some(window) = app.get_webview_window(label) {
+                        if !window.is_visible().unwrap_or(false) {
+                            show_main_window(app, false);
+                        }
+                    } else {
                         show_main_window(app, false);
                     }
-                } else {
-                    show_main_window(app, false);
                 }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                if let Some(window) = app.get_webview_window("main") {
-                    if !window.is_visible().unwrap_or(false) {
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(false) {
+                            show_main_window(app, false);
+                        }
+                    } else {
                         show_main_window(app, false);
                     }
-                } else {
-                    show_main_window(app, false);
                 }
-            }
-            // Emit event so the frontend opens the search modal
-            let _ = app.emit("open-search", ());
+                // Emit event so the frontend opens the search modal
+                let _ = app.emit("open-search", ());
+            });
         },
     )
     .await?;
@@ -1020,6 +1037,10 @@ async fn main() {
     // By logging here we capture the actual panic message for diagnosis.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Log the actual panic first — before any processing. Once unwinding hits
+        // Obj-C (e.g. tao::send_event), we get panic_cannot_unwind and lose the real message.
+        eprintln!("PANIC: {}", info);
+
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -1260,18 +1281,23 @@ async fn main() {
         ;
         #[cfg(not(target_os = "linux"))]
         let app = app.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // Focus the existing window
-            show_main_window(app, false);
+            // Defer off event stack: plugin may invoke this from run loop (nounwind).
+            let app_for_closure = app.clone();
+            let args_clone = args.clone();
+            let _ = app.run_on_main_thread(move || {
+                // Focus the existing window
+                show_main_window(&app_for_closure, false);
 
-            // Forward deep-link URL from args
-            if let Some(url) = args.iter().find(|a| a.starts_with("screenpipe://")) {
-                let _ = app.emit("deep-link-received", url.clone());
-            }
+                // Forward deep-link URL from args
+                if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
+                    let _ = app_for_closure.emit("deep-link-received", url.clone());
+                }
 
-            // Forward CLI args
-            if !args.is_empty() {
-                let _ = app.emit("second-instance-args", args.clone());
-            }
+                // Forward CLI args
+                if !args_clone.is_empty() {
+                    let _ = app_for_closure.emit("second-instance-args", args_clone.clone());
+                }
+            });
         }));
         let app = app
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
@@ -1441,7 +1467,11 @@ async fn main() {
                 app.on_menu_event(|app_handle, event| {
                     match event.id().as_ref() {
                         "settings" => {
-                            let _ = ShowRewindWindow::Settings { page: None }.show(app_handle);
+                            // Defer off event stack (same as tray: runs from tao::send_event).
+                            let app_for_closure = app_handle.clone();
+                            let _ = app_handle.run_on_main_thread(move || {
+                                let _ = ShowRewindWindow::Settings { page: None }.show(&app_for_closure);
+                            });
                         }
                         "check_for_updates" => {
                             let app = app_handle.clone();
@@ -1989,8 +2019,10 @@ async fn main() {
     }
 
     app.run(|app_handle, event| {
-        // Wrap in catch_unwind: this closure is called from tao::send_event
-        // which crosses the Obj-C FFI boundary (nounwind). A panic here would abort().
+        // CRITICAL: This closure is called from tao::send_event (Obj-C FFI, nounwind).
+        // Unwinding cannot cross that boundary, so catch_unwind never runs — any panic
+        // triggers panic_cannot_unwind and abort(). Do not use unwrap/expect/panic! here
+        // or in any code this synchronously calls (e.g. ShowRewindWindow::show/close).
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     match event {
         tauri::RunEvent::Ready { .. } => {
@@ -2063,11 +2095,13 @@ async fn main() {
             if let Ok(window_id) = RewindWindowId::from_str(label.as_str()) {
                 match window_id {
                     RewindWindowId::Settings => {
-                        // Closing Settings hides the Main panel (it's always a panel now)
-                        let _ = ShowRewindWindow::Main.close(&app_handle);
-                        return;
+                        // Closing Settings hides the Main panel (it's always a panel now).
+                        // Defer off the event stack: run handler must stay panic-free.
+                        let app = app_handle.app_handle().clone();
+                        let _ = app_handle.app_handle().run_on_main_thread(move || {
+                            let _ = ShowRewindWindow::Main.close(&app);
+                        });
                     }
-
                     _ => {}
                 }
             }
@@ -2077,9 +2111,11 @@ async fn main() {
         tauri::RunEvent::Reopen {
             ..
         } => {
-
-
-            let _ = ShowRewindWindow::Main.show(&app_handle);
+            // Defer off the event stack so run handler stays panic-free.
+            let app = app_handle.app_handle().clone();
+            let _ = app_handle.app_handle().run_on_main_thread(move || {
+                let _ = ShowRewindWindow::Main.show(&app);
+            });
         }
         _ => {}
     }

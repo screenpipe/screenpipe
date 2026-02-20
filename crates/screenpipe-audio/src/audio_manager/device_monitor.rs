@@ -1,8 +1,12 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     core::device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
@@ -64,6 +68,11 @@ pub async fn start_device_monitor(
         let mut disconnected_devices: HashSet<String> = HashSet::new();
         let mut default_tracker = SystemDefaultTracker::new();
 
+        // Track devices that repeatedly fail to start so we don't spam errors
+        // every 2 seconds. After a failure, back off for increasing durations.
+        let mut failed_devices: HashMap<String, (u32, Instant)> = HashMap::new();
+        const MAX_FAIL_BACKOFF_SECS: u64 = 300; // cap at 5 minutes
+
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
@@ -116,17 +125,27 @@ pub async fn start_device_monitor(
                             }
                         }
 
-                        // Start the new default output device
+                        // Start the new default output device (reset cooldown on change)
                         if let Ok(new_device) = parse_audio_device(&new_default_output) {
+                            failed_devices.remove(&new_default_output);
                             match audio_manager.start_device(&new_device).await {
-                                Ok(()) => info!(
-                                    "switched to new system default output: {}",
-                                    new_default_output
-                                ),
-                                Err(e) => error!(
-                                    "failed to start new default output {}: {}",
-                                    new_default_output, e
-                                ),
+                                Ok(()) => {
+                                    info!(
+                                        "switched to new system default output: {}",
+                                        new_default_output
+                                    );
+                                }
+                                Err(e) => {
+                                    let count = failed_devices
+                                        .entry(new_default_output.clone())
+                                        .or_insert((0, Instant::now()));
+                                    count.0 += 1;
+                                    count.1 = Instant::now();
+                                    error!(
+                                        "failed to start new default output {}: {} (will back off)",
+                                        new_default_output, e
+                                    );
+                                }
                             }
                         }
                     }
@@ -144,20 +163,47 @@ pub async fn start_device_monitor(
                         if !has_output {
                             if let Ok(default_output) = default_output_device().await {
                                 let device_name = default_output.to_string();
-                                info!(
-                                    "no output device running, starting default: {}",
-                                    device_name
-                                );
-                                match audio_manager.start_device(&default_output).await {
-                                    Ok(()) => {
-                                        default_tracker.last_output = Some(device_name.clone());
-                                        info!("started missing output device: {}", device_name);
-                                    }
-                                    Err(e) => {
-                                        debug!(
-                                            "could not start output device {}: {}",
-                                            device_name, e
-                                        );
+
+                                // Skip if this device is in cooldown from previous failures
+                                let should_skip = if let Some((fails, last_fail)) =
+                                    failed_devices.get(&device_name)
+                                {
+                                    let backoff = Duration::from_secs(
+                                        (2u64.pow((*fails).min(8))).min(MAX_FAIL_BACKOFF_SECS),
+                                    );
+                                    last_fail.elapsed() < backoff
+                                } else {
+                                    false
+                                };
+
+                                if !should_skip {
+                                    info!(
+                                        "no output device running, starting default: {}",
+                                        device_name
+                                    );
+                                    match audio_manager.start_device(&default_output).await {
+                                        Ok(()) => {
+                                            failed_devices.remove(&device_name);
+                                            default_tracker.last_output =
+                                                Some(device_name.clone());
+                                            info!(
+                                                "started missing output device: {}",
+                                                device_name
+                                            );
+                                        }
+                                        Err(e) => {
+                                            let count = failed_devices
+                                                .entry(device_name.clone())
+                                                .or_insert((0, Instant::now()));
+                                            count.0 += 1;
+                                            count.1 = Instant::now();
+                                            let backoff_secs = (2u64.pow(count.0.min(8)))
+                                                .min(MAX_FAIL_BACKOFF_SECS);
+                                            warn!(
+                                                "could not start output device {} ({} failures, next retry in {}s): {}",
+                                                device_name, count.0, backoff_secs, e
+                                            );
+                                        }
                                     }
                                 }
                             }

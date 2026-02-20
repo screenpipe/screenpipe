@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2 } from "lucide-react";
+import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2, Hash, Tag } from "lucide-react";
 import { useKeywordSearchStore, SearchMatch } from "@/lib/hooks/use-keyword-search-store";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
@@ -24,6 +24,13 @@ interface AudioTranscription {
   duration_secs: number;
 }
 
+
+interface TaggedFrame {
+  frame_id: number;
+  timestamp: string;
+  tag_names: string[];
+  app_name: string;
+}
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -276,6 +283,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
   const [speakerTranscriptions, setSpeakerTranscriptions] = useState<AudioTranscription[]>([]);
   const [isLoadingTranscriptions, setIsLoadingTranscriptions] = useState(false);
   const [selectedTranscriptionIndex, setSelectedTranscriptionIndex] = useState(0);
+  const [transcriptionFrames, setTranscriptionFrames] = useState<Map<string, number>>(new Map());
+
+  // Tag search state
+  const [tagResults, setTagResults] = useState<TaggedFrame[]>([]);
+  const [allTags, setAllTags] = useState<string[]>([]); // distinct tags for autocomplete
+  const [isSearchingTags, setIsSearchingTags] = useState(false);
+  const isTagSearch = query.startsWith("#");
+  const isPeopleSearch = query.startsWith("@");
 
   // App filter
   const [appFilter, setAppFilter] = useState<string | null>(null);
@@ -330,6 +345,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
       resetSearch();
       setAppFilter(null);
       setSpeakerResults([]);
+      setTagResults([]);
+      setAllTags([]);
       setSelectedSpeaker(null);
       setSpeakerTranscriptions([]);
       setSelectedTranscriptionIndex(0);
@@ -361,11 +378,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
     if (!debouncedQuery.trim()) {
       resetSearch();
       setSpeakerResults([]);
+      setTagResults([]);
       setAppFilter(null);
       return;
     }
 
+    // Skip keyword search for # and @ queries (handled by dedicated effects)
+    if (debouncedQuery.startsWith("#") || debouncedQuery.startsWith("@")) {
+      resetSearch();
+      setSpeakerResults([]);
+      return;
+    }
+
     setAppFilter(null);
+    setTagResults([]);
     setOcrOffset(0);
     setHasMoreOcr(true);
     searchKeywords(debouncedQuery, {
@@ -374,9 +400,95 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
     });
   }, [debouncedQuery, searchKeywords, resetSearch]);
 
-  // Search speakers in parallel
+  // Search tags when query starts with #
   useEffect(() => {
-    if (!debouncedQuery.trim() || debouncedQuery.length < 2 || selectedSpeaker) {
+    if (!debouncedQuery.startsWith("#")) {
+      setTagResults([]);
+      setAllTags([]);
+      return;
+    }
+
+    const tagQuery = debouncedQuery.slice(1).trim().toLowerCase(); // strip #
+    let cancelled = false;
+
+    (async () => {
+      setIsSearchingTags(true);
+      try {
+        // Fetch all distinct tags with counts from the tags + vision_tags tables
+        const tagsResp = await fetch("http://localhost:3030/raw_sql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: "SELECT t.name, COUNT(vt.vision_id) as count FROM tags t JOIN vision_tags vt ON t.id = vt.tag_id GROUP BY t.id, t.name ORDER BY count DESC",
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (cancelled) return;
+        const allDbTags: { name: string; count: number }[] = tagsResp.ok
+          ? await tagsResp.json()
+          : [];
+
+        // Set autocomplete pills (filtered if user typed something after #)
+        const tagNames = allDbTags.map(t => t.name);
+        setAllTags(
+          tagQuery.length > 0
+            ? tagNames.filter(t => t.toLowerCase().includes(tagQuery))
+            : tagNames
+        );
+
+        // Find tags that match the query
+        const matched = tagQuery.length > 0
+          ? allDbTags.filter(t => t.name.toLowerCase().includes(tagQuery))
+          : allDbTags;
+
+        if (matched.length > 0 && !cancelled) {
+          // Fetch frames tagged with matching tags
+          const inList = matched.map(t => `'${t.name.replace(/'/g, "''")}'`).join(",");
+          const framesResp = await fetch("http://localhost:3030/raw_sql", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: `SELECT f.id as frame_id, f.timestamp, f.app_name, GROUP_CONCAT(DISTINCT t.name) as tag_names FROM vision_tags vt JOIN frames f ON vt.vision_id = f.id JOIN tags t ON vt.tag_id = t.id WHERE t.name IN (${inList}) GROUP BY f.id ORDER BY f.timestamp DESC LIMIT 50`,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+
+          if (cancelled) return;
+          if (framesResp.ok) {
+            const rows: { frame_id: number; timestamp: string; tag_names: string; app_name: string }[] = await framesResp.json();
+            setTagResults(rows.map(r => ({
+              frame_id: r.frame_id,
+              timestamp: r.timestamp,
+              tag_names: r.tag_names.split(","),
+              app_name: r.app_name || "",
+            })));
+          }
+        } else {
+          setTagResults([]);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setIsSearchingTags(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [debouncedQuery]);
+
+  // Search speakers — triggered by @query or normal text query (>= 2 chars)
+  useEffect(() => {
+    if (selectedSpeaker) {
+      setSpeakerResults([]);
+      return;
+    }
+
+    const isAtQuery = debouncedQuery.startsWith("@");
+    const searchTerm = isAtQuery ? debouncedQuery.slice(1).trim() : debouncedQuery.trim();
+
+    // For normal queries, require >= 2 chars; for @, show all speakers immediately
+    if (!isAtQuery && (searchTerm.length < 2 || debouncedQuery.startsWith("#"))) {
       setSpeakerResults([]);
       return;
     }
@@ -387,13 +499,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
     (async () => {
       setIsSearchingSpeakers(true);
       try {
-        const resp = await fetch(
-          `http://localhost:3030/speakers/search?name=${encodeURIComponent(debouncedQuery)}`,
-          { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]) }
-        );
+        // For @ with no text, fetch all speakers; otherwise search by name
+        const url = searchTerm.length > 0
+          ? `http://localhost:3030/speakers/search?name=${encodeURIComponent(searchTerm)}`
+          : `http://localhost:3030/speakers/search?name=`;
+        const resp = await fetch(url, {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]),
+        });
         if (resp.ok && !cancelled) {
           const speakers: SpeakerResult[] = await resp.json();
-          setSpeakerResults(speakers.filter(s => s.name).slice(0, 5));
+          setSpeakerResults(speakers.filter(s => s.name).slice(0, isAtQuery ? 20 : 5));
         }
       } catch {
         // ignore
@@ -409,6 +524,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
   useEffect(() => {
     if (!selectedSpeaker) {
       setSpeakerTranscriptions([]);
+      setTranscriptionFrames(new Map());
       setTranscriptionOffset(0);
       setHasMoreTranscriptions(true);
       return;
@@ -432,7 +548,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
         );
         if (resp.ok && !cancelled) {
           const data = await resp.json();
-          const items = (data?.data || []).map((item: any) => ({
+          const items: AudioTranscription[] = (data?.data || []).map((item: any) => ({
             timestamp: item.content?.timestamp || "",
             transcription: item.content?.transcription || "",
             device_name: item.content?.device_name || "",
@@ -442,6 +558,37 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
           }));
           if (items.length < TRANSCRIPTION_PAGE_SIZE) setHasMoreTranscriptions(false);
           setSpeakerTranscriptions(items);
+
+          // Fetch nearest frame for each transcription timestamp (in parallel batches)
+          const uniqueTimestamps = [...new Set(items.map(i => i.timestamp).filter(Boolean))];
+          if (uniqueTimestamps.length > 0 && !cancelled) {
+            try {
+              const map = new Map<string, number>();
+              // Batch fetch: find closest frame within ±30s for each timestamp
+              const promises = uniqueTimestamps.map(async (ts) => {
+                const d = new Date(ts);
+                const lo = new Date(d.getTime() - 30_000).toISOString();
+                const hi = new Date(d.getTime() + 30_000).toISOString();
+                const escaped = ts.replace(/'/g, "''");
+                const resp = await fetch("http://localhost:3030/raw_sql", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    query: `SELECT id as frame_id FROM frames WHERE timestamp >= '${lo}' AND timestamp <= '${hi}' ORDER BY ABS(julianday(timestamp) - julianday('${escaped}')) LIMIT 1`,
+                  }),
+                  signal: AbortSignal.timeout(3000),
+                });
+                if (resp.ok) {
+                  const rows: { frame_id: number }[] = await resp.json();
+                  if (rows.length > 0) map.set(ts, rows[0].frame_id);
+                }
+              });
+              await Promise.all(promises);
+              if (!cancelled) setTranscriptionFrames(map);
+            } catch {
+              // frames are optional, ignore errors
+            }
+          }
         }
       } catch {
         // ignore
@@ -649,8 +796,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
 
   if (!isOpen) return null;
 
-  const hasResults = searchResults.length > 0 || speakerResults.length > 0;
-  const showEmpty = !isSearching && !isSearchingSpeakers && debouncedQuery && !hasResults && !selectedSpeaker;
+  const hasResults = searchResults.length > 0 || speakerResults.length > 0 || tagResults.length > 0;
+  const showEmpty = !isSearching && !isSearchingSpeakers && !isSearchingTags && debouncedQuery && !hasResults && !selectedSpeaker && !isTagSearch && !isPeopleSearch;
   const activeIndex = hoveredIndex ?? selectedIndex;
 
   return (
@@ -695,7 +842,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
                 setHasMoreTranscriptions(true);
               }
             }}
-            placeholder="Search your memory..."
+            placeholder="Search your memory... (# tags, @ people)"
             className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
             autoComplete="off"
             autoCorrect="off"
@@ -703,7 +850,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
             spellCheck={false}
             autoFocus
           />
-          {isSearching && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
+          {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
             <button
               onClick={() => setQuery("")}
@@ -756,42 +903,53 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
               )}
 
               {speakerTranscriptions.length > 0 && (
-                <div className="space-y-1">
-                  {speakerTranscriptions.map((t, index) => (
-                    <div
-                      key={`${t.timestamp}-${index}`}
-                      data-index={index}
-                      onClick={() => {
-                        if (t.timestamp) {
-                          onNavigateToTimestamp(t.timestamp);
-                          onClose();
-                        }
-                      }}
-                      className={cn(
-                        "px-3 py-2.5 rounded cursor-pointer transition-all duration-100",
-                        index === selectedTranscriptionIndex
-                          ? "bg-foreground/10 ring-1 ring-foreground/20"
-                          : "hover:bg-muted"
-                      )}
-                    >
-                      <p className="text-sm text-foreground leading-relaxed line-clamp-2">
-                        {t.transcription || "(empty)"}
-                      </p>
-                      <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1 font-mono">
-                          <Clock className="w-3 h-3" />
-                          {t.timestamp ? formatRelativeTime(t.timestamp) : "unknown"}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          {t.is_input ? <Mic className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
-                          {t.is_input ? "mic" : "speaker"}
-                        </span>
-                        {t.duration_secs > 0 && (
-                          <span>{Math.round(t.duration_secs)}s</span>
+                <div className="grid grid-cols-4 gap-3">
+                  {speakerTranscriptions.map((t, index) => {
+                    const frameId = transcriptionFrames.get(t.timestamp);
+                    return (
+                      <div
+                        key={`${t.timestamp}-${index}`}
+                        data-index={index}
+                        onClick={() => {
+                          if (t.timestamp) {
+                            onNavigateToTimestamp(t.timestamp);
+                            onClose();
+                          }
+                        }}
+                        className={cn(
+                          "cursor-pointer rounded overflow-hidden border transition-all duration-150",
+                          index === selectedTranscriptionIndex
+                            ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
+                            : "border-border hover:border-foreground/50"
                         )}
+                      >
+                        {frameId ? (
+                          <FrameThumbnail
+                            frameId={frameId}
+                            alt={t.transcription || t.speaker_name}
+                          />
+                        ) : (
+                          <div className="aspect-video bg-muted flex items-center justify-center">
+                            <Mic className="w-5 h-5 text-muted-foreground/40" />
+                          </div>
+                        )}
+                        <div className="p-2 bg-card">
+                          <p className="text-xs text-foreground line-clamp-2 leading-relaxed mb-1">
+                            {t.transcription || "(empty)"}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1 font-mono">
+                              <Clock className="w-3 h-3" />
+                              {t.timestamp ? formatRelativeTime(t.timestamp) : "unknown"}
+                            </span>
+                            <span className="flex items-center gap-0.5">
+                              {t.is_input ? <Mic className="w-2.5 h-2.5" /> : <Volume2 className="w-2.5 h-2.5" />}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -815,8 +973,117 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
                 </div>
               )}
 
+              {/* Tag autocomplete pills */}
+              {isTagSearch && allTags.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <Tag className="w-3 h-3" />
+                    tags
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {allTags.map((t) => {
+                      const tagQuery = query.slice(1).trim().toLowerCase();
+                      const isActive = tagQuery === t;
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => setQuery(`#${t}`)}
+                          className={cn(
+                            "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
+                            isActive
+                              ? "bg-foreground text-background border-foreground"
+                              : "border-border text-foreground/70 hover:bg-muted hover:border-foreground/30"
+                          )}
+                        >
+                          <Hash className="w-2.5 h-2.5" />
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tag timeline entries — thumbnail grid */}
+              {isTagSearch && tagResults.length > 0 && (
+                <div className="grid grid-cols-4 gap-3">
+                  {tagResults.map((frame) => (
+                    <div
+                      key={frame.frame_id}
+                      onClick={() => {
+                        onNavigateToTimestamp(frame.timestamp);
+                        onClose();
+                      }}
+                      className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"
+                    >
+                      <FrameThumbnail
+                        frameId={frame.frame_id}
+                        alt={frame.tag_names.join(", ")}
+                      />
+                      <div className="p-2 bg-card">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                          <Clock className="w-3 h-3" />
+                          <span className="font-mono">
+                            {formatRelativeTime(frame.timestamp)}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-foreground truncate">
+                          {frame.app_name || frame.tag_names[0]}
+                        </p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {frame.tag_names.map((t) => (
+                            <span
+                              key={t}
+                              className="px-1.5 py-0.5 text-[10px] rounded-full bg-foreground/8 text-foreground/60"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Tag search loading */}
+              {isTagSearch && isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
+                <div className="space-y-3">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-12" />
+                  ))}
+                </div>
+              )}
+
+              {/* Tag search empty */}
+              {isTagSearch && !isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  {query.slice(1).trim()
+                    ? <>no tags matching &quot;{query.slice(1).trim()}&quot;</>
+                    : "no tags found"}
+                </div>
+              )}
+
+              {/* @ people search loading */}
+              {isPeopleSearch && isSearchingSpeakers && speakerResults.length === 0 && (
+                <div className="space-y-3">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-10" />
+                  ))}
+                </div>
+              )}
+
+              {/* @ people search empty */}
+              {isPeopleSearch && !isSearchingSpeakers && speakerResults.length === 0 && (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  {query.slice(1).trim()
+                    ? <>no people matching &quot;{query.slice(1).trim()}&quot;</>
+                    : "no speakers found"}
+                </div>
+              )}
+
               {/* Loading skeleton */}
-              {isSearching && searchResults.length === 0 && speakerResults.length === 0 && (
+              {!isTagSearch && !isPeopleSearch && isSearching && searchResults.length === 0 && speakerResults.length === 0 && (
                 <div className="grid grid-cols-4 gap-3">
                   {Array.from({ length: 8 }).map((_, i) => (
                     <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">

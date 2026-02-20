@@ -27,6 +27,7 @@ pub struct CachedSuggestions {
     pub generated_at: String,
     pub mode: String,
     pub ai_generated: bool,
+    pub tags: Vec<String>,
 }
 
 // ─── Managed state ──────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ pub async fn get_cached_suggestions(
         generated_at: chrono::Utc::now().to_rfc3339(),
         mode: "idle".to_string(),
         ai_generated: false,
+        tags: vec![],
     }))
 }
 
@@ -700,48 +702,37 @@ async fn build_activity_context(
     parts.join("\n")
 }
 
-// ─── AI suggestion generation ───────────────────────────────────────────────
+// ─── AI suggestion + tag generation ─────────────────────────────────────────
 
-// System prompt ~250 tokens — leaves ~1200 tokens for context + ~500 for output
-const AI_SYSTEM_PROMPT: &str = r#"Generate 4 chat suggestions for a screenpipe user (records screen/audio 24/7). Return ONLY a JSON array of 4 strings.
+// System prompt — returns both suggestions and tags in one AI call (zero extra cost)
+const AI_SYSTEM_PROMPT: &str = r#"Analyze this screenpipe user's activity (records screen/audio 24/7). Return a JSON object with "suggestions" and "tags".
 
-CRITICAL STYLE RULES:
-- ALL LOWERCASE, no capitalization at all
-- NEVER start with "Can you", "Did you", "How did", "What's the" — these sound robotic
-- NEVER end with a question mark
-- Start with action verbs: summarize, show, list, compare, find, what, how much
-- 5-10 words, every word must add meaning
-- Sound like a real person typing in a chat, not a formal question
+Format: {"suggestions":["suggestion1","suggestion2","suggestion3","suggestion4"],"tags":["tag1","tag2","tag3"]}
 
-CONTENT RULES:
-- Reference SPECIFIC apps, people, topics from the activity data below
-- Focus on actionable insights: summaries, time tracking, key content, patterns
-- If audio mentions a person by name, use their name
-- If code/terminal activity, ask about the coding session or errors
+SUGGESTIONS — 4 natural sentences the user can click to ask about their activity:
+- all lowercase plain english, NO hyphens, NO question marks
+- 5-10 words, start with: summarize, show, list, compare, find, what, how much
+- reference specific apps/people/topics from the data below
+- example style: "summarize my slack conversations from today"
 
-GOOD examples (notice: lowercase, no question mark, action-oriented):
-- "summarize my slack conversations from today"
-- "what did sarah say in the zoom call"
-- "how much time in cursor vs chrome"
-- "show errors from the wezterm session"
-- "list topics from the standup with alex"
+TAGS — 3-8 short hyphenated labels for search/filtering:
+- lowercase with hyphens, no spaces: "coding", "rust", "debugging-auth", "meeting-with-sarah"
+- include: activity type, specific apps, topics, people, projects
 
-BAD examples (NEVER generate these):
-- "Can you walk me through the code snippets?" (too formal, question mark)
-- "Did you explore any new features?" (yes/no question, formal)
-- "What's up with Arc notifications?" (starts with What's)
-- "How did Louis discuss commercialization?" (formal, starts with How did)
-- "list topics from the team meeting" (generic, doesn't reference real data)
-- "show errors from the terminal session" (generic, name the actual terminal)
-
-IMPORTANT: Do NOT copy the examples above. Use the ACTUAL app names, people, and topics from the activity data. Every suggestion must reference something specific from the context below.
+Output ONLY the JSON on a SINGLE LINE. Do NOT copy examples — use actual data.
 "#;
+
+/// Result from a single AI call that returns both suggestions and tags.
+struct AiResult {
+    suggestions: Vec<Suggestion>,
+    tags: Vec<String>,
+}
 
 async fn generate_ai_suggestions(
     mode: &str,
     apps: &[AppActivity],
     windows: &[WindowActivity],
-) -> Option<Vec<Suggestion>> {
+) -> Option<AiResult> {
     if !check_ai_available().await {
         info!("suggestions: Apple Intelligence not available, using templates");
         return None;
@@ -774,8 +765,8 @@ async fn generate_ai_suggestions(
             let content = data["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("");
-            debug!("suggestions AI response: {}", &content[..content.len().min(200)]);
-            parse_ai_suggestions(content)
+            debug!("suggestions AI response: {}", &content[..content.len().min(300)]);
+            parse_ai_response(content)
         }
         Ok(r) => {
             warn!("suggestions: AI returned status {}", r.status());
@@ -788,36 +779,75 @@ async fn generate_ai_suggestions(
     }
 }
 
-fn parse_ai_suggestions(content: &str) -> Option<Vec<Suggestion>> {
-    // Try direct JSON parse
-    if let Ok(arr) = serde_json::from_str::<Vec<String>>(content) {
-        if !arr.is_empty() {
-            return Some(
-                arr.into_iter()
-                    .take(4)
-                    .map(|text| Suggestion { text })
-                    .collect(),
-            );
+fn parse_ai_response(content: &str) -> Option<AiResult> {
+    // Try the combined format: {"suggestions":[...], "tags":[...]}
+    let json_str = extract_json_object(content);
+    if let Some(json_str) = json_str {
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            let suggestions = obj["suggestions"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| Suggestion { text: s.to_string() }))
+                        .take(4)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            let tags = obj["tags"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                        .take(8)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            if !suggestions.is_empty() {
+                return Some(AiResult { suggestions, tags });
+            }
         }
     }
 
-    // Try extracting JSON array from wrapped text (e.g. ```json [...] ```)
+    // Fallback: try parsing as a plain JSON array of strings (old format)
     if let Some(start) = content.find('[') {
         if let Some(end) = content.rfind(']') {
             if let Ok(arr) = serde_json::from_str::<Vec<String>>(&content[start..=end]) {
                 if !arr.is_empty() {
-                    return Some(
-                        arr.into_iter()
-                            .take(4)
-                            .map(|text| Suggestion { text })
-                            .collect(),
-                    );
+                    return Some(AiResult {
+                        suggestions: arr.into_iter().take(4).map(|text| Suggestion { text }).collect(),
+                        tags: vec![],
+                    });
                 }
             }
         }
     }
 
     None
+}
+
+fn extract_json_object(content: &str) -> Option<String> {
+    let content = content.trim();
+    // Strip markdown code fences
+    let cleaned = if content.starts_with("```") {
+        content
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        content.to_string()
+    };
+
+    let start = cleaned.find('{')?;
+    let end = cleaned.rfind('}')?;
+    if end >= start {
+        Some(cleaned[start..=end].to_string())
+    } else {
+        None
+    }
 }
 
 async fn generate_suggestions() -> Result<CachedSuggestions, String> {
@@ -833,25 +863,101 @@ async fn generate_suggestions() -> Result<CachedSuggestions, String> {
         mode, apps.len(), windows.len()
     );
 
-    // Try AI-powered suggestions first
-    let (suggestions, ai_generated) =
+    // Try AI-powered suggestions + tags in one call
+    let (suggestions, tags, ai_generated) =
         match generate_ai_suggestions(mode, &apps, &windows).await {
-            Some(s) => {
-                info!("suggestions: using AI-generated suggestions");
-                (s, true)
+            Some(result) => {
+                info!(
+                    "suggestions: AI generated {} suggestions + {} tags",
+                    result.suggestions.len(),
+                    result.tags.len()
+                );
+                (result.suggestions, result.tags, true)
             }
             None => {
-                info!("suggestions: falling back to templates (mode={})", mode);
-                (template_suggestions(mode, &top_apps, &windows), false)
+                // Template fallback — generate basic tags from mode + top apps
+                let fallback_tags = generate_heuristic_tags(mode, &top_apps);
+                info!("suggestions: template fallback (mode={}, {} tags)", mode, fallback_tags.len());
+                (template_suggestions(mode, &top_apps, &windows), fallback_tags, false)
             }
         };
 
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Store tags on recent frames (fire-and-forget, don't block suggestions)
+    if !tags.is_empty() {
+        let tags_clone = tags.clone();
+        tokio::spawn(async move {
+            if let Err(e) = store_tags(&tags_clone).await {
+                warn!("suggestions: failed to store tags: {}", e);
+            }
+        });
+    }
+
     Ok(CachedSuggestions {
         suggestions: suggestions.into_iter().take(4).collect(),
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: now,
         mode: mode.to_string(),
         ai_generated,
+        tags,
     })
+}
+
+/// Generate basic tags from heuristic mode detection when AI is unavailable.
+fn generate_heuristic_tags(mode: &str, top_apps: &[String]) -> Vec<String> {
+    let mut tags = vec![mode.to_string()];
+    for app in top_apps.iter().take(3) {
+        tags.push(app.to_lowercase().replace(' ', "-"));
+    }
+    tags
+}
+
+/// Store AI-generated tags on recent frames using the existing tags + vision_tags tables.
+async fn store_tags(
+    tags: &[String],
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    // Get recent frame IDs (last 10 minutes, sample up to 10)
+    let resp = client
+        .post(format!("{}/raw_sql", API))
+        .json(&serde_json::json!({
+            "query": "SELECT id FROM frames WHERE timestamp >= datetime('now', '-10 minutes') ORDER BY timestamp DESC LIMIT 10"
+        }))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("fetch frames: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err("failed to fetch recent frames".into());
+    }
+
+    #[derive(Deserialize)]
+    struct FrameRow { id: i64 }
+    let frames: Vec<FrameRow> = resp.json().await.map_err(|e| format!("parse frames: {}", e))?;
+
+    if frames.is_empty() {
+        return Ok(());
+    }
+
+    // Tag frames via the existing API endpoint (POST /tags/vision/:id)
+    let tag_body = serde_json::json!({ "tags": tags });
+    let mut tagged = 0;
+    for frame in &frames {
+        let resp = client
+            .post(format!("{}/tags/vision/{}", API, frame.id))
+            .json(&tag_body)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+        if resp.is_ok() {
+            tagged += 1;
+        }
+    }
+
+    info!("suggestions: tagged {}/{} frames with {} tags", tagged, frames.len(), tags.len());
+    Ok(())
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

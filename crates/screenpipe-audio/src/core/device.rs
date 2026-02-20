@@ -310,7 +310,11 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
             }
         }
 
-        // add default output device - on macos think of custom virtual devices
+        // Add physical output devices — but NOT on macOS where only SCK display
+        // devices can actually be recorded from. Physical output devices (headphones,
+        // speakers) appear recordable in the UI but always fail with "device not found"
+        // in get_cpal_device_and_config because SCK's input_devices() doesn't include them.
+        #[cfg(not(target_os = "macos"))]
         for device in host.output_devices()? {
             if let Ok(name) = device.name() {
                 if should_include_output_device(&name) {
@@ -319,7 +323,9 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
             }
         }
 
-        // last, add devices that are listed in .devices() which are not already in the devices vector
+        // Last, add devices that are listed in .devices() which are not already in the
+        // devices vector. Skip on macOS — only SCK display devices are valid output sources.
+        #[cfg(not(target_os = "macos"))]
         if let Ok(other_devices) = host.devices() {
             for device in other_devices {
                 let name = match device.name() {
@@ -464,8 +470,11 @@ pub async fn default_output_device() -> Result<AudioDevice> {
 
     #[cfg(target_os = "macos")]
     {
-        // ! see https://github.com/RustAudio/cpal/pull/894
-        // Try to get device from ScreenCaptureKit first
+        // On macOS, output audio capture ONLY works via ScreenCaptureKit display
+        // audio. Physical output devices (headphones, speakers) cannot be recorded
+        // from — they always fail with "Audio device not found" in
+        // get_cpal_device_and_config because SCK input_devices() doesn't include them.
+        // See https://github.com/RustAudio/cpal/pull/894
         match get_screen_capture_host().await {
             Ok(host) => {
                 if let Some(device) = host.default_input_device() {
@@ -473,28 +482,19 @@ pub async fn default_output_device() -> Result<AudioDevice> {
                         return Ok(AudioDevice::new(name, DeviceType::Output));
                     }
                 }
-                tracing::warn!("ScreenCaptureKit host available but no default input device found");
+                return Err(anyhow!(
+                    "ScreenCaptureKit available but no display audio device found — \
+                     output audio capture requires a display device"
+                ));
             }
             Err(e) => {
-                tracing::warn!(
+                return Err(anyhow!(
                     "ScreenCaptureKit unavailable for output audio capture: {} — \
-                     falling back to physical output device (may not capture system audio)",
+                     output audio capture is not possible without it",
                     e
-                );
+                ));
             }
         }
-
-        // Fall back to default output device
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("No default output device found"))?;
-        let name = device.name()?;
-        tracing::warn!(
-            "using fallback physical output device: '{}' (not ScreenCaptureKit display audio)",
-            name
-        );
-        Ok(AudioDevice::new(name, DeviceType::Output))
     }
 
     // Linux without pulseaudio feature

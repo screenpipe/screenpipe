@@ -770,7 +770,7 @@ async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number }
 export type AIProviderType = "openai" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
-export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean }
+export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type Credits = { amount: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }

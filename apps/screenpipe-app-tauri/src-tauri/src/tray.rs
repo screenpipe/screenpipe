@@ -387,8 +387,8 @@ fn create_dynamic_menu(
 
 fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
     main_tray.on_menu_event(move |app_handle, event| {
-        // Wrap in catch_unwind: menu event handlers are called from tao::send_event
-        // which crosses the Obj-C FFI boundary (nounwind). A panic here would abort().
+        // This runs inside tao::send_event (Obj-C FFI, nounwind). handle_menu_event
+        // only clones and schedules work via run_on_main_thread — no heavy work here.
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handle_menu_event(app_handle, event);
         })) {
@@ -399,22 +399,34 @@ fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
     Ok(())
 }
 
+/// Tray menu handler runs inside tao::send_event (Obj-C FFI, nounwind). We must not
+/// do any heavy or panicking work here — defer all window/show/open work to
+/// run_on_main_thread so the sync path is minimal and panic-free.
 fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         "show" => {
-            show_main_window(app_handle, false);
-            let _ = app_handle.emit("tray-show-timeline", ());
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                show_main_window(&app, false);
+                let _ = app.emit("tray-show-timeline", ());
+            });
         }
         "show_search" => {
             // Search is a modal on the main window, not a separate window.
             // Show main window first, then emit event to open the search modal.
-            show_main_window(app_handle, false);
-            let _ = app_handle.emit("open-search", ());
-            let _ = app_handle.emit("tray-show-search", ());
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                show_main_window(&app, false);
+                let _ = app.emit("open-search", ());
+                let _ = app.emit("tray-show-search", ());
+            });
         }
         "show_chat" => {
-            let _ = ShowRewindWindow::Chat.show(app_handle);
-            let _ = app_handle.emit("tray-show-chat", ());
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = ShowRewindWindow::Chat.show(&app);
+                let _ = app.emit("tray-show-chat", ());
+            });
         }
         "start_recording" => {
             let _ = app_handle.emit("shortcut-start-recording", ());
@@ -423,56 +435,77 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = app_handle.emit("shortcut-stop-recording", ());
         }
         "fix_permissions" => {
-            let _ = ShowRewindWindow::PermissionRecovery.show(app_handle);
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = ShowRewindWindow::PermissionRecovery.show(&app);
+            });
         }
         "releases" => {
-            let _ = app_handle.opener().open_url("https://screenpi.pe/changelog", None::<&str>);
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = app.opener().open_url("https://screenpi.pe/changelog", None::<&str>);
+            });
         }
         "update_now" => {
-            // For source builds, show info dialog about updates
-            if is_source_build(app_handle) {
-                let app = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let dialog = app
-                        .dialog()
-                        .message(
-                            "auto-updates are only available in the pre-built version.\n\n\
-                            source builds require manual updates from github.",
-                        )
-                        .title("source build detected")
-                        .buttons(MessageDialogButtons::OkCancelCustom(
-                            "download pre-built".to_string(),
-                            "view on github".to_string(),
-                        ));
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                // For source builds, show info dialog about updates
+                if is_source_build(&app) {
+                    tauri::async_runtime::spawn(async move {
+                        let dialog = app
+                            .dialog()
+                            .message(
+                                "auto-updates are only available in the pre-built version.\n\n\
+                                source builds require manual updates from github.",
+                            )
+                            .title("source build detected")
+                            .buttons(MessageDialogButtons::OkCancelCustom(
+                                "download pre-built".to_string(),
+                                "view on github".to_string(),
+                            ));
 
-                    dialog.show(move |clicked_download| {
-                        if clicked_download {
-                            let _ = app.opener().open_url("https://screenpi.pe/download", None::<&str>);
-                        } else {
-                            let _ = app.opener().open_url("https://github.com/screenpipe/screenpipe/releases", None::<&str>);
-                        }
+                        dialog.show(move |clicked_download| {
+                            if clicked_download {
+                                let _ = app.opener().open_url("https://screenpi.pe/download", None::<&str>);
+                            } else {
+                                let _ = app.opener().open_url("https://github.com/screenpipe/screenpipe/releases", None::<&str>);
+                            }
+                        });
                     });
-                });
-            } else {
-                // For production builds, emit event to trigger update
-                let _ = app_handle.emit("update-now-clicked", ());
-            }
+                } else {
+                    // For production builds, emit event to trigger update
+                    let _ = app.emit("update-now-clicked", ());
+                }
+            });
         }
         "settings" => {
-            let _ = ShowRewindWindow::Settings { page: None }.show(app_handle);
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = ShowRewindWindow::Settings { page: None }.show(&app);
+            });
         }
         "feedback" => {
-            let _ = ShowRewindWindow::Settings { page: Some("feedback".to_string()) }.show(app_handle);
+            let app = app_handle.clone();
+            let page = Some("feedback".to_string());
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = ShowRewindWindow::Settings { page }.show(&app);
+            });
         }
         "book_call" => {
-            let _ = app_handle.opener().open_url("https://cal.com/team/screenpipe/chat", None::<&str>);
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = app.opener().open_url("https://cal.com/team/screenpipe/chat", None::<&str>);
+            });
         }
         "onboarding" => {
-            // Reset onboarding state so it shows even if previously completed
-            let _ = OnboardingStore::update(app_handle, |onboarding| {
-                onboarding.reset();
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                // Reset onboarding state so it shows even if previously completed
+                let _ = OnboardingStore::update(&app, |onboarding| {
+                    onboarding.reset();
+                });
+                let _ = ShowRewindWindow::Onboarding.show(&app);
             });
-            let _ = ShowRewindWindow::Onboarding.show(app_handle);
         }
         "quit" => {
             debug!("Quit requested");
@@ -538,9 +571,9 @@ async fn update_menu_if_needed(
             .collect(),
     };
 
-    // Compare with last state
+    // Compare with last state (poison-safe: run handler must not panic)
     let should_update = {
-        let mut last_state = LAST_MENU_STATE.lock().unwrap();
+        let mut last_state = LAST_MENU_STATE.lock().unwrap_or_else(|e| e.into_inner());
         if *last_state != new_state {
             *last_state = new_state.clone();
             true
