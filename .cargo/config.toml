@@ -32,6 +32,12 @@ rustflags = "-lc++ -l framework=Accelerate"
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 
+# Ensure native C/C++ dependencies (e.g. whisper.cpp/ggml) stay M1-compatible
+# when building on newer Apple Silicon (M2/M3/M4). Rust target-cpu alone does
+# not affect external C/C++ compilation done via cc/cmake.
+CFLAGS_aarch64_apple_darwin = "-mcpu=apple-m1"
+CXXFLAGS_aarch64_apple_darwin = "-mcpu=apple-m1"
+
 # Faster builds - use more threads for codegen
 [build]
 jobs = 16  # Parallel compilation jobs (adjust to your CPU cores)
