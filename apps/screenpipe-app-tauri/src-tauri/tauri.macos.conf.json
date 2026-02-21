@@ -1,5 +1,6 @@
 {
     "bundle": {
+        "publisher": "Screenpipe Inc.",
         "macOS": {
             "entitlements": "entitlements.plist",
             "hardenedRuntime": true,
