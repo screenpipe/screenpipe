@@ -41,6 +41,18 @@ const DEDUP_TIME_WINDOW_SECS: i64 = 45;
 /// Higher = stricter matching, lower = more aggressive deduplication.
 const DEDUP_SIMILARITY_THRESHOLD: f64 = 0.85;
 
+pub struct DeleteTimeRangeResult {
+    pub frames_deleted: u64,
+    pub ocr_deleted: u64,
+    pub audio_transcriptions_deleted: u64,
+    pub audio_chunks_deleted: u64,
+    pub video_chunks_deleted: u64,
+    pub accessibility_deleted: u64,
+    pub ui_events_deleted: u64,
+    pub video_files: Vec<String>,
+    pub audio_files: Vec<String>,
+}
+
 /// A transaction wrapper that uses `BEGIN IMMEDIATE` to acquire the write lock upfront,
 /// preventing WAL deadlocks. Automatically rolls back on drop if not committed.
 ///
@@ -186,7 +198,7 @@ impl DatabaseManager {
         let mut migrator = sqlx::migrate!("./src/migrations");
         migrator.set_ignore_missing(true);
         match migrator.run(pool).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {},
             Err(e) => {
                 let err_str = e.to_string();
                 // Handle checksum mismatch from modified migrations.
@@ -200,12 +212,20 @@ impl DatabaseManager {
                     );
                     Self::fix_migration_checksums(pool, &migrator).await?;
                     // Retry after fixing checksums
-                    migrator.run(pool).await.map_err(|e| e.into())
+                    migrator.run(pool).await?;
                 } else {
-                    Err(e.into())
+                    return Err(e.into());
                 }
             }
         }
+
+        // Fix: ensure event-driven capture columns exist on the frames table.
+        // An earlier version of migration 20260220000000 may have been applied
+        // without these columns. SQLite has no ALTER TABLE ADD COLUMN IF NOT EXISTS,
+        // so we check pragma_table_info and add missing columns in Rust.
+        Self::ensure_event_driven_columns(pool).await?;
+
+        Ok(())
     }
 
     /// Fix checksum mismatches by updating stored checksums to match current migration files.
@@ -229,6 +249,131 @@ impl DatabaseManager {
                 .await?;
         }
         tracing::info!("Migration checksums updated successfully");
+        Ok(())
+    }
+
+    /// Ensure all event-driven capture columns exist on the frames table,
+    /// and that frames_fts includes accessibility_text.
+    /// An earlier version of migration 20260220000000 may have been applied
+    /// without these columns.
+    async fn ensure_event_driven_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        // 1. Fix missing columns on frames table
+        let missing_columns: &[(&str, &str)] = &[
+            ("accessibility_tree_json", "TEXT DEFAULT NULL"),
+            ("content_hash", "INTEGER DEFAULT NULL"),
+            ("simhash", "INTEGER DEFAULT NULL"),
+        ];
+
+        for (col_name, col_type) in missing_columns {
+            let row: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM pragma_table_info('frames') WHERE name = ?1",
+            )
+            .bind(col_name)
+            .fetch_one(pool)
+            .await?;
+
+            if row.0 == 0 {
+                tracing::info!("Adding missing column frames.{}", col_name);
+                let sql = format!("ALTER TABLE frames ADD COLUMN {} {}", col_name, col_type);
+                sqlx::query(&sql).execute(pool).await?;
+            }
+        }
+
+        // 2. Fix frames_fts: if it's missing accessibility_text, rebuild it.
+        // FTS5 tables don't support ALTER TABLE, so we must drop + recreate.
+        let fts_has_a11y: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM pragma_table_info('frames_fts') WHERE name = 'accessibility_text'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+
+        if fts_has_a11y.0 == 0 {
+            tracing::info!("Rebuilding frames_fts to include accessibility_text column");
+
+            // Drop old triggers and FTS table
+            sqlx::query("DROP TRIGGER IF EXISTS frames_ai")
+                .execute(pool)
+                .await?;
+            sqlx::query("DROP TRIGGER IF EXISTS frames_au")
+                .execute(pool)
+                .await?;
+            sqlx::query("DROP TRIGGER IF EXISTS frames_ad")
+                .execute(pool)
+                .await?;
+            sqlx::query("DROP TABLE IF EXISTS frames_fts")
+                .execute(pool)
+                .await?;
+
+            // Recreate FTS5 table with accessibility_text
+            sqlx::query(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(\
+                    name, browser_url, app_name, window_name, focused, \
+                    accessibility_text, id UNINDEXED, tokenize='unicode61')"
+            )
+            .execute(pool)
+            .await?;
+
+            // Recreate triggers
+            sqlx::query(
+                "CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN \
+                    INSERT INTO frames_fts(id, name, browser_url, app_name, window_name, focused, accessibility_text) \
+                    VALUES ( \
+                        NEW.id, \
+                        COALESCE(NEW.name, ''), \
+                        COALESCE(NEW.browser_url, ''), \
+                        COALESCE(NEW.app_name, ''), \
+                        COALESCE(NEW.window_name, ''), \
+                        COALESCE(NEW.focused, 0), \
+                        COALESCE(NEW.accessibility_text, '') \
+                    ); \
+                END"
+            )
+            .execute(pool)
+            .await?;
+
+            sqlx::query(
+                "CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames \
+                WHEN (NEW.name IS NOT NULL AND NEW.name != '') \
+                   OR (NEW.browser_url IS NOT NULL AND NEW.browser_url != '') \
+                   OR (NEW.app_name IS NOT NULL AND NEW.app_name != '') \
+                   OR (NEW.window_name IS NOT NULL AND NEW.window_name != '') \
+                   OR (NEW.focused IS NOT NULL) \
+                   OR (NEW.accessibility_text IS NOT NULL AND NEW.accessibility_text != '') \
+                BEGIN \
+                    INSERT OR REPLACE INTO frames_fts(id, name, browser_url, app_name, window_name, focused, accessibility_text) \
+                    VALUES ( \
+                        NEW.id, \
+                        COALESCE(NEW.name, ''), \
+                        COALESCE(NEW.browser_url, ''), \
+                        COALESCE(NEW.app_name, ''), \
+                        COALESCE(NEW.window_name, ''), \
+                        COALESCE(NEW.focused, 0), \
+                        COALESCE(NEW.accessibility_text, '') \
+                    ); \
+                END"
+            )
+            .execute(pool)
+            .await?;
+
+            sqlx::query(
+                "CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN \
+                    DELETE FROM frames_fts WHERE id = OLD.id; \
+                END"
+            )
+            .execute(pool)
+            .await?;
+
+            // Reset FTS progress so the background indexer backfills
+            sqlx::query(
+                "UPDATE fts_index_progress SET last_indexed_rowid = 0 WHERE table_name = 'frames'"
+            )
+            .execute(pool)
+            .await?;
+
+            tracing::info!("frames_fts rebuilt with accessibility_text column");
+        }
+
         Ok(())
     }
 
@@ -715,6 +860,39 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Get speakers active during a time range, grouped by device type.
+    /// Returns speaker_id, current name, device type, and transcription count.
+    /// Excludes hallucination speakers.
+    pub async fn get_active_speakers_in_timerange(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<crate::ActiveSpeaker>, SqlxError> {
+        let rows = sqlx::query_as::<_, crate::ActiveSpeaker>(
+            r#"
+            SELECT
+                at.speaker_id,
+                COALESCE(s.name, '') as speaker_name,
+                at.is_input_device,
+                CAST(COUNT(*) AS INTEGER) as transcription_count
+            FROM audio_transcriptions at
+            INNER JOIN speakers s ON at.speaker_id = s.id
+            WHERE at.speaker_id IS NOT NULL
+                AND at.timestamp >= ?1
+                AND at.timestamp <= ?2
+                AND (s.hallucination IS NULL OR s.hallucination = 0)
+            GROUP BY at.speaker_id, at.is_input_device
+            ORDER BY transcription_count DESC
+            "#,
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     pub async fn update_speaker_name(&self, speaker_id: i64, name: &str) -> Result<i64, SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE speakers SET name = ?1 WHERE id = ?2")
@@ -827,6 +1005,66 @@ impl DatabaseManager {
         Ok(id)
     }
 
+    /// Insert a snapshot frame (event-driven capture).
+    ///
+    /// Unlike `insert_frame`, this does NOT require a video_chunk.
+    /// The snapshot JPEG path is stored directly on the frame row.
+    /// Returns the new frame id.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_snapshot_frame(
+        &self,
+        device_name: &str,
+        timestamp: DateTime<Utc>,
+        snapshot_path: &str,
+        app_name: Option<&str>,
+        window_name: Option<&str>,
+        browser_url: Option<&str>,
+        focused: bool,
+        capture_trigger: Option<&str>,
+        accessibility_text: Option<&str>,
+        text_source: Option<&str>,
+        accessibility_tree_json: Option<&str>,
+        content_hash: Option<i64>,
+        simhash: Option<i64>,
+    ) -> Result<i64, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let id = sqlx::query(
+            r#"INSERT INTO frames (
+                video_chunk_id, offset_index, timestamp, name,
+                browser_url, app_name, window_name, focused, device_name,
+                snapshot_path, capture_trigger, accessibility_text, text_source,
+                accessibility_tree_json, content_hash, simhash
+            ) VALUES (
+                NULL, 0, ?1, ?2,
+                ?3, ?4, ?5, ?6, ?7,
+                ?8, ?9, ?10, ?11,
+                ?12, ?13, ?14
+            )"#,
+        )
+        .bind(timestamp)
+        .bind(snapshot_path) // name = snapshot_path for compatibility
+        .bind(browser_url)
+        .bind(app_name)
+        .bind(window_name)
+        .bind(focused)
+        .bind(device_name)
+        .bind(snapshot_path)
+        .bind(capture_trigger)
+        .bind(accessibility_text)
+        .bind(text_source)
+        .bind(accessibility_tree_json)
+        .bind(content_hash)
+        .bind(simhash)
+        .execute(&mut **tx.conn())
+        .await?
+        .last_insert_rowid();
+
+        tx.commit().await?;
+        debug!("insert_snapshot_frame: id={}, trigger={:?}", id, capture_trigger);
+        Ok(id)
+    }
+
     /// Get the next frame offset for a device.
     /// This should be called ONCE per capture cycle and shared by all window results.
     pub async fn get_next_frame_offset(&self, device_name: &str) -> Result<i64, sqlx::Error> {
@@ -874,6 +1112,20 @@ impl DatabaseManager {
 
         tx.commit().await?;
         debug!("OCR text inserted into db successfully");
+        Ok(())
+    }
+
+    /// Update the text_source field on a frame (e.g., after OCR fallback).
+    pub async fn update_frame_text_source(
+        &self,
+        frame_id: i64,
+        text_source: &str,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query("UPDATE frames SET text_source = ?1 WHERE id = ?2")
+            .bind(text_source)
+            .bind(frame_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1446,7 +1698,7 @@ impl DatabaseManager {
         speaker_name: Option<&str>,
     ) -> Result<Vec<AudioResult>, sqlx::Error> {
         // base query for audio search
-        let mut base_sql = String::from(
+        let base_sql = String::from(
             "SELECT
                 audio_transcriptions.audio_chunk_id,
                 audio_transcriptions.transcription,
@@ -1466,15 +1718,10 @@ impl DatabaseManager {
              LEFT JOIN audio_tags ON audio_chunks.id = audio_tags.audio_chunk_id
              LEFT JOIN tags ON audio_tags.tag_id = tags.id",
         );
-        // if query is provided, join the corresponding fts table
-        if !query.is_empty() {
-            base_sql.push_str(" JOIN audio_transcriptions_fts ON audio_transcriptions_fts.audio_chunk_id = audio_transcriptions.audio_chunk_id");
-        }
-
         // build where clause conditions in order
         let mut conditions = Vec::new();
         if !query.is_empty() {
-            conditions.push("audio_transcriptions_fts MATCH ?");
+            conditions.push("audio_transcriptions.audio_chunk_id IN (SELECT audio_chunk_id FROM audio_transcriptions_fts WHERE audio_transcriptions_fts MATCH ? ORDER BY rank LIMIT 5000)");
         }
         if start_time.is_some() {
             conditions.push("audio_transcriptions.timestamp >= ?");
@@ -1580,23 +1827,47 @@ impl DatabaseManager {
         Ok(try_join_all(futures).await?.into_iter().collect())
     }
 
-    pub async fn get_frame(&self, frame_id: i64) -> Result<Option<(String, i64)>, sqlx::Error> {
-        sqlx::query_as::<_, (String, i64)>(
-            r#"
-            SELECT
-                video_chunks.file_path,
-                frames.offset_index
-            FROM
-                frames
-            JOIN
-                video_chunks ON frames.video_chunk_id = video_chunks.id
-            WHERE
-                frames.id = ?1
-            "#,
+    /// Get frame location for serving.
+    ///
+    /// Returns `(file_path, offset_index, is_snapshot)`:
+    /// - Snapshot frames: `(snapshot_path, 0, true)` — serve JPEG directly
+    /// - Legacy frames: `(video_chunk_path, offset_index, false)` — extract via ffmpeg
+    pub async fn get_frame(
+        &self,
+        frame_id: i64,
+    ) -> Result<Option<(String, i64, bool)>, sqlx::Error> {
+        // First check if it's a snapshot frame
+        let snapshot: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT snapshot_path FROM frames WHERE id = ?1",
         )
         .bind(frame_id)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+
+        match snapshot {
+            Some((Some(path),)) => Ok(Some((path, 0, true))),
+            Some((None,)) => {
+                // Legacy frame — get from video_chunks
+                let result = sqlx::query_as::<_, (String, i64)>(
+                    r#"
+                    SELECT
+                        video_chunks.file_path,
+                        frames.offset_index
+                    FROM
+                        frames
+                    JOIN
+                        video_chunks ON frames.video_chunk_id = video_chunks.id
+                    WHERE
+                        frames.id = ?1
+                    "#,
+                )
+                .bind(frame_id)
+                .fetch_optional(&self.pool)
+                .await?;
+                Ok(result.map(|(path, offset)| (path, offset, false)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Get timestamp for a frame. Used for deep link navigation (screenpipe://frame/123).
@@ -1613,24 +1884,26 @@ impl DatabaseManager {
         .flatten())
     }
 
-    /// Get frames after a given frame_id for validation checking
-    /// Returns frame_id, file_path, offset_index, and timestamp
+    /// Get frames near a given frame_id for validation/fallback.
+    /// Returns `(frame_id, file_path, offset_index, timestamp, is_snapshot)`.
+    /// Handles both snapshot frames (direct JPEG) and legacy video-chunk frames.
     /// Direction: true = forward (newer frames), false = backward (older frames)
     pub async fn get_frames_near(
         &self,
         frame_id: i64,
         forward: bool,
         limit: i32,
-    ) -> Result<Vec<(i64, String, i64, DateTime<Utc>)>, sqlx::Error> {
+    ) -> Result<Vec<(i64, String, i64, DateTime<Utc>, bool)>, sqlx::Error> {
         let query = if forward {
             r#"
             SELECT
                 frames.id,
-                video_chunks.file_path,
+                COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
                 frames.offset_index,
-                frames.timestamp
+                frames.timestamp,
+                CASE WHEN frames.snapshot_path IS NOT NULL THEN 1 ELSE 0 END as is_snapshot
             FROM frames
-            JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
+            LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
             WHERE frames.id > ?1
             ORDER BY frames.id ASC
             LIMIT ?2
@@ -1639,18 +1912,19 @@ impl DatabaseManager {
             r#"
             SELECT
                 frames.id,
-                video_chunks.file_path,
+                COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
                 frames.offset_index,
-                frames.timestamp
+                frames.timestamp,
+                CASE WHEN frames.snapshot_path IS NOT NULL THEN 1 ELSE 0 END as is_snapshot
             FROM frames
-            JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
+            LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
             WHERE frames.id < ?1
             ORDER BY frames.id DESC
             LIMIT ?2
             "#
         };
 
-        sqlx::query_as::<_, (i64, String, i64, DateTime<Utc>)>(query)
+        sqlx::query_as::<_, (i64, String, i64, DateTime<Utc>, bool)>(query)
             .bind(frame_id)
             .bind(limit)
             .fetch_all(&self.pool)
@@ -1676,6 +1950,22 @@ impl DatabaseManager {
         .await?;
 
         Ok(result.flatten())
+    }
+
+    /// Get accessibility data for a frame (accessibility_text, accessibility_tree_json).
+    /// Used by the /frames/:frame_id/context endpoint for copy-all and URL extraction.
+    pub async fn get_frame_accessibility_data(
+        &self,
+        frame_id: i64,
+    ) -> Result<(Option<String>, Option<String>), sqlx::Error> {
+        let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT accessibility_text, accessibility_tree_json FROM frames WHERE id = ?1",
+        )
+        .bind(frame_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.unwrap_or((None, None)))
     }
 
     /// Get all OCR text positions with bounding boxes for a specific frame.
@@ -2258,15 +2548,15 @@ impl DatabaseManager {
             f.id,
             f.timestamp,
             f.offset_index,
-            SUBSTR(ot.text, 1, 200) as text,
+            COALESCE(SUBSTR(ot.text, 1, 200), SUBSTR(f.accessibility_text, 1, 200)) as text,
             COALESCE(f.app_name, ot.app_name) as app_name,
             COALESCE(f.window_name, ot.window_name) as window_name,
-            vc.device_name as screen_device,
-            vc.file_path as video_path,
-            vc.fps as chunk_fps,
+            COALESCE(vc.device_name, f.device_name) as screen_device,
+            COALESCE(vc.file_path, f.snapshot_path) as video_path,
+            COALESCE(vc.fps, 0.033) as chunk_fps,
             f.browser_url
         FROM frames f
-        JOIN video_chunks vc ON f.video_chunk_id = vc.id
+        LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
         LEFT JOIN ocr_text ot ON f.id = ot.frame_id
         WHERE f.timestamp >= ?1 AND f.timestamp <= ?2
         ORDER BY f.timestamp DESC, f.offset_index DESC
@@ -2328,13 +2618,27 @@ impl DatabaseManager {
                 audio_entries: Vec::new(),
             });
 
-            if let Ok(text) = row.try_get::<String, _>("text") {
+            let text: String = row
+                .try_get::<String, _>("text")
+                .unwrap_or_default();
+            let video_path: String = row
+                .try_get::<String, _>("video_path")
+                .unwrap_or_default();
+            // Create an entry if we have text OR a file path (event-driven snapshots
+            // may have no OCR text but still need to appear on the timeline).
+            if !text.is_empty() || !video_path.is_empty() {
                 frame_data.ocr_entries.push(OCREntry {
                     text,
-                    app_name: row.get("app_name"),
-                    window_name: row.get("window_name"),
-                    device_name: row.get("screen_device"),
-                    video_file_path: row.get("video_path"),
+                    app_name: row
+                        .try_get::<String, _>("app_name")
+                        .unwrap_or_default(),
+                    window_name: row
+                        .try_get::<String, _>("window_name")
+                        .unwrap_or_default(),
+                    device_name: row
+                        .try_get::<String, _>("screen_device")
+                        .unwrap_or_default(),
+                    video_file_path: video_path,
                     browser_url: row.try_get("browser_url").ok(),
                 });
             }
@@ -2918,6 +3222,151 @@ impl DatabaseManager {
         Ok(())
     }
 
+    pub async fn delete_time_range(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<DeleteTimeRangeResult, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let start_str = start.to_rfc3339();
+        let end_str = end.to_rfc3339();
+
+        // 1. Collect video file paths for chunks that become fully orphaned
+        // ?1 and ?2 are numbered params — reused automatically, only need 2 binds
+        let video_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM video_chunks
+               WHERE id IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // 2. Collect audio file paths for chunks that become fully orphaned
+        let audio_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM audio_chunks
+               WHERE id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // 3. Delete chunked_text_entries (no CASCADE) — by frame_id
+        sqlx::query(
+            "DELETE FROM chunked_text_entries WHERE frame_id IN (SELECT id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        // Also delete chunked_text_entries by audio_chunk_id for orphaned audio chunks
+        sqlx::query(
+            r#"DELETE FROM chunked_text_entries WHERE audio_chunk_id IN (
+                SELECT id FROM audio_chunks
+                WHERE id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
+                AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)
+            )"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        // 4. Delete ocr_text — triggers ocr_text_delete -> cleans ocr_text_fts
+        let ocr_result = sqlx::query(
+            "DELETE FROM ocr_text WHERE frame_id IN (SELECT id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let ocr_deleted = ocr_result.rows_affected();
+
+        // 5. Delete frames — triggers frames_fts delete; vision_tags CASCADE'd automatically
+        let frames_result = sqlx::query(
+            "DELETE FROM frames WHERE timestamp BETWEEN ?1 AND ?2",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let frames_deleted = frames_result.rows_affected();
+
+        // 6. Delete orphaned video_chunks (no frames reference them anymore)
+        let video_chunks_result = sqlx::query(
+            "DELETE FROM video_chunks WHERE id NOT IN (SELECT DISTINCT video_chunk_id FROM frames)",
+        )
+        .execute(&mut **tx.conn())
+        .await?;
+        let video_chunks_deleted = video_chunks_result.rows_affected();
+
+        // 7. Delete audio_transcriptions — triggers audio_transcriptions_fts delete
+        let audio_transcriptions_result = sqlx::query(
+            "DELETE FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let audio_transcriptions_deleted = audio_transcriptions_result.rows_affected();
+
+        // 8. Delete orphaned audio_chunks — audio_tags CASCADE'd automatically
+        let audio_chunks_result = sqlx::query(
+            "DELETE FROM audio_chunks WHERE id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions)",
+        )
+        .execute(&mut **tx.conn())
+        .await?;
+        let audio_chunks_deleted = audio_chunks_result.rows_affected();
+
+        // 9. Delete accessibility — triggers accessibility_fts delete
+        let accessibility_result = sqlx::query(
+            "DELETE FROM accessibility WHERE timestamp BETWEEN ?1 AND ?2",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let accessibility_deleted = accessibility_result.rows_affected();
+
+        // 10. Delete ui_events — triggers ui_events_fts delete
+        let ui_events_result = sqlx::query(
+            "DELETE FROM ui_events WHERE timestamp BETWEEN ?1 AND ?2",
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+        let ui_events_deleted = ui_events_result.rows_affected();
+
+        // 11. Commit — if this fails, no files are touched (auto-rollback)
+        tx.commit().await.map_err(|e| {
+            error!("failed to commit delete_time_range transaction: {}", e);
+            e
+        })?;
+
+        debug!(
+            "delete_time_range committed: frames={}, ocr={}, audio_transcriptions={}, audio_chunks={}, video_chunks={}, accessibility={}, ui_events={}",
+            frames_deleted, ocr_deleted, audio_transcriptions_deleted, audio_chunks_deleted, video_chunks_deleted, accessibility_deleted, ui_events_deleted
+        );
+
+        Ok(DeleteTimeRangeResult {
+            frames_deleted,
+            ocr_deleted,
+            audio_transcriptions_deleted,
+            audio_chunks_deleted,
+            video_chunks_deleted,
+            accessibility_deleted,
+            ui_events_deleted,
+            video_files,
+            audio_files,
+        })
+    }
+
     pub async fn get_similar_speakers(
         &self,
         speaker_id: i64,
@@ -3206,7 +3655,7 @@ impl DatabaseManager {
                 query.to_string()
             };
             conditions.push(
-                "f.id IN (SELECT frame_id FROM ocr_text_fts WHERE text MATCH ? ORDER BY rank)",
+                "f.id IN (SELECT frame_id FROM ocr_text_fts WHERE text MATCH ? ORDER BY rank LIMIT 5000)",
             );
             fts_match
         } else {

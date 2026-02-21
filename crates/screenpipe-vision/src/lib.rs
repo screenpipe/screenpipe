@@ -36,3 +36,4 @@ pub use custom_ocr::perform_ocr_custom;
 pub use microsoft::perform_ocr_windows;
 pub use tesseract::perform_ocr_tesseract;
 pub mod browser_utils;
+pub mod snapshot_writer;

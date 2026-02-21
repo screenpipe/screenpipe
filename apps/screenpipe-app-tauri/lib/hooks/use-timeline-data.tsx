@@ -34,6 +34,7 @@ export function useTimelineData(
 		};
 
 		initialize();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []); // Only connect once when component mounts
 
 	// NOTE: Auto-select of first frame is handled in timeline.tsx to avoid

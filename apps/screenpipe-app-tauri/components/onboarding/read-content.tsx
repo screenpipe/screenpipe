@@ -100,6 +100,7 @@ export default function ReadContent({ handleNextSlide }: ReadContentProps) {
     return () => {
       unlisten?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleOpenBrowser = useCallback(async () => {

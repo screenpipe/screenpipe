@@ -142,6 +142,7 @@ const OnboardingStatus: React.FC<OnboardingStatusProps> = ({
       const delay = Math.max(0, minDisplay - elapsed);
       setTimeout(() => handleNextSlide(), delay);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupState]);
 
   const sendLogs = async () => {
@@ -359,6 +360,7 @@ const OnboardingStatus: React.FC<OnboardingStatusProps> = ({
       if (stuckTimeoutRef.current) clearTimeout(stuckTimeoutRef.current);
       if (takingLongerTimeoutRef.current) clearTimeout(takingLongerTimeoutRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupState]);
 
   const openLogsFolder = async () => {
@@ -433,6 +435,7 @@ const OnboardingStatus: React.FC<OnboardingStatusProps> = ({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="w-12 h-12 mb-2" src="/128x128.png" alt="screenpipe" />
         <h1 className="font-mono text-base font-bold text-foreground">screenpipe</h1>
       </motion.div>

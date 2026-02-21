@@ -63,6 +63,7 @@ const FrameImage = ({ frameId, alt }: { frameId: number; alt: string }) => {
 					<div className="w-8 h-8 rounded bg-muted/80" />
 				</div>
 			) : (
+				// eslint-disable-next-line @next/next/no-img-element
 				<img
 					src={src}
 					alt={alt}
@@ -129,7 +130,8 @@ export const ImageGrid = ({
 					});
 				}
 			}, 400),
-		[searchResult.length, searchKeywords, query, start_time, end_time, apps],
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+	[searchResult.length, searchKeywords, query, start_time, end_time, apps],
 	);
 
 	useEffect(() => {
@@ -370,6 +372,7 @@ export const MainImage = () => {
 				</div>
 			) : (
 				<div className="relative">
+					{/* eslint-disable-next-line @next/next/no-img-element */}
 					<img
 						ref={imageRef}
 						src={src}

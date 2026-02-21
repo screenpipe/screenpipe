@@ -90,7 +90,11 @@ CRITICAL SEARCH RULES (database has 600k+ entries - ALWAYS use time filters):
 1. ALWAYS include start_time in EVERY search - NEVER search without a time range
 2. Default time range: last 1-2 hours. Expand ONLY if no results found
 3. ALWAYS use app_name filter when user mentions ANY app
-4. Keep limit=5-10 initially
+4. Keep limit=5-10 per search. NEVER use limit > 50
+5. Maximum 10 search/API calls per user request. Stop and summarize what you have
+6. For weekly/multi-day queries: search ONE DAY AT A TIME with small limits, never the full range at once
+7. Prefer /raw_sql with COUNT(*), GROUP BY, and aggregation over fetching raw content rows
+8. All /raw_sql SELECT queries MUST include a LIMIT clause (max 10000). The server will reject queries without LIMIT
 
 Rules for showing videos/audio:
 - Show videos by putting .mp4 file paths in inline code blocks: \`/path/to/video.mp4\`
@@ -193,6 +197,7 @@ function GridDissolveLoader({ label = "analyzing..." }: { label?: string }) {
       });
     }, 120);
     return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -484,7 +489,7 @@ function CollapsibleUserMessage({ label, fullContent }: { label: string; fullCon
   );
 }
 
-export function StandaloneChat() {
+export function StandaloneChat({ className }: { className?: string } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac } = usePlatform();
   const { items: appItems } = useSqlAutocomplete("app");
@@ -502,6 +507,7 @@ export function StandaloneChat() {
         // ignore corrupt data
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSettingsLoaded]);
 
   const saveCustomTemplate = async (template: CustomTemplate) => {
@@ -617,11 +623,31 @@ export function StandaloneChat() {
             .map((b: any) => b.text)
             .join("\n") || "(tool result)";
         }
+        // Persist contentBlocks so tool calls/results survive reload.
+        // Strip isRunning (stale) and cap result length to keep store small.
+        const blocks = m.contentBlocks?.map((b: any) => {
+          if (b.type === "tool") {
+            const { isRunning, ...rest } = b.toolCall;
+            return {
+              type: "tool",
+              toolCall: {
+                ...rest,
+                isRunning: false,
+                result: rest.result?.slice(0, 4000),
+              },
+            };
+          }
+          if (b.type === "thinking") {
+            return { ...b, isThinking: false };
+          }
+          return b;
+        });
         return {
           id: m.id,
           role: m.role,
           content,
           timestamp: m.timestamp,
+          ...(blocks?.length ? { contentBlocks: blocks } : {}),
         };
       }),
       createdAt: existingIndex >= 0 ? history.conversations[existingIndex].createdAt : Date.now(),
@@ -659,6 +685,7 @@ export function StandaloneChat() {
       saveConversation(messages);
     }
     prevIsLoadingRef.current = isLoading;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, messages]);
 
   // Delete a conversation
@@ -709,6 +736,7 @@ export function StandaloneChat() {
       role: m.role,
       content: m.content,
       timestamp: m.timestamp,
+      ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
     })));
     setConversationId(conv.id);
     setShowHistory(false);
@@ -946,6 +974,7 @@ export function StandaloneChat() {
       }
     });
     return () => { unlisten.then((fn) => fn()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.chatHistory?.conversations]);
 
   const appMentionSuggestions = React.useMemo(
@@ -1184,6 +1213,7 @@ export function StandaloneChat() {
       model: activePreset.model || "",
       apiKey: ("apiKey" in activePreset ? (activePreset.apiKey as string) : null) || null,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePreset?.provider, activePreset?.url, activePreset?.model, activePreset?.apiKey]);
 
   // Check Pi status on mount — Pi is auto-started at app boot by Rust
@@ -1270,6 +1300,7 @@ export function StandaloneChat() {
       }
     };
     restartPi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePreset?.provider, activePreset?.model, settings.user?.token]);
 
   // Listen for Pi events (all providers route through Pi)
@@ -1617,6 +1648,13 @@ export function StandaloneChat() {
         const terminatedPid = event.payload;
         console.log("[Pi] Process terminated, pid:", terminatedPid, "restart count:", piRestartCountRef.current);
 
+        // pid=0 means the idle watchdog stopped Pi to save resources — don't auto-restart
+        if (terminatedPid === 0) {
+          console.log("[Pi] Idle watchdog stopped Pi, skipping auto-restart");
+          setPiInfo(null);
+          return;
+        }
+
         // If a message was in flight, mark it as errored so the UI doesn't stay stuck
         if (piMessageIdRef.current) {
           const msgId = piMessageIdRef.current;
@@ -1714,6 +1752,7 @@ export function StandaloneChat() {
       unlistenTerminated?.();
       unlistenLog?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Generate follow-up suggestions using Apple Intelligence
@@ -2061,7 +2100,7 @@ export function StandaloneChat() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className={cn("flex flex-col bg-background", className ?? "h-screen")}>
       {/* Header - draggable */}
       {/* Add left padding on macOS to avoid traffic light overlap */}
       <div
@@ -2431,6 +2470,7 @@ export function StandaloneChat() {
               {prefillFrameId && (
                 <div className="flex-shrink-0">
                   <div className="relative group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={`http://localhost:3030/frames/${prefillFrameId}`}
                       alt="Attached frame"
@@ -2636,6 +2676,7 @@ export function StandaloneChat() {
               {pastedImage && (
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
                   <div className="relative group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={pastedImage}
                       alt="Pasted"

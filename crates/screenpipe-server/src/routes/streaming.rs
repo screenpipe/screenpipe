@@ -816,21 +816,33 @@ async fn handle_video_export(
             .await;
 
         match state.db.get_frame(*frame_id).await {
-            Ok(Some((file_path, offset_index))) => {
-                match extract_high_quality_frame(&file_path, offset_index, &frames_dir).await {
-                    Ok(frame_path) => {
-                        frames.push(FrameContent {
-                            file_path: frame_path,
-                            timestamp: Some(chrono::Utc::now()),
-                            window_name: None,
-                            app_name: None,
-                            ocr_results: None,
-                            tags: None,
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to extract frame {}: {}", frame_id, e);
-                        skipped_frames.push(*frame_id);
+            Ok(Some((file_path, offset_index, is_snapshot))) => {
+                if is_snapshot {
+                    // Snapshot frame — use JPEG directly
+                    frames.push(FrameContent {
+                        file_path,
+                        timestamp: Some(chrono::Utc::now()),
+                        window_name: None,
+                        app_name: None,
+                        ocr_results: None,
+                        tags: None,
+                    });
+                } else {
+                    match extract_high_quality_frame(&file_path, offset_index, &frames_dir).await {
+                        Ok(frame_path) => {
+                            frames.push(FrameContent {
+                                file_path: frame_path,
+                                timestamp: Some(chrono::Utc::now()),
+                                window_name: None,
+                                app_name: None,
+                                ocr_results: None,
+                                tags: None,
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to extract frame {}: {}", frame_id, e);
+                            skipped_frames.push(*frame_id);
+                        }
                     }
                 }
             }

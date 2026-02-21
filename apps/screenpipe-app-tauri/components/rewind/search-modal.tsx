@@ -36,6 +36,7 @@ interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onNavigateToTimestamp: (timestamp: string) => void;
+  embedded?: boolean;
 }
 
 // stopwords to filter out from suggestions
@@ -240,6 +241,7 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
           <span className="text-xs text-muted-foreground">unavailable</span>
         </div>
       ) : (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`http://localhost:3030/frames/${frameId}`}
           alt={alt}
@@ -268,7 +270,7 @@ function formatRelativeTime(timestamp: string): string {
   return format(date, "MMM d") + " " + time;
 }
 
-export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchModalProps) {
+export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded = false }: SearchModalProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -800,6 +802,483 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
   const showEmpty = !isSearching && !isSearchingSpeakers && !isSearchingTags && debouncedQuery && !hasResults && !selectedSpeaker && !isTagSearch && !isPeopleSearch;
   const activeIndex = hoveredIndex ?? selectedIndex;
 
+  const renderResults = () => (
+    <>
+      {/* === Speaker drill-down view === */}
+      {selectedSpeaker ? (
+        <div>
+          {/* Back button + speaker name */}
+          <button
+            onClick={handleBackFromSpeaker}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4 transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <User className="w-3.5 h-3.5" />
+            <span className="font-medium text-foreground">{selectedSpeaker.name}</span>
+          </button>
+
+          {isLoadingTranscriptions && (
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="bg-muted animate-pulse rounded p-3 h-16" />
+              ))}
+            </div>
+          )}
+
+          {!isLoadingTranscriptions && speakerTranscriptions.length === 0 && (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              no transcriptions found for {selectedSpeaker.name}
+            </div>
+          )}
+
+          {speakerTranscriptions.length > 0 && (
+            <div className="grid grid-cols-4 gap-3">
+              {speakerTranscriptions.map((t, index) => {
+                const frameId = transcriptionFrames.get(t.timestamp);
+                return (
+                  <div
+                    key={`${t.timestamp}-${index}`}
+                    data-index={index}
+                    onClick={() => {
+                      if (t.timestamp) {
+                        onNavigateToTimestamp(t.timestamp);
+                        if (!embedded) onClose();
+                      }
+                    }}
+                    className={cn(
+                      "cursor-pointer rounded overflow-hidden border transition-all duration-150",
+                      index === selectedTranscriptionIndex
+                        ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
+                        : "border-border hover:border-foreground/50"
+                    )}
+                  >
+                    {frameId ? (
+                      <FrameThumbnail
+                        frameId={frameId}
+                        alt={t.transcription || t.speaker_name}
+                      />
+                    ) : (
+                      <div className="aspect-video bg-muted flex items-center justify-center">
+                        <Mic className="w-5 h-5 text-muted-foreground/40" />
+                      </div>
+                    )}
+                    <div className="p-2 bg-card">
+                      <p className="text-xs text-foreground line-clamp-2 leading-relaxed mb-1">
+                        {t.transcription || "(empty)"}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1 font-mono">
+                          <Clock className="w-3 h-3" />
+                          {t.timestamp ? formatRelativeTime(t.timestamp) : "unknown"}
+                        </span>
+                        <span className="flex items-center gap-0.5">
+                          {t.is_input ? <Mic className="w-2.5 h-2.5" /> : <Volume2 className="w-2.5 h-2.5" />}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Load more transcriptions indicator */}
+          {speakerTranscriptions.length > 0 && (isLoadingMoreTranscriptions || hasMoreTranscriptions) && (
+            <div className="flex justify-center py-4">
+              {isLoadingMoreTranscriptions ? (
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              ) : (
+                <span className="text-xs text-muted-foreground">scroll for more</span>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Empty state */}
+          {showEmpty && (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              no results for &quot;{debouncedQuery}&quot;
+            </div>
+          )}
+
+          {/* Tag autocomplete pills */}
+          {isTagSearch && allTags.length > 0 && (
+            <div className="mb-4">
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Tag className="w-3 h-3" />
+                tags
+              </p>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {allTags.map((t) => {
+                  const tagQuery = query.slice(1).trim().toLowerCase();
+                  const isActive = tagQuery === t;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setQuery(`#${t}`)}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
+                        isActive
+                          ? "bg-foreground text-background border-foreground"
+                          : "border-border text-foreground/70 hover:bg-muted hover:border-foreground/30"
+                      )}
+                    >
+                      <Hash className="w-2.5 h-2.5" />
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Tag timeline entries — thumbnail grid */}
+          {isTagSearch && tagResults.length > 0 && (
+            <div className="grid grid-cols-4 gap-3">
+              {tagResults.map((frame) => (
+                <div
+                  key={frame.frame_id}
+                  onClick={() => {
+                    onNavigateToTimestamp(frame.timestamp);
+                    if (!embedded) onClose();
+                  }}
+                  className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"
+                >
+                  <FrameThumbnail
+                    frameId={frame.frame_id}
+                    alt={frame.tag_names.join(", ")}
+                  />
+                  <div className="p-2 bg-card">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                      <Clock className="w-3 h-3" />
+                      <span className="font-mono">
+                        {formatRelativeTime(frame.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-foreground truncate">
+                      {frame.app_name || frame.tag_names[0]}
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {frame.tag_names.map((t) => (
+                        <span
+                          key={t}
+                          className="px-1.5 py-0.5 text-[10px] rounded-full bg-foreground/8 text-foreground/60"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Tag search loading */}
+          {isTagSearch && isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="bg-muted animate-pulse rounded p-3 h-12" />
+              ))}
+            </div>
+          )}
+
+          {/* Tag search empty */}
+          {isTagSearch && !isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              {query.slice(1).trim()
+                ? <>no tags matching &quot;{query.slice(1).trim()}&quot;</>
+                : "no tags found"}
+            </div>
+          )}
+
+          {/* @ people search loading */}
+          {isPeopleSearch && isSearchingSpeakers && speakerResults.length === 0 && (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="bg-muted animate-pulse rounded p-3 h-10" />
+              ))}
+            </div>
+          )}
+
+          {/* @ people search empty */}
+          {isPeopleSearch && !isSearchingSpeakers && speakerResults.length === 0 && (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              {query.slice(1).trim()
+                ? <>no people matching &quot;{query.slice(1).trim()}&quot;</>
+                : "no speakers found"}
+            </div>
+          )}
+
+          {/* Loading skeleton */}
+          {!isTagSearch && !isPeopleSearch && isSearching && searchResults.length === 0 && speakerResults.length === 0 && (
+            <div className="grid grid-cols-4 gap-3">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
+                  <div className="aspect-video" />
+                  <div className="p-2 space-y-1">
+                    <div className="h-3 bg-muted-foreground/20 rounded w-16" />
+                    <div className="h-2 bg-muted-foreground/20 rounded w-24" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* People section */}
+          {speakerResults.length > 0 && (
+            <div className="mb-4">
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                <User className="w-3 h-3" />
+                people
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                {speakerResults.map((speaker) => (
+                  <button
+                    key={speaker.id}
+                    onClick={() => {
+                      setSelectedSpeaker(speaker);
+                      setSelectedTranscriptionIndex(0);
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 border border-border rounded-md
+                      hover:bg-muted hover:border-foreground/30 transition-colors cursor-pointer"
+                  >
+                    <User className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="text-sm font-medium">{speaker.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Screen results grid */}
+          {searchResults.length > 0 && (
+            <>
+              {speakerResults.length > 0 && (
+                <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Search className="w-3 h-3" />
+                  screen
+                </p>
+              )}
+
+              {/* App filter chips */}
+              {appCounts.length > 1 && (
+                <div className="flex gap-1.5 mb-3 flex-wrap">
+                  <button
+                    onClick={() => { setAppFilter(null); setSelectedIndex(0); }}
+                    className={cn(
+                      "px-2 py-0.5 text-[11px] rounded-full border transition-colors",
+                      !appFilter
+                        ? "bg-foreground text-background border-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/40"
+                    )}
+                  >
+                    all ({searchResults.length})
+                  </button>
+                  {appCounts.map(([app, count]) => (
+                    <button
+                      key={app}
+                      onClick={() => { setAppFilter(appFilter === app ? null : app); setSelectedIndex(0); }}
+                      className={cn(
+                        "px-2 py-0.5 text-[11px] rounded-full border transition-colors",
+                        appFilter === app
+                          ? "bg-foreground text-background border-foreground"
+                          : "border-border text-muted-foreground hover:border-foreground/40"
+                      )}
+                    >
+                      {app} ({count})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-4 gap-3">
+                {filteredResults.map((result, index) => {
+                  const isActive = index === activeIndex;
+                  const group = filteredGroups[index];
+                  const groupSize = group?.group_size ?? 1;
+
+                  return (
+                    <div
+                      key={result.frame_id}
+                      data-index={index}
+                      onClick={() => handleSelectResult(result)}
+                      onMouseEnter={() => setHoveredIndex(index)}
+                      onMouseLeave={() => setHoveredIndex(null)}
+                      className={cn(
+                        "cursor-pointer rounded overflow-hidden border transition-all duration-150",
+                        isActive
+                          ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
+                          : "border-border hover:border-foreground/50"
+                      )}
+                    >
+                      <div className="relative">
+                        <FrameThumbnail
+                          frameId={result.frame_id}
+                          alt={`${result.app_name} - ${result.window_name}`}
+                        />
+                        {groupSize > 1 && (
+                          <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/70 text-white rounded">
+                            {groupSize} frames
+                          </span>
+                        )}
+                      </div>
+                      <div className="p-2 bg-card">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                          <Clock className="w-3 h-3" />
+                          <span className="font-mono">
+                            {groupSize > 1 && group
+                              ? `${formatRelativeTime(group.start_time)} – ${formatRelativeTime(group.end_time)}`
+                              : formatRelativeTime(result.timestamp)}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-foreground truncate">
+                          {result.app_name}
+                        </p>
+                        {isActive && (
+                          <div className="mt-1 pt-1 border-t border-border space-y-1">
+                            <p className="text-xs text-muted-foreground line-clamp-2">
+                              {result.window_name}
+                            </p>
+                            {result.url && (
+                              <p className="text-xs text-muted-foreground/70 truncate">
+                                {result.url}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Load more indicator */}
+              {(isLoadingMore || (hasMoreOcr && searchResults.length >= OCR_PAGE_SIZE)) && (
+                <div className="flex justify-center py-4">
+                  {isLoadingMore ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">scroll for more</span>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Suggestions when no query */}
+          {!debouncedQuery && !isSearching && (
+            <div className="py-8 px-2">
+              {suggestions.length > 0 ? (
+                <>
+                  <p className="text-xs text-muted-foreground mb-3 text-center">
+                    from your recent activity
+                  </p>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {suggestions.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        onClick={() => setQuery(suggestion)}
+                        className="px-3 py-1.5 text-sm border border-border rounded-md
+                          hover:bg-muted hover:border-foreground/30 transition-colors
+                          text-foreground/80 hover:text-foreground cursor-pointer"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : suggestionsLoading ? (
+                <div className="text-center text-sm text-muted-foreground">
+                  loading suggestions...
+                </div>
+              ) : (
+                <div className="text-center text-sm text-muted-foreground">
+                  type to search your screen history
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col h-full bg-card">
+        {/* Search Input */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+          <Search className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (selectedSpeaker) {
+                setSelectedSpeaker(null);
+                setSpeakerTranscriptions([]);
+                setSelectedTranscriptionIndex(0);
+                setTranscriptionOffset(0);
+                setHasMoreTranscriptions(true);
+              }
+            }}
+            placeholder="Search your memory... (# tags, @ people)"
+            className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            autoFocus
+          />
+          {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="p-1 hover:bg-muted rounded"
+            >
+              <X className="w-3 h-3 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+
+        {/* Results area — fills remaining space */}
+        <div
+          ref={gridRef}
+          className="flex-1 min-h-0 overflow-y-auto p-4 overscroll-contain touch-pan-y"
+          onScroll={handleScroll}
+        >
+          {renderResults()}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-2 border-t border-border bg-muted/30 flex items-center justify-between text-[10px] text-muted-foreground font-mono">
+          <div className="flex items-center gap-4">
+            {selectedSpeaker ? (
+              <>
+                <span>↑↓ navigate</span>
+                <span>⏎ go to timeline</span>
+                <span>esc back</span>
+              </>
+            ) : (
+              <>
+                <span>←→↑↓ navigate</span>
+                <span>⏎ go to timeline</span>
+                <span className="flex items-center gap-1">
+                  <MessageSquare className="w-3 h-3" />
+                  ⌘⏎ ask AI
+                </span>
+              </>
+            )}
+          </div>
+          <span>esc {selectedSpeaker ? "back" : "close"}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       role="dialog"
@@ -875,404 +1354,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp }: SearchMo
           onTouchMove={(e) => e.stopPropagation()}
           onScroll={handleScroll}
         >
-          {/* === Speaker drill-down view === */}
-          {selectedSpeaker ? (
-            <div>
-              {/* Back button + speaker name */}
-              <button
-                onClick={handleBackFromSpeaker}
-                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4 transition-colors"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <User className="w-3.5 h-3.5" />
-                <span className="font-medium text-foreground">{selectedSpeaker.name}</span>
-              </button>
-
-              {isLoadingTranscriptions && (
-                <div className="space-y-3">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-16" />
-                  ))}
-                </div>
-              )}
-
-              {!isLoadingTranscriptions && speakerTranscriptions.length === 0 && (
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  no transcriptions found for {selectedSpeaker.name}
-                </div>
-              )}
-
-              {speakerTranscriptions.length > 0 && (
-                <div className="grid grid-cols-4 gap-3">
-                  {speakerTranscriptions.map((t, index) => {
-                    const frameId = transcriptionFrames.get(t.timestamp);
-                    return (
-                      <div
-                        key={`${t.timestamp}-${index}`}
-                        data-index={index}
-                        onClick={() => {
-                          if (t.timestamp) {
-                            onNavigateToTimestamp(t.timestamp);
-                            onClose();
-                          }
-                        }}
-                        className={cn(
-                          "cursor-pointer rounded overflow-hidden border transition-all duration-150",
-                          index === selectedTranscriptionIndex
-                            ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
-                            : "border-border hover:border-foreground/50"
-                        )}
-                      >
-                        {frameId ? (
-                          <FrameThumbnail
-                            frameId={frameId}
-                            alt={t.transcription || t.speaker_name}
-                          />
-                        ) : (
-                          <div className="aspect-video bg-muted flex items-center justify-center">
-                            <Mic className="w-5 h-5 text-muted-foreground/40" />
-                          </div>
-                        )}
-                        <div className="p-2 bg-card">
-                          <p className="text-xs text-foreground line-clamp-2 leading-relaxed mb-1">
-                            {t.transcription || "(empty)"}
-                          </p>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span className="flex items-center gap-1 font-mono">
-                              <Clock className="w-3 h-3" />
-                              {t.timestamp ? formatRelativeTime(t.timestamp) : "unknown"}
-                            </span>
-                            <span className="flex items-center gap-0.5">
-                              {t.is_input ? <Mic className="w-2.5 h-2.5" /> : <Volume2 className="w-2.5 h-2.5" />}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Load more transcriptions indicator */}
-              {speakerTranscriptions.length > 0 && (isLoadingMoreTranscriptions || hasMoreTranscriptions) && (
-                <div className="flex justify-center py-4">
-                  {isLoadingMoreTranscriptions ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">scroll for more</span>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Empty state */}
-              {showEmpty && (
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  no results for &quot;{debouncedQuery}&quot;
-                </div>
-              )}
-
-              {/* Tag autocomplete pills */}
-              {isTagSearch && allTags.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                    <Tag className="w-3 h-3" />
-                    tags
-                  </p>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {allTags.map((t) => {
-                      const tagQuery = query.slice(1).trim().toLowerCase();
-                      const isActive = tagQuery === t;
-                      return (
-                        <button
-                          key={t}
-                          onClick={() => setQuery(`#${t}`)}
-                          className={cn(
-                            "inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors cursor-pointer",
-                            isActive
-                              ? "bg-foreground text-background border-foreground"
-                              : "border-border text-foreground/70 hover:bg-muted hover:border-foreground/30"
-                          )}
-                        >
-                          <Hash className="w-2.5 h-2.5" />
-                          {t}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Tag timeline entries — thumbnail grid */}
-              {isTagSearch && tagResults.length > 0 && (
-                <div className="grid grid-cols-4 gap-3">
-                  {tagResults.map((frame) => (
-                    <div
-                      key={frame.frame_id}
-                      onClick={() => {
-                        onNavigateToTimestamp(frame.timestamp);
-                        onClose();
-                      }}
-                      className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"
-                    >
-                      <FrameThumbnail
-                        frameId={frame.frame_id}
-                        alt={frame.tag_names.join(", ")}
-                      />
-                      <div className="p-2 bg-card">
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                          <Clock className="w-3 h-3" />
-                          <span className="font-mono">
-                            {formatRelativeTime(frame.timestamp)}
-                          </span>
-                        </div>
-                        <p className="text-xs font-medium text-foreground truncate">
-                          {frame.app_name || frame.tag_names[0]}
-                        </p>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {frame.tag_names.map((t) => (
-                            <span
-                              key={t}
-                              className="px-1.5 py-0.5 text-[10px] rounded-full bg-foreground/8 text-foreground/60"
-                            >
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Tag search loading */}
-              {isTagSearch && isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
-                <div className="space-y-3">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-12" />
-                  ))}
-                </div>
-              )}
-
-              {/* Tag search empty */}
-              {isTagSearch && !isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  {query.slice(1).trim()
-                    ? <>no tags matching &quot;{query.slice(1).trim()}&quot;</>
-                    : "no tags found"}
-                </div>
-              )}
-
-              {/* @ people search loading */}
-              {isPeopleSearch && isSearchingSpeakers && speakerResults.length === 0 && (
-                <div className="space-y-3">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="bg-muted animate-pulse rounded p-3 h-10" />
-                  ))}
-                </div>
-              )}
-
-              {/* @ people search empty */}
-              {isPeopleSearch && !isSearchingSpeakers && speakerResults.length === 0 && (
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  {query.slice(1).trim()
-                    ? <>no people matching &quot;{query.slice(1).trim()}&quot;</>
-                    : "no speakers found"}
-                </div>
-              )}
-
-              {/* Loading skeleton */}
-              {!isTagSearch && !isPeopleSearch && isSearching && searchResults.length === 0 && speakerResults.length === 0 && (
-                <div className="grid grid-cols-4 gap-3">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
-                      <div className="aspect-video" />
-                      <div className="p-2 space-y-1">
-                        <div className="h-3 bg-muted-foreground/20 rounded w-16" />
-                        <div className="h-2 bg-muted-foreground/20 rounded w-24" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* People section */}
-              {speakerResults.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                    <User className="w-3 h-3" />
-                    people
-                  </p>
-                  <div className="flex gap-2 flex-wrap">
-                    {speakerResults.map((speaker) => (
-                      <button
-                        key={speaker.id}
-                        onClick={() => {
-                          setSelectedSpeaker(speaker);
-                          setSelectedTranscriptionIndex(0);
-                        }}
-                        className="flex items-center gap-2 px-3 py-2 border border-border rounded-md
-                          hover:bg-muted hover:border-foreground/30 transition-colors cursor-pointer"
-                      >
-                        <User className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-sm font-medium">{speaker.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Screen results grid */}
-              {searchResults.length > 0 && (
-                <>
-                  {speakerResults.length > 0 && (
-                    <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
-                      <Search className="w-3 h-3" />
-                      screen
-                    </p>
-                  )}
-
-                  {/* App filter chips */}
-                  {appCounts.length > 1 && (
-                    <div className="flex gap-1.5 mb-3 flex-wrap">
-                      <button
-                        onClick={() => { setAppFilter(null); setSelectedIndex(0); }}
-                        className={cn(
-                          "px-2 py-0.5 text-[11px] rounded-full border transition-colors",
-                          !appFilter
-                            ? "bg-foreground text-background border-foreground"
-                            : "border-border text-muted-foreground hover:border-foreground/40"
-                        )}
-                      >
-                        all ({searchResults.length})
-                      </button>
-                      {appCounts.map(([app, count]) => (
-                        <button
-                          key={app}
-                          onClick={() => { setAppFilter(appFilter === app ? null : app); setSelectedIndex(0); }}
-                          className={cn(
-                            "px-2 py-0.5 text-[11px] rounded-full border transition-colors",
-                            appFilter === app
-                              ? "bg-foreground text-background border-foreground"
-                              : "border-border text-muted-foreground hover:border-foreground/40"
-                          )}
-                        >
-                          {app} ({count})
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-4 gap-3">
-                    {filteredResults.map((result, index) => {
-                      const isActive = index === activeIndex;
-                      const group = filteredGroups[index];
-                      const groupSize = group?.group_size ?? 1;
-
-                      return (
-                        <div
-                          key={result.frame_id}
-                          data-index={index}
-                          onClick={() => handleSelectResult(result)}
-                          onMouseEnter={() => setHoveredIndex(index)}
-                          onMouseLeave={() => setHoveredIndex(null)}
-                          className={cn(
-                            "cursor-pointer rounded overflow-hidden border transition-all duration-150",
-                            isActive
-                              ? "ring-2 ring-foreground border-foreground scale-[1.02] shadow-lg z-10"
-                              : "border-border hover:border-foreground/50"
-                          )}
-                        >
-                          <div className="relative">
-                            <FrameThumbnail
-                              frameId={result.frame_id}
-                              alt={`${result.app_name} - ${result.window_name}`}
-                            />
-                            {groupSize > 1 && (
-                              <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/70 text-white rounded">
-                                {groupSize} frames
-                              </span>
-                            )}
-                          </div>
-                          <div className="p-2 bg-card">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                              <Clock className="w-3 h-3" />
-                              <span className="font-mono">
-                                {groupSize > 1 && group
-                                  ? `${formatRelativeTime(group.start_time)} – ${formatRelativeTime(group.end_time)}`
-                                  : formatRelativeTime(result.timestamp)}
-                              </span>
-                            </div>
-                            <p className="text-xs font-medium text-foreground truncate">
-                              {result.app_name}
-                            </p>
-                            {isActive && (
-                              <div className="mt-1 pt-1 border-t border-border space-y-1">
-                                <p className="text-xs text-muted-foreground line-clamp-2">
-                                  {result.window_name}
-                                </p>
-                                {result.url && (
-                                  <p className="text-xs text-muted-foreground/70 truncate">
-                                    {result.url}
-                                  </p>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Load more indicator */}
-                  {(isLoadingMore || (hasMoreOcr && searchResults.length >= OCR_PAGE_SIZE)) && (
-                    <div className="flex justify-center py-4">
-                      {isLoadingMore ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                      ) : (
-                        <span className="text-xs text-muted-foreground">scroll for more</span>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Suggestions when no query */}
-              {!debouncedQuery && !isSearching && (
-                <div className="py-8 px-2">
-                  {suggestions.length > 0 ? (
-                    <>
-                      <p className="text-xs text-muted-foreground mb-3 text-center">
-                        from your recent activity
-                      </p>
-                      <div className="flex flex-wrap gap-2 justify-center">
-                        {suggestions.map((suggestion) => (
-                          <button
-                            key={suggestion}
-                            onClick={() => setQuery(suggestion)}
-                            className="px-3 py-1.5 text-sm border border-border rounded-md
-                              hover:bg-muted hover:border-foreground/30 transition-colors
-                              text-foreground/80 hover:text-foreground cursor-pointer"
-                          >
-                            {suggestion}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  ) : suggestionsLoading ? (
-                    <div className="text-center text-sm text-muted-foreground">
-                      loading suggestions...
-                    </div>
-                  ) : (
-                    <div className="text-center text-sm text-muted-foreground">
-                      type to search your screen history
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
+          {renderResults()}
         </div>
 
         {/* Footer with keyboard hints */}

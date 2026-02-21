@@ -233,6 +233,7 @@ pub async fn record_video(
     // This reduces write semaphore acquisitions from ~10/min to ~2/min.
     const BATCH_MAX_FRAMES: usize = 5;
     const BATCH_MAX_AGE: Duration = Duration::from_secs(3);
+    #[allow(clippy::type_complexity)]
     struct PendingFrame {
         captured_at: chrono::DateTime<chrono::Utc>,
         offset_index: i64,

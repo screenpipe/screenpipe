@@ -73,6 +73,7 @@ export function AccountSection() {
     return () => {
       if (deepLinkUnsubscribe) deepLinkUnsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.token, updateSettings]);
 
   const handleCheckout = async () => {

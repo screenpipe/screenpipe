@@ -110,7 +110,7 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 					<>🦙</>
 				)}
 			</div>
-			<div className="flex-1 px-1 ml-4 space-y-2 overflow-hidden w-[96em]">
+			<div className="flex-1 px-1 ml-4 space-y-2 overflow-hidden min-w-0">
 				{isThinking && thinkingContent.length > 0 && (
 					<div
 						className={cn(
@@ -156,7 +156,7 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 					</div>
 				)}
 				<MemoizedReactMarkdown
-					className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 w-full"
+					className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 w-full max-w-full overflow-hidden [word-break:break-word]"
 					remarkPlugins={[remarkGfm, remarkMath]}
 					components={{
 						p({ children }) {
@@ -248,7 +248,7 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 								}
 								return (
 									<code
-										className="px-1 py-0.5 rounded-sm font-mono text-sm"
+										className="px-1 py-0.5 rounded-sm font-mono text-sm break-all"
 										{...props}
 									>
 										{content}

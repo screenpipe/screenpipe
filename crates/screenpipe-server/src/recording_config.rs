@@ -32,6 +32,7 @@ pub struct RecordingConfig {
     pub use_pii_removal: bool,
     pub enable_input_capture: bool,
     pub enable_accessibility: bool,
+    pub event_driven: bool,
 
     // Engines (typed, not strings)
     pub audio_transcription_engine: AudioTranscriptionEngine,
@@ -131,6 +132,7 @@ impl RecordingConfig {
             video_quality: self.video_quality.clone(),
             vision_metrics,
             disable_ocr: self.disable_ocr,
+            event_driven: self.event_driven,
         }
     }
 }

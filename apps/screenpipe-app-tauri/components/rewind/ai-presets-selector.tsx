@@ -781,6 +781,7 @@ export const AIPresetsSelector = ({
     AIPreset | undefined
   >();
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = (settings?.aiPresets || []) as AIPreset[];
 
   const selectedPreset = useMemo(() => {
@@ -801,6 +802,7 @@ export const AIPresetsSelector = ({
     if (onPresetChange) {
       onPresetChange(aiPresets.find((p) => p.id === selectedPreset) as AIPreset);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPreset, onPresetChange]);
 
   useEffect(() => {

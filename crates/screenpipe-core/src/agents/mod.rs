@@ -34,6 +34,7 @@ pub struct ExecutionHandle {
 /// `agent` ≠ `model`.  The *agent* is the CLI tool that executes the prompt
 /// (pi, claude-code, opencode …).  The *model* is the LLM the agent talks to
 /// (haiku, opus, llama4 …).  Both are configurable per-pipe.
+#[allow(clippy::too_many_arguments)]
 #[async_trait::async_trait]
 pub trait AgentExecutor: Send + Sync {
     /// Execute `prompt` using `model` with the given `working_dir` as cwd.

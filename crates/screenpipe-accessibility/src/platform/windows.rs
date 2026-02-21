@@ -710,31 +710,33 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                     }
 
                     WM_MOUSEWHEEL => {
-                        // Record activity
+                        // Record activity for adaptive FPS even when scroll capture is off
                         if let Some(ref feed) = s.activity_feed {
                             feed.record(ActivityKind::Scroll);
                         }
 
-                        // High word of mouseData contains wheel delta
-                        let delta = (mouse_struct.mouseData >> 16) as i16;
+                        if s.config.capture_scroll {
+                            // High word of mouseData contains wheel delta
+                            let delta = (mouse_struct.mouseData >> 16) as i16;
 
-                        let event = UiEvent {
-                            id: None,
-                            timestamp,
-                            relative_ms: t,
-                            data: EventData::Scroll {
-                                x,
-                                y,
-                                delta_x: 0,
-                                delta_y: delta,
-                            },
-                            app_name,
-                            window_title,
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = s.tx.try_send(event);
+                            let event = UiEvent {
+                                id: None,
+                                timestamp,
+                                relative_ms: t,
+                                data: EventData::Scroll {
+                                    x,
+                                    y,
+                                    delta_x: 0,
+                                    delta_y: delta,
+                                },
+                                app_name,
+                                window_title,
+                                browser_url: None,
+                                element: None,
+                                frame_id: None,
+                            };
+                            let _ = s.tx.try_send(event);
+                        }
                     }
 
                     _ => {}

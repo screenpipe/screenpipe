@@ -494,11 +494,70 @@ pub(crate) struct RawSqlQuery {
     query: String,
 }
 
+const MAX_SQL_LIMIT: u64 = 10_000;
+
+/// Validate a raw SQL query before execution to prevent unbounded result sets.
+/// Returns Ok(()) if the query is safe to execute, or Err with a helpful message.
+fn validate_raw_sql(query: &str) -> Result<(), String> {
+    let normalized = query
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.starts_with("--"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let upper = normalized.to_uppercase();
+
+    // Only SELECT queries need limit validation
+    let trimmed = upper.trim_start();
+    if !trimmed.starts_with("SELECT") {
+        return Ok(());
+    }
+
+    // Check for LIMIT clause
+    if !upper.contains("LIMIT") {
+        return Err(format!(
+            "Query rejected: SELECT without LIMIT. Add 'LIMIT n' (max {}) to your query. \
+             Example: SELECT * FROM frames WHERE timestamp > '2024-01-01' LIMIT 100",
+            MAX_SQL_LIMIT
+        ));
+    }
+
+    // Extract the LIMIT value and enforce a ceiling
+    // Matches "LIMIT <number>" (ignoring OFFSET after it)
+    if let Some(pos) = upper.rfind("LIMIT") {
+        let after_limit = &normalized[pos + 5..];
+        let digits: String = after_limit
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(limit_val) = digits.parse::<u64>() {
+            if limit_val > MAX_SQL_LIMIT {
+                return Err(format!(
+                    "Query rejected: LIMIT {} is too large. Maximum allowed is {}. \
+                     Use smaller queries with pagination (LIMIT + OFFSET) for large datasets.",
+                    limit_val, MAX_SQL_LIMIT
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[oasgen]
 pub(crate) async fn execute_raw_sql(
     State(state): State<Arc<AppState>>,
     JsonResponse(payload): JsonResponse<RawSqlQuery>,
 ) -> Result<JsonResponse<serde_json::Value>, (StatusCode, JsonResponse<serde_json::Value>)> {
+    // Pre-execution validation: catch unbounded queries before they hit the DB
+    if let Err(msg) = validate_raw_sql(&payload.query) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({"error": msg})),
+        ));
+    }
+
     match state.db.execute_raw_sql(&payload.query).await {
         Ok(result) => Ok(JsonResponse(result)),
         Err(e) => {

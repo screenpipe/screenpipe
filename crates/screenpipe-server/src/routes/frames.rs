@@ -81,7 +81,23 @@ pub async fn get_frame_data(
 
         // If not in cache or cache disabled, get from database
         match state.db.get_frame(frame_id).await {
-            Ok(Some((file_path, offset_index))) => {
+            Ok(Some((file_path, offset_index, is_snapshot))) => {
+                if is_snapshot {
+                    // Snapshot frame — serve JPEG directly (no ffmpeg needed)
+                    if query.redact_pii {
+                        return apply_pii_redaction(&state, frame_id, &file_path).await;
+                    }
+                    // Cache snapshot path too
+                    if let Some(cache) = &state.frame_image_cache {
+                        if let Ok(mut cache) = cache.try_lock() {
+                            cache.put(frame_id, (file_path.clone(), Instant::now()));
+                        }
+                    }
+                    debug!("Snapshot frame {} served in {:?}", frame_id, start_time.elapsed());
+                    return serve_file(&file_path).await;
+                }
+
+                // Legacy video-chunk frame — extract via ffmpeg
                 match try_extract_and_serve_frame(
                     &state,
                     frame_id,
@@ -231,8 +247,32 @@ async fn try_nearest_frame(
             Err(_) => continue,
         };
 
-        for (candidate_id, file_path, offset_index, _timestamp) in candidates {
-            // Quick pre-check: skip if file missing or too small (avoids ffmpeg spawn)
+        for (candidate_id, file_path, offset_index, _timestamp, is_snapshot) in candidates {
+            if is_snapshot {
+                // Snapshot frame — just check file exists
+                if tokio::fs::metadata(&file_path).await.is_ok() {
+                    if redact_pii {
+                        if let Ok(response) =
+                            apply_pii_redaction(state, candidate_id, &file_path).await
+                        {
+                            debug!(
+                                "Frame {} unavailable, serving nearest snapshot {} ({})",
+                                frame_id, candidate_id, dir_name
+                            );
+                            return Some(response);
+                        }
+                    } else if let Ok(response) = serve_file(&file_path).await {
+                        debug!(
+                            "Frame {} unavailable, serving nearest snapshot {} ({})",
+                            frame_id, candidate_id, dir_name
+                        );
+                        return Some(response);
+                    }
+                }
+                continue;
+            }
+
+            // Legacy frame — quick pre-check: skip if file missing or too small (avoids ffmpeg spawn)
             match tokio::fs::metadata(&file_path).await {
                 Ok(meta) if meta.len() >= MIN_VIDEO_SIZE => {}
                 _ => continue,
@@ -322,9 +362,9 @@ pub async fn get_next_valid_frame(
         }
     };
 
-    // Check each frame's video file exists on disk
+    // Check each frame's file exists on disk
     let mut skipped = 0;
-    for (frame_id, file_path, _offset_index, timestamp) in candidates {
+    for (frame_id, file_path, _offset_index, timestamp, _is_snapshot) in candidates {
         if std::path::Path::new(&file_path).exists() {
             return Ok(JsonResponse(NextValidFrameResponse {
                 frame_id,
@@ -382,6 +422,168 @@ pub async fn get_frame_metadata(
             ))
         }
     }
+}
+
+/// A node from the accessibility tree
+#[derive(OaSchema, Serialize, Clone)]
+pub struct AccessibilityNode {
+    pub role: String,
+    pub text: String,
+    pub depth: u32,
+}
+
+/// Response type for frame context endpoint (accessibility-first, OCR fallback)
+#[derive(OaSchema, Serialize)]
+pub struct FrameContextResponse {
+    pub frame_id: i64,
+    /// Full text (accessibility_text or OCR fallback)
+    pub text: Option<String>,
+    /// Parsed accessibility tree nodes
+    pub nodes: Vec<AccessibilityNode>,
+    /// Extracted URLs from link nodes + regex
+    pub urls: Vec<String>,
+    /// "accessibility" or "ocr"
+    pub text_source: String,
+}
+
+/// Get frame context: accessibility text, tree nodes, and extracted URLs.
+/// Falls back to OCR data for legacy frames without accessibility data.
+#[oasgen]
+pub async fn get_frame_context(
+    State(state): State<Arc<AppState>>,
+    Path(frame_id): Path<i64>,
+) -> Result<JsonResponse<FrameContextResponse>, (StatusCode, JsonResponse<Value>)> {
+    // Try to get accessibility data; gracefully handle missing columns (pre-migration DBs)
+    let (a11y_text, a11y_tree_json) = match state
+        .db
+        .get_frame_accessibility_data(frame_id)
+        .await
+    {
+        Ok(data) => data,
+        Err(e) => {
+            debug!("Accessibility data unavailable for frame {} ({}), falling back to OCR", frame_id, e);
+            (None, None)
+        }
+    };
+
+    // If we have accessibility data, use it
+    if a11y_text.is_some() || a11y_tree_json.is_some() {
+        let mut nodes = Vec::new();
+        let mut urls = Vec::new();
+
+        if let Some(ref tree_json) = a11y_tree_json {
+            // Parse tree nodes: [{role, text, depth}, ...]
+            if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(tree_json) {
+                for node_val in &parsed {
+                    let role = node_val
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let text = node_val
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let depth = node_val
+                        .get("depth")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+
+                    if !text.is_empty() {
+                        nodes.push(AccessibilityNode {
+                            role: role.clone(),
+                            text: text.clone(),
+                            depth,
+                        });
+
+                        // Extract URLs from link roles
+                        let role_lower = role.to_lowercase();
+                        if role_lower.contains("link") || role_lower.contains("hyperlink") {
+                            if let Some(url) = extract_url_from_text(&text) {
+                                urls.push(url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also regex-scan all node text for URLs (catches URLs in non-link nodes)
+        let all_text = a11y_text.as_deref().unwrap_or("");
+        for url in extract_urls_regex(all_text) {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+
+        return Ok(JsonResponse(FrameContextResponse {
+            frame_id,
+            text: a11y_text,
+            nodes,
+            urls,
+            text_source: "accessibility".to_string(),
+        }));
+    }
+
+    // Fallback: use OCR data for legacy frames
+    let text_positions = state
+        .db
+        .get_frame_text_positions(frame_id)
+        .await
+        .unwrap_or_default();
+
+    let text = if text_positions.is_empty() {
+        None
+    } else {
+        Some(
+            text_positions
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    };
+
+    let mut urls = Vec::new();
+    for pos in &text_positions {
+        for url in extract_urls_regex(&pos.text) {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+    }
+
+    Ok(JsonResponse(FrameContextResponse {
+        frame_id,
+        text,
+        nodes: Vec::new(),
+        urls,
+        text_source: "ocr".to_string(),
+    }))
+}
+
+/// Extract a URL from text if it looks like one
+fn extract_url_from_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        // Take just the URL part (stop at whitespace)
+        Some(trimmed.split_whitespace().next().unwrap_or(trimmed).to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract all URLs from text using a simple regex-like scan
+fn extract_urls_regex(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for word in text.split_whitespace() {
+        let trimmed = word.trim_matches(|c: char| c == ',' || c == ')' || c == ']' || c == '>' || c == '"' || c == '\'');
+        if (trimmed.starts_with("http://") || trimmed.starts_with("https://")) && trimmed.len() > 10 {
+            urls.push(trimmed.to_string());
+        }
+    }
+    urls
 }
 
 /// Response type for frame OCR data endpoint

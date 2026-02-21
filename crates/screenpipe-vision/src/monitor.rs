@@ -4,9 +4,24 @@
 
 use anyhow::{Error, Result};
 use image::DynamicImage;
+use once_cell::sync::Lazy;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tracing;
+
+/// Cached monitor descriptions updated by the monitor watcher every 5s.
+/// Health check reads this instead of making a blocking system call.
+static CACHED_MONITOR_DESCRIPTIONS: Lazy<RwLock<Vec<String>>> =
+    Lazy::new(|| RwLock::new(Vec::new()));
+
+/// Get cached monitor descriptions without blocking system calls.
+/// Returns the list last updated by `list_monitors_detailed()`.
+pub fn get_cached_monitor_descriptions() -> Vec<String> {
+    CACHED_MONITOR_DESCRIPTIONS
+        .read()
+        .map(|v| v.clone())
+        .unwrap_or_default()
+}
 
 /// Error type for monitor listing that distinguishes permission issues from other failures
 #[derive(Debug)]
@@ -419,56 +434,87 @@ impl SafeMonitor {
     }
 }
 
+/// Update the cached monitor descriptions from a successful monitor list.
+fn update_monitor_cache(monitors: &[SafeMonitor]) {
+    let descriptions: Vec<String> = monitors
+        .iter()
+        .map(|m| format!("Display {} ({}x{})", m.id(), m.width(), m.height()))
+        .collect();
+    if let Ok(mut cache) = CACHED_MONITOR_DESCRIPTIONS.write() {
+        *cache = descriptions;
+    }
+}
+
 /// List monitors with detailed error information (permission denied vs no monitors)
 #[cfg(target_os = "macos")]
 pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
-    tokio::task::spawn_blocking(|| {
-        if use_sck_rs() {
-            tracing::debug!("Using sck-rs for screen capture (macOS 12.3+)");
-            match SckMonitor::all() {
-                Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
-                Ok(monitors) => Ok(monitors.into_iter().map(SafeMonitor::from_sck).collect()),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains("permission") || err_str.contains("Screen recording") {
-                        Err(MonitorListError::PermissionDenied)
-                    } else if err_str.contains("No monitors") {
-                        Err(MonitorListError::NoMonitorsFound)
-                    } else {
-                        Err(MonitorListError::Other(err_str))
+    let result: std::result::Result<Vec<SafeMonitor>, MonitorListError> =
+        tokio::task::spawn_blocking(|| {
+            if use_sck_rs() {
+                tracing::debug!("Using sck-rs for screen capture (macOS 12.3+)");
+                match SckMonitor::all() {
+                    Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
+                    Ok(monitors) => {
+                        Ok(monitors.into_iter().map(SafeMonitor::from_sck).collect())
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("permission")
+                            || err_str.contains("Screen recording")
+                        {
+                            Err(MonitorListError::PermissionDenied)
+                        } else if err_str.contains("No monitors") {
+                            Err(MonitorListError::NoMonitorsFound)
+                        } else {
+                            Err(MonitorListError::Other(err_str))
+                        }
+                    }
+                }
+            } else {
+                tracing::info!("Using xcap fallback for screen capture (macOS < 12.3)");
+                match XcapMonitor::all() {
+                    Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
+                    Ok(monitors) => {
+                        Ok(monitors.into_iter().map(SafeMonitor::from_xcap).collect())
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("permission")
+                            || err_str.contains("Screen recording")
+                        {
+                            Err(MonitorListError::PermissionDenied)
+                        } else {
+                            Err(MonitorListError::Other(err_str))
+                        }
                     }
                 }
             }
-        } else {
-            tracing::info!("Using xcap fallback for screen capture (macOS < 12.3)");
-            match XcapMonitor::all() {
-                Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
-                Ok(monitors) => Ok(monitors.into_iter().map(SafeMonitor::from_xcap).collect()),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains("permission") || err_str.contains("Screen recording") {
-                        Err(MonitorListError::PermissionDenied)
-                    } else {
-                        Err(MonitorListError::Other(err_str))
-                    }
-                }
-            }
-        }
-    })
-    .await
-    .unwrap_or(Err(MonitorListError::Other("Task panicked".to_string())))
+        })
+        .await
+        .unwrap_or(Err(MonitorListError::Other("Task panicked".to_string())));
+
+    if let Ok(monitors) = &result {
+        update_monitor_cache(monitors);
+    }
+    result
 }
 
 /// List monitors with detailed error information (permission denied vs no monitors)
 #[cfg(not(target_os = "macos"))]
 pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
-    tokio::task::spawn_blocking(|| match XcapMonitor::all() {
-        Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
-        Ok(monitors) => Ok(monitors.into_iter().map(SafeMonitor::new).collect()),
-        Err(e) => Err(MonitorListError::Other(e.to_string())),
-    })
-    .await
-    .unwrap_or(Err(MonitorListError::Other("Task panicked".to_string())))
+    let result: std::result::Result<Vec<SafeMonitor>, MonitorListError> =
+        tokio::task::spawn_blocking(|| match XcapMonitor::all() {
+            Ok(monitors) if monitors.is_empty() => Err(MonitorListError::NoMonitorsFound),
+            Ok(monitors) => Ok(monitors.into_iter().map(SafeMonitor::new).collect()),
+            Err(e) => Err(MonitorListError::Other(e.to_string())),
+        })
+        .await
+        .unwrap_or(Err(MonitorListError::Other("Task panicked".to_string())));
+
+    if let Ok(monitors) = &result {
+        update_monitor_cache(monitors);
+    }
+    result
 }
 
 /// List monitors, returning empty vec on any error (backwards-compatible)

@@ -4,7 +4,7 @@
 
 //! macOS accessibility tree walker using cidre AX APIs.
 
-use super::{TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform};
+use super::{AccessibilityTreeNode, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform};
 use anyhow::Result;
 use chrono::Utc;
 use cidre::{ax, cf, ns};
@@ -292,6 +292,7 @@ impl TreeWalkerPlatform for MacosTreeWalker {
             app_name,
             window_name,
             text_content,
+            nodes: state.nodes,
             browser_url,
             timestamp: Utc::now(),
             node_count: state.node_count,
@@ -305,6 +306,7 @@ impl TreeWalkerPlatform for MacosTreeWalker {
 /// Mutable state passed through the recursive walk.
 struct WalkState {
     text_buffer: String,
+    nodes: Vec<AccessibilityTreeNode>,
     node_count: usize,
     max_depth: usize,
     max_nodes: usize,
@@ -317,6 +319,7 @@ impl WalkState {
     fn new(config: &TreeWalkerConfig, start: Instant) -> Self {
         Self {
             text_buffer: String::with_capacity(4096),
+            nodes: Vec::with_capacity(256),
             node_count: 0,
             max_depth: config.max_depth,
             max_nodes: config.max_nodes,
@@ -397,7 +400,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
 
     // Extract text from this element
     if should_extract_text(&role_str) {
-        extract_text(elem, &role_str, state);
+        extract_text(elem, &role_str, depth, state);
     } else if role_str == "AXGroup" || role_str == "AXWebArea" {
         // Groups and web areas: only extract if they have a direct value
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
@@ -424,13 +427,18 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
     }
 }
 
-/// Extract text attributes from an element and append to the buffer.
-fn extract_text(elem: &ax::UiElement, role_str: &str, state: &mut WalkState) {
+/// Extract text attributes from an element, append to the buffer, and collect a structured node.
+fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut WalkState) {
     // For text fields / text areas, prefer value (the actual content)
     if role_str == "AXTextField" || role_str == "AXTextArea" || role_str == "AXComboBox" {
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
+                state.nodes.push(AccessibilityTreeNode {
+                    role: role_str.to_string(),
+                    text: val.trim().to_string(),
+                    depth: depth.min(255) as u8,
+                });
                 return;
             }
         }
@@ -441,6 +449,11 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, state: &mut WalkState) {
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
+                state.nodes.push(AccessibilityTreeNode {
+                    role: role_str.to_string(),
+                    text: val.trim().to_string(),
+                    depth: depth.min(255) as u8,
+                });
                 return;
             }
         }
@@ -450,6 +463,11 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, state: &mut WalkState) {
     if let Some(title) = get_string_attr(elem, ax::attr::title()) {
         if !title.is_empty() {
             append_text(&mut state.text_buffer, &title);
+            state.nodes.push(AccessibilityTreeNode {
+                role: role_str.to_string(),
+                text: title.trim().to_string(),
+                depth: depth.min(255) as u8,
+            });
             return;
         }
     }
@@ -458,6 +476,11 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, state: &mut WalkState) {
     if let Some(desc) = get_string_attr(elem, ax::attr::desc()) {
         if !desc.is_empty() {
             append_text(&mut state.text_buffer, &desc);
+            state.nodes.push(AccessibilityTreeNode {
+                role: role_str.to_string(),
+                text: desc.trim().to_string(),
+                depth: depth.min(255) as u8,
+            });
         }
     }
 }

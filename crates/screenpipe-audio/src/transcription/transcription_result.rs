@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::{DatabaseManager, Speaker};
 use tracing::{debug, error, info};
@@ -108,12 +108,13 @@ pub async fn process_transcription_result(
             }
         }
     }
-    // Convert capture_timestamp (epoch secs) to DateTime<Utc> for DB insertion
-    let capture_ts = if result.timestamp > 0 {
-        Utc.timestamp_opt(result.timestamp as i64, 0).single()
-    } else {
-        None
-    };
+    // Use current time for DB insertion instead of capture_timestamp.
+    // The capture_timestamp is set when audio enters the processing channel,
+    // but smart mode meeting deferral creates a growing backlog — by the time
+    // audio is processed, the capture_timestamp can be 20+ minutes stale.
+    // Using None here makes the DB fall back to Utc::now(), which is close
+    // to when the audio was actually processed and the MP4 file was written.
+    let capture_ts: Option<DateTime<Utc>> = None;
 
     match db
         .insert_audio_chunk_and_transcription(

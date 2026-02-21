@@ -30,7 +30,8 @@ use screenpipe_server::{
     },
     cli_pipe::handle_pipe_command,
     cli_status::handle_status_command,
-    start_continuous_recording, start_meeting_watcher, start_sleep_monitor, start_ui_recording,
+    start_continuous_recording, start_meeting_watcher, start_sleep_monitor,
+    start_speaker_identification, start_ui_recording,
     sync_provider::ScreenpipeSyncProvider,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
     watch_pid, ResourceMonitor, SCServer,
@@ -1113,7 +1114,7 @@ async fn main() -> anyhow::Result<()> {
     let ui_recorder_handle = {
         if ui_recorder_config.enabled {
             info!("starting UI event capture");
-            match start_ui_recording(db.clone(), ui_recorder_config).await {
+            match start_ui_recording(db.clone(), ui_recorder_config, None).await {
                 Ok(handle) => Some(handle),
                 Err(e) => {
                     error!("failed to start UI event recording: {}", e);
@@ -1131,6 +1132,9 @@ async fn main() -> anyhow::Result<()> {
     let _meeting_watcher_handle = meeting_detector
         .as_ref()
         .map(|detector| start_meeting_watcher(detector.clone()));
+
+    // Start calendar-assisted speaker identification
+    let _speaker_id_handle = start_speaker_identification(db.clone(), None);
 
     // Start background FTS indexer (replaces synchronous INSERT triggers)
     let _fts_handle = screenpipe_db::fts_indexer::start_fts_indexer(db.clone());

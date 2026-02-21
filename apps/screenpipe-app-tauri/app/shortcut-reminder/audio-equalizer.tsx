@@ -9,6 +9,8 @@ import { useRef, useEffect } from "react";
 interface AudioEqualizerProps {
   active: boolean;
   speechRatio: number;
+  /** "dark" = light bars on dark bg (default), "light" = dark bars on light bg */
+  variant?: "dark" | "light";
 }
 
 const BAR_COUNT = 8;
@@ -20,16 +22,18 @@ const LERP_FACTOR = 0.12;
 
 const BAR_OFFSETS = [0.6, 1.0, 0.75, 0.9, 0.65, 0.95, 0.8, 0.7];
 
-export function AudioEqualizer({ active, speechRatio }: AudioEqualizerProps) {
+export function AudioEqualizer({ active, speechRatio, variant = "dark" }: AudioEqualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const currentHeights = useRef<number[]>(new Array(BAR_COUNT).fill(1));
   const targetHeights = useRef<number[]>(new Array(BAR_COUNT).fill(1));
   const activeRef = useRef(active);
   const speechRatioRef = useRef(speechRatio);
+  const variantRef = useRef(variant);
 
   activeRef.current = active;
   speechRatioRef.current = speechRatio;
+  variantRef.current = variant;
 
   useEffect(() => {
     const baseH = active ? speechRatio * MAX_BAR_H : 1;
@@ -60,7 +64,8 @@ export function AudioEqualizer({ active, speechRatio }: AudioEqualizerProps) {
       // Spread bars evenly across the full canvas width
       const spacing = canvasW / BAR_COUNT;
 
-      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      const fg = variantRef.current === "light" ? "0, 0, 0" : "255, 255, 255";
+      ctx.fillStyle = `rgba(${fg}, 0.6)`;
 
       for (let i = 0; i < BAR_COUNT; i++) {
         currentHeights.current[i] +=

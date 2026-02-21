@@ -278,7 +278,7 @@ pub struct Cli {
     #[arg(long, hide = true)]
     pub auto_destruct_pid: Option<u32>,
 
-    #[arg(long, value_enum, default_value_t = CliVadSensitivity::High)]
+    #[arg(long, value_enum, default_value_t = CliVadSensitivity::Medium)]
     pub vad_sensitivity: CliVadSensitivity,
 
     /// Audio transcription scheduling mode
@@ -298,6 +298,11 @@ pub struct Cli {
     /// Enable accessibility text capture (AX tree walker)
     #[arg(long, default_value_t = false)]
     pub enable_accessibility: bool,
+
+    /// Use event-driven capture instead of continuous polling. Enabled by default.
+    /// Pass --no-event-driven to fall back to legacy continuous capture.
+    #[arg(long, default_value_t = true)]
+    pub event_driven: bool,
 
     #[arg(long, default_value_t = false)]
     pub enable_sync: bool,
@@ -508,7 +513,7 @@ pub struct RecordArgs {
     pub auto_destruct_pid: Option<u32>,
 
     /// Voice activity detection sensitivity level
-    #[arg(long, value_enum, default_value_t = CliVadSensitivity::High)]
+    #[arg(long, value_enum, default_value_t = CliVadSensitivity::Medium)]
     pub vad_sensitivity: CliVadSensitivity,
 
     /// Audio transcription scheduling mode: realtime (default) or smart (defer to idle)
@@ -530,6 +535,11 @@ pub struct RecordArgs {
     /// Enable accessibility text capture (AX tree walker)
     #[arg(long, default_value_t = false)]
     pub enable_accessibility: bool,
+
+    /// Use event-driven capture instead of continuous polling. Enabled by default.
+    /// Pass --no-event-driven to fall back to legacy continuous capture.
+    #[arg(long, default_value_t = true)]
+    pub event_driven: bool,
 
     /// Enable cloud sync
     #[arg(long, default_value_t = false)]
@@ -584,6 +594,7 @@ impl RecordArgs {
             video_quality: cli.video_quality.clone(),
             enable_input_capture: cli.enable_input_capture,
             enable_accessibility: cli.enable_accessibility,
+            event_driven: cli.event_driven,
             enable_sync: cli.enable_sync,
             sync_token: cli.sync_token.clone(),
             sync_password: cli.sync_password.clone(),
@@ -639,6 +650,7 @@ impl RecordArgs {
             use_pii_removal: self.use_pii_removal,
             enable_input_capture: self.enable_input_capture,
             enable_accessibility: self.enable_accessibility,
+            event_driven: self.event_driven,
             audio_transcription_engine: self.audio_transcription_engine.into(),
             ocr_engine: self.ocr_engine.into(),
             vad_sensitivity: self.vad_sensitivity.into(),

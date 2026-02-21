@@ -369,7 +369,7 @@ pub async fn start_embedded_server(
         let ui_config = config.to_ui_recorder_config();
         let db_clone = db.clone();
         tokio::spawn(async move {
-            match start_ui_recording(db_clone, ui_config).await {
+            match start_ui_recording(db_clone, ui_config, None).await {
                 Ok(handle) => {
                     info!("UI event recording started successfully");
                     // Keep the handle alive - don't drop it or UI recording stops

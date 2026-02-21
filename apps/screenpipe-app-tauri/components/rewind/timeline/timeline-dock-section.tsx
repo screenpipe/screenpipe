@@ -313,6 +313,7 @@ export function TimelineIconsSection({
                     padding: "2px",
                   }}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={
                       window.navigator.platform === "Linux"
@@ -372,6 +373,7 @@ export function TimelineIconsSection({
             <DialogTitle className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {selectedApp?.iconSrc && (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={
                       window.navigator.platform === "Linux"

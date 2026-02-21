@@ -50,6 +50,7 @@ interface AudioTranscriptProps {
 	meetings?: Meeting[];
 	onClose?: () => void;
 	onJumpToTime?: (timestamp: Date) => void;
+	isPlaying?: boolean;
 }
 
 function formatDurationHuman(durationInSeconds: number): string {
@@ -86,6 +87,7 @@ export function AudioTranscript({
 	meetings = [],
 	onClose,
 	onJumpToTime,
+	isPlaying = false,
 }: AudioTranscriptProps) {
 	const [playing, setPlaying] = useState<string | null>(null);
 	const [viewMode, setViewMode] = useState<ViewMode>("thread"); // Default to thread view
@@ -300,6 +302,17 @@ export function AudioTranscript({
 
 		return { items, participants, timeRange, totalDuration };
 	}, [frames, currentIndex, groupingWindowMs, getSpeakerInfo]);
+
+	// Auto-scroll to latest bubble during playback
+	useEffect(() => {
+		if (!isPlaying) return;
+		const scrollEl = meetingScrollRef.current;
+		if (!scrollEl) return;
+		// Scroll to bottom to show the latest transcript entry
+		requestAnimationFrame(() => {
+			scrollEl.scrollTop = scrollEl.scrollHeight;
+		});
+	}, [isPlaying, currentIndex, conversationData.items.length]);
 
 	// Full meeting conversation data (when a meeting is active)
 	const meetingConversationData = useMemo(() => {

@@ -97,17 +97,27 @@ pub async fn start_device_monitor(
                             }
                         }
 
-                        // Start the new default input device
+                        // Start the new default input device (reset cooldown on change)
                         if let Ok(new_device) = parse_audio_device(&new_default_input) {
+                            failed_devices.remove(&new_default_input);
                             match audio_manager.start_device(&new_device).await {
-                                Ok(()) => info!(
-                                    "switched to new system default input: {}",
-                                    new_default_input
-                                ),
-                                Err(e) => error!(
-                                    "failed to start new default input {}: {}",
-                                    new_default_input, e
-                                ),
+                                Ok(()) => {
+                                    info!(
+                                        "switched to new system default input: {}",
+                                        new_default_input
+                                    );
+                                }
+                                Err(e) => {
+                                    let count = failed_devices
+                                        .entry(new_default_input.clone())
+                                        .or_insert((0, Instant::now()));
+                                    count.0 += 1;
+                                    count.1 = Instant::now();
+                                    error!(
+                                        "failed to start new default input {}: {} (will back off)",
+                                        new_default_input, e
+                                    );
+                                }
                             }
                         }
                     }
@@ -150,6 +160,62 @@ pub async fn start_device_monitor(
                         }
                     }
 
+                    // Ensure an input device is actually running.
+                    // Handles the case where the input device was lost after a
+                    // server restart or device reconnection (e.g. AirPods).
+                    {
+                        let current_enabled = audio_manager.enabled_devices().await;
+                        let has_input = current_enabled.iter().any(|name| {
+                            parse_audio_device(name)
+                                .map(|d| d.device_type == DeviceType::Input)
+                                .unwrap_or(false)
+                        });
+
+                        if !has_input {
+                            if let Ok(default_input) = default_input_device() {
+                                let device_name = default_input.to_string();
+
+                                let should_skip = if let Some((fails, last_fail)) =
+                                    failed_devices.get(&device_name)
+                                {
+                                    let backoff = Duration::from_secs(
+                                        (2u64.pow((*fails).min(8))).min(MAX_FAIL_BACKOFF_SECS),
+                                    );
+                                    last_fail.elapsed() < backoff
+                                } else {
+                                    false
+                                };
+
+                                if !should_skip {
+                                    info!(
+                                        "no input device running, starting default: {}",
+                                        device_name
+                                    );
+                                    match audio_manager.start_device(&default_input).await {
+                                        Ok(()) => {
+                                            failed_devices.remove(&device_name);
+                                            default_tracker.last_input = Some(device_name.clone());
+                                            info!("started missing input device: {}", device_name);
+                                        }
+                                        Err(e) => {
+                                            let count = failed_devices
+                                                .entry(device_name.clone())
+                                                .or_insert((0, Instant::now()));
+                                            count.0 += 1;
+                                            count.1 = Instant::now();
+                                            let backoff_secs = (2u64.pow(count.0.min(8)))
+                                                .min(MAX_FAIL_BACKOFF_SECS);
+                                            warn!(
+                                                "could not start input device {} ({} failures, next retry in {}s): {}",
+                                                device_name, count.0, backoff_secs, e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Ensure an output device is actually running.
                     // Handles the case where ScreenCaptureKit wasn't ready at startup.
                     {
@@ -184,12 +250,8 @@ pub async fn start_device_monitor(
                                     match audio_manager.start_device(&default_output).await {
                                         Ok(()) => {
                                             failed_devices.remove(&device_name);
-                                            default_tracker.last_output =
-                                                Some(device_name.clone());
-                                            info!(
-                                                "started missing output device: {}",
-                                                device_name
-                                            );
+                                            default_tracker.last_output = Some(device_name.clone());
+                                            info!("started missing output device: {}", device_name);
                                         }
                                         Err(e) => {
                                             let count = failed_devices

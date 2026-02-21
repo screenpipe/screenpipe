@@ -99,6 +99,7 @@ mod tests {
             app_name: app.to_string(),
             window_name: window.to_string(),
             text_content: text.to_string(),
+            nodes: vec![],
             browser_url: None,
             timestamp: Utc::now(),
             node_count: 1,

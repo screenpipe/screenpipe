@@ -21,6 +21,9 @@ export function useAiProvider(
 		error: "",
 	});
 
+	const aiPresets = (settings as any)?.aiPresets;
+	const userToken = settings?.user?.token;
+
 	useEffect(() => {
 		if (!settings) {
 			setStatus({ isAvailable: false, error: "no settings found" });
@@ -28,24 +31,21 @@ export function useAiProvider(
 		}
 
 		// Check if user has any AI presets configured
-		const presets = (settings as any).aiPresets;
-		if (!presets || presets.length === 0) {
+		if (!aiPresets || aiPresets.length === 0) {
 			setStatus({ isAvailable: false, error: "no ai presets configured" });
 			return;
 		}
 
 		// Check if default preset has a model
-		const defaultPreset = presets.find((p: any) => p.defaultPreset) || presets[0];
+		const defaultPreset = aiPresets.find((p: any) => p.defaultPreset) || aiPresets[0];
 		if (!defaultPreset?.model) {
 			setStatus({ isAvailable: false, error: "no model selected in preset" });
 			return;
 		}
 
 		setStatus({ isAvailable: true, error: "" });
-	}, [
-		(settings as any)?.aiPresets,
-		settings?.user?.token,
-	]);
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [aiPresets, userToken]);
 
 	return status;
 }

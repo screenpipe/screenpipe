@@ -145,12 +145,28 @@ jobs:
           throw "No DLLs found in target directory!"
         }
 
+    - name: Download ONNX Runtime (CPU)
+      shell: pwsh
+      run: |
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
+        $zipFile = "onnxruntime-win-x64-1.19.2.zip"
+        $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+        Invoke-WebRequest -Uri $url -OutFile $zipFile
+        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+        7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
+        Write-Host "ONNX Runtime extracted to $extractDir"
+
     - name: Build CLI on Windows
       shell: pwsh
       env:
         CARGO_PROFILE_RELEASE_STRIP: symbols
         CARGO_PROFILE_RELEASE_PANIC: abort
         CARGO_PROFILE_RELEASE_INCREMENTAL: false
+        RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+        ORT_STRATEGY: system
+        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+        VCPKG_STATIC_LINKAGE: "true"
+        KNF_STATIC_CRT: 1
       run: cargo build --release -p screenpipe-server --target x86_64-pc-windows-msvc
 
     - name: Install frontend dependencies

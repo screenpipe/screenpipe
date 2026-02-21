@@ -10,6 +10,8 @@ interface ScreenMatrixProps {
   active: boolean;
   captureFps: number;
   ocrPulseTimestamp: number;
+  /** "dark" = light strokes on dark bg (default), "light" = dark strokes on light bg */
+  variant?: "dark" | "light";
 }
 
 const CANVAS_H = 12;
@@ -20,6 +22,7 @@ export function ScreenMatrix({
   active,
   captureFps,
   ocrPulseTimestamp,
+  variant = "dark",
 }: ScreenMatrixProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
@@ -28,9 +31,11 @@ export function ScreenMatrix({
   const prevPulseRef = useRef(ocrPulseTimestamp);
   const sweepRef = useRef(0); // 0-1 capture sweep position
   const flashRef = useRef(0); // OCR capture flash intensity
+  const variantRef = useRef(variant);
 
   activeRef.current = active;
   fpsRef.current = captureFps;
+  variantRef.current = variant;
 
   useEffect(() => {
     if (ocrPulseTimestamp !== prevPulseRef.current) {
@@ -58,6 +63,8 @@ export function ScreenMatrix({
       const isActive = activeRef.current;
       const fps = fpsRef.current;
       const fill = isActive ? Math.min(1, fps / 2.0) : 0;
+      const fg = variantRef.current === "light" ? "0, 0, 0" : "255, 255, 255";
+      const scanGap = variantRef.current === "light" ? "255, 255, 255" : "0, 0, 0";
 
       // Sweep speed: tied to capture rate
       const speed = isActive ? 0.003 + fill * 0.007 : 0.001;
@@ -72,21 +79,20 @@ export function ScreenMatrix({
 
       // --- Captured region (behind sweep bar) ---
       const capturedAlpha = isActive ? 0.06 + fill * 0.06 : 0.02;
-      ctx.fillStyle = `rgba(255, 255, 255, ${capturedAlpha + flash * 0.25})`;
+      ctx.fillStyle = `rgba(${fg}, ${capturedAlpha + flash * 0.25})`;
       ctx.fillRect(0, 0, sweepX, CANVAS_H);
 
       // --- Uncaptured region (ahead of sweep bar) ---
-      ctx.fillStyle = `rgba(255, 255, 255, ${0.015 + flash * 0.1})`;
+      ctx.fillStyle = `rgba(${fg}, ${0.015 + flash * 0.1})`;
       ctx.fillRect(sweepX, 0, canvasW - sweepX, CANVAS_H);
 
       // --- Sweep bar (vertical capture line) ---
       const barAlpha = isActive ? 0.5 + fill * 0.2 : 0.08;
-      ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, barAlpha + flash * 0.3)})`;
+      ctx.fillStyle = `rgba(${fg}, ${Math.min(1, barAlpha + flash * 0.3)})`;
       ctx.fillRect(Math.round(sweepX), 0, 1, CANVAS_H);
 
       // --- Horizontal scan lines (CRT screen texture) ---
-      // Dark gaps between "rows" make it read as a screen
-      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.fillStyle = `rgba(${scanGap}, 0.35)`;
       for (let i = 1; i < SCAN_LINES; i++) {
         const y = Math.round((i * CANVAS_H) / SCAN_LINES);
         ctx.fillRect(0, y, canvasW, 1);

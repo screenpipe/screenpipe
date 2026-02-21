@@ -332,7 +332,14 @@ async fn check_health(client: &reqwest::Client) -> Result<HealthCheckResponse> {
             .await
             .map_err(|e| anyhow::anyhow!("failed to parse sidecar response: {}", e)),
         Ok(response) => {
-            anyhow::bail!("health check failed with status: {}", response.status())
+            // Server returned non-2xx (e.g. 503 for "degraded") — still try to
+            // parse the JSON body so we can distinguish "degraded but running"
+            // from "server is down". Without this, a high frame-drop rate causes
+            // the tray to show "stopped" even though the server IS recording.
+            match response.json::<HealthCheckResponse>().await {
+                Ok(health) => Ok(health),
+                Err(e) => anyhow::bail!("health check non-2xx with unparseable body: {}", e),
+            }
         }
         Err(e) if e.is_timeout() => {
             anyhow::bail!("health check timeout, sidecar may not be running")

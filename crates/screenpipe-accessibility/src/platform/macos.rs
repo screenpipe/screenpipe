@@ -484,31 +484,33 @@ extern "C" fn tap_callback(
         }
 
         cg::EventType::SCROLL_WHEEL => {
-            // Record activity
+            // Record activity for adaptive FPS even when scroll capture is off
             if let Some(ref feed) = state.activity_feed {
                 feed.record(ActivityKind::Scroll);
             }
 
-            let dy = event.field_i64(cg::EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS1) as i16;
-            let dx = event.field_i64(cg::EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS2) as i16;
-            if dx != 0 || dy != 0 {
-                let ui_event = UiEvent {
-                    id: None,
-                    timestamp,
-                    relative_ms: t,
-                    data: EventData::Scroll {
-                        x: loc.x as i32,
-                        y: loc.y as i32,
-                        delta_x: dx,
-                        delta_y: dy,
-                    },
-                    app_name,
-                    window_title,
-                    browser_url: None,
-                    element: None,
-                    frame_id: None,
-                };
-                let _ = state.tx.try_send(ui_event);
+            if state.config.capture_scroll {
+                let dy = event.field_i64(cg::EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS1) as i16;
+                let dx = event.field_i64(cg::EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS2) as i16;
+                if dx != 0 || dy != 0 {
+                    let ui_event = UiEvent {
+                        id: None,
+                        timestamp,
+                        relative_ms: t,
+                        data: EventData::Scroll {
+                            x: loc.x as i32,
+                            y: loc.y as i32,
+                            delta_x: dx,
+                            delta_y: dy,
+                        },
+                        app_name,
+                        window_title,
+                        browser_url: None,
+                        element: None,
+                        frame_id: None,
+                    };
+                    let _ = state.tx.try_send(ui_event);
+                }
             }
         }
 

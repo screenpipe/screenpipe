@@ -247,7 +247,7 @@ fn create_dynamic_menu(
                     .build(app)?,
             )
             .item(&PredefinedMenuItem::separator(app)?)
-            .item(&MenuItemBuilder::with_id("quit", "quit screenpipe").build(app)?);
+            .item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
 
         return menu_builder.build().map_err(Into::into);
     }
@@ -272,36 +272,44 @@ fn create_dynamic_menu(
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| default_chat.to_string());
 
+    // Open screenpipe (settings window) at the top
+    menu_builder = menu_builder
+        .item(
+            &MenuItemBuilder::with_id("settings", "Open screenpipe")
+                .build(app)?,
+        )
+        .item(&PredefinedMenuItem::separator(app)?);
+
     // Show timeline, search, and chat items with shortcuts
     menu_builder = menu_builder
         .item(
             &MenuItemBuilder::with_id(
                 "show",
-                format!("show timeline ({})", format_shortcut(&show_shortcut)),
+                format!("Show timeline ({})", format_shortcut(&show_shortcut)),
             )
             .build(app)?,
         )
         .item(
             &MenuItemBuilder::with_id(
                 "show_search",
-                format!("show search ({})", format_shortcut(&search_shortcut)),
+                format!("Show search ({})", format_shortcut(&search_shortcut)),
             )
             .build(app)?,
         )
         .item(
             &MenuItemBuilder::with_id(
                 "show_chat",
-                format!("show chat ({})", format_shortcut(&chat_shortcut)),
+                format!("Show chat ({})", format_shortcut(&chat_shortcut)),
             )
             .build(app)?,
         );
 
     // Recording status indicator
     let status_text = match get_recording_status() {
-        RecordingStatus::Starting => "○ starting…",
-        RecordingStatus::Recording => "● recording",
-        RecordingStatus::Stopped => "○ stopped",
-        RecordingStatus::Error => "○ error",
+        RecordingStatus::Starting => "○ Starting…",
+        RecordingStatus::Recording => "● Recording",
+        RecordingStatus::Stopped => "○ Stopped",
+        RecordingStatus::Error => "○ Error",
     };
     menu_builder = menu_builder.item(
         &MenuItemBuilder::with_id("recording_status", status_text)
@@ -337,7 +345,7 @@ fn create_dynamic_menu(
             || !perms.microphone.permitted();
         if has_permission_issue {
             menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("fix_permissions", "⚠ fix permissions")
+                &MenuItemBuilder::with_id("fix_permissions", "⚠ Fix permissions")
                     .build(app)?,
             );
         }
@@ -346,9 +354,9 @@ fn create_dynamic_menu(
     // Version and update items
     let is_beta = app.config().identifier.contains("beta");
     let version_text = if is_beta {
-        format!("version {} (beta)", app.package_info().version)
+        format!("Version {} (Beta)", app.package_info().version)
     } else {
-        format!("version {}", app.package_info().version)
+        format!("Version {}", app.package_info().version)
     };
     menu_builder = menu_builder
         .item(&PredefinedMenuItem::separator(app)?)
@@ -358,7 +366,7 @@ fn create_dynamic_menu(
                 .build(app)?,
         )
         .item(update_item)
-        .item(&MenuItemBuilder::with_id("releases", "changelog").build(app)?);
+        .item(&MenuItemBuilder::with_id("releases", "Changelog").build(app)?);
 
     // Only show recording controls if not in dev mode
     let dev_mode = store
@@ -368,19 +376,18 @@ fn create_dynamic_menu(
     if !dev_mode {
         menu_builder = menu_builder
             .item(&PredefinedMenuItem::separator(app)?)
-            .item(&MenuItemBuilder::with_id("start_recording", "start recording").build(app)?)
-            .item(&MenuItemBuilder::with_id("stop_recording", "stop recording").build(app)?);
+            .item(&MenuItemBuilder::with_id("start_recording", "Start recording").build(app)?)
+            .item(&MenuItemBuilder::with_id("stop_recording", "Stop recording").build(app)?);
     }
 
-    // Settings, feedback and quit
+    // Help and quit
     menu_builder = menu_builder
         .item(&PredefinedMenuItem::separator(app)?)
-        .item(&MenuItemBuilder::with_id("settings", "settings").build(app)?)
-        .item(&MenuItemBuilder::with_id("feedback", "send feedback").build(app)?)
-        .item(&MenuItemBuilder::with_id("book_call", "book a call with founder").build(app)?)
-        .item(&MenuItemBuilder::with_id("onboarding", "onboarding").build(app)?)
+        .item(&MenuItemBuilder::with_id("feedback", "Help").build(app)?)
+        .item(&MenuItemBuilder::with_id("book_call", "Book a call with founder").build(app)?)
+        .item(&MenuItemBuilder::with_id("onboarding", "Onboarding").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
-        .item(&MenuItemBuilder::with_id("quit", "quit screenpipe").build(app)?);
+        .item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
 
     menu_builder.build().map_err(Into::into)
 }
@@ -486,7 +493,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "feedback" => {
             let app = app_handle.clone();
-            let page = Some("feedback".to_string());
+            let page = Some("help".to_string());
             let _ = app_handle.run_on_main_thread(move || {
                 let _ = ShowRewindWindow::Settings { page }.show(&app);
             });

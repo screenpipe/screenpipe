@@ -80,7 +80,7 @@ impl Default for AudioManagerOptions {
             enable_diarization: true,
             enable_realtime: false,
             audio_chunk_duration: Duration::from_secs(30),
-            vad_sensitivity: VadSensitivity::High,
+            vad_sensitivity: VadSensitivity::Medium,
             health_check_grace_period: 15,
             enabled_devices,
             use_all_devices: false,

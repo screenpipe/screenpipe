@@ -231,6 +231,7 @@ impl PiExecutor {
     }
 
     /// Spawn the pi subprocess and wait for its output.
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_pi(
         &self,
         pi_path: &str,
@@ -256,8 +257,12 @@ impl PiExecutor {
         if let Some(key) = provider_api_key {
             if !key.is_empty() {
                 match resolved_provider {
-                    "openai" | "openai-byok" => { cmd.env("OPENAI_API_KEY", key); }
-                    "custom" => { cmd.env("CUSTOM_API_KEY", key); }
+                    "openai" | "openai-byok" => {
+                        cmd.env("OPENAI_API_KEY", key);
+                    }
+                    "custom" => {
+                        cmd.env("CUSTOM_API_KEY", key);
+                    }
                     _ => {}
                 }
             }

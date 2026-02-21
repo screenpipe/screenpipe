@@ -18,8 +18,8 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 use screenpipe_vision::capture_screenshot_by_window::CapturedWindow;
 use screenpipe_vision::core::RawCaptureResult;
 use screenpipe_vision::ocr_cache::WindowOcrCache;
-use std::sync::Arc;
 use screenpipe_vision::{process_ocr_task, OcrEngine};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 

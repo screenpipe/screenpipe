@@ -88,6 +88,7 @@ const ShortcutRow = ({
         );
       };
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRecording]);
 
   const syncShortcuts = async (updatedShortcuts: {

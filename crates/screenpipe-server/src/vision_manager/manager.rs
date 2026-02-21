@@ -6,6 +6,7 @@ use screenpipe_core::Language;
 use screenpipe_db::DatabaseManager;
 use screenpipe_vision::monitor::{get_monitor_by_id, list_monitors};
 use screenpipe_vision::{OcrEngine, PipelineMetrics};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -31,6 +32,7 @@ pub struct VisionManagerConfig {
     pub video_quality: String,
     pub vision_metrics: Arc<PipelineMetrics>,
     pub disable_ocr: bool,
+    pub event_driven: bool,
 }
 
 /// Status of the VisionManager
@@ -168,70 +170,167 @@ impl VisionManager {
         let video_quality = self.config.video_quality.clone();
         let vision_metrics = self.config.vision_metrics.clone();
         let disable_ocr = self.config.disable_ocr;
+        let event_driven = self.config.event_driven;
 
-        // Spawn the recording task using the existing record_video function
-        let handle = self.vision_handle.spawn(async move {
-            let mut consecutive_restarts: u32 = 0;
-            loop {
-                match record_video(
-                    db.clone(),
-                    output_path.clone(),
-                    fps,
-                    ocr_engine.clone(),
-                    monitor_id,
-                    use_pii_removal,
-                    &ignored_windows,
-                    &included_windows,
-                    &ignored_urls,
-                    video_chunk_duration,
-                    languages.clone(),
-                    activity_feed.clone(),
-                    video_quality.clone(),
-                    vision_metrics.clone(),
-                    disable_ocr,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        info!("Monitor {} recording completed normally", monitor_id);
-                        break;
-                    }
-                    Err(e) => {
-                        consecutive_restarts += 1;
-
-                        // Before restarting, verify the monitor still exists
-                        let monitor_exists = get_monitor_by_id(monitor_id).await.is_some();
-
-                        if !monitor_exists {
-                            warn!(
-                                "Monitor {} no longer exists after error: {:?}. \
-                                 Stopping task — MonitorWatcher will restart if it reappears.",
-                                monitor_id, e
-                            );
+        let handle = if event_driven {
+            // Event-driven capture mode
+            self.start_event_driven_monitor(monitor_id, monitor).await?
+        } else {
+            // Legacy continuous capture mode
+            self.vision_handle.spawn(async move {
+                let mut consecutive_restarts: u32 = 0;
+                loop {
+                    match record_video(
+                        db.clone(),
+                        output_path.clone(),
+                        fps,
+                        ocr_engine.clone(),
+                        monitor_id,
+                        use_pii_removal,
+                        &ignored_windows,
+                        &included_windows,
+                        &ignored_urls,
+                        video_chunk_duration,
+                        languages.clone(),
+                        activity_feed.clone(),
+                        video_quality.clone(),
+                        vision_metrics.clone(),
+                        disable_ocr,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            info!("Monitor {} recording completed normally", monitor_id);
                             break;
                         }
+                        Err(e) => {
+                            consecutive_restarts += 1;
 
-                        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
-                        let backoff =
-                            Duration::from_secs((1u64 << consecutive_restarts.min(4)).min(30));
-                        error!(
-                            "Monitor {} recording error (restart #{}): {:?}, retrying in {:?}",
-                            monitor_id, consecutive_restarts, e, backoff
-                        );
-                        tokio::time::sleep(backoff).await;
+                            // Before restarting, verify the monitor still exists
+                            let monitor_exists = get_monitor_by_id(monitor_id).await.is_some();
 
-                        // Reset restart counter after successful long run (>5 min)
-                        // This is handled implicitly: if record_video runs for a while
-                        // and then fails, the backoff is appropriate. If it fails immediately
-                        // (capture broken), backoff grows quickly to stop hammering.
+                            if !monitor_exists {
+                                warn!(
+                                    "Monitor {} no longer exists after error: {:?}. \
+                                     Stopping task — MonitorWatcher will restart if it reappears.",
+                                    monitor_id, e
+                                );
+                                break;
+                            }
+
+                            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+                            let backoff =
+                                Duration::from_secs((1u64 << consecutive_restarts.min(4)).min(30));
+                            error!(
+                                "Monitor {} recording error (restart #{}): {:?}, retrying in {:?}",
+                                monitor_id, consecutive_restarts, e, backoff
+                            );
+                            tokio::time::sleep(backoff).await;
+                        }
                     }
                 }
-            }
-        });
+            })
+        };
 
         self.recording_tasks.insert(monitor_id, handle);
 
         Ok(())
+    }
+
+    /// Start event-driven capture for a specific monitor.
+    #[cfg(feature = "ui-events")]
+    async fn start_event_driven_monitor(
+        &self,
+        monitor_id: u32,
+        monitor: screenpipe_vision::monitor::SafeMonitor,
+    ) -> Result<JoinHandle<()>> {
+        use crate::event_driven_capture::{
+            event_driven_capture_loop, trigger_channel, EventDrivenCaptureConfig,
+        };
+        use screenpipe_accessibility::tree::TreeWalkerConfig;
+        use screenpipe_accessibility::ActivityFeed;
+        use screenpipe_vision::snapshot_writer::SnapshotWriter;
+
+        let db = self.db.clone();
+        let output_path = self.config.output_path.clone();
+        let device_name = format!("monitor_{}", monitor_id);
+
+        // Create snapshot writer for this monitor's data directory
+        let snapshot_writer = Arc::new(SnapshotWriter::new(
+            format!("{}/data", output_path),
+            80, // JPEG quality
+        ));
+
+        // Create activity feed for this monitor
+        let activity_feed = ActivityFeed::new();
+
+        // Tree walker config with defaults
+        let tree_walker_config = TreeWalkerConfig::default();
+
+        // Event-driven capture config
+        let capture_config = EventDrivenCaptureConfig::default();
+
+        // Create trigger channel for external events
+        // Keep sender alive in the spawned task so the channel doesn't disconnect
+        let (trigger_tx, trigger_rx) = trigger_channel();
+
+        // Stop signal
+        let stop_signal = Arc::new(AtomicBool::new(false));
+
+        let monitor = Arc::new(monitor);
+        let vision_metrics = self.config.vision_metrics.clone();
+
+        info!(
+            "Starting event-driven capture for monitor {} (device: {})",
+            monitor_id, device_name
+        );
+
+        let handle = self.vision_handle.spawn(async move {
+            // Keep trigger_tx alive so the channel doesn't disconnect
+            let _trigger_tx = trigger_tx;
+
+            // Event-driven capture loop runs once. If it fails,
+            // the task exits and MonitorWatcher will restart it.
+            if let Err(e) = event_driven_capture_loop(
+                db,
+                monitor,
+                monitor_id,
+                device_name,
+                snapshot_writer,
+                activity_feed,
+                tree_walker_config,
+                capture_config,
+                trigger_rx,
+                stop_signal,
+                vision_metrics,
+            )
+            .await
+            {
+                error!(
+                    "Event-driven capture failed for monitor {}: {:?}",
+                    monitor_id, e
+                );
+            }
+            info!(
+                "Event-driven capture for monitor {} exited",
+                monitor_id
+            );
+        });
+
+        Ok(handle)
+    }
+
+    /// Fallback for when ui-events feature is disabled.
+    #[cfg(not(feature = "ui-events"))]
+    async fn start_event_driven_monitor(
+        &self,
+        monitor_id: u32,
+        _monitor: screenpipe_vision::monitor::SafeMonitor,
+    ) -> Result<JoinHandle<()>> {
+        anyhow::bail!(
+            "Event-driven capture requires the 'ui-events' feature (monitor {})",
+            monitor_id
+        )
     }
 
     /// Stop recording on a specific monitor

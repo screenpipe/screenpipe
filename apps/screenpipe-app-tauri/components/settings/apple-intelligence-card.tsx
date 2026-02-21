@@ -23,10 +23,29 @@ const API = "http://localhost:3030";
 
 export function AppleIntelligenceCard() {
   const [os, setOs] = useState<string>("");
-  const [aiStatus, setAiStatus] = useState<
+  const [aiStatus, setAiStatusRaw] = useState<
     "unknown" | "available" | "unavailable"
-  >("unknown");
+  >(() => {
+    try {
+      const cached = localStorage?.getItem("apple-intelligence-status");
+      if (cached === "available" || cached === "unavailable") return cached;
+    } catch {}
+    return "unknown";
+  });
   const [enabled, setEnabled] = useState(true);
+
+  // Wrap setAiStatus to persist to localStorage
+  const setAiStatus = useCallback(
+    (status: "unknown" | "available" | "unavailable") => {
+      setAiStatusRaw(status);
+      if (status !== "unknown") {
+        try {
+          localStorage?.setItem("apple-intelligence-status", status);
+        } catch {}
+      }
+    },
+    []
+  );
 
   // Reminders state
   const [remindersAvailable, setRemindersAvailable] = useState(false);
@@ -67,20 +86,32 @@ export function AppleIntelligenceCard() {
 
   const statusCapturedRef = useRef(false);
 
-  // Check AI availability
+  // Check AI availability (with retry on failure)
   const checkStatus = useCallback(async () => {
-    try {
+    const attempt = async () => {
       const resp = await fetch(`${API}/ai/status`, {
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(10000),
       });
       if (resp.ok) {
         const data = await resp.json();
-        const available = data.available ? "available" : "unavailable";
-        setAiStatus(available as any);
+        return data.available ? "available" : "unavailable";
+      }
+      return null;
+    };
+
+    try {
+      let result = await attempt();
+      // Retry once after 2s if the first attempt failed
+      if (result === null) {
+        await new Promise((r) => setTimeout(r, 2000));
+        result = await attempt();
+      }
+      if (result) {
+        setAiStatus(result as "available" | "unavailable");
         if (!statusCapturedRef.current) {
           statusCapturedRef.current = true;
           posthog.capture("apple_intelligence_status", {
-            available: data.available,
+            available: result === "available",
             enabled,
           });
         }
@@ -88,9 +119,18 @@ export function AppleIntelligenceCard() {
         setAiStatus("unavailable");
       }
     } catch {
-      setAiStatus("unavailable");
+      // On network error, retry once
+      try {
+        await new Promise((r) => setTimeout(r, 2000));
+        const result = await attempt();
+        setAiStatus(
+          result ? (result as "available" | "unavailable") : "unavailable"
+        );
+      } catch {
+        setAiStatus("unavailable");
+      }
     }
-  }, [enabled]);
+  }, [enabled, setAiStatus]);
 
   useEffect(() => {
     checkStatus();
@@ -250,6 +290,7 @@ export function AppleIntelligenceCard() {
       <CardContent className="p-0">
         <div className="flex items-start p-4 gap-4">
           <div className="flex-shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/apple-intelligence-logo.svg"
               alt="Apple Intelligence"

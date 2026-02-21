@@ -677,7 +677,8 @@ async fn build_activity_context(
             let mut used = 0;
             for s in &snippets {
                 let text = s.snippet.trim().replace('\n', " ");
-                let line = format!("  [{}] {}", s.app_name, &text[..text.len().min(150)]);
+                let end = text.floor_char_boundary(text.len().min(150));
+                let line = format!("  [{}] {}", s.app_name, &text[..end]);
                 if used + line.len() > char_budget { break; }
                 used += line.len() + 1;
                 parts.push(line);
@@ -765,7 +766,7 @@ async fn generate_ai_suggestions(
             let content = data["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("");
-            debug!("suggestions AI response: {}", &content[..content.len().min(300)]);
+            debug!("suggestions AI response: {}", &content[..content.floor_char_boundary(content.len().min(300))]);
             parse_ai_response(content)
         }
         Ok(r) => {
@@ -1164,7 +1165,7 @@ mod tests {
         if !ocr.is_empty() {
             println!("\n  ocr samples:");
             for s in ocr.iter().take(3) {
-                println!("    \"{}\"", &s[..s.len().min(80)]);
+                println!("    \"{}\"", &s[..s.floor_char_boundary(s.len().min(80))]);
             }
         }
 

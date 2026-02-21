@@ -40,7 +40,7 @@ impl std::str::FromStr for VadSensitivity {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
-            _ => Ok(Self::High),
+            _ => Ok(Self::Medium),
         }
     }
 }
@@ -109,10 +109,10 @@ mod tests {
     }
 
     #[test]
-    fn vad_sensitivity_from_str_unknown_defaults_to_high() {
+    fn vad_sensitivity_from_str_unknown_defaults_to_medium() {
         assert!(matches!(
             "anything".parse::<VadSensitivity>().unwrap(),
-            VadSensitivity::High
+            VadSensitivity::Medium
         ));
     }
 }

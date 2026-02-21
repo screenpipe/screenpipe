@@ -18,7 +18,7 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
     description: "Today's accomplishments, key moments, and unfinished work",
     icon: "📋",
     featured: true,
-    prompt: `Analyze my screen and audio recordings from today.
+    prompt: `Analyze my screen and audio recordings from today (last 16 hours only). Use limit=10 per search, max 5 searches total.
 Provide:
 1. A one-line summary of my day
 2. Top 3 accomplishments (with approximate timestamps)
@@ -34,7 +34,7 @@ Format each section with clear headings. Only report activities you can verify f
     description: "What you did, what's next, and any blockers",
     icon: "🏢",
     featured: true,
-    prompt: `Based on my recordings from the last 24 hours, generate a concise standup update with these sections:
+    prompt: `Based on my recordings from the last 24 hours, generate a concise standup update. Use limit=10 per search, max 3 searches total.
 
 **Yesterday:** What I worked on (be specific — mention projects, files, tools)
 **Today:** What I'm likely working on next (based on recent activity and unfinished tasks)
@@ -56,8 +56,9 @@ Keep it short and copy-paste ready for a team standup. Use bullet points.`,
     description: "Recurring topics and themes from your activity",
     icon: "💡",
     featured: true,
-    prompt: `Search my recent screen and audio recordings and identify:
+    prompt: `Search my screen and audio recordings from the last 8 hours. Use limit=10 per search, max 4 searches total.
 
+Identify:
 1. **Recurring Topics** — subjects, projects, or people that keep coming up
 2. **Focus Areas** — what I spent the most time on
 3. **Unresolved Questions** — things I searched for or discussed without clear resolution
@@ -71,7 +72,7 @@ Rank topics by how frequently they appeared. Include context for each.`,
     description: "How you use AI tools — patterns and insights",
     icon: "🤖",
     featured: true,
-    prompt: `Search my recordings for AI tool usage: ChatGPT, Claude, Copilot, Cursor, Gemini, Perplexity, and other AI assistants.
+    prompt: `Search my recordings from the last 24 hours for AI tool usage. Use app_name filter for each tool separately: ChatGPT, Claude, Copilot, Cursor, Gemini, Perplexity. Use limit=5 per search, max 6 searches total.
 
 Report:
 1. **Which AI tools** I used and approximate time per tool
@@ -87,8 +88,9 @@ If no AI usage is found, say so. Don't make up data.`,
     description: "Catch up on yesterday's unfinished work and pending items",
     icon: "🌅",
     featured: false,
-    prompt: `Look at my recordings from yesterday evening and generate a morning brief:
+    prompt: `Look at my recordings from yesterday evening (last 12-18 hours). Use limit=10 per search, max 3 searches total.
 
+Generate a morning brief:
 1. **Where I left off** — what was I working on when I stopped?
 2. **Unfinished tasks** — anything started but not completed
 3. **Important messages** — key conversations or notifications I should follow up on
@@ -102,7 +104,7 @@ Be specific with app names and window titles so I can jump right back in.`,
     description: "Where your time went — by app, project, and category",
     icon: "⏱",
     featured: false,
-    prompt: `Analyze my app usage and screen recordings from today.
+    prompt: `Analyze my app usage and screen recordings from today (last 12 hours). Use limit=10 per search, max 4 searches. Prefer using /raw_sql with COUNT/GROUP BY queries over fetching raw data.
 
 Break down my time by:
 1. **By Application** — which apps I used and approximate duration
@@ -118,8 +120,9 @@ Show percentages and durations. Use a mermaid gantt chart to visualize the timel
     description: "Who you interact with and how",
     icon: "👥",
     featured: false,
-    prompt: `Analyze my communication patterns from recent recordings:
+    prompt: `Analyze my communication patterns from the last 24 hours. Use limit=10 per search, max 4 searches. Filter by app_name for communication tools (Slack, Teams, Zoom, Discord, Mail).
 
+Report:
 1. **People I interacted with** — from meetings, messages, emails
 2. **Communication channels** — which apps/platforms for each person
 3. **Meeting time** — how much time in calls vs. async communication
@@ -133,8 +136,11 @@ Focus on professional interactions. Don't include personal messages unless clear
     description: "Weekly review without manual journaling",
     icon: "📅",
     featured: false,
-    prompt: `Generate a weekly recap from my recordings this week:
+    prompt: `Generate a weekly recap. Search ONE DAY AT A TIME (7 separate searches, one per day this week). Use limit=5 per search, max 10 searches total. Use /raw_sql with COUNT/GROUP BY to get app usage stats instead of fetching raw content.
 
+IMPORTANT: Do NOT fetch all data for the entire week in one query. Break it into daily slices.
+
+Provide:
 1. **Week Summary** — one paragraph overview
 2. **Daily Highlights** — one key accomplishment per day
 3. **Top Projects** — what I spent the most time on
@@ -150,8 +156,9 @@ Make it suitable for a personal weekly review or sharing with a manager.`,
     description: "Work style analysis for self-improvement",
     icon: "🎯",
     featured: false,
-    prompt: `Based on my recent activity patterns, analyze my professional work style:
+    prompt: `Analyze my professional work style from the last 48 hours. Use limit=10 per search, max 5 searches. Prefer /raw_sql with COUNT/GROUP BY for app usage stats.
 
+Report:
 1. **Work Rhythm** — when am I most productive? Morning vs. afternoon patterns
 2. **Focus vs. Multitasking** — how often do I context-switch between apps?
 3. **Communication Style** — do I prefer meetings, chat, or async?

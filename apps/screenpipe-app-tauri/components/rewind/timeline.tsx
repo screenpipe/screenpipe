@@ -10,6 +10,7 @@ import { commands } from "@/lib/utils/tauri";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { AudioTranscript } from "@/components/rewind/timeline/audio-transcript";
+import { SubtitleBar } from "@/components/rewind/timeline/subtitle-bar";
 import { TimelineProvider, useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { throttle } from "lodash";
 import { TimelineControls } from "@/components/rewind/timeline/timeline-controls";
@@ -23,6 +24,7 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasFramesForDate } from "@/lib/actions/has-frames-date";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useAudioPlayback } from "@/lib/hooks/use-audio-playback";
 
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
@@ -76,19 +78,22 @@ const easeOutCubic = (x: number): number => {
 
 
 
-export default function Timeline() {
+export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const { isMac } = usePlatform();
 	const [currentIndex, setCurrentIndex] = useState(0);
-	const [showAudioTranscript, setShowAudioTranscript] = useState(true);
+	const [showAudioTranscript, setShowAudioTranscript] = useState(false);
 	const [showSearchModal, setShowSearchModal] = useState(false);
 
 
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	// const [searchResults, setSearchResults] = useState<number[]>([]);
-	const [startAndEndDates, setStartAndEndDates] = useState<TimeRange>({
-		// Default to 1 year ago so navigation works even if getStartDate fails
-		start: new Date(new Date().setFullYear(new Date().getFullYear() - 1)),
-		end: new Date(),
+	const [startAndEndDates, setStartAndEndDates] = useState<TimeRange>(() => {
+		// Lazy init to avoid SSR/client hydration mismatch from new Date()
+		const now = new Date();
+		return {
+			start: new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()),
+			end: now,
+		};
 	});
 	
 	// Performance tracking refs
@@ -143,10 +148,7 @@ export default function Timeline() {
 		}
 	}, [selectionRange?.frameIds.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	// Re-show audio transcript when navigating timeline
-	useEffect(() => {
-		setShowAudioTranscript(true);
-	}, [currentIndex]);
+	// Note: audio transcript is now on-demand (opened via subtitle bar click)
 
 	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, loadingProgress, onWindowFocus, newFramesCount, lastFlushTimestamp, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation } =
 		useTimelineStore();
@@ -158,6 +160,21 @@ export default function Timeline() {
 
 	// Meeting detection from existing frame data
 	const { meetings } = useMeetings(frames);
+
+	// Audio playback engine
+	const {
+		isPlaying,
+		playbackSpeed,
+		hasAudioNearby,
+		togglePlayPause,
+		cycleSpeed,
+		pause: pausePlayback,
+	} = useAudioPlayback({
+		frames,
+		currentIndex,
+		setCurrentIndex,
+		setCurrentFrame,
+	});
 
 	// Track if user is at "live edge" (viewing newest frame, index 0)
 	const isAtLiveEdge = currentIndex === 0;
@@ -201,6 +218,9 @@ export default function Timeline() {
 					debounceTimer = null;
 					console.log("Window focused, refreshing timeline...");
 
+					// Pause any active playback
+					pausePlayback();
+
 					// Reset position to latest (index 0 = newest frame)
 					// Window is hidden/shown not destroyed, so old position persists
 					setCurrentIndex(0);
@@ -211,6 +231,9 @@ export default function Timeline() {
 
 					onWindowFocus();
 				}, 500);
+			} else {
+				// Window lost focus / hidden — stop audio immediately
+				pausePlayback();
 			}
 		});
 
@@ -218,10 +241,22 @@ export default function Timeline() {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame]);
+	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback]);
 
-	// Hide timeline when mouse moves to a different screen
+	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
+		const handleVisibilityChange = () => {
+			if (document.hidden) {
+				pausePlayback();
+			}
+		};
+		document.addEventListener("visibilitychange", handleVisibilityChange);
+		return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+	}, [pausePlayback]);
+
+	// Hide timeline when mouse moves to a different screen (skip in embedded mode)
+	useEffect(() => {
+		if (embedded) return;
 		let initialScreenBounds: { x: number; y: number; width: number; height: number } | null = null;
 		let checkInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -257,6 +292,7 @@ export default function Timeline() {
 							if (isOutside) {
 								console.log("Cursor left screen, hiding timeline");
 								alreadyHidden = true;
+								pausePlayback();
 								commands.closeWindow("Main");
 							}
 						} catch (e) {
@@ -368,6 +404,7 @@ export default function Timeline() {
 		return () => {
 			unlisten.then((fn) => fn());
 		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [navigateToTimestamp, setPendingNavigation, toast]);
 
 	// Consume pending navigation from zustand store on mount (survives page navigation)
@@ -428,6 +465,7 @@ export default function Timeline() {
 				isNavigatingRef.current = false;
 			}
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [frames, currentDate, setPendingNavigation]);
 
 	// Timeout: clear seeking overlay if navigation doesn't resolve within 15s
@@ -460,6 +498,7 @@ export default function Timeline() {
 			setCurrentFrame(frames[0]);
 			setCurrentIndex(0);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [frames.length, currentFrame, setCurrentFrame, seekingTimestamp]);
 
 	// Track timeline opened and setup session tracking
@@ -700,16 +739,19 @@ export default function Timeline() {
 	}, [currentFrame, isMac, showSearchModal]);
 
 	// Handle Escape: close search modal if open, otherwise close the window
+	// In embedded mode, only handle closing the search modal (don't close the window)
 	useEffect(() => {
+		if (embedded) return;
 		const unlisten = listen("escape-pressed", () => {
 			if (showSearchModal) {
 				setShowSearchModal(false);
 				return;
 			}
+			pausePlayback();
 			commands.closeWindow("Main");
 		});
 		return () => { unlisten.then((fn) => fn()); };
-	}, [showSearchModal]);
+	}, [showSearchModal, embedded]);
 
 	// Handle arrow key navigation via JS keydown (no global hotkey stealing)
 	useEffect(() => {
@@ -726,6 +768,7 @@ export default function Timeline() {
 			const isAlt = e.altKey;
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
+				pausePlayback();
 				if (isAlt) {
 					// Alt+ArrowLeft = prev app boundary
 					setCurrentIndex((prev) => {
@@ -750,6 +793,7 @@ export default function Timeline() {
 				}
 			} else if (e.key === "ArrowRight") {
 				e.preventDefault();
+				pausePlayback();
 				if (isAlt) {
 					// Alt+ArrowRight = next app boundary
 					setCurrentIndex((prev) => {
@@ -848,6 +892,7 @@ export default function Timeline() {
 		return () => {
 			cancelled = true;
 		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [currentDate, websocket]); // Re-run when websocket connects or date changes
 
 	// Sync currentDate to frame's date - but NOT during intentional navigation
@@ -874,6 +919,9 @@ export default function Timeline() {
 		() =>
 			throttle(
 				(e: WheelEvent) => {
+					// Pause playback on manual scroll
+					pausePlayback();
+
 					// Pinch gesture on trackpad sends ctrlKey=true
 					// Cmd+Scroll on mouse sends metaKey=true — handle as zoom
 					if (e.ctrlKey || e.metaKey) {
@@ -934,13 +982,17 @@ export default function Timeline() {
 				16,
 				{ leading: true, trailing: false },
 			),
-		[frames, zoomLevel], // Re-create when zoom changes
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+	[frames, zoomLevel, pausePlayback], // Re-create when zoom changes
 	);
 
-	// Attach scroll/zoom handler at document level so pinch-to-zoom works
-	// without clicking the timeline first (wheel events go to window under cursor)
+	// Attach scroll/zoom handler so pinch-to-zoom and scroll-to-navigate work.
+	// Overlay mode: attach to document (wheel events go to window under cursor).
+	// Embedded mode: attach to the container element only, so the settings
+	// sidebar and other page areas still scroll normally.
 	useEffect(() => {
 		const onWheel = (e: WheelEvent) => {
+			// Allow normal scrolling inside panels/dialogs in both overlay and embedded mode
 			const isWithinAiPanel = document
 				.querySelector(".ai-panel")
 				?.contains(e.target as Node);
@@ -958,16 +1010,19 @@ export default function Timeline() {
 				return;
 			}
 
-			// Always preventDefault to block native browser zoom
+			// preventDefault to block native browser zoom
 			e.preventDefault();
 
 			// Delegate to the throttled handler for zoom + scroll logic
 			handleScroll(e);
 		};
 
-		document.addEventListener("wheel", onWheel, { passive: false });
-		return () => document.removeEventListener("wheel", onWheel);
-	}, [handleScroll]);
+		const target = embedded ? containerRef.current : document;
+		if (!target) return;
+		const handler = onWheel as EventListener;
+		target.addEventListener("wheel", handler, { passive: false });
+		return () => target.removeEventListener("wheel", handler);
+	}, [handleScroll, embedded]);
 
 	// Ensure WKWebView is first responder so pinch-to-zoom works.
 	// On macOS, magnifyWithEvent: only reaches the WKWebView if it's first responder.
@@ -1064,6 +1119,9 @@ export default function Timeline() {
 	};
 
 	const handleDateChange = async (newDate: Date) => {
+		// Pause playback on date change
+		pausePlayback();
+
 		// Set navigation flag to prevent frame-date sync from fighting
 		isNavigatingRef.current = true;
 
@@ -1232,7 +1290,7 @@ export default function Timeline() {
 				ref={containerRef}
 				className="inset-0 flex flex-col text-foreground relative"
 				style={{
-					height: "100vh",
+					height: embedded ? "100%" : "100vh",
 					overscrollBehavior: "none",
 					WebkitUserSelect: "none",
 					userSelect: "none",
@@ -1241,7 +1299,7 @@ export default function Timeline() {
 				}}
 			>
 				{/* Main Image - Full Screen - Should fill entire viewport */}
-				<div className="absolute inset-0 z-10 bg-black">
+				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`}>
 					{currentFrame ? (
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
@@ -1350,23 +1408,29 @@ export default function Timeline() {
 				</div>
 
 				{/* Top Gradient Overlay - Very subtle */}
-				<div className="absolute top-0 left-0 right-0 h-20 bg-gradient-to-b from-black/20 via-black/5 to-transparent z-30 pointer-events-none" />
+				{!embedded && <div className="absolute top-0 left-0 right-0 h-20 bg-gradient-to-b from-black/20 via-black/5 to-transparent z-30 pointer-events-none" />}
 
 				{/* Bottom Gradient Overlay - Very subtle, only where timeline is */}
-				<div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/10 via-black/2 to-transparent z-30 pointer-events-none" />
+				{!embedded && <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/10 via-black/2 to-transparent z-30 pointer-events-none" />}
 
 				{/* Top Controls */}
-				<div className="absolute top-0 left-0 right-0 z-40 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+16px)]">
+				<div className={`absolute top-0 left-0 right-0 z-40 px-4 pb-4 ${embedded ? "pt-2" : "pt-[calc(env(safe-area-inset-top)+16px)]"}`}>
 					<TimelineControls
 						currentDate={currentDate}
 						startAndEndDates={startAndEndDates}
 						onDateChange={handleDateChange}
 						onJumpToday={handleJumpToday}
 						onSearchClick={() => setShowSearchModal(true)}
-						onChatClick={() => commands.showWindow("Chat")}
+						onChatClick={embedded ? undefined : () => commands.showWindow("Chat")}
+						embedded={embedded}
+						isPlaying={isPlaying}
+						playbackSpeed={playbackSpeed}
+						hasAudioNearby={hasAudioNearby}
+						onTogglePlayPause={togglePlayPause}
+						onCycleSpeed={cycleSpeed}
 					/>
 					{/* Top right buttons */}
-					<div className="absolute top-[calc(env(safe-area-inset-top)+16px)] right-4 flex items-center gap-2">
+					<div className={`absolute ${embedded ? "top-2" : "top-[calc(env(safe-area-inset-top)+16px)]"} right-4 flex items-center gap-2`}>
 						{/* Refresh button */}
 						<button
 							onClick={handleRefresh}
@@ -1379,21 +1443,33 @@ export default function Timeline() {
 				</div>
 
 				{/* Daily Summary — top right, below controls */}
-				<div className="absolute top-[calc(env(safe-area-inset-top)+56px)] right-4 z-40">
+				<div className={`absolute ${embedded ? "top-12" : "top-[calc(env(safe-area-inset-top)+56px)]"} right-4 z-40`}>
 					<DailySummaryCard currentDate={currentDate} />
+				</div>
+
+				{/* Subtitle bar — below nav bar, always visible when audio exists nearby */}
+				<div className={`absolute ${embedded ? "top-16" : "top-[calc(env(safe-area-inset-top)+96px)]"} left-4 right-4 z-[35]`}>
+					<SubtitleBar
+						frames={frames}
+						currentIndex={currentIndex}
+						isPlaying={isPlaying}
+						onClick={() => setShowAudioTranscript(true)}
+					/>
 				</div>
 
 				{/* Loading/Error States - Progressive loading: only block when no frames yet */}
 				{showBlockingLoader && (
 					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
-						{/* Close button - always visible to prevent being stuck */}
-						<button
-							onClick={() => commands.closeWindow("Main")}
-							className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
-							title="Close (Esc)"
-						>
-							<X className="w-4 h-4 text-muted-foreground" />
-						</button>
+						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
+						{!embedded && (
+							<button
+								onClick={() => commands.closeWindow("Main")}
+								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
+								title="Close (Esc)"
+							>
+								<X className="w-4 h-4 text-muted-foreground" />
+							</button>
+						)}
 						<div className="bg-card text-foreground p-6 rounded-2xl text-center space-y-3 max-w-md mx-4">
 							<h3 className="font-medium">Loading Timeline</h3>
 							<p className="text-sm text-foreground">
@@ -1427,14 +1503,16 @@ export default function Timeline() {
 
 				{error && (
 					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
-						{/* Close button - always visible to prevent being stuck */}
-						<button
-							onClick={() => commands.closeWindow("Main")}
-							className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
-							title="Close (Esc)"
-						>
-							<X className="w-4 h-4 text-muted-foreground" />
-						</button>
+						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
+						{!embedded && (
+							<button
+								onClick={() => commands.closeWindow("Main")}
+								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
+								title="Close (Esc)"
+							>
+								<X className="w-4 h-4 text-muted-foreground" />
+							</button>
+						)}
 						<div className="bg-destructive/20 border border-destructive/30 text-foreground p-6 rounded-2xl text-center space-y-4 max-w-md mx-4">
 							<div className="flex flex-col items-center gap-2">
 								<AlertCircle className="h-6 w-6 text-destructive" />
@@ -1458,15 +1536,16 @@ export default function Timeline() {
 					</div>
 				)}
 
-				{/* Audio Transcript Panel - Re-enabled and properly positioned */}
-				{currentFrame && showAudioTranscript && (
+				{/* Full transcript panel — only shown on demand */}
+				{showAudioTranscript && currentFrame && (
 					<div className="absolute bottom-28 left-4 right-4 z-[35]">
 						<AudioTranscript
 							frames={frames}
 							currentIndex={currentIndex}
-							groupingWindowMs={30000} // 30 seconds window
+							groupingWindowMs={30000}
 							meetings={meetings}
 							onClose={() => setShowAudioTranscript(false)}
+							isPlaying={isPlaying}
 							onJumpToTime={(timestamp) => {
 								const targetTime = timestamp.getTime();
 								let bestIdx = 0;
@@ -1496,6 +1575,7 @@ export default function Timeline() {
 							frames={frames}
 							currentIndex={currentIndex}
 							onFrameChange={(index) => {
+								pausePlayback();
 								setCurrentIndex(index);
 								if (frames[index]) {
 									setCurrentFrame(frames[index]);
@@ -1511,6 +1591,8 @@ export default function Timeline() {
 							targetZoom={targetZoom}
 							setTargetZoom={setTargetZoom}
 							onAskAI={sendSelectionToChat}
+							isPlaying={isPlaying}
+							onTogglePlayPause={togglePlayPause}
 						/>
 					) : (
 						<div className="bg-card/80 backdrop-blur-sm p-4 border-t border-border">
@@ -1529,7 +1611,8 @@ export default function Timeline() {
 													key={i}
 													className="flex-1 bg-muted rounded-t"
 													style={{
-														height: `${Math.random() * 60 + 20}%`,
+														// Deterministic heights to avoid SSR/client hydration mismatch
+														height: `${((i * 37 + 13) % 60) + 20}%`,
 														animationDelay: `${i * 20}ms`
 													}}
 												/>
@@ -1553,26 +1636,52 @@ export default function Timeline() {
 				</div>
 
 	
-				{/* Search Modal */}
-				<SearchModal
-					isOpen={showSearchModal}
-					onClose={() => setShowSearchModal(false)}
-					onNavigateToTimestamp={(timestamp) => {
-						const targetDate = new Date(timestamp);
-						setSeekingTimestamp(timestamp);
-
-						if (!isSameDay(targetDate, currentDate)) {
-							// Different day: use direct navigation (skip hasFramesForDate —
-							// search results prove this date has data)
-							navigateDirectToDate(targetDate);
-						} else {
-							// Same day: jump directly, no pending navigation needed
-							pendingNavigationRef.current = null;
-							jumpToTime(targetDate);
-							setSeekingTimestamp(null);
-						}
-					}}
-				/>
+				{/* Search — inline overlay in embedded mode, standard modal otherwise */}
+				{embedded && showSearchModal ? (
+					<div className="absolute inset-0 z-50 flex flex-col">
+						{/* Backdrop */}
+						<div
+							className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+							onClick={() => setShowSearchModal(false)}
+						/>
+						{/* Panel — drops down from top */}
+						<div className="relative z-10 m-3 mt-14 flex flex-col max-h-[calc(100%-7rem)] rounded-lg border border-border shadow-2xl overflow-hidden">
+							<SearchModal
+								isOpen={true}
+								embedded
+								onClose={() => setShowSearchModal(false)}
+								onNavigateToTimestamp={(timestamp) => {
+									setShowSearchModal(false);
+									const targetDate = new Date(timestamp);
+									setSeekingTimestamp(timestamp);
+									if (!isSameDay(targetDate, currentDate)) {
+										navigateDirectToDate(targetDate);
+									} else {
+										pendingNavigationRef.current = null;
+										jumpToTime(targetDate);
+										setSeekingTimestamp(null);
+									}
+								}}
+							/>
+						</div>
+					</div>
+				) : (
+					<SearchModal
+						isOpen={showSearchModal}
+						onClose={() => setShowSearchModal(false)}
+						onNavigateToTimestamp={(timestamp) => {
+							const targetDate = new Date(timestamp);
+							setSeekingTimestamp(timestamp);
+							if (!isSameDay(targetDate, currentDate)) {
+								navigateDirectToDate(targetDate);
+							} else {
+								pendingNavigationRef.current = null;
+								jumpToTime(targetDate);
+								setSeekingTimestamp(null);
+							}
+						}}
+					/>
+				)}
 			</div>
 		</TimelineProvider>
 	);

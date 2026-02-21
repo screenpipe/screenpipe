@@ -54,6 +54,7 @@ export function ReferralCard() {
     };
 
     fetchReferral();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.email]);
 
   if (!settings.user?.token) return null;

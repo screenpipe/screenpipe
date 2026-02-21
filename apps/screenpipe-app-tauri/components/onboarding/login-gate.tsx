@@ -99,6 +99,7 @@ function useBackgroundCanvas(
     }
     draw();
     return () => cancelAnimationFrame(anim.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w, h]);
 }
 
@@ -122,6 +123,7 @@ function useButtonCanvas(
     c.width = w * dpr;
     c.height = h * dpr;
     ctx.scale(dpr, dpr);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w, h]);
 
   useEffect(() => {
@@ -217,6 +219,7 @@ function useButtonCanvas(
     }
     draw();
     return () => cancelAnimationFrame(anim.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w, h, hovered]);
 }
 
@@ -293,7 +296,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({ handleNextSlide }) =>
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.5 }}
         >
-          ai finally knows what you're doing
+          ai finally knows what you&apos;re doing
         </motion.p>
 
         {isLoggedIn ? (

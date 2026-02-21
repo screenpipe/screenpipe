@@ -51,6 +51,8 @@ pub struct UiRecorderConfig {
     pub capture_app_switch: bool,
     /// Capture window focus changes
     pub capture_window_focus: bool,
+    /// Capture scroll events
+    pub capture_scroll: bool,
     /// Capture element context via accessibility
     pub capture_context: bool,
     /// Additional apps to exclude
@@ -85,7 +87,8 @@ impl Default for UiRecorderConfig {
             capture_clipboard: true,
             capture_clipboard_content: true,
             capture_app_switch: true,
-            capture_window_focus: true,
+            capture_window_focus: false,
+            capture_scroll: false,
             capture_context: true,
             excluded_apps: Vec::new(),
             excluded_windows: Vec::new(),
@@ -114,6 +117,7 @@ impl UiRecorderConfig {
         config.capture_clipboard_content = self.capture_clipboard_content;
         config.capture_app_switch = self.capture_app_switch;
         config.capture_window_focus = self.capture_window_focus;
+        config.capture_scroll = self.capture_scroll;
         config.capture_context = self.capture_context;
 
         // Add excluded apps
@@ -163,11 +167,15 @@ impl UiRecorderHandle {
     }
 }
 
-/// Start UI event recording
+/// Start UI event recording.
+///
+/// If `capture_trigger_tx` is provided, relevant UI events (app switch, window focus,
+/// click, clipboard) will also be sent as capture triggers for event-driven capture.
 #[cfg(feature = "ui-events")]
 pub async fn start_ui_recording(
     db: Arc<DatabaseManager>,
     config: UiRecorderConfig,
+    capture_trigger_tx: Option<crate::event_driven_capture::TriggerSender>,
 ) -> Result<UiRecorderHandle> {
     if !config.enabled {
         info!("UI event capture is disabled");
@@ -254,6 +262,33 @@ pub async fn start_ui_recording(
                         if let Ok(mut woken) = lock.lock() {
                             *woken = true;
                             cvar.notify_one();
+                        }
+                    }
+
+                    // Send capture triggers for event-driven capture
+                    if let Some(ref trigger_tx) = capture_trigger_tx {
+                        use crate::event_driven_capture::CaptureTrigger;
+                        let trigger = match &db_event.event_type {
+                            screenpipe_db::UiEventType::AppSwitch => {
+                                Some(CaptureTrigger::AppSwitch {
+                                    app_name: db_event.app_name.clone().unwrap_or_default(),
+                                })
+                            }
+                            screenpipe_db::UiEventType::WindowFocus => {
+                                Some(CaptureTrigger::WindowFocus {
+                                    window_name: db_event.window_title.clone().unwrap_or_default(),
+                                })
+                            }
+                            screenpipe_db::UiEventType::Click => {
+                                Some(CaptureTrigger::Click)
+                            }
+                            screenpipe_db::UiEventType::Clipboard => {
+                                Some(CaptureTrigger::Clipboard)
+                            }
+                            _ => None,
+                        };
+                        if let Some(trigger) = trigger {
+                            let _ = trigger_tx.send(trigger);
                         }
                     }
 
@@ -497,11 +532,7 @@ fn run_tree_walker(
                                 snap.node_count,
                                 walk_ms
                             );
-                            cache.record_store(
-                                &snap.app_name,
-                                &snap.window_name,
-                                snap.simhash,
-                            );
+                            cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
                             metrics.walks_stored += 1;
                         }
                         Err(e) => {
@@ -615,6 +646,7 @@ impl UiRecorderHandle {
 pub async fn start_ui_recording(
     _db: std::sync::Arc<screenpipe_db::DatabaseManager>,
     _config: UiRecorderConfig,
+    _capture_trigger_tx: Option<crate::event_driven_capture::TriggerSender>,
 ) -> anyhow::Result<UiRecorderHandle> {
     Ok(UiRecorderHandle)
 }

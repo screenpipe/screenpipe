@@ -5,7 +5,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, RefreshCw, CalendarIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, CalendarIcon, Search, Play, Pause } from "lucide-react";
 import {
 	endOfDay,
 	format,
@@ -98,7 +98,13 @@ interface TimelineControlsProps {
 	onJumpToday: () => void;
 	onSearchClick?: () => void;
 	onChatClick?: () => void;
+	embedded?: boolean;
 	className?: string;
+	isPlaying?: boolean;
+	playbackSpeed?: number;
+	hasAudioNearby?: boolean;
+	onTogglePlayPause?: () => void;
+	onCycleSpeed?: () => void;
 }
 
 export function TimelineControls({
@@ -108,7 +114,13 @@ export function TimelineControls({
 	onJumpToday,
 	onSearchClick,
 	onChatClick,
+	embedded,
 	className,
+	isPlaying,
+	playbackSpeed,
+	hasAudioNearby,
+	onTogglePlayPause,
+	onCycleSpeed,
 }: TimelineControlsProps) {
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
@@ -162,7 +174,7 @@ export function TimelineControls({
 			
 			
 			{/* Center section - Timeline controls */}
-			<div className="flex items-center gap-2 mt-8">
+			<div className={`flex items-center gap-2 ${embedded ? "mt-1" : "mt-8"}`}>
 				<div className="flex items-center h-10 bg-background border border-border px-1">
 					<Button
 						variant="ghost"
@@ -234,23 +246,67 @@ export function TimelineControls({
 					</Button>
 				</div>
 
-				<button
-					type="button"
-					onClick={onSearchClick}
-					className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
-				>
-					<span className="text-xs text-muted-foreground group-hover:text-background">{searchShortcutDisplay}</span>
-					<span className="text-xs text-foreground group-hover:text-background">search</span>
-				</button>
+				{hasAudioNearby && onTogglePlayPause && (
+					<div className="flex items-center h-10 bg-background border border-border px-1 gap-0.5">
+						<Button
+							variant="ghost"
+							size="icon"
+							onClick={onTogglePlayPause}
+							className="h-8 w-8 text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
+							title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+						>
+							{isPlaying ? (
+								<Pause className="h-4 w-4" />
+							) : (
+								<Play className="h-4 w-4" />
+							)}
+						</Button>
+						{onCycleSpeed && (
+							<button
+								type="button"
+								onClick={onCycleSpeed}
+								className="px-2 h-8 text-xs font-mono text-foreground hover:bg-foreground hover:text-background transition-colors duration-150 min-w-[36px] text-center"
+								title="Playback speed"
+							>
+								{playbackSpeed ?? 1}x
+							</button>
+						)}
+					</div>
+				)}
 
-				<button
-					type="button"
-					onClick={onChatClick}
-					className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
-				>
-					<span className="text-xs text-muted-foreground group-hover:text-background">{chatShortcutDisplay}</span>
-					<span className="text-xs text-foreground group-hover:text-background">chat</span>
-				</button>
+				{onSearchClick && (
+					embedded ? (
+						<Button
+							variant="ghost"
+							size="icon"
+							onClick={onSearchClick}
+							className="h-10 w-10 bg-background border border-border text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
+							title="Search"
+						>
+							<Search className="h-4 w-4" />
+						</Button>
+					) : (
+						<button
+							type="button"
+							onClick={onSearchClick}
+							className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
+						>
+							<span className="text-xs text-muted-foreground group-hover:text-background">{searchShortcutDisplay}</span>
+							<span className="text-xs text-foreground group-hover:text-background">search</span>
+						</button>
+					)
+				)}
+
+				{onChatClick && (
+					<button
+						type="button"
+						onClick={onChatClick}
+						className="flex items-center h-10 gap-1.5 bg-background border border-border px-4 font-mono hover:bg-foreground hover:text-background transition-colors duration-150 cursor-pointer group"
+					>
+						<span className="text-xs text-muted-foreground group-hover:text-background">{chatShortcutDisplay}</span>
+						<span className="text-xs text-foreground group-hover:text-background">chat</span>
+					</button>
+				)}
 			</div>
 
 			

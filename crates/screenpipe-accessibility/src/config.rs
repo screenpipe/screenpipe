@@ -29,8 +29,11 @@ pub struct UiCaptureConfig {
     /// Capture app switches
     pub capture_app_switch: bool,
 
-    /// Capture window focus changes
+    /// Capture window focus changes (high volume - disabled by default)
     pub capture_window_focus: bool,
+
+    /// Capture scroll events (very high volume - disabled by default)
+    pub capture_scroll: bool,
 
     /// Capture clipboard operations
     pub capture_clipboard: bool,
@@ -111,7 +114,8 @@ impl Default for UiCaptureConfig {
             capture_text: true,
             capture_keystrokes: false, // Privacy risk
             capture_app_switch: true,
-            capture_window_focus: true,
+            capture_window_focus: false, // High volume
+            capture_scroll: false,       // Very high volume
             capture_clipboard: true,
             capture_clipboard_content: true,
             capture_context: true,

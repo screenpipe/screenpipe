@@ -60,6 +60,8 @@ interface TimelineSliderProps {
 	targetZoom: number;
 	setTargetZoom: (fn: (prev: number) => number) => void;
 	onAskAI?: () => void;
+	isPlaying?: boolean; // Whether audio playback is active
+	onTogglePlayPause?: () => void; // Toggle audio playback (Space key)
 }
 
 interface AppGroup {
@@ -173,6 +175,8 @@ export const TimelineSlider = ({
 	targetZoom,
 	setTargetZoom,
 	onAskAI,
+	isPlaying = false,
+	onTogglePlayPause,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
@@ -303,6 +307,25 @@ export const TimelineSlider = ({
 			});
 		}
 	}, [isSearchModalOpen]);
+
+	// Space key toggles play/pause (only when timeline focused, not during search modal)
+	useEffect(() => {
+		if (isSearchModalOpen || !onTogglePlayPause) return;
+
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === " " || e.code === "Space") {
+				const target = e.target as HTMLElement;
+				if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable) {
+					return;
+				}
+				e.preventDefault();
+				onTogglePlayPause();
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [isSearchModalOpen, onTogglePlayPause]);
 
 	// Calculate frame width based on zoom level
 	const frameWidth = useMemo(() => {
@@ -482,6 +505,7 @@ export const TimelineSlider = ({
 			block: "nearest",
 			inline: "center",
 		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [currentIndex, frames.length]);
 
 	useEffect(() => {
@@ -745,6 +769,7 @@ export const TimelineSlider = ({
 												}}
 												transition={{ type: "spring", stiffness: 400, damping: 25 }}
 											>
+												{/* eslint-disable-next-line @next/next/no-img-element */}
 												<img
 													src={`http://localhost:11435/app-icon?name=${encodeURIComponent(appName)}`}
 													className="w-full h-full rounded-sm object-contain scale-110"
@@ -825,7 +850,8 @@ export const TimelineSlider = ({
 											data-selected={isSelected || isInRange ? "true" : undefined}
 											className={cn(
 												"flex-shrink-0 cursor-ew-resize rounded-t relative hover:z-50 transition-all duration-200",
-												(isSelected || isInRange) && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-black/20"
+												(isSelected || isInRange) && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-black/20",
+												isCurrent && isPlaying && "animate-pulse"
 											)}
 											style={{
 												width: `${frameWidth}px`,
@@ -835,7 +861,11 @@ export const TimelineSlider = ({
 												height: isCurrent || isSelected || isInRange ? "75%" : hasAudio ? "60%" : "45%",
 												opacity: isCurrent || isSelected || isInRange ? 1 : hasAudio ? 0.9 : 0.7,
 												direction: "ltr",
-												boxShadow: isCurrent ? '0 0 10px rgba(255, 255, 255, 0.4), 0 0 20px rgba(255, 255, 255, 0.2)' : 'none',
+												boxShadow: isCurrent
+												? isPlaying
+													? '0 0 12px rgba(255, 255, 255, 0.6), 0 0 24px rgba(255, 255, 255, 0.3)'
+													: '0 0 10px rgba(255, 255, 255, 0.4), 0 0 20px rgba(255, 255, 255, 0.2)'
+												: 'none',
 												transform: isCurrent ? 'scale(1.1)' : 'scale(1)',
 												transition: 'all 0.2s ease-out',
 												borderRadius: '4px 4px 0 0',
@@ -893,6 +923,7 @@ export const TimelineSlider = ({
 													}}
 												>
 													<div className="flex items-center gap-2 mb-1">
+														{/* eslint-disable-next-line @next/next/no-img-element */}
 														<img
 															src={`http://localhost:11435/app-icon?name=${encodeURIComponent(group.appName)}`}
 															className="w-4 h-4 rounded"

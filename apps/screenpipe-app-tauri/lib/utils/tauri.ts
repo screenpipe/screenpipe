@@ -733,6 +733,51 @@ async remindersSetAudioOnly(audioOnly: boolean) : Promise<Result<null, string>> 
 }
 },
 /**
+ * Check Calendar authorization status (no popup).
+ */
+async calendarStatus() : Promise<Result<CalendarStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("calendar_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Request Calendar permission (shows one-time macOS popup).
+ * Returns "granted", "denied", or an error message.
+ */
+async calendarAuthorize() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("calendar_authorize") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Get calendar events in a time window.
+ */
+async calendarGetEvents(hoursBack: bigint | null, hoursAhead: bigint | null) : Promise<Result<CalendarEventItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("calendar_get_events", { hoursBack, hoursAhead }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Get events happening right now.
+ */
+async calendarGetCurrentMeeting() : Promise<Result<CalendarEventItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("calendar_get_current_meeting") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: start voice training. Spawns a background task that polls
  * until audio is transcribed, then assigns the speaker. Returns immediately.
  */
@@ -771,6 +816,24 @@ export type AIPreset = { id: string; prompt: string; provider: AIProviderType; u
 export type AIProviderType = "openai" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
+export type CalendarEventItem = { id: string; title: string; 
+/**
+ * RFC3339 in UTC — for meeting detection / comparisons.
+ */
+start: string; 
+/**
+ * RFC3339 in UTC — for meeting detection / comparisons.
+ */
+end: string; 
+/**
+ * Pre-formatted local time, e.g. "3:30 PM" — for display.
+ */
+startDisplay: string; 
+/**
+ * Pre-formatted local time, e.g. "5:00 PM" — for display.
+ */
+endDisplay: string; attendees: string[]; location: string | null; calendarName: string; isAllDay: boolean }
+export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type Credits = { amount: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }

@@ -482,18 +482,16 @@ pub async fn default_output_device() -> Result<AudioDevice> {
                         return Ok(AudioDevice::new(name, DeviceType::Output));
                     }
                 }
-                return Err(anyhow!(
+                Err(anyhow!(
                     "ScreenCaptureKit available but no display audio device found — \
                      output audio capture requires a display device"
-                ));
+                ))
             }
-            Err(e) => {
-                return Err(anyhow!(
-                    "ScreenCaptureKit unavailable for output audio capture: {} — \
+            Err(e) => Err(anyhow!(
+                "ScreenCaptureKit unavailable for output audio capture: {} — \
                      output audio capture is not possible without it",
-                    e
-                ));
-            }
+                e
+            )),
         }
     }
 

@@ -276,6 +276,7 @@ export function ObsidianSyncCard() {
         console.error("Failed to restart scheduler:", e);
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.syncIntervalMinutes, settings.enabled, settingsLoaded, isValidVault, appSettings?.user?.token]);
 
   // Validate vault path when it changes
@@ -285,6 +286,7 @@ export function ObsidianSyncCard() {
     } else {
       setIsValidVault(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.vaultPath]);
 
   // Listen for sync events

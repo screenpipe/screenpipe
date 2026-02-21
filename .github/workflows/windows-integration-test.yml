@@ -56,6 +56,11 @@ jobs:
     - name: Setup MSVC Dev Cmd
       uses: ilammy/msvc-dev-cmd@v1
 
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@v2
+      with:
+        version: "10.0"
+
     - name: Sign and Install Scream Driver on Windows
       shell: powershell
       run: |
@@ -65,14 +70,51 @@ jobs:
         Scream\Install\helpers\devcon-x64.exe install Scream\Install\driver\x64\Scream.inf *Scream
       timeout-minutes: 5
 
+    - name: Install 7zip
+      shell: powershell
+      run: |
+        $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
+        $7zipInstaller = "7z-installer.exe"
+        Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
+        Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
+        Remove-Item $7zipInstaller
+        echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Download ONNX Runtime (CPU)
+      shell: pwsh
+      run: |
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
+        $zipFile = "onnxruntime-win-x64-1.19.2.zip"
+        $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+        Invoke-WebRequest -Uri $url -OutFile $zipFile
+        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+        7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
+        Write-Host "ONNX Runtime extracted to $extractDir"
+
     - name: Build CLI
-      run: cargo build --release
+      env:
+        RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+        ORT_STRATEGY: system
+        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+        VCPKG_STATIC_LINKAGE: "true"
+        KNF_STATIC_CRT: 1
+      run: cargo build --release --target x86_64-pc-windows-msvc
 
     - name: Run CLI and generate activity
       shell: pwsh
       run: |
         $env:RUST_LOG = "debug"
-        $process = Start-Process -FilePath ".\target\release\screenpipe.exe" -ArgumentList "--debug" -PassThru -RedirectStandardOutput "screenpipe_output.log" -RedirectStandardError "screenpipe_error.log" -NoNewWindow
+        $exePath = if (Test-Path ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe") {
+          ".\target\x86_64-pc-windows-msvc\release\screenpipe.exe"
+        } else {
+          ".\target\release\screenpipe.exe"
+        }
+        # Copy onnxruntime.dll next to the binary
+        $ortDll = "apps\screenpipe-app-tauri\src-tauri\onnxruntime-win-x64-1.19.2\lib\onnxruntime.dll"
+        if (Test-Path $ortDll) {
+          Copy-Item $ortDll (Split-Path $exePath) -Force
+        }
+        $process = Start-Process -FilePath $exePath -ArgumentList "--debug" -PassThru -RedirectStandardOutput "screenpipe_output.log" -RedirectStandardError "screenpipe_error.log" -NoNewWindow
         Start-Sleep -Seconds 10
         
         # Generate some screen activity

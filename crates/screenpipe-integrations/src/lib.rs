@@ -5,3 +5,9 @@ pub mod unstructured_ocr;
 
 #[cfg(target_os = "macos")]
 pub mod reminders;
+
+#[cfg(target_os = "macos")]
+pub mod calendar;
+
+#[cfg(target_os = "windows")]
+pub mod calendar_windows;

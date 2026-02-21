@@ -22,7 +22,8 @@ use crate::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
             remove_tags, validate_media_handler,
         },
-        frames::{get_frame_data, get_frame_metadata, get_frame_ocr_data, get_next_valid_frame},
+        data::delete_time_range_handler,
+        frames::{get_frame_context, get_frame_data, get_frame_metadata, get_frame_ocr_data, get_next_valid_frame},
         health::{
             api_list_monitors, api_vision_status, audio_metrics_handler, health_check,
             vision_metrics_handler,
@@ -357,6 +358,7 @@ impl SCServer {
             .delete("/tags/:content_type/:id", remove_tags)
             .get("/frames/:frame_id", get_frame_data)
             .get("/frames/:frame_id/ocr", get_frame_ocr_data)
+            .get("/frames/:frame_id/context", get_frame_context)
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
             .get("/health", health_check)
@@ -395,19 +397,27 @@ impl SCServer {
                 axum::routing::post(sync_api::sync_download),
             )
             // Trigger immediate FTS indexing (used by onboarding so search works right away)
-            .route("/fts/index", axum::routing::post({
-                use axum::extract::State;
-                use axum::Json;
-                |State(state): State<Arc<AppState>>| async move {
-                    let count = screenpipe_db::fts_indexer::index_all_tables(&state.db).await;
-                    Json(json!({ "indexed": count }))
-                }
-            }))
+            .route(
+                "/fts/index",
+                axum::routing::post({
+                    use axum::extract::State;
+                    use axum::Json;
+                    |State(state): State<Arc<AppState>>| async move {
+                        let count = screenpipe_db::fts_indexer::index_all_tables(&state.db).await;
+                        Json(json!({ "indexed": count }))
+                    }
+                }),
+            )
             // Vision status endpoint (not in OpenAPI spec to avoid oasgen registration issues)
             .route("/vision/status", get(api_vision_status))
             // Vision pipeline metrics (not in OpenAPI spec)
             .route("/vision/metrics", get(vision_metrics_handler))
-            .route("/audio/metrics", get(audio_metrics_handler));
+            .route("/audio/metrics", get(audio_metrics_handler))
+            // Data management (not in OpenAPI spec)
+            .route(
+                "/data/delete-range",
+                axum::routing::post(delete_time_range_handler),
+            );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
         #[cfg(feature = "apple-intelligence")]

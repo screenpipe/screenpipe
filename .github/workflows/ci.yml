@@ -116,6 +116,27 @@ jobs:
         with:
           version: "10.0"
 
+      - name: Install 7zip
+        shell: powershell
+        run: |
+          $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
+          $7zipInstaller = "7z-installer.exe"
+          Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
+          Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
+          Remove-Item $7zipInstaller
+          echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Download ONNX Runtime (CPU)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
+          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+          Invoke-WebRequest -Uri $url -OutFile $zipFile
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
+          Write-Host "ONNX Runtime extracted to $extractDir"
+
       - name: Run pre_build.js
         shell: bash
         run: bun ./scripts/pre_build.js
@@ -128,13 +149,28 @@ jobs:
           cp crates/screenpipe-vision/tests/testing_OCR.png target/debug/deps/
 
       - name: Run specific Windows OCR cargo test
-        run: cargo test test_process_ocr_task_windows --release
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          KNF_STATIC_CRT: 1
+        run: cargo test test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
 
       - name: Run PII removal tests
-        run: cargo test -p screenpipe-core pii_removal --release
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          KNF_STATIC_CRT: 1
+        run: cargo test -p screenpipe-core pii_removal --release --target x86_64-pc-windows-msvc
 
       - name: Run PII redaction tests
-        run: cargo test -p screenpipe-server --lib pii_redaction_tests --release
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          KNF_STATIC_CRT: 1
+        run: cargo test -p screenpipe-server --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc
 
       # pipes_test removed — pipe manager system deleted in #2212
 

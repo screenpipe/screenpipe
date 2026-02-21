@@ -742,39 +742,67 @@ jobs:
         if: matrix.os_type == 'macos'
         shell: bash
         run: |
-          # On macOS 26 self-hosted runners, Tauri's bundler creates a temp keychain
-          # and sets the search list to just login+temp, dropping System.keychain.
-          # codesign then can't find Apple intermediate certs for chain verification.
+          # On self-hosted runners, System.keychain may be missing Apple intermediate
+          # CA certs needed for codesign chain verification (errSecInternalComponent).
+          # Tauri CLI sets search list to [login, System, temp] — we need the certs
+          # in at least one of those keychains.
           #
-          # Fix: import Apple intermediate CA certs directly into the login keychain.
-          # This way codesign finds them regardless of which keychains are in the
-          # search list — no PATH wrapper needed (Tauri calls /usr/bin/codesign directly).
-          security unlock-keychain -p '' ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+          # IMPORTANT: Do NOT call `security unlock-keychain -p ''` — if the login
+          # keychain has a real password, this can LOCK it (triggering a password
+          # check that fails). The login keychain should already be unlocked in
+          # a logged-in user session on self-hosted runners.
 
           # Download Apple intermediate certs if not cached
           mkdir -p ~/apple-certs
-          if [ ! -f ~/apple-certs/DeveloperIDG2CA.cer ]; then
-            curl -sL -o ~/apple-certs/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
-            curl -sL -o ~/apple-certs/AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
-            curl -sL -o ~/apple-certs/AppleIncRootCertificate.cer https://www.apple.com/certificateauthority/AppleIncRootCertificate.cer
-          fi
-
-          # Import Apple CA certs into login keychain so codesign can build the chain
-          for cert in ~/apple-certs/*.cer; do
-            if [ -f "$cert" ]; then
-              security import "$cert" -t cert -k ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-              echo "Imported $(basename "$cert") into login keychain"
+          for cert_url in \
+            "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+            "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer" \
+            "https://www.apple.com/certificateauthority/AppleIncRootCertificate.cer"; do
+            cert_name=$(basename "$cert_url")
+            if [ ! -f ~/apple-certs/"$cert_name" ]; then
+              curl -sL -o ~/apple-certs/"$cert_name" "$cert_url"
+              echo "Downloaded $cert_name"
             fi
           done
 
-          # Also import into System.keychain as belt-and-suspenders
+          # Import into System.keychain (most reliable — always in search list)
           for cert in ~/apple-certs/*.cer; do
             if [ -f "$cert" ]; then
               sudo security import "$cert" -t cert -k /Library/Keychains/System.keychain 2>/dev/null || true
+              echo "Imported $(basename "$cert") into System.keychain"
             fi
           done
 
-          echo "Imported Apple intermediate CA certificates for codesign chain verification"
+          # Also add as trusted certs in the admin trust store (belt-and-suspenders)
+          # This ensures trust evaluation succeeds even if keychain search is limited
+          sudo security add-trusted-cert -d -r trustRoot \
+            -k /Library/Keychains/System.keychain \
+            ~/apple-certs/AppleIncRootCertificate.cer 2>/dev/null || true
+          sudo security add-trusted-cert -d -r unspecified \
+            -k /Library/Keychains/System.keychain \
+            ~/apple-certs/DeveloperIDG2CA.cer 2>/dev/null || true
+          sudo security add-trusted-cert -d -r unspecified \
+            -k /Library/Keychains/System.keychain \
+            ~/apple-certs/AppleWWDRCAG3.cer 2>/dev/null || true
+
+          # Import into login keychain too (without explicit unlock — should be unlocked already)
+          for cert in ~/apple-certs/*.cer; do
+            if [ -f "$cert" ]; then
+              security import "$cert" -t cert -k ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+            fi
+          done
+
+          # Verify certs are findable
+          echo "=== Verifying Apple CA certs in keychains ==="
+          security find-certificate -c "Developer ID Certification Authority" /Library/Keychains/System.keychain > /dev/null 2>&1 \
+            && echo "✅ Developer ID CA found in System.keychain" \
+            || echo "⚠️ Developer ID CA NOT found in System.keychain"
+          security find-certificate -c "Apple Root CA" /Library/Keychains/System.keychain > /dev/null 2>&1 \
+            && echo "✅ Apple Root CA found in System.keychain" \
+            || echo "⚠️ Apple Root CA NOT found in System.keychain"
+          security find-certificate -c "Developer ID Certification Authority" ~/Library/Keychains/login.keychain-db > /dev/null 2>&1 \
+            && echo "✅ Developer ID CA found in login.keychain" \
+            || echo "⚠️ Developer ID CA NOT found in login.keychain"
 
       - name: Compute Tauri build args
         id: tauri-args

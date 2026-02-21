@@ -44,6 +44,7 @@ export function UpgradeDialog({
     if (!open) {
       trackedRef.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const trackAction = (action: string, extra?: Record<string, unknown>) => {

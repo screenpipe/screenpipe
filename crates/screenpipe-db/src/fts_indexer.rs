@@ -12,14 +12,23 @@ use crate::DatabaseManager;
 /// infrequently — process everything that accumulated since last run.
 const FTS_BATCH_SIZE: i64 = 10_000;
 
-/// Rows per micro-batch inside a write transaction. Keep small so each
-/// tx holds the write lock briefly, letting real-time inserts interleave.
-/// 25 rows × ~2KB ≈ sub-millisecond lock hold time.
+// --- Normal mode (steady-state): gentle on writes ---
+
+/// Rows per micro-batch in normal mode.
 const FTS_MICRO_BATCH_SIZE: usize = 25;
 
-/// Delay between micro-batches to let real-time inserts through.
-/// 200ms gives pending frame/audio inserts a window to acquire the lock.
+/// Delay between micro-batches in normal mode.
 const FTS_MICRO_BATCH_DELAY: Duration = Duration::from_millis(200);
+
+// --- Backfill mode (catching up after FTS rebuild): fast ---
+
+/// Rows per micro-batch during backfill. Larger batches = fewer lock
+/// acquisitions. 500 rows × ~2KB ≈ 1MB per tx, still very fast.
+const BACKFILL_MICRO_BATCH_SIZE: usize = 500;
+
+/// Delay between micro-batches during backfill. Just a yield to let
+/// other tasks run — no need for long delays during startup catchup.
+const BACKFILL_MICRO_BATCH_DELAY: Duration = Duration::from_millis(5);
 
 /// Delay between indexing each table to let frame inserts interleave.
 const FTS_INTER_TABLE_DELAY: Duration = Duration::from_secs(1);
@@ -31,6 +40,9 @@ const FTS_INTER_TABLE_DELAY: Duration = Duration::from_secs(1);
 /// This eliminates the FTS indexer as a source of write contention
 /// (was 555 slow batches in 3 hours at the old 30s interval).
 const FTS_INDEX_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// If any table has more than this many unindexed rows, use backfill mode.
+const BACKFILL_THRESHOLD: i64 = 1_000;
 
 /// Start the background FTS indexer that periodically indexes new rows
 /// into FTS5 tables. This replaces the synchronous AFTER INSERT triggers
@@ -50,13 +62,44 @@ pub fn start_fts_indexer(db: Arc<DatabaseManager>) -> tokio::task::JoinHandle<()
         // At startup, frame/audio inserts are heaviest — give them 60s headroom.
         tokio::time::sleep(Duration::from_secs(60)).await;
 
+        // Phase 1: Check if we need backfill (e.g. after FTS table rebuild).
+        // Run continuously with fast settings until caught up.
+        let backlog = estimate_backlog(&db).await;
+        if backlog > BACKFILL_THRESHOLD {
+            info!(
+                "FTS indexer: backfill needed (~{} rows behind), using fast mode",
+                backlog
+            );
+            loop {
+                let total = index_all_tables_with_config(
+                    &db,
+                    BACKFILL_MICRO_BATCH_SIZE,
+                    BACKFILL_MICRO_BATCH_DELAY,
+                )
+                .await;
+                if total == 0 {
+                    info!("FTS indexer: backfill complete, switching to normal mode");
+                    break;
+                }
+                info!("FTS indexer: backfill batch indexed {} rows", total);
+                // Brief pause between backfill cycles — 1s is enough
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        // Phase 2: Normal steady-state mode.
         let mut interval = tokio::time::interval(FTS_INDEX_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             interval.tick().await;
 
-            let total = index_all_tables(&db).await;
+            let total = index_all_tables_with_config(
+                &db,
+                FTS_MICRO_BATCH_SIZE,
+                FTS_MICRO_BATCH_DELAY,
+            )
+            .await;
             if total > 0 {
                 debug!("FTS indexer: indexed {} total rows", total);
             }
@@ -64,16 +107,56 @@ pub fn start_fts_indexer(db: Arc<DatabaseManager>) -> tokio::task::JoinHandle<()
     })
 }
 
+/// Estimate how many rows are behind across all FTS-indexed tables.
+async fn estimate_backlog(db: &DatabaseManager) -> i64 {
+    let mut total: i64 = 0;
+
+    let tables: &[(&str, &str, &str)] = &[
+        ("frames", "frames", "rowid"),
+        ("ocr_text", "ocr_text", "rowid"),
+        ("audio_transcriptions", "audio_transcriptions", "rowid"),
+        ("accessibility", "accessibility", "id"),
+    ];
+
+    for (progress_name, table, id_col) in tables {
+        let last = get_last_indexed(db, progress_name).await.unwrap_or(0);
+        let max_id: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT MAX({}) FROM {}",
+            id_col, table
+        ))
+        .fetch_optional(&db.pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(max) = max_id {
+            total += (max - last).max(0);
+        }
+    }
+
+    total
+}
+
 /// Index all FTS tables, returning total rows indexed.
 /// Adds a small delay between tables so frame inserts can interleave.
 pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
+    index_all_tables_with_config(db, FTS_MICRO_BATCH_SIZE, FTS_MICRO_BATCH_DELAY).await
+}
+
+/// Index all FTS tables with configurable batch size and delay.
+async fn index_all_tables_with_config(
+    db: &DatabaseManager,
+    micro_batch_size: usize,
+    micro_batch_delay: Duration,
+) -> i64 {
     let mut total = 0;
 
     let t0 = std::time::Instant::now();
-    let frames_count = index_frames_fts(db).await.unwrap_or_else(|e| {
-        warn!("FTS indexer: frames error: {}", e);
-        0
-    });
+    let frames_count = index_frames_fts(db, micro_batch_size, micro_batch_delay)
+        .await
+        .unwrap_or_else(|e| {
+            warn!("FTS indexer: frames error: {}", e);
+            0
+        });
     let frames_elapsed = t0.elapsed();
     if frames_elapsed.as_secs() >= 1 {
         info!(
@@ -90,10 +173,12 @@ pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
     }
 
     let t1 = std::time::Instant::now();
-    let ocr_count = index_ocr_text_fts(db).await.unwrap_or_else(|e| {
-        warn!("FTS indexer: ocr_text error: {}", e);
-        0
-    });
+    let ocr_count = index_ocr_text_fts(db, micro_batch_size, micro_batch_delay)
+        .await
+        .unwrap_or_else(|e| {
+            warn!("FTS indexer: ocr_text error: {}", e);
+            0
+        });
     let ocr_elapsed = t1.elapsed();
     if ocr_elapsed.as_secs() >= 1 {
         info!(
@@ -110,7 +195,7 @@ pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
     }
 
     let t2 = std::time::Instant::now();
-    let audio_count = index_audio_transcriptions_fts(db)
+    let audio_count = index_audio_transcriptions_fts(db, micro_batch_size, micro_batch_delay)
         .await
         .unwrap_or_else(|e| {
             warn!("FTS indexer: audio_transcriptions error: {}", e);
@@ -132,10 +217,12 @@ pub async fn index_all_tables(db: &DatabaseManager) -> i64 {
     }
 
     let t3 = std::time::Instant::now();
-    let accessibility_count = index_accessibility_fts(db).await.unwrap_or_else(|e| {
-        warn!("FTS indexer: accessibility error: {}", e);
-        0
-    });
+    let accessibility_count = index_accessibility_fts(db, micro_batch_size, micro_batch_delay)
+        .await
+        .unwrap_or_else(|e| {
+            warn!("FTS indexer: accessibility error: {}", e);
+            0
+        });
     let accessibility_elapsed = t3.elapsed();
     if accessibility_elapsed.as_secs() >= 1 {
         info!(
@@ -184,25 +271,30 @@ async fn update_last_indexed(
 /// Index new rows from `frames` into `frames_fts`.
 ///
 /// Pre-reads source data outside the write tx, then inserts into FTS
-/// in micro-batches of FTS_MICRO_BATCH_SIZE rows. Each micro-batch
-/// acquires and releases the write lock so frame inserts can interleave.
-async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+/// in micro-batches. Each micro-batch acquires and releases the write
+/// lock so frame inserts can interleave.
+#[allow(clippy::explicit_auto_deref)]
+async fn index_frames_fts(
+    db: &DatabaseManager,
+    micro_batch_size: usize,
+    micro_batch_delay: Duration,
+) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "frames").await?;
 
     // Cheap existence check — avoid slow full SELECT on 3GB+ DB when nothing to index
-    let has_rows: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM frames WHERE rowid > ?1)")
-            .bind(last)
-            .fetch_one(&db.pool)
-            .await?;
+    let has_rows: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM frames WHERE rowid > ?1)")
+        .bind(last)
+        .fetch_one(&db.pool)
+        .await?;
     if !has_rows {
         return Ok(0);
     }
 
     // Pre-read source data OUTSIDE the write transaction.
-    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+    let rows: Vec<(i64, String, String, String, String, String, String)> = sqlx::query_as(
         "SELECT id, COALESCE(name, ''), COALESCE(browser_url, ''), \
-                COALESCE(app_name, ''), COALESCE(window_name, ''), CAST(COALESCE(focused, 0) AS TEXT) \
+                COALESCE(app_name, ''), COALESCE(window_name, ''), CAST(COALESCE(focused, 0) AS TEXT), \
+                COALESCE(accessibility_text, '') \
          FROM frames WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
     )
     .bind(last)
@@ -216,14 +308,14 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
 
     let count = rows.len() as i64;
 
-    for chunk in rows.chunks(FTS_MICRO_BATCH_SIZE) {
+    for chunk in rows.chunks(micro_batch_size) {
         let chunk_max_id = chunk.last().unwrap().0;
 
         let mut tx = db.begin_immediate_with_retry().await?;
-        for (id, name, browser_url, app_name, window_name, focused) in chunk {
+        for (id, name, browser_url, app_name, window_name, focused, accessibility_text) in chunk {
             sqlx::query(
-                "INSERT OR IGNORE INTO frames_fts(id, name, browser_url, app_name, window_name, focused) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR IGNORE INTO frames_fts(id, name, browser_url, app_name, window_name, focused, accessibility_text) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )
             .bind(id)
             .bind(name)
@@ -231,6 +323,7 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
             .bind(app_name)
             .bind(window_name)
             .bind(focused)
+            .bind(accessibility_text)
             .execute(&mut **tx.conn())
             .await?;
         }
@@ -238,14 +331,19 @@ async fn index_frames_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
         tx.commit().await?;
 
         // Brief delay to let real-time inserts through between micro-batches
-        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
+        tokio::time::sleep(micro_batch_delay).await;
     }
 
     Ok(count)
 }
 
 /// Index new rows from `ocr_text` into `ocr_text_fts`.
-async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+#[allow(clippy::explicit_auto_deref)]
+async fn index_ocr_text_fts(
+    db: &DatabaseManager,
+    micro_batch_size: usize,
+    micro_batch_delay: Duration,
+) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "ocr_text").await?;
 
     // Cheap existence check
@@ -276,7 +374,7 @@ async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
 
     let count = rows.len() as i64;
 
-    for chunk in rows.chunks(FTS_MICRO_BATCH_SIZE) {
+    for chunk in rows.chunks(micro_batch_size) {
         let chunk_max_rowid = chunk.last().unwrap().0;
 
         let mut tx = db.begin_immediate_with_retry().await?;
@@ -295,14 +393,19 @@ async fn index_ocr_text_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
         update_last_indexed(&mut **tx.conn(), "ocr_text", chunk_max_rowid).await?;
         tx.commit().await?;
 
-        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
+        tokio::time::sleep(micro_batch_delay).await;
     }
 
     Ok(count)
 }
 
 /// Index new rows from `audio_transcriptions` into `audio_transcriptions_fts`.
-async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+#[allow(clippy::explicit_auto_deref)]
+async fn index_audio_transcriptions_fts(
+    db: &DatabaseManager,
+    micro_batch_size: usize,
+    micro_batch_delay: Duration,
+) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "audio_transcriptions").await?;
 
     // Cheap existence check
@@ -334,7 +437,7 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
 
     let count = rows.len() as i64;
 
-    for chunk in rows.chunks(FTS_MICRO_BATCH_SIZE) {
+    for chunk in rows.chunks(micro_batch_size) {
         let chunk_max_rowid = chunk.last().unwrap().0;
 
         let mut tx = db.begin_immediate_with_retry().await?;
@@ -353,14 +456,19 @@ async fn index_audio_transcriptions_fts(db: &DatabaseManager) -> Result<i64, sql
         update_last_indexed(&mut **tx.conn(), "audio_transcriptions", chunk_max_rowid).await?;
         tx.commit().await?;
 
-        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
+        tokio::time::sleep(micro_batch_delay).await;
     }
 
     Ok(count)
 }
 
 /// Index new rows from `accessibility` into `accessibility_fts`.
-async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Error> {
+#[allow(clippy::explicit_auto_deref)]
+async fn index_accessibility_fts(
+    db: &DatabaseManager,
+    micro_batch_size: usize,
+    micro_batch_delay: Duration,
+) -> Result<i64, sqlx::Error> {
     let last = get_last_indexed(db, "accessibility").await?;
 
     // Cheap existence check
@@ -391,7 +499,7 @@ async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Erro
 
     let count = rows.len() as i64;
 
-    for chunk in rows.chunks(FTS_MICRO_BATCH_SIZE) {
+    for chunk in rows.chunks(micro_batch_size) {
         let chunk_max_id = chunk.last().unwrap().0;
 
         let mut tx = db.begin_immediate_with_retry().await?;
@@ -410,7 +518,7 @@ async fn index_accessibility_fts(db: &DatabaseManager) -> Result<i64, sqlx::Erro
         update_last_indexed(&mut **tx.conn(), "accessibility", chunk_max_id).await?;
         tx.commit().await?;
 
-        tokio::time::sleep(FTS_MICRO_BATCH_DELAY).await;
+        tokio::time::sleep(micro_batch_delay).await;
     }
 
     Ok(count)

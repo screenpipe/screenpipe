@@ -16,7 +16,8 @@ use tracing::{debug, warn};
 use crate::server::AppState;
 
 use screenpipe_vision::monitor::{
-    get_monitor_by_id, list_monitors, list_monitors_detailed, MonitorListError,
+    get_cached_monitor_descriptions, get_monitor_by_id, list_monitors, list_monitors_detailed,
+    MonitorListError,
 };
 
 #[derive(OaSchema, Serialize)]
@@ -289,21 +290,14 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         )
     };
 
-    // Get active monitors — timeout so health check stays fast even if
-    // the blocking pool is saturated by DB writes.
+    // Read cached monitor list — updated every 5s by the monitor watcher.
+    // No blocking system calls, no spawn_blocking contention.
     let monitors = if !state.vision_disabled {
-        match tokio::time::timeout(Duration::from_secs(2), list_monitors()).await {
-            Ok(monitor_list) if !monitor_list.is_empty() => Some(
-                monitor_list
-                    .iter()
-                    .map(|m| format!("Display {} ({}x{})", m.id(), m.width(), m.height()))
-                    .collect(),
-            ),
-            Ok(_) => None,
-            Err(_) => {
-                warn!("health_check: list_monitors timed out after 2s");
-                None
-            }
+        let cached = get_cached_monitor_descriptions();
+        if cached.is_empty() {
+            None
+        } else {
+            Some(cached)
         }
     } else {
         None

@@ -63,6 +63,7 @@ export interface ChatMessage {
 	role: "user" | "assistant";
 	content: string;
 	timestamp: number;
+	contentBlocks?: any[];
 }
 
 export interface ChatConversation {
@@ -97,6 +98,21 @@ export type Settings = SettingsStore & {
 	userName?: string;
 	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
 	disableOcr?: boolean;
+	/** Filters pushed from team — merged with local filters for recording */
+	teamFilters?: {
+		ignoredWindows: string[];
+		includedWindows: string[];
+		ignoredUrls: string[];
+	};
+}
+
+export function getEffectiveFilters(settings: Settings) {
+	const team = settings.teamFilters || { ignoredWindows: [], includedWindows: [], ignoredUrls: [] };
+	return {
+		ignoredWindows: [...new Set([...settings.ignoredWindows, ...team.ignoredWindows])],
+		includedWindows: [...new Set([...settings.includedWindows, ...team.includedWindows])],
+		ignoredUrls: [...new Set([...(settings.ignoredUrls || []), ...team.ignoredUrls])],
+	};
 }
 
 export const DEFAULT_PROMPT = `Rules:
@@ -177,9 +193,10 @@ let DEFAULT_SETTINGS: Settings = {
 			],
 			includedWindows: [],
 			ignoredUrls: [],
+			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			fps: 0.5,
-			vadSensitivity: "high",
+			vadSensitivity: "medium",
 			analyticsEnabled: true,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
@@ -483,6 +500,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 					});
 				});
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.analyticsId, settings.user?.id]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
@@ -503,6 +521,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			// Mark as done even if we didn't change anything
 			settingsStore.set({ _proCloudMigrationDone: true } as any);
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {

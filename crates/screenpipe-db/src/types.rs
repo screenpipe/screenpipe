@@ -132,6 +132,14 @@ pub struct Speaker {
     pub metadata: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ActiveSpeaker {
+    pub speaker_id: i64,
+    pub speaker_name: String,
+    pub is_input_device: bool,
+    pub transcription_count: i32,
+}
+
 #[derive(OaSchema, Clone, Eq, PartialEq, Hash, Serialize, Debug, Deserialize)]
 pub enum DeviceType {
     Input,

@@ -6,6 +6,7 @@ pub mod analytics;
 #[cfg(feature = "apple-intelligence")]
 mod apple_intelligence_api;
 mod auto_destruct;
+pub mod calendar_speaker_id;
 pub mod cli;
 pub mod cli_pipe;
 pub mod cli_status;
@@ -17,7 +18,9 @@ pub mod pipes_api;
 pub mod recording_config;
 pub mod routes;
 
+pub mod event_driven_capture;
 pub mod meeting_watcher;
+pub mod paired_capture;
 mod resource_monitor;
 mod server;
 pub mod sleep_monitor;
@@ -45,6 +48,7 @@ pub use server::HealthCheckResponse;
 pub use server::PaginatedResponse;
 pub use server::SCServer;
 pub use server::{api_list_monitors_handler as api_list_monitors, MonitorInfo};
+pub use calendar_speaker_id::start_speaker_identification;
 pub use sleep_monitor::start_sleep_monitor;
 pub use ui_recorder::{start_ui_recording, UiRecorderConfig, UiRecorderHandle};
 pub use video::{

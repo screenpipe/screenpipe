@@ -53,7 +53,7 @@ mod tests {
             "balanced".to_string(),
         );
 
-        let router = app.create_router(true).await;
+        let router = app.create_router().await;
         init();
         (router, db)
     }

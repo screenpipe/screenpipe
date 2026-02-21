@@ -7,7 +7,7 @@
 //! Reuses the UIA CacheRequest-based capture from `platform::windows_uia` to walk
 //! the focused window's tree and extract all visible text — matching macOS behavior.
 
-use super::{TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform};
+use super::{AccessibilityTreeNode, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform};
 use crate::events::AccessibilityNode;
 use crate::platform::windows_uia::UiaContext;
 
@@ -181,7 +181,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         // Extract text from the tree (matching macOS text extraction behavior)
         let mut text_buffer = String::with_capacity(4096);
-        extract_text_from_tree(&root, 0, self.config.max_depth, &mut text_buffer);
+        let mut nodes = Vec::with_capacity(256);
+        extract_text_from_tree(&root, 0, self.config.max_depth, &mut text_buffer, &mut nodes);
 
         if text_buffer.is_empty() {
             return Ok(None);
@@ -214,6 +215,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             app_name,
             window_name,
             text_content: text_buffer,
+            nodes,
             browser_url: None,
             timestamp: Utc::now(),
             node_count,
@@ -231,6 +233,7 @@ fn extract_text_from_tree(
     depth: usize,
     max_depth: usize,
     buffer: &mut String,
+    nodes: &mut Vec<AccessibilityTreeNode>,
 ) {
     if depth > max_depth {
         return;
@@ -250,6 +253,11 @@ fn extract_text_from_tree(
             if let Some(ref val) = node.value {
                 if !val.trim().is_empty() {
                     append_text(buffer, val);
+                    nodes.push(AccessibilityTreeNode {
+                        role: ct.to_string(),
+                        text: val.trim().to_string(),
+                        depth: depth.min(255) as u8,
+                    });
                     // Don't recurse into text controls — their children are sub-elements of the same text
                     return;
                 }
@@ -260,6 +268,11 @@ fn extract_text_from_tree(
         if let Some(ref name) = node.name {
             if !name.trim().is_empty() {
                 append_text(buffer, name);
+                nodes.push(AccessibilityTreeNode {
+                    role: ct.to_string(),
+                    text: name.trim().to_string(),
+                    depth: depth.min(255) as u8,
+                });
             }
         }
     } else if ct.eq_ignore_ascii_case("Group") || ct.eq_ignore_ascii_case("Pane") {
@@ -273,7 +286,7 @@ fn extract_text_from_tree(
 
     // Recurse into children
     for child in &node.children {
-        extract_text_from_tree(child, depth + 1, max_depth, buffer);
+        extract_text_from_tree(child, depth + 1, max_depth, buffer, nodes);
     }
 }
 
@@ -378,7 +391,8 @@ mod tests {
         };
 
         let mut buf = String::new();
-        extract_text_from_tree(&tree, 0, 10, &mut buf);
+        let mut nodes = Vec::new();
+        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes);
 
         // Text node's name should be captured
         assert!(

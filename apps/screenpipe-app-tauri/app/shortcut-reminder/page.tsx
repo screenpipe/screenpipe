@@ -219,7 +219,7 @@ export default function ShortcutReminderPage() {
           </div>
 
           {/* Row 2, Col 2: Screen animation */}
-          <div className="border-t border-white/10 py-1 min-w-0 overflow-hidden">
+          <div className="border-t border-l border-white/10 py-1 min-w-0 overflow-hidden">
             <ScreenMatrix
               active={overlayData.screenActive}
               captureFps={overlayData.captureFps}
@@ -253,59 +253,27 @@ export default function ShortcutReminderPage() {
 }
 
 /**
- * Format a shortcut string for display with consistent modifier ordering.
- * On macOS: Command (⌘) → Control (⌃) → Option (⌥) → Shift (⇧) → Key
- * On Windows/Linux: Ctrl → Alt → Shift → Key
+ * Format a shortcut string for display.
+ * On macOS: replace modifier names with compact symbols (⌘, ⌃, ⌥, ⇧).
+ * On other platforms: show the actual key names as configured.
  */
 function formatShortcut(shortcut: string, isMac: boolean): string {
-  if (!shortcut) return isMac ? "⌘⌃S" : "Alt+S";
+  if (!shortcut) return "";
 
-  // Parse the shortcut into parts
   const parts = shortcut.split("+").map(p => p.trim().toLowerCase());
 
-  // Define modifier priorities (lower = comes first)
-  // Command/Super comes first, then Control, then Alt/Option, then Shift
-  const modifierPriority: Record<string, number> = {
-    "super": 0, "command": 0, "cmd": 0,
-    "ctrl": 1, "control": 1,
-    "alt": 2, "option": 2,
-    "shift": 3,
-  };
-
-  // Separate modifiers from the key
-  const modifiers: string[] = [];
-  let key = "";
-
-  for (const part of parts) {
-    if (modifierPriority[part] !== undefined) {
-      modifiers.push(part);
-    } else {
-      key = part;
-    }
-  }
-
-  // Sort modifiers by priority (Command first)
-  modifiers.sort((a, b) => (modifierPriority[a] ?? 99) - (modifierPriority[b] ?? 99));
-
   if (isMac) {
-    // Convert to Mac symbols in sorted order
     const macSymbols: Record<string, string> = {
-      "super": "⌘", "command": "⌘", "cmd": "⌘",
-      "ctrl": "⌃", "control": "⌃",
-      "alt": "⌥", "option": "⌥",
-      "shift": "⇧",
+      super: "⌘", command: "⌘", cmd: "⌘",
+      ctrl: "⌃", control: "⌃",
+      alt: "⌥", option: "⌥",
+      shift: "⇧",
     };
-    const formattedMods = modifiers.map(m => macSymbols[m] || m).join("");
-    return formattedMods + key.toUpperCase();
-  } else {
-    // Windows/Linux: readable format
-    const winNames: Record<string, string> = {
-      "super": "Win", "command": "Ctrl", "cmd": "Ctrl",
-      "ctrl": "Ctrl", "control": "Ctrl",
-      "alt": "Alt", "option": "Alt",
-      "shift": "Shift",
-    };
-    const formattedMods = modifiers.map(m => winNames[m] || m);
-    return [...formattedMods, key.toUpperCase()].join("+");
+    return parts.map(p => macSymbols[p] || p.toUpperCase()).join("");
   }
+
+  // Windows/Linux: show exactly what the user set, just capitalized
+  return parts
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+    .join("+");
 }

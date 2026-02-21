@@ -111,6 +111,7 @@ export function AIPanel({
 		setActivePreset(activePreset || undefined);
 
 		setOsType(detectOS());
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	const handlePanelMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -514,7 +515,7 @@ Please analyze the data in context of this question.`;
 			{isExpanded && (
 				<div className="flex flex-col h-[calc(100%-52px)]">
 					<div
-						className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 hover:cursor-auto text-foreground font-mono text-sm leading-relaxed "
+						className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-h-0 hover:cursor-auto text-foreground font-mono text-sm leading-relaxed"
 						onContextMenu={(e) => {
 							if (chatMessages.length === 0) return;
 							e.preventDefault();

@@ -127,6 +127,7 @@ export const AIProviderCard = ({
     >
       <CardContent className="flex flex-col p-0 w-full">
         <div className="flex items-center gap-2 mb-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={imageSrc}
             alt={title}
@@ -485,6 +486,7 @@ const AISection = ({
     } finally {
       setIsLoadingModels(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsPreset?.provider, settingsPreset?.url, settingsPreset?.apiKey, settings.user?.id]);
 
   const apiKey = useMemo(() => {
@@ -502,6 +504,7 @@ const AISection = ({
     )
       return;
     fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchModels]);
 
   return (
@@ -1116,6 +1119,7 @@ export const AIPresets = () => {
                   </div>
 
                   <div className="flex items-start gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={providerImageSrc[preset.provider]}
                       alt={`${preset.provider} logo`}

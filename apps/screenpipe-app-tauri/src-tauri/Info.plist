@@ -12,5 +12,7 @@
     <string>This app requires system extension access to capture audio output.</string>
     <key>NSRemindersUsageDescription</key>
     <string>screenpipe saves action items it detects from your screen and audio activity to Apple Reminders.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
 </dict>
 </plist>

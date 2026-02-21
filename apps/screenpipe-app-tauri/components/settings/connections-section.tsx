@@ -16,6 +16,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir } from "@tauri-apps/api/path";
 import { ObsidianSyncCard } from "./obsidian-sync-card";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
+import { CalendarCard } from "./calendar-card";
 
 const GITHUB_RELEASES_API = "https://api.github.com/repos/screenpipe/screenpipe/releases";
 
@@ -614,71 +615,19 @@ export function ConnectionsSection() {
         {/* Apple Intelligence */}
         <AppleIntelligenceCard />
 
+        {/* Calendar */}
+        <CalendarCard />
+
         {/* Obsidian Sync */}
         <ObsidianSyncCard />
 
-        {/* Learn & Build section */}
-        <div className="space-y-2">
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
-            Learn & Build
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-            <button
-              onClick={() => openUrl("https://docs.screenpi.pe/api-reference")}
-              className="flex items-center gap-2 p-3 bg-card hover:bg-muted border border-border rounded-lg transition-colors text-left group"
-            >
-              <span className="text-lg">📡</span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground group-hover:text-foreground/80">REST API</p>
-                <p className="text-xs text-muted-foreground truncate">Query data via HTTP</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => openUrl("https://docs.screenpi.pe/mcp-server")}
-              className="flex items-center gap-2 p-3 bg-card hover:bg-muted border border-border rounded-lg transition-colors text-left group"
-            >
-              <span className="text-lg">🔌</span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground group-hover:text-foreground/80">MCP Server</p>
-                <p className="text-xs text-muted-foreground truncate">Cursor, Claude</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => openUrl("https://docs.screenpi.pe/mcp-apps")}
-              className="flex items-center gap-2 p-3 bg-card hover:bg-muted border border-border rounded-lg transition-colors text-left group"
-            >
-              <span className="text-lg">🤖</span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground group-hover:text-foreground/80">AI Agents</p>
-                <p className="text-xs text-muted-foreground truncate">Automate workflows</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => openUrl("https://docs.screenpi.pe/sdk-reference")}
-              className="flex items-center gap-2 p-3 bg-card hover:bg-muted border border-border rounded-lg transition-colors text-left group"
-            >
-              <span className="text-lg">🔧</span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground group-hover:text-foreground/80">SDK</p>
-                <p className="text-xs text-muted-foreground truncate">TypeScript</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => openUrl("https://docs.screenpi.pe")}
-              className="flex items-center gap-2 p-3 bg-card hover:bg-muted border border-border rounded-lg transition-colors text-left group"
-            >
-              <span className="text-lg">📚</span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground group-hover:text-foreground/80">All Docs</p>
-                <p className="text-xs text-muted-foreground truncate">Full documentation</p>
-              </div>
-            </button>
-          </div>
-        </div>
+        {/* Docs link */}
+        <button
+          onClick={() => openUrl("https://docs.screenpi.pe")}
+          className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors text-center py-2"
+        >
+          docs.screenpi.pe
+        </button>
 
       </div>
     </div>

@@ -4,6 +4,7 @@
 
 pub mod audio;
 pub mod content;
+pub mod data;
 pub mod frames;
 pub mod health;
 pub mod search;

@@ -7,7 +7,7 @@ license = "MIT"
 
 [features]
 default = []
-screenpipe-query = ["dep:reqwest", "dep:chrono", "dep:tokio"]
+screenpipe-query = ["dep:reqwest", "dep:tokio"]
 server = ["dep:axum", "dep:tokio", "dep:uuid", "dep:tokio-stream"]
 
 [dependencies]
@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 reqwest = { version = "0.12", features = ["json"], optional = true }
-chrono = { version = "0.4", optional = true }
+chrono = "0.4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net"], optional = true }
 axum = { version = "0.7", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
@@ -29,3 +29,4 @@ required-features = ["server"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
+chrono = "0.4"

@@ -1,0 +1,146 @@
+---
+title: "teams — share configs with end-to-end encryption"
+sidebarTitle: "teams"
+description: "Push pipe configurations and content filters to your team. Everything is encrypted client-side — the server only sees encrypted blobs."
+icon: "users"
+---
+
+teams let admins push pipe configurations and recording filters to all members. everything is end-to-end encrypted using AES-256-GCM — the screenpipe server never sees your configs in plaintext.
+
+## what you can share
+
+<CardGroup cols={3}>
+  <Card title="pipes" icon="bolt">
+    share scheduled AI agents (pipe.md configs) with your team so everyone runs the same automations
+  </Card>
+  <Card title="window filters" icon="window-maximize">
+    push ignored/included window lists so the whole team has consistent privacy rules
+  </Card>
+  <Card title="url filters" icon="globe">
+    share ignored URL patterns (e.g. banking sites) to enforce org-wide recording policies
+  </Card>
+</CardGroup>
+
+## how security works
+
+teams use **AES-256-GCM** encryption. the encryption key is generated on the admin's device and never sent to our server. members receive the key through the invite link (shared out-of-band via a secure channel like slack DM or signal).
+
+<Steps>
+  <Step title="admin creates a team">
+    a 256-bit AES-GCM key is generated locally using the Web Crypto API. this key is stored in the Tauri secure store (`~/.screenpipe/store.bin`) — not in localStorage or anywhere web-accessible.
+  </Step>
+  <Step title="admin shares invite link">
+    the invite link contains the team ID and the base64-encoded encryption key: `screenpipe://join-team?team_id=...&key=...`. this is the only time the key is transmitted — via the link itself, not through our server.
+  </Step>
+  <Step title="members join and store the key">
+    when a member opens the invite link, the key is imported and stored in their local Tauri secure store. our server only records the membership — it never sees the key.
+  </Step>
+  <Step title="configs are encrypted before upload">
+    when an admin pushes a pipe or filter config, it's encrypted locally with AES-256-GCM using a random 12-byte nonce. only the encrypted blob and nonce are sent to the server.
+  </Step>
+  <Step title="members decrypt locally">
+    team members download the encrypted configs and decrypt them on-device using the shared key. decrypted configs are applied to local settings automatically.
+  </Step>
+</Steps>
+
+## what the server stores vs what it can see
+
+| data | stored on server | readable by server |
+|------|:---:|:---:|
+| team name & member list | yes | yes |
+| encrypted config blobs | yes | **no** |
+| encryption nonces | yes | yes (but useless without key) |
+| encryption key | **no** | **no** |
+| decrypted pipe configs | **no** | **no** |
+| decrypted filter lists | **no** | **no** |
+
+## getting started
+
+### create a team (admin)
+
+1. go to **settings > team**
+2. enter a team name and click **create team**
+3. copy the invite link and share it with your team via a secure channel
+
+<Warning>
+the invite link contains your encryption key. share it only through a secure channel (e.g. signal, slack DM, in-person). anyone with this link can join and decrypt your team's configs.
+</Warning>
+
+### join a team (member)
+
+1. open the invite link — screenpipe will handle it automatically via deep link
+2. alternatively, go to **settings > team** and paste the invite link manually
+
+### push filters to team (admin)
+
+1. go to **settings > recording** and scroll to **filtering**
+2. set up your ignored windows, included windows, or ignored URLs
+3. click the **push to team** button on any filter card
+
+pushed filters appear under the **team** tab and are automatically synced to all members.
+
+### share a pipe to team (admin)
+
+1. go to **settings > pipes**
+2. click the **share** button next to any pipe
+3. the pipe config (including its prompt and schedule) is encrypted and pushed to the team
+
+<Info>
+if you update a pipe locally and share it again, the team copy is overwritten with your latest version. the model is last-push-wins — there's no merge.
+</Info>
+
+### how filters sync for members
+
+when a member visits the team tab, shared filters are automatically merged into their local recording settings:
+
+- **team filters are additive** — they're combined with the member's own filters, not replaced
+- **team-sourced entries show a badge** in the recording settings so members know which filters come from the team
+- **members can't remove team filters** from their local settings while they're in the team — leaving the team clears them
+
+## roles
+
+| action | admin | member |
+|--------|:-----:|:------:|
+| create/delete team | yes | no |
+| invite members | yes | no |
+| remove members | yes | no |
+| push configs (pipes, filters) | yes | no |
+| delete shared configs | yes | no |
+| receive shared configs | yes | yes |
+| leave team | yes | yes |
+
+## requirements
+
+- screenpipe account (sign in at **settings > team**)
+- screenpipe desktop app (teams use the Tauri secure store for key storage)
+
+## technical details
+
+- **encryption**: AES-256-GCM via the [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto)
+- **key storage**: Tauri plugin-store (`~/.screenpipe/store.bin`), not localStorage
+- **nonce**: 12-byte random per encryption operation (crypto.getRandomValues)
+- **config types**: `pipe`, `window_filter`, `url_filter` (extensible)
+- **sync**: automatic when the team tab loads; filter configs merge into local settings via the `useTeamSync` hook
+
+<Card title="view source code" icon="github" href="https://github.com/screenpipe/screenpipe/tree/main/apps/screenpipe-app-tauri/lib/team-crypto.ts">
+  audit the AES-256-GCM encryption implementation
+</Card>
+
+## faq
+
+**what happens if i lose the invite link?**
+the admin can always copy it again from **settings > team**. the encryption key is stored locally on the admin's device.
+
+**can the screenpipe team read my configs?**
+no. the server only stores encrypted blobs. the encryption key is never transmitted to our server.
+
+**what if two admins push the same pipe name?**
+last push wins. the newer version overwrites the older one. there's no merge or conflict resolution — the pipe is treated as a single document.
+
+**what happens when i leave a team?**
+all team-sourced filters are removed from your local settings. your personal filters remain unchanged.
+
+**is the encryption key rotated?**
+not currently. if you suspect the key is compromised, delete the team and create a new one with a fresh key.
+
+questions? [join our discord](https://discord.gg/dU9EBuw7Uq).

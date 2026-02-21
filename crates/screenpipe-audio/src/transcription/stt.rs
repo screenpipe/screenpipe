@@ -147,9 +147,10 @@ pub async fn process_audio_input(
     whisper_state: &mut WhisperState,
     metrics: Arc<AudioPipelineMetrics>,
 ) -> Result<()> {
-    // Use the capture timestamp from when audio was recorded, not processing time.
-    // This is critical for batch/deferred transcription mode where processing
-    // may happen minutes or hours after capture.
+    // NOTE: capture_timestamp is set when audio enters the channel, but smart mode
+    // deferral can delay processing by 20+ minutes. The DB now uses Utc::now() at
+    // insert time instead, so this timestamp is only used for TranscriptionResult
+    // metadata (not for DB storage).
     let timestamp = audio.capture_timestamp;
 
     let audio_data = if audio.sample_rate != SAMPLE_RATE {

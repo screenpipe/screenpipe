@@ -589,6 +589,7 @@ export function SyncSettings() {
     if (isSettingsLoaded) {
       checkSubscriptionAndLoad();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSettingsLoaded]);
 
   // Auto-poll for subscription when on onboarding step
@@ -608,6 +609,7 @@ export function SyncSettings() {
     }, 1000); // Poll every 1 second
 
     return () => clearInterval(pollInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
   const tryAutoInitSync = async (): Promise<boolean> => {

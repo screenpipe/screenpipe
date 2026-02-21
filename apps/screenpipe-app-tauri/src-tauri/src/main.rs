@@ -59,6 +59,7 @@ mod space_monitor;
 mod sync;
 mod obsidian_sync;
 mod reminders;
+mod calendar;
 mod pi;
 mod embedded_server;
 mod suggestions;
@@ -1212,6 +1213,11 @@ async fn main() {
                 reminders::reminders_set_custom_prompt,
                 reminders::reminders_get_audio_only,
                 reminders::reminders_set_audio_only,
+                // Calendar commands
+                calendar::calendar_status,
+                calendar::calendar_authorize,
+                calendar::calendar_get_events,
+                calendar::calendar_get_current_meeting,
                 // Voice training
                 voice_training::train_voice,
                 // Suggestions
@@ -1227,6 +1233,8 @@ async fn main() {
             .typ::<reminders::RemindersStatus>()
             .typ::<reminders::ReminderItem>()
             .typ::<reminders::ScanResult>()
+            .typ::<calendar::CalendarStatus>()
+            .typ::<calendar::CalendarEventItem>()
             .typ::<suggestions::CachedSuggestions>()
             .typ::<suggestions::Suggestion>();
 
@@ -1412,6 +1420,11 @@ async fn main() {
             reminders::reminders_set_custom_prompt,
             reminders::reminders_get_audio_only,
             reminders::reminders_set_audio_only,
+            // Calendar commands
+            calendar::calendar_status,
+            calendar::calendar_authorize,
+            calendar::calendar_get_events,
+            calendar::calendar_get_current_meeting,
             // Rollback commands
             commands::rollback_to_version,
             // OCR commands
@@ -1989,6 +2002,12 @@ async fn main() {
                 reminders::auto_start_scheduler(app_handle_clone, &reminders_state_clone).await;
             });
 
+            // Start calendar events publisher (publishes to event bus for meeting detection)
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                calendar::start_calendar_events_publisher().await;
+            });
+
             // Auto-start cloud sync if it was enabled
             let app_handle_clone = app_handle.clone();
             let sync_state = app_handle.state::<sync::SyncState>();
@@ -2112,9 +2131,10 @@ async fn main() {
             ..
         } => {
             // Defer off the event stack so run handler stays panic-free.
+            // Open the settings/app window (not the timeline overlay).
             let app = app_handle.app_handle().clone();
             let _ = app_handle.app_handle().run_on_main_thread(move || {
-                let _ = ShowRewindWindow::Main.show(&app);
+                let _ = ShowRewindWindow::Settings { page: None }.show(&app);
             });
         }
         _ => {}

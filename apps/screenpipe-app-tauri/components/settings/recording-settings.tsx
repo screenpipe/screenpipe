@@ -26,6 +26,8 @@ import {
   Languages,
   Mic,
   Monitor,
+  Volume2,
+  Headphones,
   Folder,
   AppWindowMac,
   EyeOff,
@@ -37,9 +39,9 @@ import {
   Loader2,
   Globe,
   Shield,
-  Film,
   Zap,
   User,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -57,6 +59,7 @@ import {
   VadSensitivity,
   Settings,
 } from "@/lib/hooks/use-settings";
+import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { Badge } from "@/components/ui/badge";
@@ -82,13 +85,16 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { ValidatedInput } from "../ui/validated-input";
-import { 
-  validateField, 
-  sanitizeValue, 
-  debounce, 
+import {
+  validateField,
+  sanitizeValue,
+  debounce,
   validateUrl,
-  FieldValidationResult 
+  FieldValidationResult
 } from "@/lib/utils/validation";
+import { AudioEqualizer } from "@/app/shortcut-reminder/audio-equalizer";
+
+import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 
 type PermissionsStatus = {
   screenRecording: string;
@@ -97,40 +103,63 @@ type PermissionsStatus = {
 
 // AudioDeviceInfo and MonitorDevice are imported from @/lib/utils/tauri
 
+const formatCount = (count: number): string => {
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return `${count}`;
+};
+
+const getAppIconUrl = (appName: string): string => {
+  return `http://localhost:11435/app-icon?name=${encodeURIComponent(appName)}`;
+};
+
 const createWindowOptions = (
-  windowItems: { name: string }[],
+  windowItems: { name: string; count: number; app_name?: string }[],
   existingPatterns: string[]
 ) => {
-  const windowOptions = windowItems
-    .sort((a, b) => a.name.localeCompare(b.name))
+  // Sort by usage frequency (most used first)
+  const windowOptions = [...windowItems]
+    .sort((a, b) => b.count - a.count)
     .map((item) => ({
       value: item.name,
       label: item.name,
       icon: AppWindowMac,
+      iconUrl: getAppIconUrl(item.app_name || item.name),
+      description: [
+        item.app_name && item.app_name !== item.name ? item.app_name : null,
+        `${formatCount(item.count)} captures`,
+      ].filter(Boolean).join(" · "),
     }));
 
-  // Only add custom patterns that aren't already in windowItems
+  // Custom patterns try the app-icon endpoint; OptionIcon falls back to Lucide if it returns a placeholder
   const customOptions = existingPatterns
     .filter((pattern) => !windowItems.some((item) => item.name === pattern))
     .map((pattern) => ({
       value: pattern,
       label: pattern,
-      icon: Asterisk,
+      icon: AppWindowMac,
+      iconUrl: getAppIconUrl(pattern),
     }));
 
   return [...windowOptions, ...customOptions];
 };
 
+const getFaviconUrl = (domain: string): string => {
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+};
+
 const createUrlOptions = (
-  urlItems: { name: string }[],
+  urlItems: { name: string; count: number }[],
   existingUrls: string[]
 ) => {
-  const urlOptions = urlItems
-    .sort((a, b) => a.name.localeCompare(b.name))
+  // Sort by usage frequency (most used first)
+  const urlOptions = [...urlItems]
+    .sort((a, b) => b.count - a.count)
     .map((item) => ({
       value: item.name,
       label: item.name,
+      iconUrl: getFaviconUrl(item.name),
       icon: Globe,
+      description: `${formatCount(item.count)} visits this week`,
     }));
 
   // Add existing custom URLs that aren't in the suggestions
@@ -139,15 +168,33 @@ const createUrlOptions = (
     .map((url) => ({
       value: url,
       label: url,
-      icon: Asterisk,
+      iconUrl: getFaviconUrl(url),
+      icon: Globe,
     }));
 
   return [...urlOptions, ...customOptions];
 };
 
+const getAudioDeviceType = (name: string): "input" | "output" => {
+  if (name.endsWith("(input)")) return "input";
+  return "output";
+};
+
+const getAudioDeviceDisplayName = (name: string): string => {
+  return name.replace(/\s*\((input|output)\)\s*$/i, "");
+};
+
+const getAudioDeviceIcon = (name: string) => {
+  const lower = name.toLowerCase();
+  if (lower.includes("bluetooth") || lower.includes("airpods") || lower.includes("headphone")) {
+    return Headphones;
+  }
+  if (getAudioDeviceType(name) === "input") return Mic;
+  return Volume2;
+};
+
 export function RecordingSettings() {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
-  const [openAudioDevices, setOpenAudioDevices] = React.useState(false);
   const [openLanguages, setOpenLanguages] = React.useState(false);
   const [dataDirInputVisible, setDataDirInputVisible] = React.useState(false);
   const [clickTimeout, setClickTimeout] = useState<ReturnType<
@@ -179,6 +226,23 @@ export function RecordingSettings() {
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
+  const team = useTeam();
+  const isTeamAdmin = !!team.team && team.role === "admin";
+  const [pushingFilter, setPushingFilter] = useState<string | null>(null);
+  const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
+  const overlayData = useOverlayData();
+
+  const handlePushFilterToTeam = async (configType: string, key: string, filters: string[]) => {
+    setPushingFilter(key);
+    try {
+      await team.pushConfig(configType, key, { filters });
+      toast({ title: "pushed to team" });
+    } catch (err: any) {
+      toast({ title: "failed to push to team", description: err.message, variant: "destructive" });
+    } finally {
+      setPushingFilter(null);
+    }
+  };
 
   // OpenAI Compatible model fetching state
   const [openAIModels, setOpenAIModels] = useState<string[]>([]);
@@ -383,6 +447,7 @@ export function RecordingSettings() {
     };
 
     loadDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch OpenAI Compatible models when endpoint changes
@@ -462,12 +527,6 @@ export function RecordingSettings() {
     // Add more validation as needed
     return { isValid: true };
   }, []);
-
-  // Enhanced FPS change handler with validation
-  const handleFpsChange = useCallback((value: number[]) => {
-    const fps = Math.max(0.1, Math.min(60, value[0]));
-    handleSettingsChange({ fps }, true);
-  }, [handleSettingsChange]);
 
   // Enhanced audio chunk duration handler
   const handleAudioChunkDurationChange = useCallback((value: number[]) => {
@@ -954,8 +1013,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       </div>
 
 
-      <div className="space-y-2">
-      {/* Data Directory */}
+      {/* Data Directory - hidden for now (not fully working) */}
+      {/* <div className="space-y-2">
       <Card className="border-border bg-card">
         <CardContent className="px-3 py-2.5">
           <div className="flex items-center justify-between">
@@ -987,82 +1046,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </div>
         </CardContent>
       </Card>
-
-      {/* Adaptive FPS */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Adaptive FPS
-                  <HelpTooltip text="Automatically increases capture rate during mouse/keyboard activity (up to 5 FPS) and decreases during idle periods. Helps capture fast workflows without wasting resources." />
-                </h3>
-                <p className="text-xs text-muted-foreground">Boost during activity, reduce when idle</p>
-              </div>
-            </div>
-            <Switch
-              id="adaptiveFps"
-              checked={settings.adaptiveFps}
-              onCheckedChange={(checked) => handleSettingsChange({ adaptiveFps: checked }, true)}
-            />
-          </div>
-          {!settings.adaptiveFps && (
-            <div className="flex items-center space-x-3 mt-2 ml-[26px]">
-              <Slider id="fps" min={0.1} max={10} step={0.1} value={[settings.fps]} onValueChange={handleFpsChange} className="flex-grow" />
-              <span className="text-xs text-muted-foreground w-12 text-right">{settings.fps.toFixed(1)} fps</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Video Quality */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <Film className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">Video quality</h3>
-                <p className="text-xs text-muted-foreground">Higher quality = larger files & more CPU</p>
-              </div>
-            </div>
-            <Select
-              value={settings.videoQuality || "balanced"}
-              onValueChange={(value) => handleSettingsChange({ videoQuality: value }, true)}
-            >
-              <SelectTrigger className="w-[160px] h-7 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low (smallest)</SelectItem>
-                <SelectItem value="balanced">Balanced</SelectItem>
-                <SelectItem value="high">High (sharp text)</SelectItem>
-                <SelectItem value="max">Max (best, more CPU)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Audio Chunk Duration */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center space-x-2.5">
-            <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-            <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-              Audio chunk duration
-              <HelpTooltip text="Duration of each audio recording segment. Shorter chunks lower memory spikes. Longer chunks may improve transcription quality." />
-            </h3>
-          </div>
-          <div className="flex items-center space-x-3 mt-2 ml-[26px]">
-            <Slider id="audioChunkDuration" min={5} max={3000} step={1} value={[settings.audioChunkDuration]} onValueChange={handleAudioChunkDurationChange} className="flex-grow" />
-            <span className="text-xs text-muted-foreground w-10 text-right">{settings.audioChunkDuration}s</span>
-          </div>
-        </CardContent>
-      </Card>
-      </div>
+      </div> */}
 
       
 
@@ -1070,7 +1054,43 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio</h2>
 
+        {/* Disable Audio */}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Disable audio recording</h3>
+                  <p className="text-xs text-muted-foreground">Turn off audio capture completely</p>
+                </div>
+              </div>
+              <Switch id="disableAudio" checked={settings.disableAudio} onCheckedChange={handleDisableAudioChange} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Audio Chunk Duration */}
+        {!settings.disableAudio && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Audio chunk duration
+                  <HelpTooltip text="Duration of each audio recording segment. Shorter chunks lower memory spikes. Longer chunks may improve transcription quality." />
+                </h3>
+              </div>
+              <div className="flex items-center space-x-3 mt-2 ml-[26px]">
+                <Slider id="audioChunkDuration" min={5} max={3000} step={1} value={[settings.audioChunkDuration]} onValueChange={handleAudioChunkDurationChange} className="flex-grow" />
+                <span className="text-xs text-muted-foreground w-10 text-right">{settings.audioChunkDuration}s</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Your Name + Train Voice */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -1123,8 +1143,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Transcription Engine */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -1235,9 +1257,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             )}
           </CardContent>
         </Card>
+        )}
 
         {/* Transcription Mode - only for local Whisper engines */}
-        {settings.audioTranscriptionEngine !== "deepgram" &&
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "deepgram" &&
          settings.audioTranscriptionEngine !== "screenpipe-cloud" &&
          settings.audioTranscriptionEngine !== "openai-compatible" &&
          settings.audioTranscriptionEngine !== "disabled" && (
@@ -1267,6 +1290,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
         {/* System Default Audio */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -1285,47 +1309,70 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Audio Devices */}
-        {!settings.useSystemDefaultAudio && (
+        {!settings.disableAudio && !settings.useSystemDefaultAudio && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <h3 className="text-sm font-medium text-foreground">Audio devices</h3>
-                </div>
-                <Popover open={openAudioDevices} onOpenChange={setOpenAudioDevices}>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 text-xs">
-                      {settings.audioDevices.length > 0 ? `${settings.audioDevices.length} selected` : "Select..."}
-                      <ChevronsUpDown className="ml-1 h-3 w-3 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[300px] p-0">
-                    <Command>
-                      <CommandInput placeholder="Search devices..." />
-                      <CommandList>
-                        <CommandEmpty>No devices found.</CommandEmpty>
-                        <CommandGroup>
-                          {availableAudioDevices.map((device) => (
-                            <CommandItem key={device.name} value={device.name} onSelect={() => handleAudioDeviceChange(device.name)}>
-                              <Check className={cn("mr-2 h-3 w-3", settings.audioDevices.includes(device.name) ? "opacity-100" : "opacity-0")} />
-                              <span className="text-xs">{device.name}</span>
-                              {device.isDefault && <Badge variant="secondary" className="ml-1 text-[10px] h-4">Default</Badge>}
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+              <div className="flex items-center space-x-2.5 mb-2">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground">Audio devices</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {availableAudioDevices.map((device) => {
+                  const isSelected = settings.audioDevices.includes(device.name);
+                  const DeviceIcon = getAudioDeviceIcon(device.name);
+                  const deviceType = getAudioDeviceType(device.name);
+                  const displayName = getAudioDeviceDisplayName(device.name);
+                  return (
+                    <div
+                      key={device.name}
+                      className={cn(
+                        "relative rounded-lg border cursor-pointer transition-all overflow-hidden",
+                        isSelected
+                          ? "border-foreground bg-foreground/5"
+                          : "border-border opacity-70 hover:opacity-100 hover:bg-accent/50"
+                      )}
+                      onClick={() => handleAudioDeviceChange(device.name)}
+                    >
+                      <div className="px-2.5 py-2 flex items-start gap-2">
+                        <DeviceIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-medium truncate">{displayName}</p>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <span className="text-[10px] text-muted-foreground capitalize">{deviceType}</span>
+                            {device.isDefault && (
+                              <Badge variant="secondary" className="text-[9px] h-3.5 px-1">Default</Badge>
+                            )}
+                          </div>
+                        </div>
+                        {isSelected && (
+                          <Check className="h-3 w-3 text-foreground shrink-0 mt-0.5" />
+                        )}
+                      </div>
+
+                      {/* Apple-style audio level meter */}
+                      {isSelected && (
+                        <div className="px-2.5 pb-2">
+                          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-foreground/60 transition-all duration-75"
+                              style={{ width: `${Math.min(100, Math.pow(overlayData.speechRatio, 3) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
         )}
 
         {/* Languages */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -1399,24 +1446,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
           </CardContent>
         </Card>
-
-        {/* Disable Audio */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Disable audio recording</h3>
-                  <p className="text-xs text-muted-foreground">Turn off audio completely</p>
-                </div>
-              </div>
-              <Switch id="disableAudio" checked={settings.disableAudio} onCheckedChange={handleDisableAudioChange} />
-            </div>
-          </CardContent>
-        </Card>
+        )}
 
         {/* VAD Sensitivity */}
+        {!settings.disableAudio && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center space-x-2.5">
@@ -1432,6 +1465,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
           </CardContent>
         </Card>
+        )}
       </div>
 
       
@@ -1456,6 +1490,94 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
 
+        {/* Use All Monitors - right below disable screen recording */}
+        {!settings.disableVision && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">Use all monitors</h3>
+                    <p className="text-xs text-muted-foreground">Take screenshot from all available monitors</p>
+                  </div>
+                </div>
+                <Switch id="useAllMonitors" checked={settings.useAllMonitors} onCheckedChange={(checked) => handleSettingsChange({ useAllMonitors: checked }, true)} />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Monitor Selection */}
+        {!settings.disableVision && !settings.useAllMonitors && (
+          <Card className="border-border bg-card overflow-hidden">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center space-x-2.5 mb-3">
+                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground">Monitors</h3>
+              </div>
+
+              <div className="flex items-end justify-center gap-6 py-2">
+                {/* Default option as a monitor */}
+                <button
+                  className="flex flex-col items-center gap-1.5 group"
+                  onClick={() => {
+                    const isDefaultSelected = settings.monitorIds.includes("default");
+                    if (isDefaultSelected) { handleSettingsChange({ monitorIds: settings.monitorIds.filter(id => id !== "default") }, true); }
+                    else { handleSettingsChange({ monitorIds: ["default"] }, true); }
+                  }}
+                >
+                  {/* Monitor SVG */}
+                  <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", settings.monitorIds.includes("default") ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
+                    <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
+                    <rect x="8" y="6" width="64" height="34" rx="1" className={cn(settings.monitorIds.includes("default") ? "fill-foreground/10" : "fill-background")} />
+                    <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
+                    <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
+                    {settings.monitorIds.includes("default") && (
+                      <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
+                    )}
+                  </svg>
+                  <span className={cn("text-[11px] font-medium", settings.monitorIds.includes("default") ? "text-foreground" : "text-muted-foreground")}>
+                    Default
+                  </span>
+                </button>
+
+                {availableMonitors.map((monitor) => {
+                  const isSelected = settings.monitorIds.includes(monitor.stableId);
+                  return (
+                    <button
+                      key={monitor.stableId}
+                      className="flex flex-col items-center gap-1.5 group"
+                      onClick={() => {
+                        const newIds = isSelected
+                          ? settings.monitorIds.filter(id => id !== monitor.stableId)
+                          : [...settings.monitorIds.filter(id => id !== "default"), monitor.stableId];
+                        handleSettingsChange({ monitorIds: newIds }, true);
+                      }}
+                    >
+                      <svg width="80" height="56" viewBox="0 0 80 56" fill="none" className={cn("transition-opacity", isSelected ? "opacity-100" : "opacity-40 group-hover:opacity-60")}>
+                        <rect x="4" y="2" width="72" height="42" rx="3" className="fill-muted stroke-border" strokeWidth="1.5" />
+                        <rect x="8" y="6" width="64" height="34" rx="1" className={cn(isSelected ? "fill-foreground/10" : "fill-background")} />
+                        <path d="M30 44 L30 50 L50 50 L50 44" className="stroke-border" strokeWidth="1.5" fill="none" />
+                        <line x1="24" y1="50" x2="56" y2="50" className="stroke-border" strokeWidth="1.5" strokeLinecap="round" />
+                        {isSelected && (
+                          <path d="M32 20 L37 25 L48 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground" />
+                        )}
+                      </svg>
+                      <div className="text-center">
+                        <span className={cn("text-[11px] font-medium block", isSelected ? "text-foreground" : "text-muted-foreground")}>
+                          {monitor.name || `Monitor ${monitor.id}`}
+                        </span>
+                        <p className="text-[10px] text-muted-foreground">{monitor.width}x{monitor.height}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Text extraction methods - shown when screen recording is on */}
         {!settings.disableVision && (
           <Card className="border-border bg-card">
@@ -1476,6 +1598,28 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
                 <Switch className="shrink-0" id="enableOcr" checked={!(settings.disableOcr ?? false)} onCheckedChange={(checked) => handleSettingsChange({ disableOcr: !checked }, true)} />
               </div>
+
+              {/* OCR Engine - shown when OCR is enabled */}
+              {!(settings.disableOcr ?? false) && (
+                <>
+                  <div className="flex items-center justify-between ml-[26px] gap-3">
+                    <h4 className="text-sm text-foreground flex items-center gap-1.5">
+                      OCR engine
+                      <HelpTooltip text="Apple Native: fast, uses built-in macOS OCR. Tesseract: open-source, cross-platform. Windows Native: uses Windows OCR APIs." />
+                    </h4>
+                    <Select value={settings.ocrEngine} onValueChange={handleOcrModelChange}>
+                      <SelectTrigger className="w-[160px] h-7 text-xs">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {isMacOS && <SelectItem value="apple-native">Apple Native</SelectItem>}
+                        {!isMacOS && platform() === "windows" && <SelectItem value="windows-native">Windows Native</SelectItem>}
+                        {!isMacOS && platform() !== "windows" && <SelectItem value="tesseract">Tesseract</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
 
               {(isMacOS || platform() === "windows") && <Separator />}
 
@@ -1523,93 +1667,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Use All Monitors */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Use all monitors</h3>
-                  <p className="text-xs text-muted-foreground">Record from all available monitors</p>
-                </div>
-              </div>
-              <Switch id="useAllMonitors" checked={settings.useAllMonitors} onCheckedChange={(checked) => handleSettingsChange({ useAllMonitors: checked }, true)} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Monitor Selection */}
-        {!settings.useAllMonitors && (
-          <Card className="border-border bg-card">
-            <CardContent className="px-3 py-2.5">
-              <div className="flex items-center space-x-2.5 mb-2">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <h3 className="text-sm font-medium text-foreground">Monitors</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 ml-[26px]">
-                <div
-                  className={cn(
-                    "flex items-center justify-between rounded-md border px-2.5 py-1.5 cursor-pointer transition-colors text-xs",
-                    settings.monitorIds.includes("default") ? "border-foreground bg-foreground/5" : "border-border hover:bg-accent"
-                  )}
-                  onClick={() => {
-                    const isDefaultSelected = settings.monitorIds.includes("default");
-                    if (isDefaultSelected) { handleSettingsChange({ monitorIds: settings.monitorIds.filter(id => id !== "default") }, true); }
-                    else { handleSettingsChange({ monitorIds: ["default"] }, true); }
-                  }}
-                >
-                  <span>Default</span>
-                  <Check className={cn("h-3 w-3", settings.monitorIds.includes("default") ? "opacity-100" : "opacity-0")} />
-                </div>
-                {availableMonitors.map((monitor) => (
-                  <div
-                    key={monitor.stableId}
-                    className={cn(
-                      "flex items-center justify-between rounded-md border px-2.5 py-1.5 cursor-pointer transition-colors text-xs",
-                      settings.monitorIds.includes(monitor.stableId) ? "border-foreground bg-foreground/5" : "border-border hover:bg-accent"
-                    )}
-                    onClick={() => {
-                      const currentIds = settings.monitorIds.filter(id => id !== "default");
-                      const monitorId = monitor.stableId;
-                      const updatedIds = currentIds.includes(monitorId) ? currentIds.filter(id => id !== monitorId) : [...currentIds, monitorId];
-                      handleSettingsChange({ monitorIds: updatedIds }, true);
-                    }}
-                  >
-                    <span>{monitor.name} <span className="text-muted-foreground">{monitor.width}x{monitor.height}</span></span>
-                    <Check className={cn("h-3 w-3", settings.monitorIds.includes(monitor.stableId) ? "opacity-100" : "opacity-0")} />
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* OCR Engine */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  OCR engine
-                  <HelpTooltip text="Apple Native: fast, uses built-in macOS OCR. Tesseract: open-source, cross-platform. Windows Native: uses Windows OCR APIs." />
-                </h3>
-              </div>
-              <Select value={settings.ocrEngine} onValueChange={handleOcrModelChange}>
-                <SelectTrigger className="w-[160px] h-7 text-xs">
-                  <SelectValue placeholder="Select" />
-                </SelectTrigger>
-                <SelectContent>
-                  {isMacOS && <SelectItem value="apple-native">Apple Native</SelectItem>}
-                  {!isMacOS && platform() === "windows" && <SelectItem value="windows-native">Windows Native</SelectItem>}
-                  {!isMacOS && platform() !== "windows" && <SelectItem value="tesseract">Tesseract</SelectItem>}
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* PII Removal */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -1640,77 +1697,272 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Filtering</h2>
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <AppWindowMac className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Ignored windows
-                <HelpTooltip text="Windows matching these patterns will not be captured by OCR or element capture. Use for privacy — e.g. add 'Password Manager' to skip sensitive apps." />
-              </h3>
+        {/* All | Personal | Shared with team tabs */}
+        {team.team && (() => {
+          const teamIgnored = new Set(settings.teamFilters?.ignoredWindows ?? []);
+          const teamIncluded = new Set(settings.teamFilters?.includedWindows ?? []);
+          const teamUrls = new Set(settings.teamFilters?.ignoredUrls ?? []);
+          const personalOnlyCount =
+            settings.ignoredWindows.filter((w) => !teamIgnored.has(w)).length +
+            settings.includedWindows.filter((w) => !teamIncluded.has(w)).length +
+            (settings.ignoredUrls || []).filter((u) => !teamUrls.has(u)).length;
+          const teamOnlyCount = teamIgnored.size + teamIncluded.size + teamUrls.size;
+          const allCount = personalOnlyCount + teamOnlyCount;
+          return (
+            <div className="flex items-center gap-4 border-b border-border">
+              {(["all", "personal", "team"] as const).map((tab) => {
+                const count = tab === "all" ? allCount : tab === "personal" ? personalOnlyCount : teamOnlyCount;
+                const label = tab === "all" ? "All" : tab === "personal" ? "Personal" : "Shared with team";
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => setFilterView(tab)}
+                    className={cn(
+                      "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px",
+                      filterView === tab
+                        ? "border-foreground text-foreground font-medium"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {label} ({count})
+                  </button>
+                );
+              })}
             </div>
-            <div className="ml-[26px]">
-              <MultiSelect
-                options={createWindowOptions(windowItems || [], settings.ignoredWindows)}
-                defaultValue={settings.ignoredWindows}
-                value={settings.ignoredWindows}
-                onValueChange={handleIgnoredWindowsChange}
-                placeholder="Select windows to ignore..."
-              />
-            </div>
-          </CardContent>
-        </Card>
+          );
+        })()}
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <AppWindowMac className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Included windows
-                <HelpTooltip text="When set, ONLY windows matching these patterns will be captured by OCR and element capture. Everything else is ignored. Leave empty to capture all windows (except ignored ones)." />
-              </h3>
-            </div>
-            <div className="ml-[26px]">
-              <MultiSelect
-                options={createWindowOptions(windowItems || [], settings.includedWindows)}
-                defaultValue={settings.includedWindows}
-                value={settings.includedWindows}
-                onValueChange={handleIncludedWindowsChange}
-                placeholder="Whitelist (optional)..."
-              />
-            </div>
-          </CardContent>
-        </Card>
+        {/* Personal filters (shown in "all" and "personal" views) */}
+        {filterView !== "team" && (
+          <>
+            <Card className="border-border bg-card">
+              <CardContent className="px-3 py-2.5">
+                <div className="flex items-center space-x-2.5 mb-2">
+                  <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Ignored apps
+                      <HelpTooltip text="Apps matching these patterns will not be captured. Matches against window titles — e.g. add 'Password Manager' to skip sensitive apps." />
+                    </h3>
+                    {isTeamAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[10px] ml-auto cursor-pointer"
+                        disabled={pushingFilter === "ignored_windows"}
+                        onClick={() => handlePushFilterToTeam("window_filter", "ignored_windows", settings.ignoredWindows)}
+                      >
+                        {pushingFilter === "ignored_windows" ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Users className="h-3 w-3 mr-1" />
+                        )}
+                        push to team
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="ml-[26px]">
+                  <MultiSelect
+                    options={createWindowOptions(windowItems || [], settings.ignoredWindows)}
+                    defaultValue={settings.ignoredWindows}
+                    value={settings.ignoredWindows}
+                    onValueChange={handleIgnoredWindowsChange}
+                    placeholder="Select apps to ignore..."
+                  />
+                  {filterView === "all" && (settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {settings.teamFilters!.ignoredWindows.map((w) => (
+                        <Badge key={w} variant="outline" className="text-[10px] h-5">
+                          <Users className="h-2.5 w-2.5 mr-0.5" />{w}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Ignored URLs
-                <HelpTooltip text="Browser URLs matching these patterns will not be captured. Use for privacy — e.g. add 'bank.com' to skip banking sites." />
-              </h3>
-            </div>
-            <div className="ml-[26px]">
-              <MultiSelect
-                options={createUrlOptions(urlItems || [], settings.ignoredUrls || [])}
-                defaultValue={settings.ignoredUrls || []}
-                value={settings.ignoredUrls || []}
-                onValueChange={handleIgnoredUrlsChange}
-                placeholder="e.g. wellsfargo.com, chase.com..."
-                allowCustomValues={true}
-              />
-              {(settings.ignoredUrls || []).some((url) =>
-                url.length < 5 || ['bank', 'pay', 'money', 'finance'].includes(url.toLowerCase())
-              ) && (
-                <p className="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1 mt-1">
-                  <AlertCircle className="h-3 w-3" />
-                  Short patterns may over-match. Use specific domains.
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+            <Card className="border-border bg-card">
+              <CardContent className="px-3 py-2.5">
+                <div className="flex items-center space-x-2.5 mb-2">
+                  <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Included apps
+                      <HelpTooltip text="When set, ONLY apps matching these patterns will be captured. Everything else is ignored. Leave empty to capture all apps (except ignored ones)." />
+                    </h3>
+                    {isTeamAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[10px] ml-auto cursor-pointer"
+                        disabled={pushingFilter === "included_windows"}
+                        onClick={() => handlePushFilterToTeam("window_filter", "included_windows", settings.includedWindows)}
+                      >
+                        {pushingFilter === "included_windows" ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Users className="h-3 w-3 mr-1" />
+                        )}
+                        push to team
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="ml-[26px]">
+                  <MultiSelect
+                    options={createWindowOptions(windowItems || [], settings.includedWindows)}
+                    defaultValue={settings.includedWindows}
+                    value={settings.includedWindows}
+                    onValueChange={handleIncludedWindowsChange}
+                    placeholder="Only capture these apps (optional)..."
+                  />
+                  {filterView === "all" && (settings.teamFilters?.includedWindows?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {settings.teamFilters!.includedWindows.map((w) => (
+                        <Badge key={w} variant="outline" className="text-[10px] h-5">
+                          <Users className="h-2.5 w-2.5 mr-0.5" />{w}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border bg-card">
+              <CardContent className="px-3 py-2.5">
+                <div className="flex items-center space-x-2.5 mb-2">
+                  <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Ignored URLs
+                      <HelpTooltip text="Browser URLs matching these patterns will not be captured. Use for privacy — e.g. add 'bank.com' to skip banking sites." />
+                    </h3>
+                    {isTeamAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[10px] ml-auto cursor-pointer"
+                        disabled={pushingFilter === "ignored_urls"}
+                        onClick={() => handlePushFilterToTeam("url_filter", "ignored_urls", settings.ignoredUrls || [])}
+                      >
+                        {pushingFilter === "ignored_urls" ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <Users className="h-3 w-3 mr-1" />
+                        )}
+                        push to team
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="ml-[26px]">
+                  <MultiSelect
+                    options={createUrlOptions(urlItems || [], settings.ignoredUrls || [])}
+                    defaultValue={settings.ignoredUrls || []}
+                    value={settings.ignoredUrls || []}
+                    onValueChange={handleIgnoredUrlsChange}
+                    placeholder="e.g. wellsfargo.com, chase.com..."
+                    allowCustomValues={true}
+                  />
+                  {(settings.ignoredUrls || []).some((url) =>
+                    url.length < 5 || ['bank', 'pay', 'money', 'finance'].includes(url.toLowerCase())
+                  ) && (
+                    <p className="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Short patterns may over-match. Use specific domains.
+                    </p>
+                  )}
+                  {filterView === "all" && (settings.teamFilters?.ignoredUrls?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {settings.teamFilters!.ignoredUrls.map((u) => (
+                        <Badge key={u} variant="outline" className="text-[10px] h-5">
+                          <Users className="h-2.5 w-2.5 mr-0.5" />{u}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        )}
+
+        {/* Team-only view */}
+        {filterView === "team" && (
+          <>
+            {(settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
+              <Card className="border-border bg-card">
+                <CardContent className="px-3 py-2.5">
+                  <div className="flex items-center space-x-2.5 mb-2">
+                    <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <h3 className="text-sm font-medium text-foreground">Ignored apps</h3>
+                  </div>
+                  <div className="flex flex-wrap gap-1 ml-[26px]">
+                    {settings.teamFilters!.ignoredWindows.map((w) => (
+                      <Badge key={w} variant="outline" className="text-[10px] h-5">
+                        <Users className="h-2.5 w-2.5 mr-0.5" />{w}
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {(settings.teamFilters?.includedWindows?.length ?? 0) > 0 && (
+              <Card className="border-border bg-card">
+                <CardContent className="px-3 py-2.5">
+                  <div className="flex items-center space-x-2.5 mb-2">
+                    <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <h3 className="text-sm font-medium text-foreground">Included apps</h3>
+                  </div>
+                  <div className="flex flex-wrap gap-1 ml-[26px]">
+                    {settings.teamFilters!.includedWindows.map((w) => (
+                      <Badge key={w} variant="outline" className="text-[10px] h-5">
+                        <Users className="h-2.5 w-2.5 mr-0.5" />{w}
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {(settings.teamFilters?.ignoredUrls?.length ?? 0) > 0 && (
+              <Card className="border-border bg-card">
+                <CardContent className="px-3 py-2.5">
+                  <div className="flex items-center space-x-2.5 mb-2">
+                    <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <h3 className="text-sm font-medium text-foreground">Ignored URLs</h3>
+                  </div>
+                  <div className="flex flex-wrap gap-1 ml-[26px]">
+                    {settings.teamFilters!.ignoredUrls.map((u) => (
+                      <Badge key={u} variant="outline" className="text-[10px] h-5">
+                        <Users className="h-2.5 w-2.5 mr-0.5" />{u}
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {(settings.teamFilters?.ignoredWindows?.length ?? 0) === 0 &&
+             (settings.teamFilters?.includedWindows?.length ?? 0) === 0 &&
+             (settings.teamFilters?.ignoredUrls?.length ?? 0) === 0 && (
+              <Card className="border-border bg-card">
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  <p>no team filters shared yet</p>
+                  {isTeamAdmin && (
+                    <p className="text-sm mt-2">
+                      use &quot;push to team&quot; to share your filters
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
       </div>
 
       
@@ -1814,6 +2066,25 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Floating apply & restart button — always visible when changes pending */}
+      {hasUnsavedChanges && (
+        <div className="sticky bottom-4 flex justify-end pointer-events-none z-50">
+          <Button
+            onClick={handleUpdate}
+            disabled={isUpdating || Object.keys(validationErrors).length > 0}
+            size="sm"
+            className="pointer-events-auto flex items-center gap-1.5 h-9 px-4 text-sm bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 shadow-lg"
+          >
+            {isUpdating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Apply & Restart
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

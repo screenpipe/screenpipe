@@ -105,6 +105,7 @@ export const useOnboardingWithLoader = () => {
   
   useEffect(() => {
     store.loadOnboardingStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   
   return store;

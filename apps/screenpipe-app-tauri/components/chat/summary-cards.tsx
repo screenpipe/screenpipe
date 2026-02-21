@@ -47,33 +47,33 @@ export function SummaryCards({
   };
 
   return (
-    <div className="relative flex flex-col items-center py-8 px-4">
+    <div className="relative flex flex-col items-center py-4 px-4">
       {/* Header */}
-      <div className="relative mx-auto mb-6 w-fit">
+      <div className="relative mx-auto mb-3 w-fit">
         <div className="absolute -inset-4 border border-dashed border-border/50 rounded-xl" />
         <div className="absolute -inset-2 border border-border/30 rounded-lg" />
-        <PipeAIIconLarge size={48} thinking={false} className="relative text-foreground/80" />
+        <PipeAIIconLarge size={40} thinking={false} className="relative text-foreground/80" />
       </div>
-      <h3 className="text-base font-medium mb-1 text-foreground">
+      <h3 className="text-sm font-medium mb-0.5 text-foreground">
         {userName ? `How can I help, ${userName}?` : "How can I help today?"}
       </h3>
-      <p className="text-xs text-muted-foreground mb-6">
+      <p className="text-[11px] text-muted-foreground mb-4">
         One-click summaries from your screen activity
       </p>
 
       {/* Featured template cards */}
-      <div className="grid grid-cols-2 gap-2 w-full max-w-md mb-3">
+      <div className="grid grid-cols-3 gap-1.5 w-full max-w-lg mb-2">
         {featured.map((template) => (
           <button
             key={template.id}
             onClick={() => handleCardClick(template)}
-            className="group text-left p-3 rounded-xl border border-border/40 bg-muted/20 hover:bg-muted/50 hover:border-border/70 transition-all duration-150 cursor-pointer"
+            className="group text-left p-2 rounded-lg border border-border/40 bg-muted/20 hover:bg-muted/50 hover:border-border/70 transition-all duration-150 cursor-pointer"
           >
-            <div className="text-lg mb-1">{template.icon}</div>
-            <div className="text-[12px] font-medium text-foreground group-hover:text-foreground mb-0.5">
+            <div className="text-sm mb-0.5">{template.icon}</div>
+            <div className="text-[11px] font-medium text-foreground group-hover:text-foreground mb-0.5 leading-tight">
               {template.title}
             </div>
-            <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
+            <div className="text-[10px] text-muted-foreground leading-tight line-clamp-1">
               {template.description}
             </div>
           </button>
@@ -81,30 +81,30 @@ export function SummaryCards({
         {/* Custom Summary card */}
         <button
           onClick={() => setShowBuilder(true)}
-          className="group text-left p-3 rounded-xl border border-dashed border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-all duration-150 cursor-pointer"
+          className="group text-left p-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/50 transition-all duration-150 cursor-pointer"
         >
-          <div className="text-lg mb-1">✨</div>
-          <div className="text-[12px] font-medium text-foreground group-hover:text-foreground mb-0.5">
+          <div className="text-sm mb-0.5">✨</div>
+          <div className="text-[11px] font-medium text-foreground group-hover:text-foreground mb-0.5 leading-tight">
             Custom Summary
           </div>
-          <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
-            Build your own with filters and instructions
+          <div className="text-[10px] text-muted-foreground leading-tight line-clamp-1">
+            Build your own
           </div>
         </button>
         {/* Discover / Show More card */}
         <button
           onClick={() => setShowAll(!showAll)}
-          className="group text-left p-3 rounded-xl border border-border/40 bg-muted/10 hover:bg-muted/30 hover:border-border/60 transition-all duration-150 cursor-pointer"
+          className="group text-left p-2 rounded-lg border border-border/40 bg-muted/10 hover:bg-muted/30 hover:border-border/60 transition-all duration-150 cursor-pointer"
         >
-          <div className="text-lg mb-1">🔍</div>
-          <div className="text-[12px] font-medium text-foreground group-hover:text-foreground mb-0.5">
+          <div className="text-sm mb-0.5">🔍</div>
+          <div className="text-[11px] font-medium text-foreground group-hover:text-foreground mb-0.5 leading-tight">
             {showAll ? "Show Less" : "Discover"}
           </div>
-          <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2 flex items-center gap-1">
+          <div className="text-[10px] text-muted-foreground leading-tight line-clamp-1 flex items-center gap-1">
             {showAll ? (
               <>Collapse <ChevronUp className="w-3 h-3 inline" /></>
             ) : (
-              <>{discover.length} more templates <ChevronDown className="w-3 h-3 inline" /></>
+              <>{discover.length} more <ChevronDown className="w-3 h-3 inline" /></>
             )}
           </div>
         </button>
@@ -116,19 +116,19 @@ export function SummaryCards({
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
           exit={{ opacity: 0, height: 0 }}
-          className="grid grid-cols-2 gap-2 w-full max-w-md mb-3"
+          className="grid grid-cols-3 gap-1.5 w-full max-w-lg mb-2"
         >
           {discover.map((template) => (
             <button
               key={template.id}
               onClick={() => handleCardClick(template)}
-              className="group text-left p-3 rounded-xl border border-border/30 bg-muted/10 hover:bg-muted/40 hover:border-border/60 transition-all duration-150 cursor-pointer"
+              className="group text-left p-2 rounded-lg border border-border/30 bg-muted/10 hover:bg-muted/40 hover:border-border/60 transition-all duration-150 cursor-pointer"
             >
-              <div className="text-lg mb-1">{template.icon}</div>
-              <div className="text-[12px] font-medium text-foreground group-hover:text-foreground mb-0.5">
+              <div className="text-sm mb-0.5">{template.icon}</div>
+              <div className="text-[11px] font-medium text-foreground group-hover:text-foreground mb-0.5 leading-tight">
                 {template.title}
               </div>
-              <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
+              <div className="text-[10px] text-muted-foreground leading-tight line-clamp-1">
                 {template.description}
               </div>
             </button>
@@ -138,11 +138,11 @@ export function SummaryCards({
 
       {/* User's custom saved templates */}
       {customTemplates.length > 0 && (
-        <div className="w-full max-w-md mb-3">
-          <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1.5 px-1">
+        <div className="w-full max-w-lg mb-2">
+          <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1 px-1">
             your templates
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
             {customTemplates.map((ct) => (
               <div
                 key={ct.id}
@@ -150,13 +150,13 @@ export function SummaryCards({
                 tabIndex={0}
                 onClick={() => handleCustomTemplateClick(ct)}
                 onKeyDown={(e) => e.key === "Enter" && handleCustomTemplateClick(ct)}
-                className="group text-left p-3 rounded-xl border border-border/30 bg-muted/10 hover:bg-muted/40 hover:border-border/60 transition-all duration-150 cursor-pointer relative"
+                className="group text-left p-2 rounded-lg border border-border/30 bg-muted/10 hover:bg-muted/40 hover:border-border/60 transition-all duration-150 cursor-pointer relative"
               >
-                <div className="text-lg mb-1">📌</div>
-                <div className="text-[12px] font-medium text-foreground group-hover:text-foreground mb-0.5">
+                <div className="text-sm mb-0.5">📌</div>
+                <div className="text-[11px] font-medium text-foreground group-hover:text-foreground mb-0.5 leading-tight">
                   {ct.title}
                 </div>
-                <div className="text-[10px] text-muted-foreground leading-tight line-clamp-2">
+                <div className="text-[10px] text-muted-foreground leading-tight line-clamp-1">
                   {ct.description || ct.timeRange}
                 </div>
                 <button
@@ -177,7 +177,7 @@ export function SummaryCards({
 
       {/* Dynamic AI suggestions */}
       {autoSuggestions.length > 0 && (
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-lg">
           <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1.5 px-1">
             based on your activity
           </div>

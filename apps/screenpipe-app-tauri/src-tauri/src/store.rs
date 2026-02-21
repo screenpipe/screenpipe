@@ -461,7 +461,7 @@ impl Default for SettingsStore {
             ignored_urls: vec![],
 
             fps: 0.5,
-            vad_sensitivity: "high".to_string(),
+            vad_sensitivity: "medium".to_string(),
             analytics_enabled: true,
             audio_chunk_duration: 30,
             use_chinese_mirror: false,
@@ -621,6 +621,7 @@ impl SettingsStore {
             use_chinese_mirror: self.use_chinese_mirror,
             analytics_enabled: self.analytics_enabled,
             analytics_id: self.analytics_id.clone(),
+            event_driven: true,
         }
     }
 

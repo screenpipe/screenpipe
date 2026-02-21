@@ -1,0 +1,19 @@
+[    1640ms] [ERROR] ErrorUtils caught an error:
+
+Cannot listen to an undefined element. [Caught in: Tried to listen to element of type click]
+
+Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. {column: 2527, clientTime: 1771624599, extra: Object, guardList: Array(4), hash: tnp5rt} @ https://static.xx.fbcdn.net/rsrc.php/v4/y8/r/Z7FleB5e0YK.js:75
+[    3475ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3506ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3576ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3592ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3624ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3722ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    3723ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/graphql:0
+[    5813ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    5813ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    5814ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    5814ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    5950ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    5951ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0
+[    6109ms] [ERROR] Failed to load resource: the server responded with a status of 400 () @ https://embed.reddit.com/svc/shreddit/client-errors:0

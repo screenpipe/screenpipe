@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.0.515"
+version = "2.0.522"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -114,6 +114,7 @@ screenpipe-accessibility = { path = "../../../crates/screenpipe-accessibility" }
 screenpipe-audio = { path = "../../../crates/screenpipe-audio" }
 screenpipe-db = { path = "../../../crates/screenpipe-db" }
 screenpipe-integrations = { path = "../../../crates/screenpipe-integrations" }
+screenpipe-events = { path = "../../../crates/screenpipe-events" }
 image = "0.25.5"
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]

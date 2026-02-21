@@ -20,6 +20,7 @@ import {
   Loader2,
   ExternalLink,
   Check,
+  Users,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -29,7 +30,10 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { emit } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
+import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useTeam } from "@/lib/hooks/use-team";
+import { useToast } from "@/components/ui/use-toast";
 import { UpgradeDialog } from "@/components/upgrade-dialog";
 import posthog from "posthog-js";
 
@@ -276,6 +280,40 @@ export function PipesSection() {
   // Track in-flight config saves so runPipe can await them
   const pendingConfigSaves = useRef<Record<string, Promise<void>>>({});
   const { settings } = useSettings();
+  const team = useTeam();
+  const { toast } = useToast();
+  const isTeamAdmin = !!team.team && team.role === "admin";
+  const [sharingPipe, setSharingPipe] = useState<string | null>(null);
+  const [pipeFilter, setPipeFilter] = useState<"all" | "personal" | "team">("all");
+  const sharedPipeNames = new Set(
+    team.configs
+      .filter((c) => c.config_type === "pipe" && c.scope === "team")
+      .map((c) => c.key)
+  );
+
+  const filteredPipes = pipes.filter((p) => {
+    if (pipeFilter === "all") return true;
+    if (pipeFilter === "team") return sharedPipeNames.has(p.config.name);
+    return !sharedPipeNames.has(p.config.name); // personal
+  });
+
+  const sharePipeToTeam = async (pipe: PipeStatus) => {
+    setSharingPipe(pipe.config.name);
+    try {
+      await team.pushConfig("pipe", pipe.config.name, {
+        name: pipe.config.name,
+        raw_content: pipe.raw_content,
+        config: pipe.config,
+      });
+      toast({
+        title: sharedPipeNames.has(pipe.config.name) ? "updated team pipe" : "shared to team",
+      });
+    } catch (err: any) {
+      toast({ title: "failed to share to team", description: err.message, variant: "destructive" });
+    } finally {
+      setSharingPipe(null);
+    }
+  };
 
   const fetchPipes = useCallback(async () => {
     try {
@@ -628,23 +666,57 @@ export function PipesSection() {
         />
       </form>
 
-      {pipes.length === 0 ? (
+      {/* All | Personal | Shared with team tabs */}
+      {team.team && (
+        <div className="flex items-center gap-4 border-b border-border">
+          {(["all", "personal", "team"] as const).map((tab) => {
+            const label = tab === "all" ? "All" : tab === "personal" ? "Personal" : "Shared with team";
+            const count = tab === "all" ? pipes.length : tab === "team"
+              ? pipes.filter((p) => sharedPipeNames.has(p.config.name)).length
+              : pipes.filter((p) => !sharedPipeNames.has(p.config.name)).length;
+            return (
+              <button
+                key={tab}
+                onClick={() => setPipeFilter(tab)}
+                className={cn(
+                  "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px",
+                  pipeFilter === tab
+                    ? "border-foreground text-foreground font-medium"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {label} ({count})
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {filteredPipes.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
-            <p>no pipes installed</p>
-            <p className="text-sm mt-2">
-              create a pipe at{" "}
-              <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                ~/.screenpipe/pipes/my-pipe/pipe.md
-              </code>
-            </p>
+            {pipeFilter === "all" ? (
+              <>
+                <p>no pipes installed</p>
+                <p className="text-sm mt-2">
+                  create a pipe at{" "}
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    ~/.screenpipe/pipes/my-pipe/pipe.md
+                  </code>
+                </p>
+              </>
+            ) : pipeFilter === "team" ? (
+              <p>no pipes shared with team yet</p>
+            ) : (
+              <p>no personal-only pipes</p>
+            )}
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-2">
           {/* Global daily limit banner — shown once at top */}
           {(() => {
-            const limitError = pipes
+            const limitError = filteredPipes
               .filter((p) => p.last_success === false && p.last_error)
               .map((p) => parsePipeError(p.last_error!))
               .find((e) => e.type === "daily_limit");
@@ -668,7 +740,7 @@ export function PipesSection() {
               </div>
             );
           })()}
-          {pipes.map((pipe) => {
+          {filteredPipes.map((pipe) => {
             const recentExecs = pipeExecutions[pipe.config.name] || [];
             const isRunning = pipe.is_running || runningPipe === pipe.config.name;
             const runningExec = recentExecs.find((e) => e.status === "running");
@@ -718,6 +790,26 @@ export function PipesSection() {
                       title="run pipe"
                     >
                       <Play className="h-4 w-4" />
+                    </Button>
+                  )}
+
+                  {isTeamAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs cursor-pointer gap-1"
+                      disabled={sharingPipe === pipe.config.name}
+                      onClick={() => sharePipeToTeam(pipe)}
+                      title={sharedPipeNames.has(pipe.config.name) ? "update team copy" : "share to team"}
+                    >
+                      {sharingPipe === pipe.config.name ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : sharedPipeNames.has(pipe.config.name) ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <Users className="h-3 w-3" />
+                      )}
+                      {sharedPipeNames.has(pipe.config.name) ? "shared" : "share"}
                     </Button>
                   )}
 

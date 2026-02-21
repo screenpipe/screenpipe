@@ -641,7 +641,12 @@ impl PipeManager {
         let (run_model, run_provider, run_provider_url, run_api_key) =
             if let Some(ref preset_id) = config.preset {
                 match resolve_preset(&self.pipes_dir, preset_id) {
-                    Some(resolved) => (resolved.model, resolved.provider, resolved.url, resolved.api_key),
+                    Some(resolved) => (
+                        resolved.model,
+                        resolved.provider,
+                        resolved.url,
+                        resolved.api_key,
+                    ),
                     None => (config.model.clone(), config.provider.clone(), None, None),
                 }
             } else {
@@ -925,7 +930,8 @@ impl PipeManager {
         let pipe_dir = self.pipes_dir.join(name);
 
         // Resolve preset → model/provider overrides
-        let (run_model, run_provider, run_provider_url, run_api_key) = if let Some(ref preset_id) = config.preset
+        let (run_model, run_provider, run_provider_url, run_api_key) = if let Some(ref preset_id) =
+            config.preset
         {
             match resolve_preset(&self.pipes_dir, preset_id) {
                 Some(resolved) => {
@@ -933,7 +939,12 @@ impl PipeManager {
                         "pipe '{}': using preset '{}' → model={}, provider={:?}",
                         name, preset_id, resolved.model, resolved.provider
                     );
-                    (resolved.model, resolved.provider, resolved.url, resolved.api_key)
+                    (
+                        resolved.model,
+                        resolved.provider,
+                        resolved.url,
+                        resolved.api_key,
+                    )
                 }
                 None => {
                     warn!("pipe '{}': preset '{}' not found in store.bin, falling back to pipe config",
@@ -1517,13 +1528,19 @@ impl PipeManager {
                     }
 
                     // Resolve preset → model/provider overrides (same as run_pipe)
-                    let (model, provider, provider_url, api_key) = if let Some(ref preset_id) = config.preset
+                    let (model, provider, provider_url, api_key) = if let Some(ref preset_id) =
+                        config.preset
                     {
                         match resolve_preset(&pipes_dir, preset_id) {
                             Some(resolved) => {
                                 info!("scheduler: pipe '{}' using preset '{}' → model={}, provider={:?}",
                                     name, preset_id, resolved.model, resolved.provider);
-                                (resolved.model, resolved.provider, resolved.url, resolved.api_key)
+                                (
+                                    resolved.model,
+                                    resolved.provider,
+                                    resolved.url,
+                                    resolved.api_key,
+                                )
                             }
                             None => (config.model.clone(), config.provider.clone(), None, None),
                         }

@@ -213,6 +213,7 @@ export function AppContextPopover({
 			<div className="flex items-center justify-between px-3 py-2 border-b border-border">
 				<div className="flex items-center gap-2 min-w-0">
 					{allApps.map((name, i) => (
+						// eslint-disable-next-line @next/next/no-img-element
 						<img
 							key={i}
 							src={`http://localhost:11435/app-icon?name=${encodeURIComponent(name)}`}
