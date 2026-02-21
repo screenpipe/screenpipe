@@ -17,7 +17,7 @@ const DEFAULT_TTL: Duration = Duration::from_secs(60);
 /// Hamming distance threshold for fuzzy dedup: if distance <= this, content is "similar enough" to skip.
 /// Real accessibility text is typically hundreds of words; scrolling changes ~10-20% of content,
 /// which corresponds to roughly 5-10 bit differences in a 64-bit SimHash.
-const SIMHASH_THRESHOLD: u32 = 10;
+const SIMHASH_THRESHOLD: u32 = 12;
 
 /// Cache entry tracking the last stored simhash for a window.
 struct CacheEntry {
