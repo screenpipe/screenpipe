@@ -15,8 +15,10 @@ import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
+import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 
 export default function GeneralSettings() {
+  const isEnterprise = useIsEnterpriseBuild();
   const { settings, updateSettings } = useSettings();
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
@@ -149,75 +151,79 @@ export default function GeneralSettings() {
           </CardContent>
         </Card>
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
-                  <p className="text-xs text-muted-foreground">Install updates automatically</p>
-                </div>
-              </div>
-              <Switch
-                id="auto-update-toggle"
-                checked={settings?.autoUpdate ?? true}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ autoUpdate: checked })
-                }
-                className="ml-4"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Undo2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Version{currentVersion ? ` ${currentVersion}` : ""}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    install a previous version (at your own risk)
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={fetchVersions}
-                disabled={isRollingBack}
-                className="ml-4 h-7 text-xs"
-              >
-                {isRollingBack ? "installing..." : showVersions ? "hide" : "show versions"}
-              </Button>
-            </div>
-            {showVersions && availableVersions.length > 0 && (
-              <div className="mt-3 space-y-1 border-t pt-2">
-                <p className="text-[10px] text-muted-foreground mb-2">
-                  ⚠️ database migrations are not reversed. use at your own risk.
-                </p>
-                {availableVersions.map((v) => (
-                  <div key={v} className="flex items-center justify-between py-0.5">
-                    <span className="text-xs text-muted-foreground">v{v}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRollback(v)}
-                      disabled={isRollingBack}
-                      className="h-6 text-[11px] px-2"
-                    >
-                      install
-                    </Button>
+        {!isEnterprise && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
+                    <p className="text-xs text-muted-foreground">Install updates automatically</p>
                   </div>
-                ))}
+                </div>
+                <Switch
+                  id="auto-update-toggle"
+                  checked={settings?.autoUpdate ?? true}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ autoUpdate: checked })
+                  }
+                  className="ml-4"
+                />
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {!isEnterprise && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Undo2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">
+                      Version{currentVersion ? ` ${currentVersion}` : ""}
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      install a previous version (at your own risk)
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={fetchVersions}
+                  disabled={isRollingBack}
+                  className="ml-4 h-7 text-xs"
+                >
+                  {isRollingBack ? "installing..." : showVersions ? "hide" : "show versions"}
+                </Button>
+              </div>
+              {showVersions && availableVersions.length > 0 && (
+                <div className="mt-3 space-y-1 border-t pt-2">
+                  <p className="text-[10px] text-muted-foreground mb-2">
+                    ⚠️ database migrations are not reversed. use at your own risk.
+                  </p>
+                  {availableVersions.map((v) => (
+                    <div key={v} className="flex items-center justify-between py-0.5">
+                      <span className="text-xs text-muted-foreground">v{v}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRollback(v)}
+                        disabled={isRollingBack}
+                        className="h-6 text-[11px] px-2"
+                      >
+                        install
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

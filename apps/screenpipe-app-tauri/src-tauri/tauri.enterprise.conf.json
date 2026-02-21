@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "screenpipe",
+  "identifier": "screenpi.pe.enterprise",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3000"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "active": true,
+    "publisher": "Screenpipe Inc.",
+    "category": "DeveloperTool",
+    "shortDescription": "24/7 memory for your desktop",
+    "longDescription": "24/7 memory for your desktop. 100% local. You own your data.",
+    "copyright": "",
+    "targets": ["app", "dmg", "deb", "appimage", "nsis"],
+    "externalBin": ["bun"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/256x256.png",
+      "icons/512x512.png",
+      "icons/1024x1024.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/screenpipe-logo-tray-failed.png",
+      "icons/screenpipe-logo-tray-black.png"
+    ],
+    "resources": ["assets/*"],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      },
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
+  },
+  "plugins": {
+    "updater": { "endpoints": [], "pubkey": "" },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["screenpipe"]
+      },
+      "mobile": [
+        { "host": "screenpi.pe", "pathPrefix": ["/auth"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/stripe-connect"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/purchase-successful"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/settings"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/changelog"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/onboarding"] },
+        { "host": "screenpi.pe", "pathPrefix": ["/status"] }
+      ]
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "screenpipe_main",
+      "iconPath": "assets/screenpipe-logo-tray-white.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": true
+    },
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$HOME/.screenpipe/**"]
+      },
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  }
+}

@@ -95,6 +95,11 @@ pub fn is_source_build(_app: &tauri::AppHandle) -> bool {
     !cfg!(feature = "official-build")
 }
 
+/// Enterprise build: updates are managed by IT (Intune/RoboPack), not in-app.
+pub fn is_enterprise_build(app: &tauri::AppHandle) -> bool {
+    app.config().identifier.as_str() == "screenpi.pe.enterprise"
+}
+
 pub struct UpdatesManager {
     interval: Duration,
     update_available: Arc<Mutex<bool>>,
@@ -147,6 +152,12 @@ impl UpdatesManager {
             if show_dialog {
                 self.show_source_build_dialog().await?;
             }
+            return Result::Ok(false);
+        }
+
+        // Enterprise: updates managed by IT (Intune/RoboPack), no in-app check
+        if is_enterprise_build(&self.app) {
+            info!("enterprise build, updates managed by IT");
             return Result::Ok(false);
         }
 

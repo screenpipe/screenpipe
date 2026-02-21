@@ -1327,6 +1327,7 @@ async fn main() {
         .manage(reminders_state)
         .manage(suggestions_state)
         .invoke_handler(tauri::generate_handler![
+            commands::is_enterprise_build_cmd,
             spawn_screenpipe,
             stop_screenpipe,
             recording::get_monitors,
@@ -1448,12 +1449,16 @@ async fn main() {
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder, PredefinedMenuItem, MenuItemBuilder};
 
-                let app_submenu = SubmenuBuilder::new(app, "screenpipe")
+                let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
                     .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
-                    .separator()
-                    .item(&MenuItemBuilder::with_id("check_for_updates", "Check for Updates...")
-                        .build(app)?)
-                    .separator()
+                    .separator();
+                if !crate::updates::is_enterprise_build(app) {
+                    app_submenu_builder = app_submenu_builder
+                        .item(&MenuItemBuilder::with_id("check_for_updates", "Check for Updates...")
+                            .build(app)?)
+                        .separator();
+                }
+                let app_submenu = app_submenu_builder
                     .item(&MenuItemBuilder::with_id("settings", "Settings...")
                         .accelerator("CmdOrCtrl+,")
                         .build(app)?)

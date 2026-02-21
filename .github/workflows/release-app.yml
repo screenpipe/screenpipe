@@ -1067,6 +1067,62 @@ jobs:
 
           Write-Host "R2 beta upload complete for Windows"
 
+      - name: Rebuild and upload enterprise (Windows) — per-machine, Intune/RoboPack
+        if: matrix.os_type == 'windows'
+        continue-on-error: true
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          cd apps/screenpipe-app-tauri/src-tauri
+
+          Write-Host "=== Rebuilding with enterprise config (perMachine, Intune-ready) ==="
+          Copy-Item "tauri.enterprise.conf.json" "tauri.conf.json" -Force
+          $bundleNsis = "target\x86_64-pc-windows-msvc\release\bundle\nsis"
+          if (Test-Path $bundleNsis) { Remove-Item -Recurse -Force $bundleNsis }
+          Push-Location ..
+          $env:TAURI_CLI_CONFIG = '{"build":{"beforeBuildCommand":""}}'
+          bunx tauri build --target x86_64-pc-windows-msvc --features mkl,official-build
+          Pop-Location
+          Write-Host "=== Enterprise rebuild complete ==="
+
+          $intunewinPath = $null
+          Push-Location ..
+          try { .\scripts\exe-to-intunewin.ps1 } catch { Write-Host ".intunewin creation failed: $_" }
+          $intunewin = Get-ChildItem "scripts\intunewin\out\*.intunewin" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($intunewin) { $intunewinPath = $intunewin.FullName }
+          Pop-Location
+
+          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing AWS CLI..."
+            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
+            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
+            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          $r2Prefix = "s3://screenpipe-releases/enterprise/releases/$version/x86_64-pc-windows-msvc"
+
+          Write-Host "Uploading enterprise Windows bundles for v$version to R2..."
+          Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
+            Write-Host "  ✅ $($_.Name)"
+          }
+          Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip","target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
+            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
+            Write-Host "  ✅ $($_.Name)"
+          }
+          if ($intunewinPath) {
+            aws s3 cp $intunewinPath "$r2Prefix/$(Split-Path -Leaf $intunewinPath)" --endpoint-url $r2Endpoint
+            Write-Host "  ✅ $(Split-Path -Leaf $intunewinPath)"
+          }
+
+          Write-Host "R2 enterprise upload complete for Windows"
+
       - name: Clean stale beta artifacts before stable upload
         if: matrix.os_type != 'windows'
         shell: bash

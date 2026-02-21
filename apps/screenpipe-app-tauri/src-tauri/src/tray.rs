@@ -6,7 +6,7 @@ use crate::commands::show_main_window;
 use crate::health::{get_recording_info, get_recording_status, DeviceKind, RecordingStatus};
 use crate::recording::RecordingState;
 use crate::store::{get_store, OnboardingStore};
-use crate::updates::is_source_build;
+use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window_api::ShowRewindWindow;
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -364,9 +364,11 @@ fn create_dynamic_menu(
             &MenuItemBuilder::with_id("version", version_text)
                 .enabled(false)
                 .build(app)?,
-        )
-        .item(update_item)
-        .item(&MenuItemBuilder::with_id("releases", "Changelog").build(app)?);
+        );
+    if !is_enterprise_build(app) {
+        menu_builder = menu_builder.item(update_item);
+    }
+    menu_builder = menu_builder.item(&MenuItemBuilder::with_id("releases", "Changelog").build(app)?);
 
     // Only show recording controls if not in dev mode
     let dev_mode = store
