@@ -11,6 +11,7 @@
   "bundle": {
     "createUpdaterArtifacts": true,
     "active": true,
+    "publisher": "Screenpipe Inc.",
     "category": "DeveloperTool",
     "shortDescription": "24/7 memory for your desktop",
     "longDescription": "24/7 memory for your desktop. 100% local. You own your data.",
