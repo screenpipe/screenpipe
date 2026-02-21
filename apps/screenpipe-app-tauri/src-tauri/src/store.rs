@@ -607,6 +607,10 @@ impl SettingsStore {
                 Some(self.deepgram_api_key.clone())
             },
             user_id: self.user.id.as_ref().filter(|id| !id.is_empty()).cloned(),
+            // OpenAI Compatible transcription
+            openai_compatible_endpoint: self.extra.get("openaiCompatibleEndpoint").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            openai_compatible_api_key: self.extra.get("openaiCompatibleApiKey").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            openai_compatible_model: self.extra.get("openaiCompatibleModel").and_then(|v| v.as_str()).map(|s| s.to_string()),
             // Fallback chain for speaker identification: userName setting → cloud name → cloud email
             user_name: self.extra.get("userName")
                 .and_then(|v| v.as_str())

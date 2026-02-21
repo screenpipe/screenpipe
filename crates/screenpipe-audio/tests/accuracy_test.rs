@@ -143,6 +143,7 @@ async fn test_transcription_accuracy() {
                     &audio_input.device.to_string(),
                     Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
                     None,
+                    None,
                     vec![Language::English],
                     &mut whisper_state,
                 )

@@ -141,7 +141,7 @@ pub trait TreeWalkerPlatform: Send {
 }
 
 /// Create a platform-appropriate tree walker.
-pub fn create_tree_walker(config: TreeWalkerConfig) -> Box<dyn TreeWalkerPlatform> {
+pub fn create_tree_walker(_config: TreeWalkerConfig) -> Box<dyn TreeWalkerPlatform> {
     #[cfg(target_os = "macos")]
     {
         Box::new(macos::MacosTreeWalker::new(config))

@@ -50,6 +50,11 @@ pub struct RecordingConfig {
     // Cloud/auth
     pub deepgram_api_key: Option<String>,
     pub user_id: Option<String>,
+    
+    // OpenAI Compatible transcription
+    pub openai_compatible_endpoint: Option<String>,
+    pub openai_compatible_api_key: Option<String>,
+    pub openai_compatible_model: Option<String>,
 
     // Speaker identification
     /// User's display name for calendar-assisted speaker ID.

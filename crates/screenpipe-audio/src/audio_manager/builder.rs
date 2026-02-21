@@ -13,8 +13,8 @@ use crate::{
         device::{default_input_device, default_output_device},
         engine::AudioTranscriptionEngine,
     },
+    transcription::{deepgram::CUSTOM_DEEPGRAM_API_TOKEN, stt::OpenAICompatibleConfig},
     meeting_detector::MeetingDetector,
-    transcription::deepgram::CUSTOM_DEEPGRAM_API_TOKEN,
     vad::{VadEngineEnum, VadSensitivity},
 };
 
@@ -38,6 +38,8 @@ pub struct AudioManagerOptions {
     pub vad_engine: VadEngineEnum,
     pub languages: Vec<Language>,
     pub deepgram_api_key: Option<String>,
+    /// Configuration for OpenAI Compatible transcription engine
+    pub openai_compatible_config: Option<OpenAICompatibleConfig>,
     pub enable_diarization: bool,
     pub enable_realtime: bool,
     pub audio_chunk_duration: Duration,
@@ -74,6 +76,7 @@ impl Default for AudioManagerOptions {
             vad_engine: VadEngineEnum::Silero,
             languages: vec![],
             deepgram_api_key,
+            openai_compatible_config: None,
             enable_diarization: true,
             enable_realtime: false,
             audio_chunk_duration: Duration::from_secs(30),
@@ -121,6 +124,12 @@ impl AudioManagerBuilder {
 
     pub fn deepgram_api_key(mut self, deepgram_api_key: Option<String>) -> Self {
         self.options.deepgram_api_key = deepgram_api_key;
+        self
+    }
+
+    /// Set OpenAI Compatible transcription configuration
+    pub fn openai_compatible_config(mut self, config: Option<OpenAICompatibleConfig>) -> Self {
+        self.options.openai_compatible_config = config;
         self
     }
 
