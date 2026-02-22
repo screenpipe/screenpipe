@@ -1637,6 +1637,10 @@ impl DatabaseManager {
         Ok(results)
     }
 
+    /// Similarity threshold for OCR deduplication in search results (0.0 to 1.0).
+    /// Results with text similarity above this threshold are considered duplicates.
+    const OCR_DEDUP_SIMILARITY_THRESHOLD: f64 = 0.85;
+
     #[allow(clippy::too_many_arguments)]
     async fn search_ocr(
         &self,
@@ -1680,6 +1684,9 @@ impl DatabaseManager {
         }
 
         let frame_query = frame_fts_parts.join(" ");
+
+        // Fetch more results than requested to account for deduplication filtering
+        let fetch_limit = limit * 3;
 
         let sql = format!(
             r#"
@@ -1761,33 +1768,62 @@ impl DatabaseManager {
             } else {
                 Some(query)
             })
-            .bind(limit)
+            .bind(fetch_limit)
             .bind(offset)
             .fetch_all(&self.pool)
             .await?;
 
-        Ok(raw_results
-            .into_iter()
-            .map(|raw| OCRResult {
-                frame_id: raw.frame_id,
-                ocr_text: raw.ocr_text,
-                text_json: raw.text_json,
-                timestamp: raw.timestamp,
-                frame_name: raw.frame_name,
-                file_path: raw.file_path,
-                offset_index: raw.offset_index,
-                app_name: raw.app_name,
-                ocr_engine: raw.ocr_engine,
-                window_name: raw.window_name,
-                device_name: raw.device_name,
-                tags: raw
-                    .tags
-                    .map(|t| t.split(',').map(String::from).collect())
-                    .unwrap_or_default(),
-                browser_url: raw.browser_url,
-                focused: raw.focused,
-            })
-            .collect())
+        // Deduplicate near-identical OCR results to reduce LLM context waste.
+        // Group by app_name + window_name, then filter similar text within each group.
+        let mut deduped_results: Vec<OCRResult> = Vec::with_capacity(limit as usize);
+        
+        // Track seen text per (app_name, window_name) combination
+        let mut seen_texts: std::collections::HashMap<(String, String), Vec<String>> = 
+            std::collections::HashMap::new();
+
+        for raw in raw_results {
+            let app = raw.app_name.clone().unwrap_or_default();
+            let window = raw.window_name.clone().unwrap_or_default();
+            let key = (app, window);
+            
+            let texts = seen_texts.entry(key).or_insert_with(Vec::new);
+            
+            // Check if this OCR text is similar to any already-seen text for this app/window
+            let is_duplicate = texts.iter().any(|existing| {
+                is_similar_transcription(&raw.ocr_text, existing, Self::OCR_DEDUP_SIMILARITY_THRESHOLD)
+            });
+            
+            if !is_duplicate {
+                texts.push(raw.ocr_text.clone());
+                
+                deduped_results.push(OCRResult {
+                    frame_id: raw.frame_id,
+                    ocr_text: raw.ocr_text,
+                    text_json: raw.text_json,
+                    timestamp: raw.timestamp,
+                    frame_name: raw.frame_name,
+                    file_path: raw.file_path,
+                    offset_index: raw.offset_index,
+                    app_name: raw.app_name,
+                    ocr_engine: raw.ocr_engine,
+                    window_name: raw.window_name,
+                    device_name: raw.device_name,
+                    tags: raw
+                        .tags
+                        .map(|t| t.split(',').map(String::from).collect())
+                        .unwrap_or_default(),
+                    browser_url: raw.browser_url,
+                    focused: raw.focused,
+                });
+                
+                // Stop once we have enough unique results
+                if deduped_results.len() >= limit as usize {
+                    break;
+                }
+            }
+        }
+
+        Ok(deduped_results)
     }
 
     #[allow(clippy::too_many_arguments)]
