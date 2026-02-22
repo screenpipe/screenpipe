@@ -2,17 +2,28 @@ import { useState, useEffect, useCallback } from "react";
 import { commands, PiInfo, PiCheckResult } from "@/lib/utils/tauri";
 import { listen } from "@tauri-apps/api/event";
 
+export interface PipeRun {
+  id: string;
+  pipeName: string;
+  startedAt: Date;
+  endedAt?: Date;
+  status: "running" | "completed" | "failed";
+  output?: string;
+}
+
 export interface UsePiResult {
   info: PiInfo | null;
   checkResult: PiCheckResult | null;
   isLoading: boolean;
   error: string | null;
   logs: string[];
+  pipeRuns: PipeRun[];
   start: (projectDir: string, userToken?: string) => Promise<PiInfo | null>;
   stop: () => Promise<void>;
   refresh: () => Promise<void>;
   check: () => Promise<void>;
   clearError: () => void;
+  clearPipeRuns: () => void;
 }
 
 export function usePi(): UsePiResult {
