@@ -365,6 +365,7 @@ impl AudioManager {
         let output_path = options.output_path.clone();
         let languages = options.languages.clone();
         let deepgram_api_key = options.deepgram_api_key.clone();
+        let openai_compatible_config = options.openai_compatible_config.clone();
         let audio_transcription_engine = options.transcription_engine.clone();
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
@@ -477,6 +478,7 @@ impl AudioManager {
                     &output_path.clone().unwrap(),
                     audio_transcription_engine.clone(),
                     deepgram_api_key.clone(),
+                    openai_compatible_config.clone(),
                     languages.clone(),
                     &transcription_sender.clone(),
                     &mut whisper_state,

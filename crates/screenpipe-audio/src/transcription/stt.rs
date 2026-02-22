@@ -10,6 +10,7 @@ use crate::speaker::embedding_manager::EmbeddingManager;
 use crate::speaker::prepare_segments;
 use crate::speaker::segment::SpeechSegment;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
+use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
 use crate::transcription::whisper::batch::process_with_whisper;
 use crate::utils::audio::resample;
 use crate::utils::ffmpeg::{get_new_file_path, write_audio_to_file};
@@ -26,6 +27,14 @@ use crate::{AudioInput, TranscriptionResult};
 
 pub const SAMPLE_RATE: u32 = 16000;
 
+/// Configuration for OpenAI Compatible transcription engine
+#[derive(Clone, Debug, Default)]
+pub struct OpenAICompatibleConfig {
+    pub endpoint: String,
+    pub api_key: Option<String>,
+    pub model: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stt_sync(
     audio: &[f32],
@@ -33,6 +42,7 @@ pub async fn stt_sync(
     device: &str,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
+    openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     whisper_state: &mut WhisperState,
 ) -> Result<String> {
@@ -46,6 +56,7 @@ pub async fn stt_sync(
         &device,
         audio_transcription_engine,
         deepgram_api_key,
+        openai_compatible_config,
         languages,
         whisper_state,
     )
@@ -59,6 +70,7 @@ pub async fn stt(
     device: &str,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
+    openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     whisper_state: &mut WhisperState,
 ) -> Result<String> {
@@ -76,6 +88,35 @@ pub async fn stt(
                 Err(e) => {
                     error!(
                         "device: {}, deepgram transcription failed, falling back to Whisper: {:?}",
+                        device, e
+                    );
+                    // Fallback to Whisper
+                    process_with_whisper(audio, languages.clone(), whisper_state).await
+                }
+            }
+        } else if audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible.into() {
+            // OpenAI Compatible implementation
+            let config = openai_compatible_config.unwrap_or_else(|| OpenAICompatibleConfig {
+                endpoint: "http://127.0.0.1:8080".to_string(),
+                api_key: None,
+                model: "whisper-1".to_string(),
+            });
+
+            match transcribe_with_openai_compatible(
+                &config.endpoint,
+                config.api_key.as_deref(),
+                &config.model,
+                audio,
+                device,
+                sample_rate,
+                languages.clone(),
+            )
+            .await
+            {
+                Ok(transcription) => Ok(transcription),
+                Err(e) => {
+                    error!(
+                        "device: {}, openai compatible transcription failed, falling back to Whisper: {:?}",
                         device, e
                     );
                     // Fallback to Whisper
@@ -100,6 +141,7 @@ pub async fn process_audio_input(
     output_path: &PathBuf,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
+    openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     output_sender: &crossbeam::channel::Sender<TranscriptionResult>,
     whisper_state: &mut WhisperState,
@@ -159,6 +201,7 @@ pub async fn process_audio_input(
             audio.device.clone(),
             audio_transcription_engine.clone(),
             deepgram_api_key.clone(),
+            openai_compatible_config.clone(),
             languages.clone(),
             path,
             timestamp,
@@ -180,6 +223,7 @@ pub async fn run_stt(
     device: Arc<AudioDevice>,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
+    openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     path: String,
     timestamp: u64,
@@ -193,6 +237,7 @@ pub async fn run_stt(
         &device.to_string(),
         audio_transcription_engine.clone(),
         deepgram_api_key.clone(),
+        openai_compatible_config.clone(),
         languages.clone(),
         whisper_state,
     )

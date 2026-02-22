@@ -223,6 +223,7 @@ export function RecordingSettings() {
   const isDisabled = health?.status_code === 500;
   const [isMacOS, setIsMacOS] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
   const team = useTeam();
@@ -241,6 +242,30 @@ export function RecordingSettings() {
     } finally {
       setPushingFilter(null);
     }
+  };
+
+  // OpenAI Compatible model fetching state
+  const [openAIModels, setOpenAIModels] = useState<string[]>([]);
+  const [allOpenAIModels, setAllOpenAIModels] = useState<string[]>([]); // Store all models
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [filterTranscriptionModels, setFilterTranscriptionModels] = useState(true); // Default to filtered
+
+  // Transcription model name patterns
+  const TRANSCRIPTION_MODEL_PATTERNS = [
+    /^whisper/i,
+    /whisper/i,
+    /^canary/i,
+    /^parakeet/i,
+    /^speech/i,
+    /audio.*transcri/i,
+    /^transcribe/i,
+    /stt/i,
+    /^moonshine/i,
+    /^sensevoice/i,
+  ];
+
+  const isLikelyTranscriptionModel = (modelId: string): boolean => {
+    return TRANSCRIPTION_MODEL_PATTERNS.some(pattern => pattern.test(modelId));
   };
 
   // Add new state to track if settings have changed
@@ -417,6 +442,65 @@ export function RecordingSettings() {
     loadDevices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch OpenAI Compatible models when endpoint changes
+  const fetchOpenAIModels = useCallback(async (endpoint: string, apiKey?: string) => {
+    setIsLoadingModels(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+      
+      const response = await fetch(`${endpoint}/v1/models`, {
+        method: 'GET',
+        headers,
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch models');
+      }
+      
+      const data = await response.json();
+      const models = data.data?.map((m: any) => m.id) || [];
+      setAllOpenAIModels(models); // Store all models
+      // Filtered models will be set by the useEffect below
+    } catch (error) {
+      console.error('Failed to fetch OpenAI models:', error);
+      setAllOpenAIModels(['!API_Error']);
+      setOpenAIModels(['!API_Error']);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }, []);
+
+  // Update displayed models when filter toggle or all models change
+  useEffect(() => {
+    if (allOpenAIModels.length === 0) return;
+    
+    if (allOpenAIModels.includes('!API_Error')) {
+      setOpenAIModels(allOpenAIModels);
+      return;
+    }
+    
+    if (filterTranscriptionModels) {
+      const filtered = allOpenAIModels.filter(isLikelyTranscriptionModel);
+      setOpenAIModels(filtered.length > 0 ? filtered : allOpenAIModels);
+    } else {
+      setOpenAIModels(allOpenAIModels);
+    }
+  }, [allOpenAIModels, filterTranscriptionModels]);
+
+  // Fetch models when OpenAI Compatible is selected and endpoint changes
+  useEffect(() => {
+    if (settings.audioTranscriptionEngine === 'openai-compatible') {
+      const endpoint = (settings as any).openaiCompatibleEndpoint || 'http://127.0.0.1:8080';
+      const apiKey = (settings as any).openaiCompatibleApiKey;
+      fetchOpenAIModels(endpoint, apiKey);
+    }
+  }, [settings.audioTranscriptionEngine, (settings as any).openaiCompatibleEndpoint, (settings as any).openaiCompatibleApiKey, fetchOpenAIModels]);
 
   // Enhanced validation for specific fields
   const validateDeepgramApiKey = useCallback((apiKey: string): FieldValidationResult => {
@@ -1060,7 +1144,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Transcription engine
-                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower. Disabled: capture audio only without transcription, useful for external ASR." />
+                  <HelpTooltip text="Deepgram: cloud-based, higher quality, requires API key or screenpipe cloud. Whisper: runs locally, no API key needed, may be slower. OpenAI Compatible: use any OpenAI-compatible API endpoint. Disabled: capture audio only without transcription, useful for external ASR." />
                 </h3>
               </div>
               <Select
@@ -1080,6 +1164,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectItem value="whisper-large-quantized">Whisper Large V3 Quantized</SelectItem>
                   <SelectItem value="whisper-large-v3-turbo">Whisper Large V3 Turbo</SelectItem>
                   <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Large V3 Turbo Quantized</SelectItem>
+                  <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
                   <SelectItem value="deepgram">Deepgram</SelectItem>
                   <SelectItem value="disabled">Disabled (capture only)</SelectItem>
                 </SelectContent>
@@ -1103,6 +1188,63 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </Button>
               </div>
             )}
+            {settings.audioTranscriptionEngine === "openai-compatible" && (
+              <div className="mt-2 ml-[26px] space-y-2">
+                {/* API Endpoint Input */}
+                <ValidatedInput
+                  id="openaiCompatibleEndpoint"
+                  label=""
+                  value={(settings as any).openaiCompatibleEndpoint || "http://127.0.0.1:8080"}
+                  onChange={(value: string) => handleSettingsChange({ openaiCompatibleEndpoint: value } as any, true)}
+                  placeholder="API Endpoint (e.g., http://127.0.0.1:8080)"
+                  className="h-7 text-xs"
+                />
+                
+                {/* API Key Input */}
+                <div className="relative">
+                  <ValidatedInput
+                    id="openaiCompatibleApiKey"
+                    label=""
+                    type={showOpenAIApiKey ? "text" : "password"}
+                    value={(settings as any).openaiCompatibleApiKey || ""}
+                    onChange={(value: string) => handleSettingsChange({ openaiCompatibleApiKey: value } as any, true)}
+                    placeholder="API Key (optional)"
+                    className="pr-8 h-7 text-xs"
+                  />
+                  <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-7 w-7" onClick={() => setShowOpenAIApiKey(!showOpenAIApiKey)}>
+                    {showOpenAIApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  </Button>
+                </div>
+                
+                {/* Model Filter Toggle */}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Show only transcription models</span>
+                  <Switch
+                    checked={filterTranscriptionModels}
+                    onCheckedChange={setFilterTranscriptionModels}
+                    className="data-[state=checked]:bg-primary"
+                  />
+                </div>
+                
+                {/* Model Selection */}
+                <Select
+                  value={(settings as any).openaiCompatibleModel || ""}
+                  onValueChange={(value) => handleSettingsChange({ openaiCompatibleModel: value } as any, true)}
+                >
+                  <SelectTrigger className="w-full h-7 text-xs">
+                    <SelectValue placeholder={isLoadingModels ? "Loading models..." : "Select model"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {openAIModels.map((model) => (
+                      <SelectItem key={model} value={model}>{model}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {filterTranscriptionModels && openAIModels.length === 0 && allOpenAIModels.length > 0 && (
+                  <p className="text-xs text-muted-foreground">No transcription models found. Toggle off the filter to see all models.</p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
         )}
@@ -1110,6 +1252,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         {/* Transcription Mode - only for local Whisper engines */}
         {!settings.disableAudio && settings.audioTranscriptionEngine !== "deepgram" &&
          settings.audioTranscriptionEngine !== "screenpipe-cloud" &&
+         settings.audioTranscriptionEngine !== "openai-compatible" &&
          settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">

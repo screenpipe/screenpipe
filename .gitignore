@@ -62,8 +62,15 @@ __pycache__/
 screenpipe-app-tauri/src-tauri/.next/
 .vercel
 .wrangler/
+.kilocode/
 
-
+.mcp.json
+.cursor
+.agent
 
 .playwright*
 crates/screenpipe-audio/onnxruntime-win-x64-1.19.2.zip
+
+# Contox local memory
+.contox/
+.contox.json

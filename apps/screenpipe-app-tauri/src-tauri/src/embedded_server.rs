@@ -120,9 +120,28 @@ pub async fn start_embedded_server(
         };
 
     // Build audio manager
+    use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+    use screenpipe_audio::vad::{VadEngineEnum, VadSensitivity};
+    use screenpipe_audio::audio_manager::AudioManagerBuilder;
+    use screenpipe_audio::transcription::stt::OpenAICompatibleConfig;
+    
+    // Build OpenAI Compatible config if applicable
+    let openai_compatible_config = if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
+        Some(OpenAICompatibleConfig {
+            endpoint: config.openai_compatible_endpoint.clone()
+                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+            api_key: config.openai_compatible_api_key.clone(),
+            model: config.openai_compatible_model.clone()
+                .unwrap_or_else(|| "whisper-1".to_string()),
+        })
+    } else {
+        None
+    };
+
     let mut audio_manager_builder = config
         .to_audio_manager_builder(data_path.clone(), audio_devices.clone())
-        .transcription_mode(config.transcription_mode.clone());
+        .transcription_mode(config.transcription_mode.clone())
+        .openai_compatible_config(openai_compatible_config);
 
     if let Some(ref detector) = meeting_detector {
         audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());

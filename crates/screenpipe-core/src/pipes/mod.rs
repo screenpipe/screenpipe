@@ -1825,7 +1825,7 @@ impl PipeManager {
 
     /// Copy built-in pipe templates into pipes_dir if they don't exist.
     pub fn install_builtin_pipes(&self) -> Result<()> {
-        let mut builtins = vec![
+        let builtins = vec![
             (
                 "obsidian-sync",
                 include_str!("../../assets/pipes/obsidian-sync/pipe.md"),

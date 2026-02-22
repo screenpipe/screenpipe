@@ -284,6 +284,7 @@ mod tests {
                 &audio_input.device.to_string(),
                 Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
                 None,
+                None,
                 vec![Language::Arabic],
                 &mut whisper_state,
             )
@@ -389,6 +390,7 @@ mod tests {
                 audio_input.sample_rate,
                 &audio_input.device.to_string(),
                 Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
+                None,
                 None,
                 vec![Language::English],
                 &mut whisper_state,
