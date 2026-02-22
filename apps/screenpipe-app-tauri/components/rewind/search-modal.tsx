@@ -446,12 +446,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
         if (matched.length > 0 && !cancelled) {
           // Fetch frames tagged with matching tags
-          const inList = matched.map(t => `'${t.name.replace(/'/g, "''")}'`).join(",");
+          const inList = matched.map((_, i) => `?${i + 1}`).join(",");
           const framesResp = await fetch("http://localhost:3030/raw_sql", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               query: `SELECT f.id as frame_id, f.timestamp, f.app_name, GROUP_CONCAT(DISTINCT t.name) as tag_names FROM vision_tags vt JOIN frames f ON vt.vision_id = f.id JOIN tags t ON vt.tag_id = t.id WHERE t.name IN (${inList}) GROUP BY f.id ORDER BY f.timestamp DESC LIMIT 50`,
+              params: matched.map(t => t.name),
             }),
             signal: AbortSignal.timeout(5000),
           });
