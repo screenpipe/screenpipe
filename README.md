@@ -81,6 +81,53 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 [download the desktop app](https://screenpi.pe) — one-time purchase, all features, auto-updates
 
+### Linux (Ubuntu/Debian)
+
+**Prerequisites:**
+```bash
+# Install system dependencies
+sudo apt update
+sudo apt install -y \
+    libavformat-dev \
+    libavfilter-dev \
+    libavdevice-dev \
+    libclang-dev \
+    libsqlite3-dev \
+    libasound2-dev \
+    libxdo-dev \
+    libsdl2-dev \
+    ffmpeg \
+    tesseract-ocr \
+    cmake \
+    pkg-config
+```
+
+**Build from source:**
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Clone and build
+git clone https://github.com/screenpipe/screenpipe.git
+cd screenpipe
+cargo build --release
+
+# Run
+./target/release/screenpipe
+```
+
+**Desktop app (optional):**
+```bash
+# Install additional dependencies for Tauri
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Build desktop app
+cd screenpipe-app-tauri
+npm install
+npm run tauri build
+```
+
 ## specs
 
 - 10% cpu usage
