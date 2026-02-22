@@ -13,12 +13,23 @@ use crate::core::engine::AudioTranscriptionEngine;
 
 use super::{text_utils::longest_common_word_substring, AudioInput};
 
+/// Represents a single word with its timing information for animated captions
+#[derive(Debug, Clone)]
+pub struct WordTimestamp {
+    pub word: String,
+    pub start: f64,
+    pub end: f64,
+    pub confidence: Option<f32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
     pub path: String,
     pub input: AudioInput,
     pub speaker_embedding: Vec<f32>,
     pub transcription: Option<String>,
+    /// Word-level timestamps for animated captions
+    pub word_timestamps: Option<Vec<WordTimestamp>>,
     pub timestamp: u64,
     pub error: Option<String>,
     pub start_time: f64,
