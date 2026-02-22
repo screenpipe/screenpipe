@@ -1139,8 +1139,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         {isActive && (
                           <div className="mt-1 pt-1 border-t border-border space-y-1">
                             <p className="text-xs text-muted-foreground line-clamp-2">
-                              {result.window_name}
+                              <HighlightedText text={result.window_name} query={debouncedQuery} />
                             </p>
+                            {result.text && (
+                              <p className="text-xs text-muted-foreground/70 line-clamp-3">
+                                <HighlightedText text={result.text} query={debouncedQuery} />
+                              </p>
+                            )}
                             {result.url && (
                               <p className="text-xs text-muted-foreground/70 truncate">
                                 {result.url}
