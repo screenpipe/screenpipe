@@ -1,0 +1,17 @@
+Highlight Keywords That are Searched
+**describe the feature**
+When I search for a keyword in my history, I would like screenpipe to highlight where it is found in the page.
+
+**why is this needed?**
+It makes it a lot easier to locate the context of the search. It answers the question: Why did screenpipe say that this keyword is in this screenshot? 
+
+**alternatives considered**
+Not really
+
+**additional context**
+
+A search for the word "steven" in my history.
+<img width="2398" height="1672" alt="Image" src="https://github.com/user-attachments/assets/acebeb2c-2f99-432c-a6c2-c0761691a18f" />
+
+A search for the word "example" in vivaldi.
+<img width="1797" height="702" alt="Image" src="https://github.com/user-attachments/assets/c0a949a1-36cf-4a3c-a8c1-6e02ff7e6213" />

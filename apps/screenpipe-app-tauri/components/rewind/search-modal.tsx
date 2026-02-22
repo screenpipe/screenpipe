@@ -270,6 +270,23 @@ function formatRelativeTime(timestamp: string): string {
   return format(date, "MMM d") + " " + time;
 }
 
+
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
+  const parts = text.split(new RegExp(`(${query})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) => 
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-yellow-500/30 text-inherit rounded-sm px-0.5">{part}</mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+}
+
 export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded = false }: SearchModalProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -607,7 +624,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     const result = filteredResults[selectedIndex];
     if (!result) return;
 
-    const context = `Context from search result:\n${result.app_name} - ${result.window_name}\nTime: ${format(new Date(result.timestamp), "PPpp")}\n\nText:\n${result.text || ""}`;
+    const context = `Context from search result:\n${result.app_name} - $<HighlightText text={result.window_name} query={debouncedQuery} />\nTime: ${format(new Date(result.timestamp), "PPpp")}\n\nText:\n${result.text || ""}`;
 
     // Close search modal first
     onClose();
@@ -1116,7 +1133,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       <div className="relative">
                         <FrameThumbnail
                           frameId={result.frame_id}
-                          alt={`${result.app_name} - ${result.window_name}`}
+                          alt={`${result.app_name} - $<HighlightText text={result.window_name} query={debouncedQuery} />`}
                         />
                         {groupSize > 1 && (
                           <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/70 text-white rounded">
@@ -1139,7 +1156,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         {isActive && (
                           <div className="mt-1 pt-1 border-t border-border space-y-1">
                             <p className="text-xs text-muted-foreground line-clamp-2">
-                              {result.window_name}
+                              <HighlightText text={result.window_name} query={debouncedQuery} />
                             </p>
                             {result.url && (
                               <p className="text-xs text-muted-foreground/70 truncate">
