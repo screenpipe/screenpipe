@@ -14,14 +14,29 @@ use anyhow::{anyhow, Result};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
+use crate::core::device::DeviceType;
 use crate::{core::update_device_capture_time, metrics::AudioPipelineMetrics, AudioInput};
 
 use super::AudioStream;
 
-/// Timeout for receiving audio data before considering the stream dead.
-/// If no audio is received for this duration, the stream is likely hijacked
-/// by another app (e.g., Wispr Flow taking over the microphone).
-const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 30;
+/// Timeout for receiving audio data before we *consider* the stream unhealthy.
+///
+/// For microphones (Input), a lack of data usually means the stream is dead/hijacked.
+/// For system/display audio (Output), macOS may legitimately deliver no buffers while
+/// the system is silent; aggressively restarting can cause the output stream to
+/// permanently fail to reattach after long uptimes.
+const AUDIO_RECEIVE_TIMEOUT_INPUT_SECS: u64 = 30;
+const AUDIO_RECEIVE_TIMEOUT_OUTPUT_SECS: u64 = 10 * 60;
+const OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART: u32 = 6;
+const OUTPUT_RESTART_WINDOW_SECS: u64 =
+    AUDIO_RECEIVE_TIMEOUT_OUTPUT_SECS * OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART as u64;
+
+fn should_force_reconnect(device_type: &DeviceType, consecutive_timeouts: u32) -> bool {
+    match device_type {
+        DeviceType::Input => true,
+        DeviceType::Output => consecutive_timeouts >= OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART,
+    }
+}
 
 pub async fn run_record_and_transcribe(
     audio_stream: Arc<AudioStream>,
@@ -32,6 +47,12 @@ pub async fn run_record_and_transcribe(
 ) -> Result<()> {
     let mut receiver = audio_stream.subscribe().await;
     let device_name = audio_stream.device.to_string();
+    let device_type = audio_stream.device.device_type.clone();
+    let receive_timeout = match device_type {
+        DeviceType::Input => Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_INPUT_SECS),
+        DeviceType::Output => Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_OUTPUT_SECS),
+    };
+    let mut consecutive_timeouts: u32 = 0;
 
     info!(
         "starting continuous recording for {} ({}s segments)",
@@ -53,7 +74,7 @@ pub async fn run_record_and_transcribe(
             // Use timeout to detect when audio stream stops sending data
             // This happens when another app hijacks the audio device
             let recv_result = tokio::time::timeout(
-                Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS),
+                receive_timeout,
                 receiver.recv(),
             )
             .await;
@@ -63,6 +84,7 @@ pub async fn run_record_and_transcribe(
                     metrics.update_audio_level(&chunk);
                     collected_audio.extend(chunk);
                     update_device_capture_time(&device_name);
+                    consecutive_timeouts = 0;
                 }
                 Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
                     // Channel buffer overflow - receiver fell behind producer
@@ -78,20 +100,31 @@ pub async fn run_record_and_transcribe(
                     return Err(anyhow!("Audio stream error: {}", e));
                 }
                 Err(_timeout) => {
-                    // No audio data received for AUDIO_RECEIVE_TIMEOUT_SECS seconds
-                    // This can happen when another app hijacks the device, or simply
-                    // when no audio is playing through an output device (speakers).
-                    // Log at debug level to avoid spamming logs in the common idle case.
-                    debug!(
-                        "no audio received from {} for {}s - stream may be idle or hijacked, triggering reconnect",
-                        device_name, AUDIO_RECEIVE_TIMEOUT_SECS
-                    );
+                    consecutive_timeouts = consecutive_timeouts.saturating_add(1);
                     metrics.record_stream_timeout();
+
+                    if !should_force_reconnect(&device_type, consecutive_timeouts) {
+                        debug!(
+                            "no audio received from output device {} for {}s ({} consecutive timeouts) - treating as idle",
+                            device_name,
+                            receive_timeout.as_secs(),
+                            consecutive_timeouts
+                        );
+                        continue;
+                    }
+
+                    debug!(
+                        "no audio received from {} for {}s ({} consecutive timeouts, {}s total idle) - triggering reconnect",
+                        device_name,
+                        receive_timeout.as_secs(),
+                        consecutive_timeouts,
+                        OUTPUT_RESTART_WINDOW_SECS
+                    );
                     // Mark stream as disconnected so device monitor can restart it
                     audio_stream.is_disconnected.store(true, Ordering::Relaxed);
                     return Err(anyhow!(
-                        "Audio stream timeout - no data received for {}s (possible audio hijack)",
-                        AUDIO_RECEIVE_TIMEOUT_SECS
+                        "Audio stream timeout - no data received for {}s",
+                        receive_timeout.as_secs()
                     ));
                 }
             }
@@ -134,4 +167,40 @@ pub async fn run_record_and_transcribe(
 
     info!("stopped recording for {}", device_name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_device_does_not_disconnect_on_first_timeout() {
+        assert!(!should_force_reconnect(&DeviceType::Output, 1));
+    }
+
+    #[test]
+    fn output_device_disconnects_after_threshold() {
+        assert!(should_force_reconnect(
+            &DeviceType::Output,
+            OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART
+        ));
+    }
+
+    #[test]
+    fn output_device_does_not_disconnect_before_threshold() {
+        assert!(!should_force_reconnect(
+            &DeviceType::Output,
+            OUTPUT_CONSECUTIVE_TIMEOUTS_BEFORE_RESTART - 1
+        ));
+    }
+
+    #[test]
+    fn output_device_restart_window_is_one_hour() {
+        assert_eq!(OUTPUT_RESTART_WINDOW_SECS, 60 * 60);
+    }
+
+    #[test]
+    fn input_device_disconnects_on_first_timeout() {
+        assert!(should_force_reconnect(&DeviceType::Input, 1));
+    }
 }
