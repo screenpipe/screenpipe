@@ -73,6 +73,37 @@ const STOP_WORDS = new Set([
   "copy", "paste", "select", "search", "enter", "tab", "window", "screen",
 ]);
 
+// Highlight matching keywords in text
+function highlightKeywords(text: string, query: string): React.ReactNode {
+  if (!query || !text) return text;
+  
+  // Clean query - remove special prefixes and get search terms
+  const cleanQuery = query.replace(/^[@#]/, '').trim().toLowerCase();
+  if (!cleanQuery) return text;
+  
+  // Split query into individual terms
+  const terms = cleanQuery.split(/\s+/).filter(t => t.length > 1);
+  if (terms.length === 0) return text;
+  
+  // Create regex pattern for all terms
+  const pattern = new RegExp(`(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+  
+  const parts = text.split(pattern);
+  if (parts.length === 1) return text;
+  
+  return parts.map((part, i) => {
+    const isMatch = terms.some(t => part.toLowerCase() === t.toLowerCase());
+    if (isMatch) {
+      return (
+        <mark key={i} className="bg-yellow-300/60 dark:bg-yellow-500/40 text-inherit rounded-sm px-0.5">
+          {part}
+        </mark>
+      );
+    }
+    return part;
+  });
+}
+
 function isGarbageWord(word: string): boolean {
   if (word.length < 3 || word.length > 25) return true;
   // too many consonants in a row = OCR garbage
