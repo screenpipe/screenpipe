@@ -126,7 +126,7 @@ screenpipe is an open source application (MIT license) that continuously capture
 | macOS (Apple Silicon) | ✅ Full support | Native .dmg installer |
 | macOS (Intel) | ✅ Full support | Native .dmg installer |
 | Windows 10/11 | ✅ Full support | Native .exe installer |
-| Linux | ✅ Supported | Build from source |
+| Linux | ✅ Supported | Build from source ([instructions below](#linux-installation)) |
 
 Minimum requirements: 8 GB RAM recommended. ~5–10 GB disk space per month of continuous recording. CPU usage typically 5–15% on modern hardware.
 
