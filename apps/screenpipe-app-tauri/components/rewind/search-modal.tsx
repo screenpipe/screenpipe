@@ -15,6 +15,13 @@ interface SpeakerResult {
   metadata: string;
 }
 
+interface WordTimestamp {
+  word: string;
+  start_time: number;
+  end_time: number;
+  confidence?: number;
+}
+
 interface AudioTranscription {
   timestamp: string;
   transcription: string;
@@ -22,6 +29,7 @@ interface AudioTranscription {
   is_input: boolean;
   speaker_name: string;
   duration_secs: number;
+  words?: WordTimestamp[];
 }
 
 
