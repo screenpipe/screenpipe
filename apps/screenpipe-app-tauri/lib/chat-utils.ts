@@ -130,7 +130,9 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 
   // @selection - timeline selection
   const selectionPattern = /@selection\b/gi;
+  selectionPattern.lastIndex = 0;
   if (selectionPattern.test(cleanedInput) && options?.selectionRange) {
+REPLACE_END
     timeRanges.push({
       start: options.selectionRange.start,
       end: options.selectionRange.end,
@@ -189,7 +191,9 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
   ];
 
   for (const { pattern, getRange } of timePatterns) {
+    pattern.lastIndex = 0; // Reset regex state before testing
     if (pattern.test(cleanedInput)) {
+      pattern.lastIndex = 0; // Reset again before replace
       timeRanges.push(getRange());
       cleanedInput = cleanedInput.replace(pattern, "").trim();
     }
@@ -199,24 +203,31 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 
   // @audio - audio transcriptions only
   const audioPattern = /@audio\b/gi;
+  audioPattern.lastIndex = 0;
   if (audioPattern.test(cleanedInput)) {
+    audioPattern.lastIndex = 0;
     contentType = "audio";
     cleanedInput = cleanedInput.replace(audioPattern, "").trim();
   }
 
   // @screen or @ocr or @vision - screen text only
   const screenPattern = /@(screen|ocr|vision)\b/gi;
+  screenPattern.lastIndex = 0;
   if (screenPattern.test(cleanedInput)) {
+    screenPattern.lastIndex = 0;
     contentType = "ocr";
     cleanedInput = cleanedInput.replace(screenPattern, "").trim();
   }
 
   // @input or @clicks or @events - UI events (clicks, keystrokes, app switches)
   const inputPattern = /@(input|clicks|events)\b/gi;
+  inputPattern.lastIndex = 0;
   if (inputPattern.test(cleanedInput)) {
+    inputPattern.lastIndex = 0;
     contentType = "input";
     cleanedInput = cleanedInput.replace(inputPattern, "").trim();
   }
+REPLACE_END
 
   // === APP MENTIONS ===
 
