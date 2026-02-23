@@ -73,6 +73,10 @@ pub use events::{
 };
 pub use platform::{PermissionStatus, RecordingHandle, UiRecorder};
 
+/// Windows-specific: Timeout for UI Automation calls to prevent mouse blocking
+#[cfg(target_os = "windows")]
+pub const WINDOWS_UIA_TIMEOUT_MS: u32 = 50;
+
 /// Prelude for convenient imports
 pub mod prelude {
     pub use crate::activity_feed::{ActivityFeed, ActivityKind, CaptureParams};
