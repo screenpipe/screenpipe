@@ -266,3 +266,54 @@ export const querySerializer = createSerializer(queryParser);
 
 export type QueryParser = inferParserType<typeof queryParser>;
 
+// macOS permission status values
+export type PermissionStatus = "granted" | "denied" | "notDetermined";
+
+export interface MacOSPermissions {
+  screenRecording: PermissionStatus;
+  microphone: PermissionStatus;
+  accessibility: PermissionStatus;
+}
+
+// Check if microphone permission is effectively granted on macOS
+// macOS can return different states that should be treated as granted
+export async function checkMicrophonePermission(): Promise<boolean> {
+  const os = platform();
+  if (os !== "macos") {
+    return true; // Non-macOS platforms handle permissions differently
+  }
+  
+  try {
+    // Try to get the actual permission status from the backend
+    const status = await invoke<string>("check_audio_permission");
+    // Handle various "granted" states - macOS may return "authorized" or "granted"
+    const grantedStates = ["granted", "authorized", "allowed", "true", "1"];
+    return grantedStates.includes(status.toLowerCase());
+  } catch (error) {
+    console.error("Error checking microphone permission:", error);
+    // If we can't check, assume it might be granted to avoid false negatives
+    return true;
+  }
+}
+
+// Normalize macOS permission status to a consistent format
+export function normalizeMacOSPermissionStatus(status: string | boolean | number): PermissionStatus {
+  if (typeof status === "boolean") {
+    return status ? "granted" : "denied";
+  }
+  if (typeof status === "number") {
+    // macOS AVAuthorizationStatus: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
+    if (status === 3) return "granted";
+    if (status === 0) return "notDetermined";
+    return "denied";
+  }
+  
+  const normalizedStatus = status.toLowerCase().trim();
+  const grantedValues = ["granted", "authorized", "allowed", "yes", "true", "3"];
+  const notDeterminedValues = ["notdetermined", "not_determined", "unknown", "0"];
+  
+  if (grantedValues.includes(normalizedStatus)) return "granted";
+  if (notDeterminedValues.includes(normalizedStatus)) return "notDetermined";
+  return "denied";
+}
+
