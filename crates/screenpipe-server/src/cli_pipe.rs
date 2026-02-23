@@ -6,8 +6,65 @@ use crate::cli::PipeCommand;
 use screenpipe_core::agents::pi::PiExecutor;
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::pipes::PipeManager;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Persistent AI configuration for CLI pipes
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AiConfig {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+}
+
+impl AiConfig {
+    fn config_path() -> anyhow::Result<PathBuf> {
+        let path = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("could not find home directory"))?
+            .join(".screenpipe")
+            .join("ai-config.json");
+        Ok(path)
+    }
+
+    pub fn load() -> anyhow::Result<Self> {
+        let path = Self::config_path()?;
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            Ok(serde_json::from_str(&content)?)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::config_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Merge with runtime overrides (CLI args take precedence)
+    pub fn merge_with(
+        &self,
+        provider: Option<String>,
+        model: Option<String>,
+        api_key: Option<String>,
+        base_url: Option<String>,
+    ) -> Self {
+        Self {
+            provider: provider.or_else(|| self.provider.clone()),
+            model: model.or_else(|| self.model.clone()),
+            api_key: api_key.or_else(|| self.api_key.clone()),
+            base_url: base_url.or_else(|| self.base_url.clone()),
+        }
+    }
+}
 
 /// Handle pipe subcommands (standalone — does NOT require a running server).
 pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
@@ -70,28 +127,51 @@ pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
             manager.enable_pipe(name, false).await?;
             println!("disabled pipe: {}", name);
         }
-        PipeCommand::Run { name } => {
+        PipeCommand::Run {
+            name,
+            ai_provider,
+            ai_model,
+            ai_api_key,
+            ai_base_url,
+        } => {
+            // Load persistent config and merge with CLI overrides
+            let persisted = AiConfig::load().unwrap_or_default();
+            let ai_config = persisted.merge_with(
+                ai_provider.clone(),
+                ai_model.clone(),
+                ai_api_key.clone(),
+                ai_base_url.clone(),
+            );
+
+            // Set environment variables for pipe execution
+            if let Some(ref provider) = ai_config.provider {
+                std::env::set_var("SCREENPIPE_AI_PROVIDER", provider);
+            }
+            if let Some(ref model) = ai_config.model {
+                std::env::set_var("SCREENPIPE_AI_MODEL", model);
+            }
+            if let Some(ref api_key) = ai_config.api_key {
+                std::env::set_var("SCREENPIPE_AI_API_KEY", api_key);
+            }
+            if let Some(ref base_url) = ai_config.base_url {
+                std::env::set_var("SCREENPIPE_AI_BASE_URL", base_url);
+            }
+
             println!("running pipe '{}' …", name);
+            if ai_config.provider.is_some() || ai_config.model.is_some() {
+                println!(
+                    "  ai: provider={}, model={}",
+                    ai_config.provider.as_deref().unwrap_or("default"),
+                    ai_config.model.as_deref().unwrap_or("default")
+                );
+            }
+
             match manager.run_pipe(name).await {
                 Ok(log) => {
                     if log.success {
                         println!(
                             "✓ completed in {}s",
-                            (log.finished_at - log.started_at).num_seconds()
-                        );
-                        if !log.stdout.is_empty() {
-                            println!("\n{}", log.stdout);
-                        }
-                    } else {
-                        eprintln!("✗ failed");
-                        if !log.stderr.is_empty() {
-                            eprintln!("{}", log.stderr);
-                        }
-                    }
-                }
-                Err(e) => eprintln!("error: {}", e),
-            }
-        }
+                            (log.finished_at - log.started_at).num_
         PipeCommand::Logs { name, follow: _ } => {
             let logs = manager.get_logs(name).await;
             if logs.is_empty() {

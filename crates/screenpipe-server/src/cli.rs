@@ -576,6 +576,18 @@ pub enum PipeCommand {
     Run {
         /// Pipe name
         name: String,
+        /// AI provider to use (openai, anthropic, ollama)
+        #[arg(long, env = "SCREENPIPE_AI_PROVIDER")]
+        ai_provider: Option<String>,
+        /// AI model to use
+        #[arg(long, env = "SCREENPIPE_AI_MODEL")]
+        ai_model: Option<String>,
+        /// API key for AI provider
+        #[arg(long, env = "SCREENPIPE_AI_API_KEY")]
+        ai_api_key: Option<String>,
+        /// AI provider base URL (for custom endpoints)
+        #[arg(long, env = "SCREENPIPE_AI_BASE_URL")]
+        ai_base_url: Option<String>,
     },
     /// Show pipe logs
     Logs {
@@ -589,6 +601,24 @@ pub enum PipeCommand {
     Delete {
         /// Pipe name
         name: String,
+    },
+    /// Configure AI provider settings (persisted to ~/.screenpipe/ai-config.json)
+    Config {
+        /// AI provider to use (openai, anthropic, ollama)
+        #[arg(long)]
+        ai_provider: Option<String>,
+        /// AI model to use
+        #[arg(long)]
+        ai_model: Option<String>,
+        /// API key for AI provider
+        #[arg(long)]
+        ai_api_key: Option<String>,
+        /// AI provider base URL (for custom endpoints)
+        #[arg(long)]
+        ai_base_url: Option<String>,
+        /// Show current configuration
+        #[arg(long, default_value_t = false)]
+        show: bool,
     },
 }
 
