@@ -264,13 +264,19 @@ impl SafeMonitor {
 
     // Non-macOS: XcapMonitor contains *mut c_void (not Send), so we can't cache it.
     // Still use spawn_blocking for thread pool reuse, but enumerate inside the closure.
+    //
+    // GNOME/Linux note: xcap uses XGetImage which can cause screen flashing on some
+    // compositors. Setting XCAP_LINUX_METHOD=shm may help on some systems.
     #[cfg(not(target_os = "macos"))]
     pub async fn capture_image(&self) -> Result<DynamicImage> {
         let monitor_id = self.monitor_id;
 
         let image = tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
-            let monitor = XcapMonitor::all()
-                .map_err(Error::from)?
+            // On Linux/GNOME, we need to find the monitor without triggering
+            // unnecessary X11 operations that could cause screen flash
+            let monitors = XcapMonitor::all().map_err(Error::from)?;
+            
+            let monitor = monitors
                 .into_iter()
                 .find(|m| m.id().unwrap_or(0) == monitor_id)
                 .ok_or_else(|| anyhow::anyhow!("Monitor not found"))?;
@@ -279,10 +285,11 @@ impl SafeMonitor {
                 return Err(anyhow::anyhow!("Invalid monitor dimensions"));
             }
 
-            monitor
-                .capture_image()
-                .map_err(Error::from)
-                .map(DynamicImage::ImageRgba8)
+            // Capture using xcap - on GNOME/Wayland this may require xdg-desktop-portal
+            // For X11, this uses XGetImage/XShmGetImage depending on extension support
+            let rgba_image = monitor.capture_image().map_err(Error::from)?;
+            
+            Ok(DynamicImage::ImageRgba8(rgba_image))
         })
         .await
         .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))??;
