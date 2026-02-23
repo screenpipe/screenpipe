@@ -224,6 +224,52 @@ commits: `8c8c445c`
 - [ ] **Windows Claude install flow** — same flow using `cmd /c start` instead of `open -a`.
 - [ ] **download error logging** — if download fails, console shows actual error message (not `{}`).
 
+### 17. OCR & audio transcription accuracy
+
+> **purpose**: ensure OCR and audio transcription quality doesn't regress. compare against reference models to catch accuracy drops.
+
+#### OCR accuracy benchmarks
+
+- [ ] **baseline accuracy test** — run OCR on `test_data/ocr_reference/` images. compare output against `.expected.txt` files. accuracy must be ≥95% character-level match.
+- [ ] **high contrast text** — black text on white background. accuracy must be ≥98%.
+- [ ] **low contrast text** — gray text on light gray background. accuracy must be ≥90%.
+- [ ] **small font (8-10px)** — OCR captures small UI text correctly. accuracy must be ≥85%.
+- [ ] **mixed fonts in single frame** — screenshot with multiple font sizes/styles. all text regions detected.
+- [ ] **non-Latin scripts** — Chinese, Japanese, Korean, Cyrillic, Arabic text. must not crash; accuracy ≥80% for configured languages.
+- [ ] **code/monospace text** — terminal output, IDE code. special characters (`{}[]<>|`) captured correctly.
+- [ ] **rotated/skewed text** — slight rotation (≤5°) still recognized. accuracy ≥85%.
+- [ ] **text over images** — UI overlays, watermarks. text detected despite complex background.
+- [ ] **OCR engine comparison** — run same images through Apple native, Tesseract, Windows native. log accuracy differences.
+- [ ] **regression vs previous release** — compare current OCR output against last release on identical test images. no >2% accuracy drop.
+
+#### audio transcription accuracy benchmarks
+
+- [ ] **baseline accuracy test** — transcribe `test_data/audio_reference/` files. compare against `.expected.txt`. Word Error Rate (WER) must be ≤10%.
+- [ ] **clear speech** — single speaker, low noise, standard accent. WER must be ≤5%.
+- [ ] **background noise** — office ambient noise, keyboard typing. WER must be ≤15%.
+- [ ] **multiple speakers** — 2-3 speakers in conversation. all speakers transcribed, WER ≤12%.
+- [ ] **fast speech** — 180+ words per minute. WER must be ≤15%.
+- [ ] **accented English** — non-native speakers. WER must be ≤20%.
+- [ ] **technical vocabulary** — programming terms, product names. domain-specific words captured.
+- [ ] **whisper model comparison** — run same audio through tiny, base, small models. log accuracy vs speed tradeoffs.
+- [ ] **silence handling** — long pauses (>5s) don't cause hallucinations or repeated words.
+- [ ] **audio quality degradation** — low bitrate (64kbps), compression artifacts. transcription still usable.
+- [ ] **timestamp accuracy** — word timestamps within ±500ms of actual speech.
+- [ ] **regression vs previous release** — compare current transcription against last release. no >2% WER increase.
+
+#### reference model comparison
+
+- [ ] **OCR: Apple Vision vs Tesseract** — run identical screenshots through both. document accuracy difference per image category.
+- [ ] **OCR: tesseract-ocr-server baseline** — if using external OCR server, verify responses match expected format and accuracy.
+- [ ] **audio: Whisper tiny vs base vs small** — benchmark speed (RTF) and accuracy (WER) for each model on test set.
+- [ ] **audio: local vs API transcription** — if cloud API available, compare accuracy and latency against local Whisper.
+
+#### automated accuracy CI
+
+- [ ] **CI accuracy gate** — PR fails if OCR accuracy drops >2% or audio WER increases >2% vs main branch.
+- [ ] **accuracy metrics in logs** — each transcription/OCR run logs confidence scores. `grep "confidence" ~/.screenpipe/*.log`.
+- [ ] **weekly accuracy report** — scheduled job runs full benchmark suite, posts results to tracking dashboard.
+
 ## how to run
 
 ### before every release
