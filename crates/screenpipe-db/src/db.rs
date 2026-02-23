@@ -1235,6 +1235,92 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Update browser_url on recent frames matching app_name and window_name.
+    /// Used by browser extensions to provide accurate URL tracking.
+    /// Returns the number of frames updated.
+    pub async fn update_browser_url_for_recent_frames(
+        &self,
+        app_name: &str,
+        window_name: Option<&str>,
+        browser_url: &str,
+        lookback_secs: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let result = if let Some(window) = window_name {
+            sqlx::query(
+                r#"UPDATE frames 
+                   SET browser_url = ?1 
+                   WHERE app_name = ?2 
+                     AND window_name = ?3 
+                     AND (browser_url IS NULL OR browser_url = '')
+                     AND timestamp > datetime('now', ?4)
+                "#,
+            )
+            .bind(browser_url)
+            .bind(app_name)
+            .bind(window)
+            .bind(format!("-{} seconds", lookback_secs))
+            .execute(&mut **tx.conn())
+            .await?
+        } else {
+            sqlx::query(
+                r#"UPDATE frames 
+                   SET browser_url = ?1 
+                   WHERE app_name = ?2 
+                     AND (browser_url IS NULL OR browser_url = '')
+                     AND timestamp > datetime('now', ?3)
+                "#,
+            )
+            .bind(browser_url)
+            .bind(app_name)
+            .bind(format!("-{} seconds", lookback_secs))
+            .execute(&mut **tx.conn())
+            .await?
+        };
+
+        let rows_affected = result.rows_affected();
+        tx.commit().await?;
+
+        debug!(
+            "Updated browser_url for {} frames (app={}, url={})",
+            rows_affected, app_name, browser_url
+        );
+
+        Ok(rows_affected)
+    }
+
+    /// Get the most recent frame ID for a given app_name, used by browser extensions
+    /// to associate URLs with specific frames.
+    pub async fn get_recent_frame_id_for_app(
+        &self,
+        app_name: &str,
+        window_name: Option<&str>,
+    ) -> Result<Option<i64>, sqlx::Error> {
+        let result = if let Some(window) = window_name {
+            sqlx::query_scalar::<_, i64>(
+                r#"SELECT id FROM frames 
+                   WHERE app_name = ?1 AND window_name = ?2 
+                   ORDER BY timestamp DESC LIMIT 1"#,
+            )
+            .bind(app_name)
+            .bind(window)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                r#"SELECT id FROM frames 
+                   WHERE app_name = ?1 
+                   ORDER BY timestamp DESC LIMIT 1"#,
+            )
+            .bind(app_name)
+            .fetch_optional(&self.pool)
+            .await?
+        };
+
+        Ok(result)
+    }
+
     /// Batch insert frames and their OCR text in a single transaction.
     /// This dramatically reduces write lock contention in the hot path by acquiring
     /// the lock once per capture cycle instead of 2× per window result.

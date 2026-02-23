@@ -24,6 +24,7 @@ use crate::{
             remove_tags, validate_media_handler,
         },
         data::delete_time_range_handler,
+        extension,
         frames::{get_frame_context, get_frame_data, get_frame_metadata, get_frame_ocr_data, get_next_valid_frame},
         health::{
             api_list_monitors, api_vision_status, audio_metrics_handler, health_check,
@@ -438,6 +439,11 @@ impl SCServer {
             .route(
                 "/data/delete-range",
                 axum::routing::post(delete_time_range_handler),
+            )
+            // Browser extension endpoint for accurate URL tracking
+            .route(
+                "/extension/url",
+                axum::routing::post(crate::routes::extension::report_browser_url),
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
