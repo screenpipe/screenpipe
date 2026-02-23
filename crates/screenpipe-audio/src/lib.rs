@@ -6,6 +6,7 @@ pub mod metrics;
 mod utils;
 pub mod vad;
 pub use transcription::stt::stt;
+pub use transcription::stt::{check_context_health, force_whisper_context_refresh, get_or_refresh_whisper_context};
 pub use transcription::{AudioInput, TranscriptionResult};
 pub mod speaker;
 pub mod transcription;
