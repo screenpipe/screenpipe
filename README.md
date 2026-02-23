@@ -81,6 +81,87 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 [download the desktop app](https://screenpi.pe) — one-time purchase, all features, auto-updates
 
+<details>
+<summary>🐧 Linux (Ubuntu/Debian) build from source</summary>
+
+### Prerequisites
+
+```bash
+# Install system dependencies
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  libssl-dev \
+  pkg-config \
+  libavcodec-dev \
+  libavformat-dev \
+  libavutil-dev \
+  libswscale-dev \
+  libswresample-dev \
+  libclang-dev \
+  libasound2-dev \
+  libxdo-dev \
+  libxcb1-dev \
+  libxcb-randr0-dev \
+  libxcb-shm0-dev \
+  libxcb-xfixes0-dev \
+  libxcb-shape0-dev \
+  tesseract-ocr \
+  tesseract-ocr-eng \
+  libtesseract-dev \
+  cmake \
+  libdbus-1-dev \
+  libwebkit2gtk-4.1-dev \
+  libappindicator3-dev \
+  librsvg2-dev \
+  libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev \
+  curl \
+  wget \
+  file
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Install Bun (required for desktop app)
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+```
+
+### Build CLI only
+
+```bash
+git clone https://github.com/mediar-ai/screenpipe.git
+cd screenpipe
+
+cargo build --release -p screenpipe
+./target/release/screenpipe
+```
+
+### Build Desktop App
+
+```bash
+git clone https://github.com/mediar-ai/screenpipe.git
+cd screenpipe/screenpipe-app-tauri
+
+bun install
+bun tauri build
+# Binary will be in target/release/bundle/
+```
+
+### Common Issues
+
+- **FFmpeg errors**: Ensure all `libav*-dev` and `libswresample-dev` packages are installed
+- **Tauri/WebKit errors**: On Ubuntu 22.04 use `libwebkit2gtk-4.0-dev`, on 24.04+ use `libwebkit2gtk-4.1-dev`
+- **OCR not working**: Verify tesseract: `tesseract --list-langs` should show `eng`
+- **Audio capture fails**: Add user to audio group: `sudo usermod -aG audio $USER` then logout/login
+- **PipeWire/Wayland**: Set `DISPLAY=:0` for X11 or ensure PipeWire is running for Wayland
+- **Permission denied on screen capture**: Install and run `xhost +local:` for X11 access
+- **Missing libsoup**: Ubuntu 22.04 uses `libsoup2.4-dev`, Ubuntu 24.04+ uses `libsoup-3.0-dev`
+
+</details>
+
 ## specs
 
 - 10% cpu usage
