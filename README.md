@@ -81,6 +81,64 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 [download the desktop app](https://screenpi.pe) — one-time purchase, all features, auto-updates
 
+<details>
+<summary>🐧 Linux (Ubuntu/Debian) build from source</summary>
+
+### Prerequisites
+
+```bash
+# Install system dependencies
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  libssl-dev \
+  pkg-config \
+  libavcodec-dev \
+  libavformat-dev \
+  libavutil-dev \
+  libswscale-dev \
+  libclang-dev \
+  libasound2-dev \
+  libxdo-dev \
+  libxcb1-dev \
+  libxcb-randr0-dev \
+  libxcb-shm0-dev \
+  libxcb-xfixes0-dev \
+  tesseract-ocr \
+  libtesseract-dev \
+  cmake
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Install Node.js (v18+)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+### Build & Run
+
+```bash
+git clone https://github.com/mediar-ai/screenpipe.git
+cd screenpipe
+
+# Build CLI
+cargo build --release -p screenpipe
+
+# Run
+./target/release/screenpipe
+```
+
+### Common Issues
+
+- **FFmpeg errors**: Ensure `libavcodec-dev` and related packages are installed
+- **OCR not working**: Install language packs: `sudo apt install tesseract-ocr-eng`
+- **Audio capture fails**: Add user to audio group: `sudo usermod -aG audio $USER` (logout required)
+- **X11 errors**: Ensure `DISPLAY` env var is set, or use PipeWire/Wayland flags
+
+</details>
+
 ## specs
 
 - 10% cpu usage
