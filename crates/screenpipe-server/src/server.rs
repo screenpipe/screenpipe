@@ -29,6 +29,7 @@ use crate::{
             api_list_monitors, api_vision_status, audio_metrics_handler, health_check,
             vision_metrics_handler,
         },
+        import::import_screen_recording_handler,
         search::{keyword_search_handler, search},
         speakers::{
             delete_speaker_handler, get_similar_speakers_handler, get_unnamed_speakers_handler,
@@ -438,6 +439,11 @@ impl SCServer {
             .route(
                 "/data/delete-range",
                 axum::routing::post(delete_time_range_handler),
+            )
+            // Import screen recordings (not in OpenAPI spec)
+            .route(
+                "/import/screen-recording",
+                axum::routing::post(import_screen_recording_handler),
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
