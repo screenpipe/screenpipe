@@ -12,6 +12,8 @@ use std::path::PathBuf;
 pub enum CliAudioTranscriptionEngine {
     #[clap(name = "deepgram")]
     Deepgram,
+    #[clap(name = "gemini")]
+    Gemini,
     #[clap(name = "whisper-tiny")]
     WhisperTiny,
     #[clap(name = "whisper-tiny-quantized")]
@@ -33,6 +35,7 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
     fn from(cli_engine: CliAudioTranscriptionEngine) -> Self {
         match cli_engine {
             CliAudioTranscriptionEngine::Deepgram => CoreAudioTranscriptionEngine::Deepgram,
+            CliAudioTranscriptionEngine::Gemini => CoreAudioTranscriptionEngine::Gemini,
             CliAudioTranscriptionEngine::WhisperTiny => CoreAudioTranscriptionEngine::WhisperTiny,
             CliAudioTranscriptionEngine::WhisperTinyQuantized => {
                 CoreAudioTranscriptionEngine::WhisperTinyQuantized
@@ -392,6 +395,10 @@ pub struct RecordArgs {
     /// Deepgram API Key for audio transcription
     #[arg(long = "deepgram-api-key")]
     pub deepgram_api_key: Option<String>,
+
+    /// Gemini API Key for audio transcription
+    #[arg(long = "gemini-api-key", env = "GEMINI_API_KEY")]
+    pub gemini_api_key: Option<String>,
 
     /// PID to watch for auto-destruction
     #[arg(long, hide = true)]
