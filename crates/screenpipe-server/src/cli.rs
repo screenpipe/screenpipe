@@ -24,14 +24,18 @@ pub enum CliAudioTranscriptionEngine {
     WhisperLargeV3Turbo,
     #[clap(name = "whisper-large-v3-turbo-quantized")]
     WhisperLargeV3TurboQuantized,
+    /// Use a custom local Whisper model (requires --custom-whisper-model-path)
+    #[clap(name = "custom")]
+    Custom,
     /// Disable transcription (audio capture only, no speech-to-text)
     #[clap(name = "disabled")]
     Disabled,
 }
 
-impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
-    fn from(cli_engine: CliAudioTranscriptionEngine) -> Self {
-        match cli_engine {
+impl CliAudioTranscriptionEngine {
+    /// Convert to CoreAudioTranscriptionEngine with optional custom model path
+    pub fn into_core_engine(self, custom_model_path: Option<String>) -> CoreAudioTranscriptionEngine {
+        match self {
             CliAudioTranscriptionEngine::Deepgram => CoreAudioTranscriptionEngine::Deepgram,
             CliAudioTranscriptionEngine::WhisperTiny => CoreAudioTranscriptionEngine::WhisperTiny,
             CliAudioTranscriptionEngine::WhisperTinyQuantized => {
@@ -49,8 +53,17 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
             CliAudioTranscriptionEngine::WhisperLargeV3TurboQuantized => {
                 CoreAudioTranscriptionEngine::WhisperLargeV3TurboQuantized
             }
+            CliAudioTranscriptionEngine::Custom => {
+                CoreAudioTranscriptionEngine::Custom(custom_model_path.unwrap_or_default())
+            }
             CliAudioTranscriptionEngine::Disabled => CoreAudioTranscriptionEngine::Disabled,
         }
+    }
+}
+
+impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
+    fn from(cli_engine: CliAudioTranscriptionEngine) -> Self {
+        cli_engine.into_core_engine(None)
     }
 }
 
@@ -159,6 +172,10 @@ pub struct Cli {
 
     #[arg(short = 'a', long, value_enum, default_value_t = CliAudioTranscriptionEngine::WhisperLargeV3TurboQuantized)]
     pub audio_transcription_engine: CliAudioTranscriptionEngine,
+
+    /// Path to a custom local Whisper model file (.bin format). Required when using --audio-transcription-engine=custom
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub custom_whisper_model_path: Option<String>,
 
     #[arg(short = 'm', long)]
     pub monitor_id: Vec<u32>,
@@ -353,6 +370,10 @@ pub struct RecordArgs {
     #[arg(short = 'a', long, value_enum, default_value_t = CliAudioTranscriptionEngine::WhisperLargeV3TurboQuantized)]
     pub audio_transcription_engine: CliAudioTranscriptionEngine,
 
+    /// Path to a custom local Whisper model file (.bin format). Required when using --audio-transcription-engine=custom
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub custom_whisper_model_path: Option<String>,
+
     /// Monitor IDs to use
     #[arg(short = 'm', long)]
     pub monitor_id: Vec<u32>,
@@ -454,6 +475,7 @@ impl RecordArgs {
             data_dir: cli.data_dir.clone(),
             debug: cli.debug,
             audio_transcription_engine: cli.audio_transcription_engine.clone(),
+            custom_whisper_model_path: cli.custom_whisper_model_path.clone(),
             monitor_id: cli.monitor_id.clone(),
             use_all_monitors: cli.use_all_monitors,
             language: cli.language.clone(),
