@@ -810,6 +810,91 @@ fn extract_window_data_xcap(window: XcapWindow) -> Option<WindowData> {
     }
 }
 
+/// Check if a window is an overlay/topmost window on Windows
+#[cfg(target_os = "windows")]
+fn is_windows_overlay_window(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, GWL_EXSTYLE, WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE,
+    };
+    
+    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
+    
+    // Check for overlay-like extended styles:
+    // - WS_EX_TOPMOST: Always-on-top windows (overlays, widgets)
+    // - WS_EX_TOOLWINDOW: Tool windows (floating palettes, etc.)
+    // - WS_EX_NOACTIVATE: Windows that don't take focus (overlays)
+    let is_topmost = (ex_style & WS_EX_TOPMOST.0) != 0;
+    let is_toolwindow = (ex_style & WS_EX_TOOLWINDOW.0) != 0;
+    let is_noactivate = (ex_style & WS_EX_NOACTIVATE.0) != 0;
+    
+    // Consider it an overlay if it's topmost AND (tool window OR no-activate)
+    // This avoids flagging regular maximized windows as overlays
+    is_topmost && (is_toolwindow || is_noactivate)
+}
+
+/// Get the HWND for a window by process ID and title on Windows
+#[cfg(target_os = "windows")]
+fn get_hwnd_for_window(process_id: i32, window_title: &str) -> Option<windows::Win32::Foundation::HWND> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId,
+    };
+    use std::sync::Mutex;
+    
+    struct EnumData {
+        target_pid: u32,
+        target_title: String,
+        found_hwnd: Option<HWND>,
+    }
+    
+    let data = std::sync::Arc::new(Mutex::new(EnumData {
+        target_pid: process_id as u32,
+        target_title: window_title.to_string(),
+        found_hwnd: None,
+    }));
+    
+    let data_clone = data.clone();
+    
+    unsafe extern "system" fn enum_callback(
+        hwnd: HWND,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> windows::Win32::Foundation::BOOL {
+        let data_ptr = lparam.0 as *const Mutex<EnumData>;
+        let data = &*data_ptr;
+        
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        
+        let mut title_buf = [0u16; 512];
+        let len = GetWindowTextW(hwnd, &mut title_buf) as usize;
+        let title = String::from_utf16_lossy(&title_buf[..len]);
+        
+        if let Ok(mut guard) = data.lock() {
+            if pid == guard.target_pid && title == guard.target_title {
+                guard.found_hwnd = Some(hwnd);
+                return windows::Win32::Foundation::BOOL(0); // Stop enumeration
+            }
+        }
+        
+        windows::Win32::Foundation::BOOL(1) // Continue enumeration
+    }
+    
+    unsafe {
+        let data_ptr = std::sync::Arc::into_raw(data_clone);
+        let _ = EnumWindows(
+            Some(enum_callback),
+            windows::Win32::Foundation::LPARAM(data_ptr as isize),
+        );
+        let data = std::sync::Arc::from_raw(data_ptr);
+        
+        if let Ok(guard) = data.lock() {
+            return guard.found_hwnd;
+        }
+    }
+    
+    None
+}
+
 #[cfg(not(target_os = "macos"))]
 fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
     let windows = Window::all()?;
@@ -839,7 +924,7 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
                 }
             }
 
-            let is_focused = window.is_focused().unwrap_or(false);
+            let mut is_focused = window.is_focused().unwrap_or(false);
             let process_id = window.pid().map(|p| p as i32).unwrap_or(-1);
             let (window_x, window_y, window_width, window_height) = (
                 window.x().unwrap_or(0),
@@ -847,6 +932,22 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
                 window.width().unwrap_or(0),
                 window.height().unwrap_or(0),
             );
+
+            // On Windows, check if this is an overlay window and demote from focused
+            #[cfg(target_os = "windows")]
+            {
+                if is_focused {
+                    if let Some(hwnd) = get_hwnd_for_window(process_id, &title) {
+                        if is_windows_overlay_window(hwnd) {
+                            debug!(
+                                "Demoting Windows overlay window '{}' ('{}') from focused - has overlay extended styles",
+                                app_name, title
+                            );
+                            is_focused = false;
+                        }
+                    }
+                }
+            }
 
             match window.capture_image() {
                 Ok(buffer) => Some(WindowData {
