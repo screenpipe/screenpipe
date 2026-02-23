@@ -81,6 +81,28 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 [download the desktop app](https://screenpi.pe) — one-time purchase, all features, auto-updates
 
+### Linux (Ubuntu/Debian)
+
+```bash
+# install dependencies
+sudo apt update
+sudo apt install -y ffmpeg tesseract-ocr libasound2-dev libxdo-dev libdbus-1-dev pkg-config libssl-dev
+
+# install rust (if not installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# clone and build
+git clone https://github.com/mediar-ai/screenpipe.git
+cd screenpipe
+cargo build --release
+
+# run
+./target/release/screenpipe
+```
+
+> **Note**: Linux requires building from source. For X11 screen capture, ensure `libxcb` is installed. For PipeWire audio, install `pipewire` and `libpipewire-0.3-dev`.
+
 ## specs
 
 - 10% cpu usage
