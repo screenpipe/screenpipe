@@ -11,9 +11,47 @@ fn main() {
         install_onnxruntime();
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        setup_macos_libs();
+    }
+
     if !is_bun_installed() {
         install_bun();
     }
+}
+
+#[cfg(target_os = "macos")]
+fn homebrew_prefix() -> String {
+    // Allow CI / developer override
+    if let Ok(p) = std::env::var("HOMEBREW_PREFIX") {
+        return p;
+    }
+
+    // Query Homebrew — handles both Apple Silicon (/opt/homebrew) and Intel (/usr/local)
+    if let Ok(out) = Command::new("brew").arg("--prefix").output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+    }
+
+    // Static fallback based on well-known install locations
+    if std::path::Path::new("/opt/homebrew").exists() {
+        "/opt/homebrew".to_string()
+    } else {
+        "/usr/local".to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_libs() {
+    let prefix = homebrew_prefix();
+    // Point the linker at Homebrew's lib directory for FFmpeg and other native deps
+    println!("cargo:rustc-link-search=native={}/lib", prefix);
+    println!("cargo:rerun-if-env-changed=HOMEBREW_PREFIX");
 }
 
 fn is_bun_installed() -> bool {

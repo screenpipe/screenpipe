@@ -67,3 +67,17 @@ screenpipe-app-tauri/src-tauri/.next/
 
 .playwright*
 crates/screenpipe-audio/onnxruntime-win-x64-1.19.2.zip
+
+# Auto-added by Solari to prevent build artifact commits
+.venv/
+.solari_*
+.solari_deps_installed
+*.egg-info/
+dist/
+build/
+.tox/
+.pytest_cache/
+.mypy_cache/
+target/
+.gradle/
+*.class

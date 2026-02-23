@@ -18,16 +18,26 @@ rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
 
 # Force M1 target for all ARM64 macOS builds
 # This prevents whisper.cpp from using i8mm instructions that only M2+ chips have
+# aarch64-apple-darwin — Apple Silicon (M1 and later)
+# target-cpu=apple-m1 is the safe baseline: prevents whisper.cpp from emitting
+# i8mm instructions that only M2+ chips support while still enabling NEON/Dot-Product.
 [target.aarch64-apple-darwin]
 rustflags = [
     "-C", "target-cpu=apple-m1",
     "-C", "link-arg=-framework",
     "-C", "link-arg=Accelerate",
-    "-l", "c++",
+    "-C", "link-arg=-framework",
+    "-C", "link-arg=Metal",
+    "-C", "link-arg=-framework",
+    "-C", "link-arg=MetalPerformanceShaders",
 ]
 
 [target.x86_64-apple-darwin]
-rustflags = "-lc++ -l framework=Accelerate"
+rustflags = [
+    "-C", "link-arg=-framework",
+    "-C", "link-arg=Accelerate",
+    "-lc++",
+]
 
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
