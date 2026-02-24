@@ -122,6 +122,22 @@ impl PipeStore for SqlitePipeStore {
         Ok(rows.into_iter().map(|r| r.into()).collect())
     }
 
+    async fn get_all_executions(&self, limit: i32) -> Result<Vec<PipeExecution>> {
+        let rows = sqlx::query_as::<_, PipeExecutionRow>(
+            r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
+                      started_at, finished_at, stdout, stderr, exit_code,
+                      error_type, error_message, duration_ms
+               FROM pipe_executions
+               ORDER BY id DESC
+               LIMIT ?"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
     async fn mark_orphaned_running(&self) -> Result<u32> {
         let now = Utc::now().to_rfc3339();
         let result = sqlx::query(

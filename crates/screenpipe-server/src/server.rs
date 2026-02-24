@@ -452,6 +452,10 @@ impl SCServer {
                     "/install",
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
+                .route(
+                    "/executions",
+                    axum::routing::get(crate::pipes_api::get_all_pipe_executions),
+                )
                 .route("/:id", axum::routing::get(crate::pipes_api::get_pipe))
                 .route("/:id", axum::routing::delete(crate::pipes_api::delete_pipe))
                 .route(

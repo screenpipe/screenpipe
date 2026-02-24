@@ -128,6 +128,19 @@ pub async fn get_pipe_executions(
     }
 }
 
+/// GET /pipes/executions — all pipe executions across all pipes.
+pub async fn get_all_pipe_executions(
+    State(pm): State<SharedPipeManager>,
+    Query(query): Query<ExecutionsQuery>,
+) -> Json<Value> {
+    let mgr = pm.lock().await;
+    let limit = query.limit.unwrap_or(50).min(200);
+    match mgr.get_all_executions(limit).await {
+        Ok(executions) => Json(json!({ "data": executions })),
+        Err(e) => Json(json!({ "error": e.to_string() })),
+    }
+}
+
 /// POST /pipes/:id/config — update pipe config fields.
 pub async fn update_pipe_config(
     State(pm): State<SharedPipeManager>,

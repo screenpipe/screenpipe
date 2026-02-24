@@ -40,6 +40,7 @@ import {
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards } from "@/components/chat/summary-cards";
+import { PipeRunView } from "@/components/chat/pipe-run-view";
 import { type CustomTemplate } from "@/lib/summary-templates";
 
 const SCREENPIPE_API = "http://localhost:3030";
@@ -162,6 +163,28 @@ interface Message {
   timestamp: number;
   contentBlocks?: ContentBlock[];
 }
+
+interface PipeExecution {
+  id: number;
+  pipe_name: string;
+  status: string;
+  trigger_type: string;
+  pid: number | null;
+  model: string | null;
+  provider: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  error_type: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+}
+
+type SidebarItem =
+  | { kind: "chat"; data: ChatConversation }
+  | { kind: "pipe_run"; data: PipeExecution };
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -574,6 +597,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
+  const [pipeExecutions, setPipeExecutions] = useState<PipeExecution[]>([]);
+  const [sidebarFilter, setSidebarFilter] = useState<"all" | "chats" | "pipes">("all");
+  const [activePipeRun, setActivePipeRun] = useState<PipeExecution | null>(null);
 
   // Process an image file to base64
   const processImageFile = useCallback((file: File) => {
@@ -585,6 +611,26 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     };
     reader.readAsDataURL(file);
   }, []);
+
+  // Fetch pipe executions when sidebar is open
+  useEffect(() => {
+    if (!showHistory) return;
+    let cancelled = false;
+    const fetchExecutions = async () => {
+      try {
+        const res = await fetch(`${SCREENPIPE_API}/pipes/executions?limit=50`);
+        const json = await res.json();
+        if (!cancelled && json.data) {
+          setPipeExecutions(json.data);
+        }
+      } catch (e) {
+        console.warn("failed to fetch pipe executions:", e);
+      }
+    };
+    fetchExecutions();
+    const interval = setInterval(fetchExecutions, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [showHistory]);
 
   // Always start with a fresh conversation — history is accessible via the History button
   // (No auto-load of last active conversation)
@@ -731,6 +777,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       setIsLoading(false);
       setIsStreaming(false);
     }
+    setActivePipeRun(null);
     setMessages(conv.messages.map(m => ({
       id: m.id,
       role: m.role,
@@ -780,6 +827,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       setIsLoading(false);
       setIsStreaming(false);
     }
+    setActivePipeRun(null);
     setMessages([]);
     setConversationId(null);
     setInput("");
@@ -787,51 +835,113 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     setPastedImage(null);
   };
 
-  // Filter conversations by search
-  const filteredConversations = React.useMemo(() => {
-    const convs = settings.chatHistory?.conversations || [];
-    if (!historySearch.trim()) return convs;
+  // Load a pipe run into the main content area
+  const loadPipeRun = (execution: PipeExecution) => {
+    if (isLoading || isStreaming) {
+      commands.piAbort().catch(() => {});
+      setIsLoading(false);
+      setIsStreaming(false);
+    }
+    setActivePipeRun(execution);
+    setConversationId(null);
+    setMessages([]);
+    setShowHistory(false);
+  };
 
-    const search = historySearch.toLowerCase();
-    return convs.filter(c =>
-      c.title.toLowerCase().includes(search) ||
-      c.messages.some(m => m.content.toLowerCase().includes(search))
-    );
-  }, [settings.chatHistory?.conversations, historySearch]);
+  // Start a follow-up chat from a pipe run
+  const handlePipeRunFollowUp = (execution: PipeExecution, query: string) => {
+    setActivePipeRun(null);
+    const context = execution.stdout.slice(0, 4000);
+    const fullQuery = `The following is the output from a scheduled pipe run ("${execution.pipe_name}"):\n\n---\n${context}\n---\n\nMy question: ${query}`;
+    sendMessage(fullQuery, `Follow-up: ${execution.pipe_name}`);
+  };
 
-  // Group conversations by date
-  const groupedConversations = React.useMemo(() => {
-    const groups: { label: string; conversations: ChatConversation[] }[] = [];
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-    const todayConvs: ChatConversation[] = [];
-    const yesterdayConvs: ChatConversation[] = [];
-    const lastWeekConvs: ChatConversation[] = [];
-    const olderConvs: ChatConversation[] = [];
-
-    for (const conv of filteredConversations) {
-      const convDate = new Date(conv.updatedAt);
-      if (convDate >= today) {
-        todayConvs.push(conv);
-      } else if (convDate >= yesterday) {
-        yesterdayConvs.push(conv);
-      } else if (convDate >= lastWeek) {
-        lastWeekConvs.push(conv);
+  // Retry a failed pipe run
+  const handlePipeRunRetry = async (execution: PipeExecution) => {
+    try {
+      const res = await fetch(`${SCREENPIPE_API}/pipes/${execution.pipe_name}/run`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast({ title: `Re-running ${execution.pipe_name}...` });
+        setActivePipeRun(null);
       } else {
-        olderConvs.push(conv);
+        toast({ title: "Failed to retry", description: json.error, variant: "destructive" });
       }
+    } catch (e: any) {
+      toast({ title: "Failed to retry", description: e.message, variant: "destructive" });
+    }
+  };
+
+  // Unified sidebar items: merge chats and pipe runs
+  const unifiedSidebarItems = React.useMemo(() => {
+    const convs = settings.chatHistory?.conversations || [];
+    const chatItems: SidebarItem[] = convs.map(c => ({ kind: "chat" as const, data: c }));
+    const pipeItems: SidebarItem[] = pipeExecutions.map(p => ({ kind: "pipe_run" as const, data: p }));
+
+    let items: SidebarItem[];
+    if (sidebarFilter === "chats") items = chatItems;
+    else if (sidebarFilter === "pipes") items = pipeItems;
+    else items = [...chatItems, ...pipeItems];
+
+    if (historySearch.trim()) {
+      const search = historySearch.toLowerCase();
+      items = items.filter(item => {
+        if (item.kind === "chat") {
+          return item.data.title.toLowerCase().includes(search) ||
+            item.data.messages.some(m => m.content.toLowerCase().includes(search));
+        } else {
+          return item.data.pipe_name.toLowerCase().includes(search) ||
+            item.data.stdout.toLowerCase().includes(search);
+        }
+      });
     }
 
-    if (todayConvs.length > 0) groups.push({ label: "Today", conversations: todayConvs });
-    if (yesterdayConvs.length > 0) groups.push({ label: "Yesterday", conversations: yesterdayConvs });
-    if (lastWeekConvs.length > 0) groups.push({ label: "Last 7 Days", conversations: lastWeekConvs });
-    if (olderConvs.length > 0) groups.push({ label: "Older", conversations: olderConvs });
+    items.sort((a, b) => {
+      const tsA = a.kind === "chat"
+        ? a.data.updatedAt
+        : new Date(a.data.started_at || a.data.finished_at || 0).getTime();
+      const tsB = b.kind === "chat"
+        ? b.data.updatedAt
+        : new Date(b.data.started_at || b.data.finished_at || 0).getTime();
+      return tsB - tsA;
+    });
+
+    return items;
+  }, [settings.chatHistory?.conversations, pipeExecutions, sidebarFilter, historySearch]);
+
+  // Group sidebar items by date
+  const groupedSidebarItems = React.useMemo(() => {
+    const groups: { label: string; items: SidebarItem[] }[] = [];
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() - 86400000);
+    const lastWeek = new Date(today.getTime() - 7 * 86400000);
+
+    const todayItems: SidebarItem[] = [];
+    const yesterdayItems: SidebarItem[] = [];
+    const lastWeekItems: SidebarItem[] = [];
+    const olderItems: SidebarItem[] = [];
+
+    for (const item of unifiedSidebarItems) {
+      const ts = item.kind === "chat"
+        ? item.data.updatedAt
+        : new Date(item.data.started_at || item.data.finished_at || 0).getTime();
+      const d = new Date(ts);
+      if (d >= today) todayItems.push(item);
+      else if (d >= yesterday) yesterdayItems.push(item);
+      else if (d >= lastWeek) lastWeekItems.push(item);
+      else olderItems.push(item);
+    }
+
+    if (todayItems.length > 0) groups.push({ label: "Today", items: todayItems });
+    if (yesterdayItems.length > 0) groups.push({ label: "Yesterday", items: yesterdayItems });
+    if (lastWeekItems.length > 0) groups.push({ label: "Last 7 Days", items: lastWeekItems });
+    if (olderItems.length > 0) groups.push({ label: "Older", items: olderItems });
 
     return groups;
-  }, [filteredConversations]);
+  }, [unifiedSidebarItems]);
 
   // Handle drag events for image drop
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -2179,7 +2289,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               {/* History Header */}
               <div className="p-3 border-b border-border/50 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Chat History</span>
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">History</span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -2193,61 +2303,105 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 <div className="relative">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
-                    placeholder="Search conversations..."
+                    placeholder="Search..."
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
                     className="h-8 pl-8 text-xs bg-background/50"
                   />
                 </div>
+                {/* Filter Tabs */}
+                <div className="flex gap-1">
+                  {(["all", "chats", "pipes"] as const).map((f) => (
+                    <Button
+                      key={f}
+                      variant={sidebarFilter === f ? "secondary" : "ghost"}
+                      size="sm"
+                      className="h-6 text-[10px] px-2 flex-1 capitalize"
+                      onClick={() => setSidebarFilter(f)}
+                    >
+                      {f}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
-              {/* Conversations List */}
+              {/* Sidebar Items List */}
               <div className="flex-1 overflow-y-auto p-2 space-y-3">
-                {groupedConversations.length === 0 ? (
+                {groupedSidebarItems.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <History className="h-8 w-8 text-muted-foreground/50 mb-2" />
                     <p className="text-xs text-muted-foreground">
-                      {historySearch ? "No matching conversations" : "No chat history yet"}
+                      {historySearch ? "No matching items" : "No history yet"}
                     </p>
                   </div>
                 ) : (
-                  groupedConversations.map((group) => (
+                  groupedSidebarItems.map((group) => (
                     <div key={group.label} className="space-y-1">
                       <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2 py-1">
                         {group.label}
                       </p>
-                      {group.conversations.map((conv) => (
-                        <div
-                          key={conv.id}
-                          className={cn(
-                            "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
-                            conv.id === conversationId
-                              ? "bg-foreground/10"
-                              : "hover:bg-foreground/5"
-                          )}
-                          onClick={() => loadConversation(conv)}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium truncate">
-                              {conv.title}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {conv.messages.length} messages
-                            </p>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteConversation(conv.id);
-                            }}
-                            className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                      {group.items.map((item) =>
+                        item.kind === "chat" ? (
+                          <div
+                            key={`chat-${item.data.id}`}
+                            className={cn(
+                              "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                              item.data.id === conversationId && !activePipeRun
+                                ? "bg-foreground/10"
+                                : "hover:bg-foreground/5"
+                            )}
+                            onClick={() => loadConversation(item.data)}
                           >
-                            <Trash2 size={12} />
-                          </Button>
-                        </div>
-                      ))}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium truncate">
+                                {item.data.title}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                {item.data.messages.length} messages
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteConversation(item.data.id);
+                              }}
+                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 size={12} />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div
+                            key={`pipe-${item.data.id}`}
+                            className={cn(
+                              "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                              activePipeRun?.id === item.data.id
+                                ? "bg-foreground/10"
+                                : "hover:bg-foreground/5"
+                            )}
+                            onClick={() => loadPipeRun(item.data)}
+                          >
+                            <Settings size={14} className="text-muted-foreground shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium truncate">
+                                {item.data.pipe_name}
+                              </p>
+                              <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                {item.data.status === "completed" && <span className="text-green-500">&#10003;</span>}
+                                {(item.data.status === "failed" || item.data.status === "timed_out") && <span className="text-red-500">&#10007;</span>}
+                                {item.data.status === "running" && <span className="text-yellow-500 animate-pulse">&#9673;</span>}
+                                {item.data.status === "queued" && <span className="text-muted-foreground">&#9675;</span>}
+                                <span>{item.data.status}</span>
+                                {item.data.duration_ms != null && (
+                                  <span>&#183; {(item.data.duration_ms / 1000).toFixed(1)}s</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      )}
                     </div>
                   ))
                 )}
@@ -2256,7 +2410,16 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           )}
         </AnimatePresence>
 
-        {/* Messages */}
+        {/* Pipe Run View or Messages */}
+        {activePipeRun ? (
+          <div className="flex-1 overflow-hidden">
+            <PipeRunView
+              execution={activePipeRun}
+              onFollowUp={(query) => handlePipeRunFollowUp(activePipeRun, query)}
+              onRetry={() => handlePipeRunRetry(activePipeRun)}
+            />
+          </div>
+        ) : (
         <div
           className="relative flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4"
           onContextMenu={(e) => {
@@ -2452,9 +2615,11 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         </AnimatePresence>
         <div ref={messagesEndRef} />
       </div>
+        )}
       </div> {/* End of main content area with history sidebar */}
 
-      {/* Input */}
+      {/* Input (hidden when viewing a pipe run) */}
+      {!activePipeRun && (
       <div className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
         <div className="p-2 border-b border-border/30">
           <AIPresetsSelector
@@ -2764,6 +2929,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           </div>
         </form>
       </div>
+      )}
 
       <UpgradeDialog
         open={showUpgradeDialog}

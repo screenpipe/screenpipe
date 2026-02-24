@@ -177,6 +177,9 @@ pub trait PipeStore: Send + Sync {
     /// Get recent executions for a pipe (newest first).
     async fn get_executions(&self, pipe_name: &str, limit: i32) -> Result<Vec<PipeExecution>>;
 
+    /// Get recent executions across ALL pipes (newest first).
+    async fn get_all_executions(&self, limit: i32) -> Result<Vec<PipeExecution>>;
+
     /// Mark any 'running' executions as failed (orphan recovery on startup).
     /// Returns the number of rows updated.
     async fn mark_orphaned_running(&self) -> Result<u32>;
@@ -590,6 +593,15 @@ impl PipeManager {
     pub async fn get_executions(&self, name: &str, limit: i32) -> Result<Vec<PipeExecution>> {
         if let Some(ref store) = self.store {
             store.get_executions(name, limit).await
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    /// Get execution history across all pipes from the DB store.
+    pub async fn get_all_executions(&self, limit: i32) -> Result<Vec<PipeExecution>> {
+        if let Some(ref store) = self.store {
+            store.get_all_executions(limit).await
         } else {
             Ok(vec![])
         }
