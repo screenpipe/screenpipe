@@ -338,9 +338,36 @@ pub async fn start_device_monitor(
                         }
                     }
 
-                    if audio_manager.start_device(&device).await.is_ok() {
-                        info!("successfully restarted device {}", device_name);
-                        disconnected_devices.remove(&device_name);
+                    let should_skip = if let Some((fails, last_fail)) = failed_devices.get(&device_name) {
+                        let backoff = Duration::from_secs(
+                            (2u64.pow((*fails).min(8))).min(MAX_FAIL_BACKOFF_SECS),
+                        );
+                        last_fail.elapsed() < backoff
+                    } else {
+                        false
+                    };
+
+                    if !should_skip {
+                        match audio_manager.start_device(&device).await {
+                            Ok(()) => {
+                                info!("successfully restarted device {}", device_name);
+                                disconnected_devices.remove(&device_name);
+                                failed_devices.remove(&device_name);
+                            }
+                            Err(e) => {
+                                let count = failed_devices
+                                    .entry(device_name.clone())
+                                    .or_insert((0, Instant::now()));
+                                count.0 += 1;
+                                count.1 = Instant::now();
+                                let backoff_secs =
+                                    (2u64.pow(count.0.min(8))).min(MAX_FAIL_BACKOFF_SECS);
+                                warn!(
+                                    "could not restart device {} ({} failures, next retry in {}s): {}",
+                                    device_name, count.0, backoff_secs, e
+                                );
+                            }
+                        }
                     }
                 }
 

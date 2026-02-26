@@ -10,8 +10,12 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use cpal::StreamError;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
 use std::sync::Arc;
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
@@ -148,6 +152,42 @@ impl AudioStream {
     ) -> Result<tokio::task::JoinHandle<()>> {
         let device_name = device.name()?;
 
+        let last_packet_time = Arc::new(AtomicU64::new(
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+        ));
+
+        let is_running_weak_clone = is_running_weak.clone();
+        let is_disconnected_clone = is_disconnected.clone();
+        let stream_control_tx_clone = stream_control_tx.clone();
+        let last_packet_time_clone = last_packet_time.clone();
+        let device_name_clone = device_name.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                
+                let is_running = if let Some(arc) = is_running_weak_clone.upgrade() {
+                    arc.load(Ordering::Relaxed)
+                } else {
+                    false
+                };
+
+                if !is_running || is_disconnected_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let last = last_packet_time_clone.load(Ordering::Relaxed);
+                
+                if now.saturating_sub(last) > 5 {
+                    warn!("WATCHDOG_RECOVERY_TRIGGERED: no audio received for >5s on device {}", device_name_clone);
+                    let _ = stream_control_tx_clone.send(StreamControl::Stop(oneshot::channel().0));
+                    is_disconnected_clone.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        });
+
         Ok(tokio::task::spawn_blocking(move || {
             let error_callback = create_error_callback(
                 device_name.clone(),
@@ -156,7 +196,7 @@ impl AudioStream {
                 stream_control_tx,
             );
 
-            let stream = build_input_stream(&device, &config, channels, tx, error_callback);
+            let stream = build_input_stream(&device, &config, channels, tx, error_callback, last_packet_time);
 
             match stream {
                 Ok(stream) => {
@@ -253,56 +293,77 @@ fn build_input_stream(
     channels: u16,
     tx: broadcast::Sender<Vec<f32>>,
     error_callback: impl FnMut(StreamError) + Send + 'static,
+    last_packet_time: Arc<AtomicU64>,
 ) -> Result<cpal::Stream> {
     match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[f32], _: &_| {
-                    let mono = audio_to_mono(data, channels);
-                    let _ = tx.send(mono);
-                },
-                error_callback,
-                None,
-            )
-            .map_err(|e| anyhow!(e)),
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[i16], _: &_| {
-                    let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
-                    let mono = audio_to_mono(&f32_data, channels);
-                    let _ = tx.send(mono);
-                },
-                error_callback,
-                None,
-            )
-            .map_err(|e| anyhow!(e)),
-        cpal::SampleFormat::I32 => device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[i32], _: &_| {
-                    let f32_data: Vec<f32> =
-                        data.iter().map(|&s| (s as f64 / 2147483648.0) as f32).collect();
-                    let mono = audio_to_mono(&f32_data, channels);
-                    let _ = tx.send(mono);
-                },
-                error_callback,
-                None,
-            )
-            .map_err(|e| anyhow!(e)),
-        cpal::SampleFormat::I8 => device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[i8], _: &_| {
-                    let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 128.0).collect();
-                    let mono = audio_to_mono(&f32_data, channels);
-                    let _ = tx.send(mono);
-                },
-                error_callback,
-                None,
-            )
-            .map_err(|e| anyhow!(e)),
+        cpal::SampleFormat::F32 => {
+            let last_packet_time = last_packet_time.clone();
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[f32], _: &_| {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        last_packet_time.store(now, Ordering::Relaxed);
+                        let mono = audio_to_mono(data, channels);
+                        let _ = tx.send(mono);
+                    },
+                    error_callback,
+                    None,
+                )
+                .map_err(|e| anyhow!(e))
+        },
+        cpal::SampleFormat::I16 => {
+            let last_packet_time = last_packet_time.clone();
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[i16], _: &_| {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        last_packet_time.store(now, Ordering::Relaxed);
+                        let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
+                        let mono = audio_to_mono(&f32_data, channels);
+                        let _ = tx.send(mono);
+                    },
+                    error_callback,
+                    None,
+                )
+                .map_err(|e| anyhow!(e))
+        },
+        cpal::SampleFormat::I32 => {
+            let last_packet_time = last_packet_time.clone();
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[i32], _: &_| {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        last_packet_time.store(now, Ordering::Relaxed);
+                        let f32_data: Vec<f32> =
+                            data.iter().map(|&s| (s as f64 / 2147483648.0) as f32).collect();
+                        let mono = audio_to_mono(&f32_data, channels);
+                        let _ = tx.send(mono);
+                    },
+                    error_callback,
+                    None,
+                )
+                .map_err(|e| anyhow!(e))
+        },
+        cpal::SampleFormat::I8 => {
+            let last_packet_time = last_packet_time.clone();
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[i8], _: &_| {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                        last_packet_time.store(now, Ordering::Relaxed);
+                        let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 128.0).collect();
+                        let mono = audio_to_mono(&f32_data, channels);
+                        let _ = tx.send(mono);
+                    },
+                    error_callback,
+                    None,
+                )
+                .map_err(|e| anyhow!(e))
+        },
         _ => Err(anyhow!(
             "unsupported sample format: {}",
             config.sample_format()
