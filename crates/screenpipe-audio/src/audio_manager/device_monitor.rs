@@ -62,6 +62,12 @@ impl SystemDefaultTracker {
     }
 }
 
+/// On macOS, ScreenCaptureKit / CoreAudio sessions silently die after
+/// extended periods (~48h). Proactively restart all audio devices before
+/// that happens. 20 hours gives a comfortable margin (issue #1626).
+#[cfg(target_os = "macos")]
+const PROACTIVE_RESTART_INTERVAL_SECS: u64 = 20 * 60 * 60; // 20 hours
+
 pub async fn start_device_monitor(
     audio_manager: Arc<AudioManager>,
     device_manager: Arc<DeviceManager>,
@@ -81,6 +87,11 @@ pub async fn start_device_monitor(
         let mut central_restart_times: Vec<Instant> = Vec::new();
         let central_restart_exhausted = std::sync::atomic::AtomicBool::new(false);
 
+        // Proactive restart timer: on macOS, restart all audio streams
+        // periodically to prevent ScreenCaptureKit session staleness (#1626).
+        #[cfg(target_os = "macos")]
+        let mut last_proactive_restart = Instant::now();
+
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
@@ -89,6 +100,32 @@ pub async fn start_device_monitor(
             if audio_manager.status().await == AudioManagerStatus::Running {
                 let currently_available_devices = device_manager.devices().await;
                 let enabled_devices = audio_manager.enabled_devices().await;
+
+                // Proactive periodic restart on macOS to prevent
+                // ScreenCaptureKit / CoreAudio session staleness (#1626).
+                // The maintainer confirmed the issue only affects macOS and
+                // suggested restarting every ~20 hours as a fix.
+                #[cfg(target_os = "macos")]
+                if last_proactive_restart.elapsed()
+                    >= Duration::from_secs(PROACTIVE_RESTART_INTERVAL_SECS)
+                {
+                    info!(
+                        "proactive audio restart: {}h elapsed, recycling all audio streams to prevent macOS stale session (issue #1626)",
+                        last_proactive_restart.elapsed().as_secs() / 3600
+                    );
+                    for device_name in enabled_devices.iter() {
+                        if parse_audio_device(device_name).is_ok() {
+                            // Stop then re-add to disconnected set so the
+                            // reconnection logic below picks it up immediately.
+                            let _ = audio_manager.cleanup_stale_device(device_name).await;
+                            disconnected_devices.insert(device_name.clone());
+                            debug!("proactive restart: queued {} for reconnect", device_name);
+                        }
+                    }
+                    last_proactive_restart = Instant::now();
+                    // Reset failed device backoffs so restarts aren't delayed
+                    failed_devices.clear();
+                }
 
                 // Handle "Follow System Default" mode
                 if audio_manager.use_system_default_audio().await {
