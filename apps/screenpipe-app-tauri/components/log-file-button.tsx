@@ -36,6 +36,12 @@ import {
 import { ShareLogsButton } from './share-logs-button'
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
+// Normalize file paths to use forward slashes consistently
+// This fixes Windows path issues where backslashes cause problems
+const normalizePath = (path: string): string => {
+  return path.replace(/\\/g, '/');
+};
+
 const LogContent = ({
   content,
   filePath,
@@ -129,10 +135,12 @@ export const LogFileButton = ({
 
   const loadLogContent = async (filePath: string) => {
     try {
-      console.log("loadLogContent", filePath);
+      // Normalize path to fix Windows backslash issues
+      const normalizedPath = normalizePath(filePath);
+      console.log("loadLogContent", normalizedPath);
 
-      const content = await readTextFile(filePath);
-      setLogPath(filePath);
+      const content = await readTextFile(normalizedPath);
+      setLogPath(normalizedPath);
       setLogContent(content);
     } catch (error) {
       console.error("failed to read log file:", error);
@@ -239,7 +247,7 @@ export const LogFileButton = ({
                             : "ghost"
                         }
                         className="w-full justify-start text-xs"
-                        onClick={() => loadLogContent(file.path)}
+                        onClick={() => loadLogContent(normalizePath(file.path))}
                       >
                         {file.name.includes("app") ? (
                           <AppWindow className="h-3 w-3 mr-2" />
