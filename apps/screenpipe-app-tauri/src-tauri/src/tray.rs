@@ -234,9 +234,10 @@ fn create_dynamic_menu(
 
     // During onboarding: show minimal menu (version + quit only)
     if !onboarding_completed {
+        let commit_hash = option_env!("GIT_COMMIT_HASH").unwrap_or("unknown");
         menu_builder = menu_builder
             .item(
-                &MenuItemBuilder::with_id("version", format!("version {}", app.package_info().version))
+                &MenuItemBuilder::with_id("version", format!("version {} ({})", app.package_info().version, commit_hash))
                     .enabled(false)
                     .build(app)?,
             )
@@ -347,10 +348,11 @@ fn create_dynamic_menu(
 
     // Version and update items
     let is_beta = app.config().identifier.contains("beta");
+    let commit_hash = option_env!("GIT_COMMIT_HASH").unwrap_or("unknown");
     let version_text = if is_beta {
-        format!("Version {} (Beta)", app.package_info().version)
+        format!("Version {} ({}) (Beta)", app.package_info().version, commit_hash)
     } else {
-        format!("Version {}", app.package_info().version)
+        format!("Version {} ({})", app.package_info().version, commit_hash)
     };
     menu_builder = menu_builder
         .item(&PredefinedMenuItem::separator(app)?)
