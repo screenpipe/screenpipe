@@ -610,7 +610,9 @@ fn run_tree_walker(
                     let text = snap.text_content.clone();
                     let url = snap.browser_url.clone();
                     rt_handle.spawn(async move {
-                        let r = db_c.insert_accessibility_text(&app, &win, &text, url.as_deref()).await;
+                        let r = db_c
+                            .insert_accessibility_text(&app, &win, &text, url.as_deref())
+                            .await;
                         let _ = result_tx.send(r);
                     });
 
