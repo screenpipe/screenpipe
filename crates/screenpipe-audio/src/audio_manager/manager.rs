@@ -40,7 +40,10 @@ use crate::{
         handle_new_transcript,
         stt::{process_audio_input, SAMPLE_RATE},
     },
-    utils::{audio::resample, ffmpeg::{get_new_file_path, write_audio_to_file}},
+    utils::{
+        audio::resample,
+        ffmpeg::{get_new_file_path, write_audio_to_file},
+    },
     vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
     AudioInput, TranscriptionResult,
 };
@@ -165,7 +168,9 @@ impl AudioManager {
                 loop {
                     if let Some(ref engine) = *engine_ref.read().await {
                         let count = super::reconciliation::reconcile_untranscribed(
-                            &db, engine, on_insert_bg.as_ref(),
+                            &db,
+                            engine,
+                            on_insert_bg.as_ref(),
                         )
                         .await;
                         if count > 0 {
@@ -433,12 +438,9 @@ impl AudioManager {
                         audio.data.as_ref().to_vec()
                     };
                     let path = get_new_file_path(&audio.device.to_string(), out);
-                    if let Err(e) = write_audio_to_file(
-                        &resampled,
-                        SAMPLE_RATE,
-                        &PathBuf::from(&path),
-                        false,
-                    ) {
+                    if let Err(e) =
+                        write_audio_to_file(&resampled, SAMPLE_RATE, &PathBuf::from(&path), false)
+                    {
                         error!("failed to persist audio before deferral: {:?}", e);
                         None
                     } else {
@@ -465,7 +467,9 @@ impl AudioManager {
 
                         if was_in_session && !now_in_session {
                             // Audio session just ended — trigger immediate reconciliation
-                            info!("batch mode: audio session ended, transcribing accumulated audio");
+                            info!(
+                                "batch mode: audio session ended, transcribing accumulated audio"
+                            );
                             let count = super::reconciliation::reconcile_untranscribed(
                                 &db,
                                 &engine,

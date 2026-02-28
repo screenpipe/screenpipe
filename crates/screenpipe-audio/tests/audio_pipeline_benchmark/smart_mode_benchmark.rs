@@ -161,19 +161,20 @@ async fn smart_mode_restart_data_loss() {
 
     // 8-minute meeting, speech throughout
     let chunks = generate_chunks(
-        480.0,                       // 8 minutes
-        &[(0.0, 480.0)],            // speech throughout
-        30.0,                        // 30s chunks
+        480.0,           // 8 minutes
+        &[(0.0, 480.0)], // speech throughout
+        30.0,            // 30s chunks
     );
 
     // Meeting runs 0-480s, restart at 240s (4 min mark)
     let result = simulate_smart_mode(
         &chunks,
-        0.0,    // meeting starts immediately
-        480.0,  // meeting runs full duration
+        0.0,         // meeting starts immediately
+        480.0,       // meeting runs full duration
         Some(240.0), // restart at 4 minutes
-        false,  // audio NOT saved before deferral (current behavior)
-    ).await;
+        false,       // audio NOT saved before deferral (current behavior)
+    )
+    .await;
 
     let loss_rate = if result.speech_chunks > 0 {
         result.speech_chunks_lost as f64 / result.speech_chunks as f64
@@ -192,7 +193,8 @@ async fn smart_mode_restart_data_loss() {
         total_speech_chunks: result.speech_chunks,
         chunks_lost: result.speech_chunks_lost,
         loss_rate,
-        chunks_processed: result.chunks_processed_before_restart + result.chunks_processed_after_restart,
+        chunks_processed: result.chunks_processed_before_restart
+            + result.chunks_processed_after_restart,
         audio_saved_before_deferral: false,
     };
 
@@ -213,18 +215,16 @@ async fn smart_mode_no_restart_baseline() {
     println!("\n--- Smart Mode: No Restart Baseline ---");
 
     let chunks = generate_chunks(
-        300.0,                       // 5 minutes
-        &[(0.0, 300.0)],            // speech throughout
+        300.0,           // 5 minutes
+        &[(0.0, 300.0)], // speech throughout
         30.0,
     );
 
     let result = simulate_smart_mode(
-        &chunks,
-        0.0,
-        300.0,
-        None, // no restart
+        &chunks, 0.0, 300.0, None, // no restart
         false,
-    ).await;
+    )
+    .await;
 
     println!("  Total chunks: {}", result.total_chunks);
     println!("  Speech chunks lost: {}", result.speech_chunks_lost);
@@ -242,7 +242,7 @@ async fn smart_mode_back_to_back_restart() {
 
     // Meeting 1: 0-300s, gap: 300-360s, Meeting 2: 360-660s
     let chunks = generate_chunks(
-        900.0, // 15 minutes total
+        900.0,                           // 15 minutes total
         &[(0.0, 300.0), (360.0, 660.0)], // two meetings with 60s gap
         30.0,
     );
@@ -251,10 +251,11 @@ async fn smart_mode_back_to_back_restart() {
     let result = simulate_smart_mode(
         &chunks,
         0.0,
-        300.0, // only first meeting defers
+        300.0,       // only first meeting defers
         Some(330.0), // restart during gap
         false,
-    ).await;
+    )
+    .await;
 
     let loss_rate = if result.speech_chunks > 0 {
         result.speech_chunks_lost as f64 / result.speech_chunks as f64
@@ -274,11 +275,7 @@ async fn smart_mode_back_to_back_restart() {
 async fn smart_mode_audio_saved_before_deferral() {
     println!("\n--- Smart Mode: Audio Saved Before Deferral (Proposed Fix) ---");
 
-    let chunks = generate_chunks(
-        480.0,
-        &[(0.0, 480.0)],
-        30.0,
-    );
+    let chunks = generate_chunks(480.0, &[(0.0, 480.0)], 30.0);
 
     let result = simulate_smart_mode(
         &chunks,
@@ -286,7 +283,8 @@ async fn smart_mode_audio_saved_before_deferral() {
         480.0,
         Some(240.0),
         true, // audio saved before deferral
-    ).await;
+    )
+    .await;
 
     let loss_rate = if result.speech_chunks > 0 {
         result.speech_chunks_lost as f64 / result.speech_chunks as f64
@@ -299,7 +297,8 @@ async fn smart_mode_audio_saved_before_deferral() {
         total_speech_chunks: result.speech_chunks,
         chunks_lost: result.speech_chunks_lost,
         loss_rate,
-        chunks_processed: result.chunks_processed_before_restart + result.chunks_processed_after_restart,
+        chunks_processed: result.chunks_processed_before_restart
+            + result.chunks_processed_after_restart,
         audio_saved_before_deferral: true,
     };
 
@@ -316,8 +315,8 @@ async fn smart_mode_audio_saved_before_deferral() {
 async fn smart_mode_dataset() {
     use crate::ground_truth::ScenarioManifest;
 
-    let dataset_dir = std::env::var("AUDIO_BENCHMARK_DATASET")
-        .expect("set AUDIO_BENCHMARK_DATASET");
+    let dataset_dir =
+        std::env::var("AUDIO_BENCHMARK_DATASET").expect("set AUDIO_BENCHMARK_DATASET");
     let dataset_path = std::path::Path::new(&dataset_dir);
 
     println!("\n--- Smart Mode: Full Dataset ---");
@@ -340,7 +339,10 @@ async fn smart_mode_dataset() {
         let manifest = ScenarioManifest::load(&manifest_path).unwrap();
 
         // Check if this scenario has a restart event
-        let restart_event = manifest.events.iter().find(|e| e.event_type == "app_restart");
+        let restart_event = manifest
+            .events
+            .iter()
+            .find(|e| e.event_type == "app_restart");
         let restart_time = restart_event.map(|e| e.time_secs);
 
         // Derive meeting windows from events
@@ -366,7 +368,8 @@ async fn smart_mode_dataset() {
 
         let chunks = generate_chunks(manifest.total_duration_secs, &speech_ranges, 30.0);
 
-        let sim = simulate_smart_mode(&chunks, meeting_start, meeting_end, restart_time, false).await;
+        let sim =
+            simulate_smart_mode(&chunks, meeting_start, meeting_end, restart_time, false).await;
 
         let loss_rate = if sim.speech_chunks > 0 {
             sim.speech_chunks_lost as f64 / sim.speech_chunks as f64
@@ -379,7 +382,8 @@ async fn smart_mode_dataset() {
             total_speech_chunks: sim.speech_chunks,
             chunks_lost: sim.speech_chunks_lost,
             loss_rate,
-            chunks_processed: sim.chunks_processed_before_restart + sim.chunks_processed_after_restart,
+            chunks_processed: sim.chunks_processed_before_restart
+                + sim.chunks_processed_after_restart,
             audio_saved_before_deferral: false,
         });
     }

@@ -165,12 +165,10 @@ pub fn load_wav(path: &std::path::Path) -> anyhow::Result<Vec<f32>> {
                 .map(|s| s as f32 / max_val)
                 .collect()
         }
-        hound::SampleFormat::Float => {
-            reader
-                .into_samples::<f32>()
-                .filter_map(|s| s.ok())
-                .collect()
-        }
+        hound::SampleFormat::Float => reader
+            .into_samples::<f32>()
+            .filter_map(|s| s.ok())
+            .collect(),
     };
 
     // If stereo, mix to mono
@@ -208,7 +206,11 @@ mod tests {
     fn test_speech_like_not_silent() {
         let speech = speech_like(0.5, 1.0, 4.0);
         let rms = (speech.iter().map(|s| s * s).sum::<f32>() / speech.len() as f32).sqrt();
-        assert!(rms > 0.01, "speech-like signal should have non-trivial RMS: {}", rms);
+        assert!(
+            rms > 0.01,
+            "speech-like signal should have non-trivial RMS: {}",
+            rms
+        );
     }
 
     #[test]

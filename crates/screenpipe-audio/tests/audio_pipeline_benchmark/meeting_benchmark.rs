@@ -47,7 +47,11 @@ async fn replay_scenario(
             if (event.time_secs - t_secs).abs() < 0.5 {
                 match event.event_type.as_str() {
                     "app_switch" => {
-                        let app = event.metadata.get("app_name").map(|s| s.as_str()).unwrap_or("Unknown");
+                        let app = event
+                            .metadata
+                            .get("app_name")
+                            .map(|s| s.as_str())
+                            .unwrap_or("Unknown");
                         let window = event.metadata.get("window_title").map(|s| s.as_str());
                         detector.on_app_switch(app, window).await;
                     }
@@ -58,7 +62,9 @@ async fn replay_scenario(
                             .get("attendees")
                             .map(|a| a.split(',').map(|s| s.trim().to_string()).collect())
                             .unwrap_or_default();
-                        let end_event = sorted_events.iter().find(|e| e.event_type == "calendar_end");
+                        let end_event = sorted_events
+                            .iter()
+                            .find(|e| e.event_type == "calendar_end");
                         let end_ms = end_event
                             .map(|e| (e.time_secs * 1000.0) as i64)
                             .unwrap_or((total_duration_secs * 1000.0) as i64);
@@ -69,7 +75,8 @@ async fn replay_scenario(
                             .as_millis() as i64;
 
                         // Offset calendar times relative to now
-                        let event_start_ms = now_ms + (t_secs * 1000.0) as i64 - (t_secs * 1000.0) as i64;
+                        let event_start_ms =
+                            now_ms + (t_secs * 1000.0) as i64 - (t_secs * 1000.0) as i64;
                         let _event_end_ms = event_start_ms + end_ms - (t_secs * 1000.0) as i64;
 
                         detector
@@ -128,7 +135,7 @@ async fn replay_scenario(
     let detection_latency = match (first_gt, first_detected) {
         (Some(gt), Some(det)) if det >= gt => (det - gt) as f64,
         (Some(_gt), Some(det)) => -(det as f64), // detected before ground truth
-        (Some(_), None) => total_duration_secs,   // never detected
+        (Some(_), None) => total_duration_secs,  // never detected
         _ => 0.0,
     };
 
@@ -201,16 +208,17 @@ async fn meeting_detection_app_based() {
             time_secs: 0.0,
             metadata: HashMap::from([
                 ("app_name".to_string(), "Arc".to_string()),
-                ("window_title".to_string(), "Standup - meet.google.com/abc".to_string()),
+                (
+                    "window_title".to_string(),
+                    "Standup - meet.google.com/abc".to_string(),
+                ),
             ]),
         },
         // User tabs away at 120s
         TimelineEvent {
             event_type: "app_switch".to_string(),
             time_secs: 120.0,
-            metadata: HashMap::from([
-                ("app_name".to_string(), "Visual Studio Code".to_string()),
-            ]),
+            metadata: HashMap::from([("app_name".to_string(), "Visual Studio Code".to_string())]),
         },
     ];
 
@@ -233,16 +241,21 @@ async fn meeting_detection_app_based() {
         },
     ];
 
-    let meeting_windows = vec![
-        MeetingWindow { start_secs: 0.0, end_secs: 180.0, is_meeting: true },
-    ];
+    let meeting_windows = vec![MeetingWindow {
+        start_secs: 0.0,
+        end_secs: 180.0,
+        is_meeting: true,
+    }];
 
     let mut result = replay_scenario(&events, &speech_segments, 240.0, &meeting_windows).await;
     result.scenario_id = "app_based_gmeet".to_string();
 
     println!("  Detection latency: {:.1}s", result.detection_latency_secs);
     println!("  Meeting recall: {:.1}%", result.meeting_recall * 100.0);
-    println!("  Specificity: {:.1}%", result.non_meeting_specificity * 100.0);
+    println!(
+        "  Specificity: {:.1}%",
+        result.non_meeting_specificity * 100.0
+    );
     println!("  False positives: {} seconds", result.false_positive_count);
 
     // App-based detection should be nearly instant
@@ -251,7 +264,10 @@ async fn meeting_detection_app_based() {
         "app-based detection should be near-instant, got {:.1}s",
         result.detection_latency_secs
     );
-    assert!(result.missed_meetings == 0, "should not miss app-based meetings");
+    assert!(
+        result.missed_meetings == 0,
+        "should not miss app-based meetings"
+    );
 }
 
 /// Test: YouTube should NOT trigger meeting detection.
@@ -259,16 +275,17 @@ async fn meeting_detection_app_based() {
 async fn meeting_detection_youtube_false_positive() {
     println!("\n--- Meeting Detection: YouTube False Positive ---");
 
-    let events = vec![
-        TimelineEvent {
-            event_type: "app_switch".to_string(),
-            time_secs: 0.0,
-            metadata: HashMap::from([
-                ("app_name".to_string(), "Arc".to_string()),
-                ("window_title".to_string(), "How to Code - YouTube".to_string()),
-            ]),
-        },
-    ];
+    let events = vec![TimelineEvent {
+        event_type: "app_switch".to_string(),
+        time_secs: 0.0,
+        metadata: HashMap::from([
+            ("app_name".to_string(), "Arc".to_string()),
+            (
+                "window_title".to_string(),
+                "How to Code - YouTube".to_string(),
+            ),
+        ]),
+    }];
 
     // YouTube audio on system output + occasional mic noise
     let speech_segments = vec![
@@ -291,15 +308,23 @@ async fn meeting_detection_youtube_false_positive() {
     ];
 
     // No meeting should be detected
-    let meeting_windows = vec![
-        MeetingWindow { start_secs: 0.0, end_secs: 300.0, is_meeting: false },
-    ];
+    let meeting_windows = vec![MeetingWindow {
+        start_secs: 0.0,
+        end_secs: 300.0,
+        is_meeting: false,
+    }];
 
     let mut result = replay_scenario(&events, &speech_segments, 300.0, &meeting_windows).await;
     result.scenario_id = "youtube_false_pos".to_string();
 
-    println!("  False positive count: {} seconds", result.false_positive_count);
-    println!("  Specificity: {:.1}%", result.non_meeting_specificity * 100.0);
+    println!(
+        "  False positive count: {} seconds",
+        result.false_positive_count
+    );
+    println!(
+        "  Specificity: {:.1}%",
+        result.non_meeting_specificity * 100.0
+    );
 
     // YouTube should NOT trigger meeting mode
     assert!(
@@ -330,20 +355,20 @@ async fn meeting_detection_calendar_based() {
         },
     ];
 
-    let speech_segments = vec![
-        SpeechSegment {
-            start_secs: 5.0,
-            end_secs: 290.0,
-            speaker_id: Some("alice".to_string()),
-            text: None,
-            channel: "system".to_string(),
-            is_speech: true,
-        },
-    ];
+    let speech_segments = vec![SpeechSegment {
+        start_secs: 5.0,
+        end_secs: 290.0,
+        speaker_id: Some("alice".to_string()),
+        text: None,
+        channel: "system".to_string(),
+        is_speech: true,
+    }];
 
-    let meeting_windows = vec![
-        MeetingWindow { start_secs: 0.0, end_secs: 300.0, is_meeting: true },
-    ];
+    let meeting_windows = vec![MeetingWindow {
+        start_secs: 0.0,
+        end_secs: 300.0,
+        is_meeting: true,
+    }];
 
     let mut result = replay_scenario(&events, &speech_segments, 300.0, &meeting_windows).await;
     result.scenario_id = "calendar_based".to_string();
@@ -388,14 +413,16 @@ async fn meeting_detection_dataset() {
             .unwrap_or_else(|e| panic!("failed to load {:?}: {}", manifest_path, e));
 
         // Derive meeting windows from events
-        let meeting_windows: Vec<MeetingWindow> = derive_meeting_windows(&manifest.events, manifest.total_duration_secs);
+        let meeting_windows: Vec<MeetingWindow> =
+            derive_meeting_windows(&manifest.events, manifest.total_duration_secs);
 
         let mut result = replay_scenario(
             &manifest.events,
             &manifest.ground_truth,
             manifest.total_duration_secs,
             &meeting_windows,
-        ).await;
+        )
+        .await;
         result.scenario_id = manifest.scenario_id.clone();
         results.push(result);
     }

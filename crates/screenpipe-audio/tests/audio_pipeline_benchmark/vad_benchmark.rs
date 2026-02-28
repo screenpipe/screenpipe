@@ -113,14 +113,21 @@ fn run_vad_sweep_with_chunk_duration(
     // Print per-chunk details
     if verbose {
         println!("\n  Per-chunk VAD analysis ({} channel):", channel);
-        println!("  {:>5} {:>12} {:>12} {:>8}", "Chunk", "VAD Ratio", "GT Ratio", "GT Speech");
+        println!(
+            "  {:>5} {:>12} {:>12} {:>8}",
+            "Chunk", "VAD Ratio", "GT Ratio", "GT Speech"
+        );
         for (i, cr) in chunk_results.iter().enumerate() {
             println!(
                 "  {:>5} {:>11.4} {:>11.4} {:>8}",
                 i,
                 cr.speech_ratio,
                 cr._ground_truth_speech_ratio,
-                if cr.ground_truth_has_speech { "YES" } else { "no" },
+                if cr.ground_truth_has_speech {
+                    "YES"
+                } else {
+                    "no"
+                },
             );
         }
     }
@@ -132,17 +139,31 @@ fn run_vad_sweep_with_chunk_duration(
 /// Extracted so it can be used with both real VAD and predetermined ratios.
 fn sweep_thresholds(chunk_results: &[ChunkVadResult]) -> Vec<VadSweepResult> {
     let total_chunks = chunk_results.len();
-    let speech_chunks: Vec<&ChunkVadResult> = chunk_results.iter().filter(|c| c.ground_truth_has_speech).collect();
-    let silence_chunks: Vec<&ChunkVadResult> = chunk_results.iter().filter(|c| !c.ground_truth_has_speech).collect();
+    let speech_chunks: Vec<&ChunkVadResult> = chunk_results
+        .iter()
+        .filter(|c| c.ground_truth_has_speech)
+        .collect();
+    let silence_chunks: Vec<&ChunkVadResult> = chunk_results
+        .iter()
+        .filter(|c| !c.ground_truth_has_speech)
+        .collect();
 
     let avg_speech_ratio_for_speech = if !speech_chunks.is_empty() {
-        speech_chunks.iter().map(|c| c.speech_ratio as f64).sum::<f64>() / speech_chunks.len() as f64
+        speech_chunks
+            .iter()
+            .map(|c| c.speech_ratio as f64)
+            .sum::<f64>()
+            / speech_chunks.len() as f64
     } else {
         0.0
     };
 
     let avg_speech_ratio_for_silence = if !silence_chunks.is_empty() {
-        silence_chunks.iter().map(|c| c.speech_ratio as f64).sum::<f64>() / silence_chunks.len() as f64
+        silence_chunks
+            .iter()
+            .map(|c| c.speech_ratio as f64)
+            .sum::<f64>()
+            / silence_chunks.len() as f64
     } else {
         0.0
     };
@@ -218,29 +239,129 @@ fn vad_threshold_sweep_framework() {
     // - Noise: ratio 0.005-0.015
     let chunk_results = vec![
         // Clear speech chunks (should always pass)
-        ChunkVadResult { _chunk_index: 0, speech_ratio: 0.35, ground_truth_has_speech: true, _ground_truth_speech_ratio: 1.0 },
-        ChunkVadResult { _chunk_index: 1, speech_ratio: 0.28, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.9 },
-        ChunkVadResult { _chunk_index: 2, speech_ratio: 0.42, ground_truth_has_speech: true, _ground_truth_speech_ratio: 1.0 },
-        ChunkVadResult { _chunk_index: 3, speech_ratio: 0.18, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.7 },
-        ChunkVadResult { _chunk_index: 4, speech_ratio: 0.22, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.8 },
+        ChunkVadResult {
+            _chunk_index: 0,
+            speech_ratio: 0.35,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 1.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 1,
+            speech_ratio: 0.28,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.9,
+        },
+        ChunkVadResult {
+            _chunk_index: 2,
+            speech_ratio: 0.42,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 1.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 3,
+            speech_ratio: 0.18,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.7,
+        },
+        ChunkVadResult {
+            _chunk_index: 4,
+            speech_ratio: 0.22,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.8,
+        },
         // Quiet speech chunks (dropped at threshold 0.05)
-        ChunkVadResult { _chunk_index: 5, speech_ratio: 0.03, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.5 },
-        ChunkVadResult { _chunk_index: 6, speech_ratio: 0.04, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.6 },
-        ChunkVadResult { _chunk_index: 7, speech_ratio: 0.025, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.4 },
-        ChunkVadResult { _chunk_index: 8, speech_ratio: 0.035, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.5 },
-        ChunkVadResult { _chunk_index: 9, speech_ratio: 0.02, ground_truth_has_speech: true, _ground_truth_speech_ratio: 0.3 },
+        ChunkVadResult {
+            _chunk_index: 5,
+            speech_ratio: 0.03,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.5,
+        },
+        ChunkVadResult {
+            _chunk_index: 6,
+            speech_ratio: 0.04,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.6,
+        },
+        ChunkVadResult {
+            _chunk_index: 7,
+            speech_ratio: 0.025,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.4,
+        },
+        ChunkVadResult {
+            _chunk_index: 8,
+            speech_ratio: 0.035,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.5,
+        },
+        ChunkVadResult {
+            _chunk_index: 9,
+            speech_ratio: 0.02,
+            ground_truth_has_speech: true,
+            _ground_truth_speech_ratio: 0.3,
+        },
         // Silence chunks (should always be rejected)
-        ChunkVadResult { _chunk_index: 10, speech_ratio: 0.0, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 11, speech_ratio: 0.0, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 12, speech_ratio: 0.002, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 13, speech_ratio: 0.0, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 14, speech_ratio: 0.001, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
+        ChunkVadResult {
+            _chunk_index: 10,
+            speech_ratio: 0.0,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 11,
+            speech_ratio: 0.0,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 12,
+            speech_ratio: 0.002,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 13,
+            speech_ratio: 0.0,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 14,
+            speech_ratio: 0.001,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
         // Noise chunks (should be rejected)
-        ChunkVadResult { _chunk_index: 15, speech_ratio: 0.008, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 16, speech_ratio: 0.012, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 17, speech_ratio: 0.006, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 18, speech_ratio: 0.015, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
-        ChunkVadResult { _chunk_index: 19, speech_ratio: 0.009, ground_truth_has_speech: false, _ground_truth_speech_ratio: 0.0 },
+        ChunkVadResult {
+            _chunk_index: 15,
+            speech_ratio: 0.008,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 16,
+            speech_ratio: 0.012,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 17,
+            speech_ratio: 0.006,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 18,
+            speech_ratio: 0.015,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
+        ChunkVadResult {
+            _chunk_index: 19,
+            speech_ratio: 0.009,
+            ground_truth_has_speech: false,
+            _ground_truth_speech_ratio: 0.0,
+        },
     ];
 
     let results = sweep_thresholds(&chunk_results);
@@ -250,16 +371,36 @@ fn vad_threshold_sweep_framework() {
 
     // Analysis
     println!("Analysis:");
-    let current = results.iter().find(|r| (r.threshold - 0.05).abs() < 0.001).unwrap();
-    println!("  Current (0.05): Recall={:.1}%, Silence Rej={:.1}%, F1={:.3}",
-        current.recall * 100.0, current.silence_rejection * 100.0, current.f1);
+    let current = results
+        .iter()
+        .find(|r| (r.threshold - 0.05).abs() < 0.001)
+        .unwrap();
+    println!(
+        "  Current (0.05): Recall={:.1}%, Silence Rej={:.1}%, F1={:.3}",
+        current.recall * 100.0,
+        current.silence_rejection * 100.0,
+        current.f1
+    );
 
-    let proposed = results.iter().find(|r| (r.threshold - 0.02).abs() < 0.001).unwrap();
-    println!("  Proposed (0.02): Recall={:.1}%, Silence Rej={:.1}%, F1={:.3}",
-        proposed.recall * 100.0, proposed.silence_rejection * 100.0, proposed.f1);
+    let proposed = results
+        .iter()
+        .find(|r| (r.threshold - 0.02).abs() < 0.001)
+        .unwrap();
+    println!(
+        "  Proposed (0.02): Recall={:.1}%, Silence Rej={:.1}%, F1={:.3}",
+        proposed.recall * 100.0,
+        proposed.silence_rejection * 100.0,
+        proposed.f1
+    );
 
-    if let Some(best) = results.iter().max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap()) {
-        println!("  Best F1: threshold={:.3}, F1={:.3}", best.threshold, best.f1);
+    if let Some(best) = results
+        .iter()
+        .max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap())
+    {
+        println!(
+            "  Best F1: threshold={:.3}, F1={:.3}",
+            best.threshold, best.f1
+        );
     }
 
     // Assertions
@@ -273,11 +414,15 @@ fn vad_threshold_sweep_framework() {
     assert!(
         proposed.recall > current.recall,
         "lower threshold should have higher recall: {:.1}% vs {:.1}%",
-        proposed.recall * 100.0, current.recall * 100.0
+        proposed.recall * 100.0,
+        current.recall * 100.0
     );
 
     // 3. Best F1 should NOT be at 0.05
-    let best = results.iter().max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap()).unwrap();
+    let best = results
+        .iter()
+        .max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap())
+        .unwrap();
     assert!(
         (best.threshold - 0.05).abs() > 0.001,
         "optimal threshold should not be the current 0.05 (it drops too much speech)"
@@ -288,8 +433,10 @@ fn vad_threshold_sweep_framework() {
         assert!(
             results[i].recall <= results[i - 1].recall + 0.001,
             "recall should decrease as threshold increases: {} at {:.3} > {} at {:.3}",
-            results[i].recall, results[i].threshold,
-            results[i - 1].recall, results[i - 1].threshold,
+            results[i].recall,
+            results[i].threshold,
+            results[i - 1].recall,
+            results[i - 1].threshold,
         );
     }
 }
@@ -337,21 +484,26 @@ async fn vad_silero_integration() {
 async fn vad_debug_single_wav() {
     use vad_rs::Vad;
 
-    let dataset_dir = std::env::var("AUDIO_BENCHMARK_DATASET")
-        .expect("set AUDIO_BENCHMARK_DATASET");
+    let dataset_dir =
+        std::env::var("AUDIO_BENCHMARK_DATASET").expect("set AUDIO_BENCHMARK_DATASET");
     let wav_path = std::path::Path::new(&dataset_dir)
         .join("one_on_one")
         .join("input_mic.wav");
     assert!(wav_path.exists(), "WAV not found: {:?}", wav_path);
 
     let audio = audio_fixtures::load_wav(&wav_path).unwrap();
-    println!("Loaded {} samples ({:.1}s)", audio.len(), audio.len() as f64 / SAMPLE_RATE as f64);
+    println!(
+        "Loaded {} samples ({:.1}s)",
+        audio.len(),
+        audio.len() as f64 / SAMPLE_RATE as f64
+    );
 
     // Check audio levels around known speech (5.0-7.1s per manifest)
     for t in [0.0, 4.0, 5.0, 5.5, 6.0, 6.5, 7.0, 8.0] {
         let start = (t * SAMPLE_RATE as f64) as usize;
         let end = (start + SAMPLE_RATE as usize).min(audio.len());
-        let rms: f32 = (audio[start..end].iter().map(|s| s * s).sum::<f32>() / (end - start) as f32).sqrt();
+        let rms: f32 =
+            (audio[start..end].iter().map(|s| s * s).sum::<f32>() / (end - start) as f32).sqrt();
         let peak = audio[start..end].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         println!("  t={:.1}s: RMS={:.4} Peak={:.4}", t, rms, peak);
     }
@@ -371,22 +523,42 @@ async fn vad_debug_single_wav() {
     let mut speech_count = 0usize;
     let mut total = 0usize;
     for (i, frame) in region.chunks(512).enumerate() {
-        if frame.len() < 512 { break; } // skip partial
+        if frame.len() < 512 {
+            break;
+        } // skip partial
         total += 1;
         let result = raw_vad.compute(frame).unwrap();
         let t = 4.0 + i as f64 * (512.0 / SAMPLE_RATE as f64);
-        if result.prob > 0.3 { speech_count += 1; }
+        if result.prob > 0.3 {
+            speech_count += 1;
+        }
         // Print all frames in speech region and every 10th elsewhere
         if (4.9..=7.5).contains(&t) || i % 10 == 0 {
-            println!("  frame {:>3} (t={:.3}s): prob={:.4} status={:?}",
-                i, t, result.prob, if result.prob > 0.5 { "SPEECH" } else if result.prob < 0.35 { "silence" } else { "unknown" });
+            println!(
+                "  frame {:>3} (t={:.3}s): prob={:.4} status={:?}",
+                i,
+                t,
+                result.prob,
+                if result.prob > 0.5 {
+                    "SPEECH"
+                } else if result.prob < 0.35 {
+                    "silence"
+                } else {
+                    "unknown"
+                }
+            );
         }
     }
-    println!("  Speech frames (prob>0.3): {}/{} = {:.4}", speech_count, total, speech_count as f64 / total as f64);
+    println!(
+        "  Speech frames (prob>0.3): {}/{} = {:.4}",
+        speech_count,
+        total,
+        speech_count as f64 / total as f64
+    );
 
     // Test with different gain levels to find what the model expects
     println!("\n--- Amplitude sweep: testing different gain levels ---");
-    let speech_region = &audio[5 * SAMPLE_RATE as usize .. 7 * SAMPLE_RATE as usize]; // 5-7s: clear speech
+    let speech_region = &audio[5 * SAMPLE_RATE as usize..7 * SAMPLE_RATE as usize]; // 5-7s: clear speech
 
     for gain in [0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0] {
         let scaled: Vec<f32> = speech_region.iter().map(|s| s * gain).collect();
@@ -397,19 +569,29 @@ async fn vad_debug_single_wav() {
         let mut speech_count = 0usize;
         let mut total = 0usize;
         for frame in scaled.chunks(512) {
-            if frame.len() < 512 { break; }
+            if frame.len() < 512 {
+                break;
+            }
             total += 1;
             let result = test_vad.compute(frame).unwrap();
-            if result.prob > max_prob { max_prob = result.prob; }
-            if result.prob > 0.5 { speech_count += 1; }
+            if result.prob > max_prob {
+                max_prob = result.prob;
+            }
+            if result.prob > 0.5 {
+                speech_count += 1;
+            }
         }
-        println!("  gain={:.2} rms={:.4}: max_prob={:.4} speech_frames={}/{}", gain, rms, max_prob, speech_count, total);
+        println!(
+            "  gain={:.2} rms={:.4}: max_prob={:.4} speech_frames={}/{}",
+            gain, rms, max_prob, speech_count, total
+        );
     }
 
     // Test with normalize_v2 (what production does)
     println!("\n--- With normalize_v2 (production preprocessing) ---");
     let normalized = screenpipe_audio::utils::audio::normalize_v2(speech_region);
-    let norm_rms: f32 = (normalized.iter().map(|s| s * s).sum::<f32>() / normalized.len() as f32).sqrt();
+    let norm_rms: f32 =
+        (normalized.iter().map(|s| s * s).sum::<f32>() / normalized.len() as f32).sqrt();
     println!("  After normalize_v2: RMS={:.4}", norm_rms);
 
     let mut norm_vad = Vad::new(&model_path, 16000).unwrap();
@@ -417,17 +599,26 @@ async fn vad_debug_single_wav() {
     let mut speech_count = 0usize;
     let mut total = 0usize;
     for (i, frame) in normalized.chunks(512).enumerate() {
-        if frame.len() < 512 { break; }
+        if frame.len() < 512 {
+            break;
+        }
         total += 1;
         let result = norm_vad.compute(frame).unwrap();
-        if result.prob > max_prob { max_prob = result.prob; }
-        if result.prob > 0.5 { speech_count += 1; }
+        if result.prob > max_prob {
+            max_prob = result.prob;
+        }
+        if result.prob > 0.5 {
+            speech_count += 1;
+        }
         let t = 5.0 + i as f64 * (512.0 / SAMPLE_RATE as f64);
         if i < 20 || result.prob > 0.3 {
             println!("  frame {:>3} (t={:.3}s): prob={:.4}", i, t, result.prob);
         }
     }
-    println!("  max_prob={:.4} speech_frames={}/{}", max_prob, speech_count, total);
+    println!(
+        "  max_prob={:.4} speech_frames={}/{}",
+        max_prob, speech_count, total
+    );
 }
 
 /// Chunk duration sweep — tests 5s, 10s, 15s, 20s, 30s, 45s, 60s chunks
@@ -461,10 +652,16 @@ async fn chunk_duration_sweep_dataset() {
 
     // For each threshold, sweep chunk durations
     for &threshold in &[0.02f32, 0.05] {
-        let marker = if (threshold - 0.05).abs() < 0.001 { " (CURRENT)" } else { " (PROPOSED)" };
+        let marker = if (threshold - 0.05).abs() < 0.001 {
+            " (CURRENT)"
+        } else {
+            " (PROPOSED)"
+        };
         println!("\n  === Threshold: {:.2}{} ===", threshold, marker);
-        println!("  {:>8} {:>8} {:>8} {:>8} {:>10} {:>12}",
-            "Duration", "Recall", "Sil Rej", "F1", "Passed", "Total Chunks");
+        println!(
+            "  {:>8} {:>8} {:>8} {:>8} {:>10} {:>12}",
+            "Duration", "Recall", "Sil Rej", "F1", "Passed", "Total Chunks"
+        );
         println!("  {}", "─".repeat(62));
 
         for &chunk_dur in CHUNK_DURATIONS {
@@ -480,12 +677,19 @@ async fn chunk_duration_sweep_dataset() {
 
             for entry in &scenarios {
                 let manifest_path = entry.path().join("manifest.json");
-                if !manifest_path.exists() { continue; }
+                if !manifest_path.exists() {
+                    continue;
+                }
                 let manifest = ScenarioManifest::load(&manifest_path).unwrap();
 
-                for (channel, track_file) in [("mic", &manifest.tracks.input_mic), ("system", &manifest.tracks.output_system)] {
+                for (channel, track_file) in [
+                    ("mic", &manifest.tracks.input_mic),
+                    ("system", &manifest.tracks.output_system),
+                ] {
                     let wav_path = entry.path().join(track_file);
-                    if !wav_path.exists() { continue; }
+                    if !wav_path.exists() {
+                        continue;
+                    }
                     let audio = audio_fixtures::load_wav(&wav_path).unwrap();
 
                     let chunk_samples = (chunk_dur * SAMPLE_RATE as f64) as usize;
@@ -493,18 +697,25 @@ async fn chunk_duration_sweep_dataset() {
                         let chunk_start = i as f64 * chunk_dur;
                         let normalized = normalize_v2(chunk);
                         let speech_ratio = compute_speech_ratio(&normalized, &mut vad);
-                        let (gt_speech, _) = manifest.chunk_ground_truth(channel, chunk_start, chunk_dur);
+                        let (gt_speech, _) =
+                            manifest.chunk_ground_truth(channel, chunk_start, chunk_dur);
 
                         let passes = speech_ratio > threshold;
                         total_chunks += 1;
-                        if passes { total_passed += 1; }
+                        if passes {
+                            total_passed += 1;
+                        }
 
                         if gt_speech {
                             total_speech_chunks += 1;
-                            if passes { total_speech_passed += 1; }
+                            if passes {
+                                total_speech_passed += 1;
+                            }
                         } else {
                             total_silence_chunks += 1;
-                            if !passes { total_silence_rejected += 1; }
+                            if !passes {
+                                total_silence_rejected += 1;
+                            }
                         }
                     }
                 }
@@ -512,18 +723,36 @@ async fn chunk_duration_sweep_dataset() {
 
             let recall = if total_speech_chunks > 0 {
                 total_speech_passed as f64 / total_speech_chunks as f64
-            } else { 1.0 };
+            } else {
+                1.0
+            };
             let sil_rej = if total_silence_chunks > 0 {
                 total_silence_rejected as f64 / total_silence_chunks as f64
-            } else { 1.0 };
+            } else {
+                1.0
+            };
             let f1 = if recall + sil_rej > 0.0 {
                 2.0 * recall * sil_rej / (recall + sil_rej)
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
-            let dur_marker = if (chunk_dur - 30.0).abs() < 0.1 { " ←" } else { "" };
-            println!("  {:>6.0}s {:>7.1}% {:>7.1}% {:>7.3} {:>5}/{:<5} {:>5}{}",
-                chunk_dur, recall * 100.0, sil_rej * 100.0, f1,
-                total_passed, total_chunks, total_chunks, dur_marker);
+            let dur_marker = if (chunk_dur - 30.0).abs() < 0.1 {
+                " ←"
+            } else {
+                ""
+            };
+            println!(
+                "  {:>6.0}s {:>7.1}% {:>7.1}% {:>7.3} {:>5}/{:<5} {:>5}{}",
+                chunk_dur,
+                recall * 100.0,
+                sil_rej * 100.0,
+                f1,
+                total_passed,
+                total_chunks,
+                total_chunks,
+                dur_marker
+            );
         }
     }
 }
@@ -560,10 +789,16 @@ async fn vad_threshold_sweep_dataset() {
         let manifest = ScenarioManifest::load(&manifest_path)
             .unwrap_or_else(|e| panic!("failed to load {:?}: {}", manifest_path, e));
 
-        println!("\n--- Scenario: {} ({:.0}s) ---", manifest.scenario_id, manifest.total_duration_secs);
+        println!(
+            "\n--- Scenario: {} ({:.0}s) ---",
+            manifest.scenario_id, manifest.total_duration_secs
+        );
 
         // Process both tracks
-        for (channel, track_file) in [("mic", &manifest.tracks.input_mic), ("system", &manifest.tracks.output_system)] {
+        for (channel, track_file) in [
+            ("mic", &manifest.tracks.input_mic),
+            ("system", &manifest.tracks.output_system),
+        ] {
             let wav_path = entry.path().join(track_file);
             if !wav_path.exists() {
                 println!("  Skipping {} (file not found)", channel);
@@ -597,8 +832,14 @@ async fn vad_threshold_sweep_dataset() {
         println!("{}", "=".repeat(70));
         metrics::print_vad_sweep_table(&all_results, 0.05);
 
-        if let Some(best) = all_results.iter().max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap()) {
-            println!("RECOMMENDATION: Set VAD threshold to {:.3} (F1={:.3})", best.threshold, best.f1);
+        if let Some(best) = all_results
+            .iter()
+            .max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap())
+        {
+            println!(
+                "RECOMMENDATION: Set VAD threshold to {:.3} (F1={:.3})",
+                best.threshold, best.f1
+            );
         }
     }
 }

@@ -59,14 +59,7 @@ pub async fn run_record_and_transcribe(
         && !audio_stream.is_disconnected.load(Ordering::Relaxed)
     {
         while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
-            match recv_audio_chunk(
-                &mut receiver,
-                &audio_stream,
-                &device_name,
-                &metrics,
-            )
-            .await?
-            {
+            match recv_audio_chunk(&mut receiver, &audio_stream, &device_name, &metrics).await? {
                 Some(chunk) => collected_audio.extend(chunk),
                 None => continue,
             }
@@ -147,9 +140,7 @@ async fn recv_audio_chunk(
                 device_name, AUDIO_RECEIVE_TIMEOUT_SECS
             );
             metrics.record_stream_timeout();
-            audio_stream
-                .is_disconnected
-                .store(true, Ordering::Relaxed);
+            audio_stream.is_disconnected.store(true, Ordering::Relaxed);
             Err(anyhow!(
                 "Audio stream timeout - no data received for {}s (possible audio hijack)",
                 AUDIO_RECEIVE_TIMEOUT_SECS

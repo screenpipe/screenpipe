@@ -214,14 +214,10 @@ mod tests {
         setup();
 
         let engine = Arc::new(AudioTranscriptionEngine::WhisperLargeV3TurboQuantized);
-        let transcription_engine = TranscriptionEngine::new(
-            engine.clone(),
-            None,
-            vec![Language::Arabic],
-            vec![],
-        )
-        .await
-        .expect("failed to create transcription engine");
+        let transcription_engine =
+            TranscriptionEngine::new(engine.clone(), None, vec![Language::Arabic], vec![])
+                .await
+                .expect("failed to create transcription engine");
 
         let vad_engine: Arc<tokio::sync::Mutex<Box<dyn VadEngine + Send>>> = Arc::new(
             tokio::sync::Mutex::new(Box::new(SileroVad::new().await.unwrap())),
@@ -346,14 +342,10 @@ mod tests {
         let embedding_manager = Arc::new(std::sync::Mutex::new(EmbeddingManager::new(usize::MAX)));
 
         let engine = Arc::new(AudioTranscriptionEngine::WhisperLargeV3TurboQuantized);
-        let transcription_engine = TranscriptionEngine::new(
-            engine.clone(),
-            None,
-            vec![Language::English],
-            vec![],
-        )
-        .await
-        .expect("failed to create transcription engine");
+        let transcription_engine =
+            TranscriptionEngine::new(engine.clone(), None, vec![Language::English], vec![])
+                .await
+                .expect("failed to create transcription engine");
 
         // Initialize VAD engine
         let vad_engine: Box<dyn VadEngine + Send> = Box::new(SileroVad::new().await.unwrap());

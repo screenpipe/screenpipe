@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use crate::server::AppState;
 use crate::sync_provider::{
-    AccessibilityRecord, FrameRecord, OcrRecord, SyncChunk, TranscriptionRecord,
-    UiEventSyncRecord, SCHEMA_VERSION,
+    AccessibilityRecord, FrameRecord, OcrRecord, SyncChunk, TranscriptionRecord, UiEventSyncRecord,
+    SCHEMA_VERSION,
 };
 
 // ============================================================================
@@ -339,8 +339,7 @@ pub async fn archive_status(
         })),
         Some(runtime) => {
             // Count pending records between watermark and cutoff
-            let cutoff =
-                Utc::now() - Duration::days(runtime.config.retention_days as i64);
+            let cutoff = Utc::now() - Duration::days(runtime.config.retention_days as i64);
             let pending_count = if runtime.watermark < cutoff {
                 count_records_in_range(&state.db, runtime.watermark, cutoff)
                     .await
@@ -454,25 +453,25 @@ fn spawn_archive_loop(
             let mut upload_error = false;
 
             loop {
-                let chunk = match get_archive_chunk(&db, &machine_id, current_watermark, cutoff, 500)
-                    .await
-                {
-                    Ok(Some(c)) => c,
-                    Ok(None) => {
-                        // No more data to upload in this range
-                        current_watermark = cutoff;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!("archive: failed to get chunk: {}", e);
-                        let mut guard = state.write().await;
-                        if let Some(rt) = guard.as_mut() {
-                            rt.last_error = Some(format!("get_chunk: {}", e));
+                let chunk =
+                    match get_archive_chunk(&db, &machine_id, current_watermark, cutoff, 500).await
+                    {
+                        Ok(Some(c)) => c,
+                        Ok(None) => {
+                            // No more data to upload in this range
+                            current_watermark = cutoff;
+                            break;
                         }
-                        upload_error = true;
-                        break;
-                    }
-                };
+                        Err(e) => {
+                            warn!("archive: failed to get chunk: {}", e);
+                            let mut guard = state.write().await;
+                            if let Some(rt) = guard.as_mut() {
+                                rt.last_error = Some(format!("get_chunk: {}", e));
+                            }
+                            upload_error = true;
+                            break;
+                        }
+                    };
 
                 let time_end_str = chunk.time_end.clone();
                 let data = match serde_json::to_vec(&chunk) {
@@ -501,13 +500,12 @@ fn spawn_archive_loop(
                             result.blob_id
                         );
                         // Advance watermark to the end of this chunk
-                        if let Ok(ts) =
-                            DateTime::parse_from_rfc3339(&time_end_str)
-                        {
+                        if let Ok(ts) = DateTime::parse_from_rfc3339(&time_end_str) {
                             current_watermark = ts.with_timezone(&Utc);
-                        } else if let Ok(ts) =
-                            chrono::NaiveDateTime::parse_from_str(&time_end_str, "%Y-%m-%d %H:%M:%S%.f")
-                        {
+                        } else if let Ok(ts) = chrono::NaiveDateTime::parse_from_str(
+                            &time_end_str,
+                            "%Y-%m-%d %H:%M:%S%.f",
+                        ) {
                             current_watermark = ts.and_utc();
                         }
 
@@ -674,7 +672,11 @@ async fn get_archive_chunk(
     .fetch_all(pool)
     .await?;
 
-    if frames.is_empty() && transcriptions.is_empty() && accessibility.is_empty() && ui_events.is_empty() {
+    if frames.is_empty()
+        && transcriptions.is_empty()
+        && accessibility.is_empty()
+        && ui_events.is_empty()
+    {
         return Ok(None);
     }
 
@@ -750,31 +752,33 @@ async fn get_archive_chunk(
     // Build transcription records
     let transcription_records: Vec<TranscriptionRecord> = transcriptions
         .into_iter()
-        .map(|(_, timestamp, transcription, device, is_input, speaker_id)| {
-            TranscriptionRecord {
+        .map(
+            |(_, timestamp, transcription, device, is_input, speaker_id)| TranscriptionRecord {
                 sync_id: Uuid::new_v4().to_string(),
                 timestamp,
                 transcription,
                 device,
                 is_input_device: is_input,
                 speaker_id,
-            }
-        })
+            },
+        )
         .collect();
 
     // Build accessibility records
     let accessibility_records: Vec<AccessibilityRecord> = accessibility
         .into_iter()
-        .map(|(_, timestamp, app_name, window_name, text_content, browser_url)| {
-            AccessibilityRecord {
-                sync_id: Uuid::new_v4().to_string(),
-                timestamp,
-                app_name,
-                window_name,
-                text_content,
-                browser_url,
-            }
-        })
+        .map(
+            |(_, timestamp, app_name, window_name, text_content, browser_url)| {
+                AccessibilityRecord {
+                    sync_id: Uuid::new_v4().to_string(),
+                    timestamp,
+                    app_name,
+                    window_name,
+                    text_content,
+                    browser_url,
+                }
+            },
+        )
         .collect();
 
     // Build UI event records
@@ -838,13 +842,12 @@ async fn count_records_in_range(
     let start_str = start.to_rfc3339();
     let end_str = end.to_rfc3339();
 
-    let (frames,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM frames WHERE timestamp >= ? AND timestamp < ?",
-    )
-    .bind(&start_str)
-    .bind(&end_str)
-    .fetch_one(pool)
-    .await?;
+    let (frames,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM frames WHERE timestamp >= ? AND timestamp < ?")
+            .bind(&start_str)
+            .bind(&end_str)
+            .fetch_one(pool)
+            .await?;
 
     let (transcriptions,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audio_transcriptions WHERE timestamp >= ? AND timestamp < ?",
@@ -854,21 +857,19 @@ async fn count_records_in_range(
     .fetch_one(pool)
     .await?;
 
-    let (accessibility,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM accessibility WHERE timestamp >= ? AND timestamp < ?",
-    )
-    .bind(&start_str)
-    .bind(&end_str)
-    .fetch_one(pool)
-    .await?;
+    let (accessibility,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM accessibility WHERE timestamp >= ? AND timestamp < ?")
+            .bind(&start_str)
+            .bind(&end_str)
+            .fetch_one(pool)
+            .await?;
 
-    let (ui_events,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM ui_events WHERE timestamp >= ? AND timestamp < ?",
-    )
-    .bind(&start_str)
-    .bind(&end_str)
-    .fetch_one(pool)
-    .await?;
+    let (ui_events,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM ui_events WHERE timestamp >= ? AND timestamp < ?")
+            .bind(&start_str)
+            .bind(&end_str)
+            .fetch_one(pool)
+            .await?;
 
     Ok((frames + transcriptions + accessibility + ui_events) as u64)
 }

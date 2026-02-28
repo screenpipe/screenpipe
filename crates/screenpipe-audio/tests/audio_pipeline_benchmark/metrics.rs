@@ -175,9 +175,11 @@ impl BenchmarkReport {
         self.recommendations.clear();
 
         // Find optimal VAD threshold (best F1)
-        if let Some(best) = self.vad_sweep.iter().max_by(|a, b| {
-            a.f1.partial_cmp(&b.f1).unwrap_or(std::cmp::Ordering::Equal)
-        }) {
+        if let Some(best) = self
+            .vad_sweep
+            .iter()
+            .max_by(|a, b| a.f1.partial_cmp(&b.f1).unwrap_or(std::cmp::Ordering::Equal))
+        {
             self.recommendations.push(format!(
                 "Optimal VAD threshold: {:.3} (F1={:.3}, Recall={:.1}%, Silence Rej={:.1}%)",
                 best.threshold,
@@ -187,7 +189,11 @@ impl BenchmarkReport {
             ));
 
             // Check if current threshold (0.05) drops significant speech
-            if let Some(current) = self.vad_sweep.iter().find(|r| (r.threshold - 0.05).abs() < 0.001) {
+            if let Some(current) = self
+                .vad_sweep
+                .iter()
+                .find(|r| (r.threshold - 0.05).abs() < 0.001)
+            {
                 if current.recall < 0.95 {
                     self.recommendations.push(format!(
                         "WARNING: Current threshold 0.05 drops {:.1}% of speech chunks",
@@ -226,7 +232,10 @@ impl BenchmarkReport {
 /// Print a VAD sweep results table to stdout.
 pub fn print_vad_sweep_table(results: &[VadSweepResult], current_threshold: f32) {
     println!();
-    println!("{:<10} {:>7} {:>12} {:>6} {:>13}", "Threshold", "Recall", "Silence Rej", "F1", "Chunks Passed");
+    println!(
+        "{:<10} {:>7} {:>12} {:>6} {:>13}",
+        "Threshold", "Recall", "Silence Rej", "F1", "Chunks Passed"
+    );
     println!("{}", "─".repeat(55));
 
     for r in results {
@@ -252,7 +261,10 @@ pub fn print_vad_sweep_table(results: &[VadSweepResult], current_threshold: f32)
 /// Print meeting detection results table.
 pub fn print_meeting_detection_table(results: &[MeetingDetectionResult]) {
     println!();
-    println!("{:<20} {:>10} {:>10} {:>12} {:>8}", "Scenario", "Latency", "Recall", "Specificity", "FP Count");
+    println!(
+        "{:<20} {:>10} {:>10} {:>12} {:>8}",
+        "Scenario", "Latency", "Recall", "Specificity", "FP Count"
+    );
     println!("{}", "─".repeat(65));
 
     for r in results {
@@ -271,7 +283,10 @@ pub fn print_meeting_detection_table(results: &[MeetingDetectionResult]) {
 /// Print smart mode data loss table.
 pub fn print_smart_mode_table(results: &[SmartModeResult]) {
     println!();
-    println!("{:<20} {:>8} {:>8} {:>10} {:>15}", "Scenario", "Total", "Lost", "Loss Rate", "Audio Saved?");
+    println!(
+        "{:<20} {:>8} {:>8} {:>10} {:>15}",
+        "Scenario", "Total", "Lost", "Loss Rate", "Audio Saved?"
+    );
     println!("{}", "─".repeat(68));
 
     for r in results {
@@ -281,7 +296,11 @@ pub fn print_smart_mode_table(results: &[SmartModeResult]) {
             r.total_speech_chunks,
             r.chunks_lost,
             r.loss_rate * 100.0,
-            if r.audio_saved_before_deferral { "yes" } else { "NO" },
+            if r.audio_saved_before_deferral {
+                "yes"
+            } else {
+                "NO"
+            },
         );
     }
     println!();
@@ -290,8 +309,10 @@ pub fn print_smart_mode_table(results: &[SmartModeResult]) {
 /// Print cross-device coverage table.
 pub fn print_cross_device_table(results: &[CrossDeviceResult]) {
     println!();
-    println!("{:<20} {:>6} {:>8} {:>10} {:>8} {:>8} {:>10}",
-        "Scenario", "Total", "Both", "Mic Only", "Sys Only", "Neither", "Capture %");
+    println!(
+        "{:<20} {:>6} {:>8} {:>10} {:>8} {:>8} {:>10}",
+        "Scenario", "Total", "Both", "Mic Only", "Sys Only", "Neither", "Capture %"
+    );
     println!("{}", "─".repeat(78));
 
     for r in results {

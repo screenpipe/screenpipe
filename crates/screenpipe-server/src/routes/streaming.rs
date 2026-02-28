@@ -311,9 +311,13 @@ async fn handle_stream_frames_socket(
                                 match db_backfill.find_video_chunks(start_time, end_time).await {
                                     Ok(mut chunks) => {
                                         if is_descending {
-                                            chunks.frames.sort_by_key(|a| std::cmp::Reverse((a.timestamp, a.offset_index)));
+                                            chunks.frames.sort_by_key(|a| {
+                                                std::cmp::Reverse((a.timestamp, a.offset_index))
+                                            });
                                         } else {
-                                            chunks.frames.sort_by_key(|a| (a.timestamp, a.offset_index));
+                                            chunks
+                                                .frames
+                                                .sort_by_key(|a| (a.timestamp, a.offset_index));
                                         }
                                         let mut sent = sent_ids_backfill.lock().await;
                                         for chunk in chunks.frames {
@@ -954,18 +958,16 @@ pub async fn handle_video_export_post(
     // Resolve frame IDs: either from payload or by querying the time range
     let frame_ids = match (payload.frame_ids, payload.start_time, payload.end_time) {
         (Some(ids), _, _) if !ids.is_empty() => ids,
-        (_, Some(start), Some(end)) => {
-            match state.db.get_frame_ids_in_range(start, end).await {
-                Ok(ids) => ids,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": format!("DB error: {}", e) })),
-                    )
-                        .into_response();
-                }
+        (_, Some(start), Some(end)) => match state.db.get_frame_ids_in_range(start, end).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("DB error: {}", e) })),
+                )
+                    .into_response();
             }
-        }
+        },
         _ => {
             return (
                 StatusCode::BAD_REQUEST,

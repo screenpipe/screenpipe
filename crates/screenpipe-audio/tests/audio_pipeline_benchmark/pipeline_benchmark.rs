@@ -9,7 +9,7 @@
 //! and optionally runs Whisper to verify transcription quality.
 
 use crate::audio_fixtures::{self, SAMPLE_RATE};
-use crate::ground_truth::{ScenarioManifest, SpeechSegment, synthetic_manifest};
+use crate::ground_truth::{synthetic_manifest, ScenarioManifest, SpeechSegment};
 use crate::metrics::PipelineResult;
 
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
@@ -80,7 +80,9 @@ fn simulate_pipeline(
             let chunk_start_sec = chunk_idx as f64 * CHUNK_DURATION_SECS;
             let chunk_end_sec = chunk_start_sec + CHUNK_DURATION_SECS;
 
-            for &is_speech in &labels[(chunk_start_sec as usize)..(chunk_end_sec as usize).min(labels.len())] {
+            for &is_speech in
+                &labels[(chunk_start_sec as usize)..(chunk_end_sec as usize).min(labels.len())]
+            {
                 if is_speech {
                     speech_seconds_captured += 1.0;
                 }
@@ -156,21 +158,56 @@ async fn pipeline_end_to_end_synthetic() {
     let manifest = synthetic_manifest(
         duration,
         vec![
-            SpeechSegment { start_secs: 0.0, end_secs: 60.0, speaker_id: Some("a".to_string()), text: None, channel: "mic".to_string(), is_speech: true },
-            SpeechSegment { start_secs: 60.0, end_secs: 90.0, speaker_id: Some("quiet".to_string()), text: None, channel: "mic".to_string(), is_speech: true },
-            SpeechSegment { start_secs: 120.0, end_secs: 180.0, speaker_id: Some("noisy".to_string()), text: None, channel: "mic".to_string(), is_speech: true },
-            SpeechSegment { start_secs: 240.0, end_secs: 300.0, speaker_id: Some("b".to_string()), text: None, channel: "mic".to_string(), is_speech: true },
+            SpeechSegment {
+                start_secs: 0.0,
+                end_secs: 60.0,
+                speaker_id: Some("a".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 60.0,
+                end_secs: 90.0,
+                speaker_id: Some("quiet".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 120.0,
+                end_secs: 180.0,
+                speaker_id: Some("noisy".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 240.0,
+                end_secs: 300.0,
+                speaker_id: Some("b".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
         ],
     );
 
     let thresholds = [0.01, 0.02, 0.03, 0.05, 0.10];
     println!("\n  Pipeline Capture Rate by Threshold:");
-    println!("  {:<10} {:>12} {:>12} {:>10}", "Threshold", "Captured", "Total", "Rate");
+    println!(
+        "  {:<10} {:>12} {:>12} {:>10}",
+        "Threshold", "Captured", "Total", "Rate"
+    );
     println!("  {}", "─".repeat(48));
 
     for &threshold in &thresholds {
         let result = simulate_pipeline(&audio, &manifest, "mic", threshold, &mut vad);
-        let marker = if (threshold - 0.05).abs() < 0.001 { " ← CURRENT" } else { "" };
+        let marker = if (threshold - 0.05).abs() < 0.001 {
+            " ← CURRENT"
+        } else {
+            ""
+        };
         println!(
             "  {:<10.2} {:>11.0}s {:>11.0}s {:>9.1}%{}",
             threshold,
@@ -195,8 +232,8 @@ async fn pipeline_end_to_end_synthetic() {
 #[tokio::test]
 #[ignore]
 async fn pipeline_with_whisper_dataset() {
-    let dataset_dir = std::env::var("AUDIO_BENCHMARK_DATASET")
-        .expect("set AUDIO_BENCHMARK_DATASET");
+    let dataset_dir =
+        std::env::var("AUDIO_BENCHMARK_DATASET").expect("set AUDIO_BENCHMARK_DATASET");
     let dataset_path = std::path::Path::new(&dataset_dir);
 
     println!("\n{}", "=".repeat(70));
@@ -207,15 +244,13 @@ async fn pipeline_with_whisper_dataset() {
     // Load Whisper model (large-v3-turbo quantized — the production default)
     let engine = Arc::new(AudioTranscriptionEngine::WhisperLargeV3TurboQuantized);
     println!("\n  Loading Whisper model (large-v3-turbo-q8_0)...");
-    let transcription_engine = TranscriptionEngine::new(
-        engine.clone(),
-        None,
-        vec![Language::English],
-        vec![],
-    )
-    .await
-    .expect("failed to create transcription engine");
-    let mut session = transcription_engine.create_session().expect("failed to create session");
+    let transcription_engine =
+        TranscriptionEngine::new(engine.clone(), None, vec![Language::English], vec![])
+            .await
+            .expect("failed to create transcription engine");
+    let mut session = transcription_engine
+        .create_session()
+        .expect("failed to create session");
 
     let mut scenarios: Vec<_> = std::fs::read_dir(dataset_path)
         .expect("failed to read dataset directory")
@@ -236,9 +271,15 @@ async fn pipeline_with_whisper_dataset() {
         }
 
         let manifest = ScenarioManifest::load(&manifest_path).unwrap();
-        println!("\n  --- {} ({:.0}s) ---", manifest.scenario_id, manifest.total_duration_secs);
+        println!(
+            "\n  --- {} ({:.0}s) ---",
+            manifest.scenario_id, manifest.total_duration_secs
+        );
 
-        for (channel, track) in [("mic", &manifest.tracks.input_mic), ("system", &manifest.tracks.output_system)] {
+        for (channel, track) in [
+            ("mic", &manifest.tracks.input_mic),
+            ("system", &manifest.tracks.output_system),
+        ] {
             let wav_path = entry.path().join(track);
             if !wav_path.exists() {
                 continue;
@@ -277,10 +318,7 @@ async fn pipeline_with_whisper_dataset() {
                 let gt_combined = gt_texts.join(" ");
 
                 // Transcribe the full 30-second chunk
-                match session
-                    .transcribe(chunk, SAMPLE_RATE, "benchmark")
-                    .await
-                {
+                match session.transcribe(chunk, SAMPLE_RATE, "benchmark").await {
                     Ok(text) => {
                         if !text.is_empty() {
                             let wr = word_recall(&gt_combined, &text);
@@ -294,7 +332,10 @@ async fn pipeline_with_whisper_dataset() {
 
                             if wr < 0.5 {
                                 println!("    Chunk {}: recall {:.0}%", chunk_idx, wr * 100.0);
-                                println!("      GT:    \"{}\"", &gt_combined[..gt_combined.len().min(80)]);
+                                println!(
+                                    "      GT:    \"{}\"",
+                                    &gt_combined[..gt_combined.len().min(80)]
+                                );
                                 println!("      Trans: \"{}\"", &text[..text.len().min(80)]);
                             } else {
                                 println!("    Chunk {}: recall {:.0}% OK", chunk_idx, wr * 100.0);
@@ -311,7 +352,10 @@ async fn pipeline_with_whisper_dataset() {
                 let avg_wr = channel_recall_sum / channel_recall_count as f64;
                 println!(
                     "    {} {}: avg word recall {:.1}% ({} chunks with speech)",
-                    manifest.scenario_id, channel, avg_wr * 100.0, channel_recall_count,
+                    manifest.scenario_id,
+                    channel,
+                    avg_wr * 100.0,
+                    channel_recall_count,
                 );
             }
         }
@@ -327,8 +371,16 @@ async fn pipeline_with_whisper_dataset() {
     println!("\n{}", "=".repeat(70));
     println!(" WHISPER TRANSCRIPTION QUALITY SUMMARY");
     println!("{}", "=".repeat(70));
-    println!("  Chunks:       {}/{} had speech", total_with_speech, total_chunks);
-    println!("  Word recall:  {:.1}% ({}/{})", overall_recall * 100.0, total_recalled_words, total_gt_words);
+    println!(
+        "  Chunks:       {}/{} had speech",
+        total_with_speech, total_chunks
+    );
+    println!(
+        "  Word recall:  {:.1}% ({}/{})",
+        overall_recall * 100.0,
+        total_recalled_words,
+        total_gt_words
+    );
     println!("  Model:        WhisperLargeV3TurboQuantized (ggml-large-v3-turbo-q8_0.bin)");
     println!("\n  NOTE: VAD bypassed. Silero VAD v5 does not detect ElevenLabs TTS as speech.");
     println!("  Audio fed as 30s chunks (matching production) to avoid Whisper hallucination.");
@@ -339,8 +391,8 @@ async fn pipeline_with_whisper_dataset() {
 #[tokio::test]
 #[ignore]
 async fn pipeline_end_to_end_dataset() {
-    let dataset_dir = std::env::var("AUDIO_BENCHMARK_DATASET")
-        .expect("set AUDIO_BENCHMARK_DATASET");
+    let dataset_dir =
+        std::env::var("AUDIO_BENCHMARK_DATASET").expect("set AUDIO_BENCHMARK_DATASET");
     let dataset_path = std::path::Path::new(&dataset_dir);
 
     println!("\n--- Pipeline End-to-End: Full Dataset (VAD only) ---");
@@ -368,7 +420,10 @@ async fn pipeline_end_to_end_dataset() {
 
             let manifest = ScenarioManifest::load(&manifest_path).unwrap();
 
-            for (channel, track) in [("mic", &manifest.tracks.input_mic), ("system", &manifest.tracks.output_system)] {
+            for (channel, track) in [
+                ("mic", &manifest.tracks.input_mic),
+                ("system", &manifest.tracks.output_system),
+            ] {
                 let wav_path = entry.path().join(track);
                 if !wav_path.exists() {
                     continue;
@@ -382,7 +437,8 @@ async fn pipeline_end_to_end_dataset() {
         }
 
         if !results.is_empty() {
-            let avg_capture = results.iter().map(|r| r.capture_rate).sum::<f64>() / results.len() as f64;
+            let avg_capture =
+                results.iter().map(|r| r.capture_rate).sum::<f64>() / results.len() as f64;
             let total_speech: f64 = results.iter().map(|r| r.total_speech_seconds).sum();
             let total_captured: f64 = results.iter().map(|r| r.speech_seconds_in_db).sum();
             println!(

@@ -31,7 +31,10 @@ pub async fn reconcile_untranscribed(
     let chunks = match db.get_untranscribed_chunks(since, 50).await {
         Ok(c) => c,
         Err(e) => {
-            error!("reconciliation: failed to query untranscribed chunks: {}", e);
+            error!(
+                "reconciliation: failed to query untranscribed chunks: {}",
+                e
+            );
             return 0;
         }
     };
@@ -75,10 +78,8 @@ pub async fn reconcile_untranscribed(
             }
 
             let path_owned = chunk.file_path.clone();
-            match tokio::task::spawn_blocking(move || {
-                read_audio_from_file(Path::new(&path_owned))
-            })
-            .await
+            match tokio::task::spawn_blocking(move || read_audio_from_file(Path::new(&path_owned)))
+                .await
             {
                 Ok(Ok((samples, sr))) => {
                     sample_rate = sr;

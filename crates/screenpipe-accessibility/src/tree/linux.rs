@@ -74,7 +74,7 @@ fn should_extract_text(role: u32) -> bool {
         | 82  // ROLE_DOCUMENT_FRAME
         | 71  // ROLE_HEADER
         | 10  // ROLE_COLUMN_HEADER
-        | 60  // ROLE_TERMINAL (VTE terminal widget)
+        | 60 // ROLE_TERMINAL (VTE terminal widget)
     )
 }
 
@@ -256,14 +256,28 @@ fn get_accessible_description(conn: &Connection, aref: &AccessibleRef) -> String
 
 /// Get the Role of an accessible object (returns role enum as u32).
 fn get_accessible_role(conn: &Connection, aref: &AccessibleRef) -> Result<u32> {
-    let reply = dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_ACCESSIBLE, "GetRole", &())?;
+    let reply = dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_ACCESSIBLE,
+        "GetRole",
+        &(),
+    )?;
     let role: u32 = reply.body().deserialize()?;
     Ok(role)
 }
 
 /// Get the state set of an accessible object (two u32s representing a 64-bit bitfield).
 fn get_accessible_state(conn: &Connection, aref: &AccessibleRef) -> Vec<u32> {
-    dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_ACCESSIBLE, "GetState", &())
+    dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_ACCESSIBLE,
+        "GetState",
+        &(),
+    )
     .and_then(|reply| {
         let states: Vec<u32> = reply.body().deserialize()?;
         Ok(states)
@@ -290,7 +304,14 @@ fn get_accessible_children(conn: &Connection, aref: &AccessibleRef) -> Vec<Acces
 
     let mut children = Vec::with_capacity(child_count.max(0) as usize);
     for i in 0..child_count {
-        if let Ok(reply) = dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_ACCESSIBLE, "GetChildAtIndex", &(i,)) {
+        if let Ok(reply) = dbus_call(
+            conn,
+            &aref.bus_name,
+            &aref.path,
+            ATSPI_ACCESSIBLE,
+            "GetChildAtIndex",
+            &(i,),
+        ) {
             // Return type is (so) — bus name + object path
             let deserialized: Result<(String, zbus::zvariant::OwnedObjectPath), _> =
                 reply.body().deserialize();
@@ -308,19 +329,33 @@ fn get_accessible_children(conn: &Connection, aref: &AccessibleRef) -> Vec<Acces
 /// Get text content via the AT-SPI2 Text interface.
 fn get_text_content(conn: &Connection, aref: &AccessibleRef) -> Option<String> {
     // First get the character count
-    let char_count: i32 = dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_TEXT, "GetCharacterCount", &())
-        .and_then(|reply| {
-            let n: i32 = reply.body().deserialize()?;
-            Ok(n)
-        })
-        .ok()?;
+    let char_count: i32 = dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_TEXT,
+        "GetCharacterCount",
+        &(),
+    )
+    .and_then(|reply| {
+        let n: i32 = reply.body().deserialize()?;
+        Ok(n)
+    })
+    .ok()?;
 
     if char_count <= 0 {
         return None;
     }
 
     // Get the text content (start=0, end=-1 means "all text")
-    dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_TEXT, "GetText", &(0i32, -1i32))
+    dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_TEXT,
+        "GetText",
+        &(0i32, -1i32),
+    )
     .and_then(|reply| {
         let text: String = reply.body().deserialize()?;
         Ok(text)
@@ -332,7 +367,14 @@ fn get_text_content(conn: &Connection, aref: &AccessibleRef) -> Option<String> {
 /// Get the component extents (bounding box) in screen coordinates.
 fn get_component_extents(conn: &Connection, aref: &AccessibleRef) -> Option<(i32, i32, i32, i32)> {
     // coord_type 0 = SCREEN
-    dbus_call(conn, &aref.bus_name, &aref.path, ATSPI_COMPONENT, "GetExtents", &(0u32,))
+    dbus_call(
+        conn,
+        &aref.bus_name,
+        &aref.path,
+        ATSPI_COMPONENT,
+        "GetExtents",
+        &(0u32,),
+    )
     .and_then(|reply| {
         let extents: (i32, i32, i32, i32) = reply.body().deserialize()?;
         Ok(extents)
@@ -342,7 +384,14 @@ fn get_component_extents(conn: &Connection, aref: &AccessibleRef) -> Option<(i32
 
 /// Get the PID of an accessible application (from its bus name via D-Bus).
 fn get_pid_for_bus_name(conn: &Connection, bus_name: &str) -> Option<u32> {
-    dbus_call(conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetConnectionUnixProcessID", &(bus_name,))
+    dbus_call(
+        conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixProcessID",
+        &(bus_name,),
+    )
     .and_then(|reply| {
         let pid: u32 = reply.body().deserialize()?;
         Ok(pid)
@@ -482,7 +531,9 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     // Extract text from text-bearing elements
     if should_extract_text(role) {
         extract_text(conn, aref, role, depth, state);
-    } else if role == 39 /* Panel */ || role == 85 /* Section */ || role == 23 /* Frame */ {
+    } else if role == 39 /* Panel */ || role == 85 /* Section */ || role == 23
+    /* Frame */
+    {
         // Containers: only extract if they have a direct text value
         let name = get_accessible_name(conn, aref);
         if !name.is_empty() && name.len() < 200 {
@@ -512,9 +563,8 @@ fn extract_text(
     depth: usize,
     state: &mut WalkState,
 ) {
-    let bounds = get_component_extents(conn, aref).and_then(|(x, y, w, h)| {
-        normalize_bounds(x as f64, y as f64, w as f64, h as f64, state)
-    });
+    let bounds = get_component_extents(conn, aref)
+        .and_then(|(x, y, w, h)| normalize_bounds(x as f64, y as f64, w as f64, h as f64, state));
 
     let role_str = role_name(role);
 
@@ -637,11 +687,18 @@ fn connect_to_atspi_bus() -> Result<Connection> {
     // Strategy 2: Get address from org.a11y.Bus on the session bus
     let session = Connection::session().context("Failed to connect to D-Bus session bus")?;
 
-    let reply = dbus_call(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", &())
-        .context(
-            "Failed to get AT-SPI bus address. Is AT-SPI2 running? \
+    let reply = dbus_call(
+        &session,
+        "org.a11y.Bus",
+        "/org/a11y/bus",
+        "org.a11y.Bus",
+        "GetAddress",
+        &(),
+    )
+    .context(
+        "Failed to get AT-SPI bus address. Is AT-SPI2 running? \
              Try: gsettings set org.gnome.desktop.interface toolkit-accessibility true",
-        )?;
+    )?;
 
     let address: String = reply
         .body()
@@ -694,9 +751,7 @@ fn enable_accessibility(a11y_conn: &Connection) {
 /// Get the currently focused window by walking the AT-SPI2 desktop root.
 ///
 /// Returns (app_name, window_title, window_ref, pid) if found.
-fn find_focused_window(
-    conn: &Connection,
-) -> Option<(String, String, AccessibleRef, u32)> {
+fn find_focused_window(conn: &Connection) -> Option<(String, String, AccessibleRef, u32)> {
     // The AT-SPI2 registry is at bus name org.a11y.atspi.Registry,
     // path /org/a11y/atspi/accessible/root
     let desktop = AccessibleRef {

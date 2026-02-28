@@ -23,7 +23,10 @@ pub fn start_meeting_persister(
         match db.close_orphaned_meetings().await {
             Ok(0) => debug!("meeting persister: no orphaned meetings"),
             Ok(n) => info!("meeting persister: closed {} orphaned meeting(s)", n),
-            Err(e) => warn!("meeting persister: failed to close orphaned meetings: {}", e),
+            Err(e) => warn!(
+                "meeting persister: failed to close orphaned meetings: {}",
+                e
+            ),
         }
 
         let mut current_meeting_id: Option<i64> = None;
@@ -55,12 +58,7 @@ pub fn start_meeting_persister(
                     };
 
                     match db
-                        .insert_meeting(
-                            &app,
-                            source,
-                            title.as_deref(),
-                            attendees_str.as_deref(),
-                        )
+                        .insert_meeting(&app, source, title.as_deref(), attendees_str.as_deref())
                         .await
                     {
                         Ok(id) => {
@@ -78,17 +76,15 @@ pub fn start_meeting_persister(
                 (true, false) => {
                     // Transition: in_meeting → not_in_meeting
                     if let Some(id) = current_meeting_id.take() {
-                        let now =
-                            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                        let now = chrono::Utc::now()
+                            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                            .to_string();
                         match db.end_meeting(id, &now).await {
                             Ok(()) => {
                                 info!("meeting persister: meeting ended (id={})", id);
                             }
                             Err(e) => {
-                                error!(
-                                    "meeting persister: failed to end meeting {}: {}",
-                                    id, e
-                                );
+                                error!("meeting persister: failed to end meeting {}: {}", id, e);
                             }
                         }
                     }

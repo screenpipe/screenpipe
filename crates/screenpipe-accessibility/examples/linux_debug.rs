@@ -25,13 +25,25 @@ fn dbus_call<B: serde::ser::Serialize + zbus::zvariant::DynamicType>(
     conn.call_method(Some(dest), obj_path, Some(iface_name), method, body)
 }
 
-fn get_prop(conn: &Connection, dest: &str, path: &str, iface: &str, prop: &str) -> Option<OwnedValue> {
+fn get_prop(
+    conn: &Connection,
+    dest: &str,
+    path: &str,
+    iface: &str,
+    prop: &str,
+) -> Option<OwnedValue> {
     let iface_name: InterfaceName = DBUS_PROPERTIES.try_into().ok()?;
     let dest_name: BusName = dest.try_into().ok()?;
     let obj_path: ObjectPath = path.try_into().ok()?;
-    conn.call_method(Some(dest_name), obj_path, Some(iface_name), "Get", &(iface, prop))
-        .ok()
-        .and_then(|r| r.body().deserialize::<OwnedValue>().ok())
+    conn.call_method(
+        Some(dest_name),
+        obj_path,
+        Some(iface_name),
+        "Get",
+        &(iface, prop),
+    )
+    .ok()
+    .and_then(|r| r.body().deserialize::<OwnedValue>().ok())
 }
 
 fn get_name(conn: &Connection, dest: &str, path: &str) -> String {
@@ -56,15 +68,33 @@ fn get_state(conn: &Connection, dest: &str, path: &str) -> Vec<u32> {
 
 fn role_name(id: u32) -> &'static str {
     match id {
-        1 => "alert", 2 => "animation", 7 => "check_box",
-        11 => "dialog", 14 => "document_frame", 15 => "drawing_area",
-        16 => "file_chooser", 18 => "filler", 22 => "frame",
-        25 => "application", 28 => "label", 30 => "list",
-        31 => "list_item", 34 => "menu_bar", 36 => "menu_item",
-        38 => "option_pane", 39 => "page_tab", 40 => "page_tab_list",
-        41 => "panel", 46 => "push_button", 50 => "scroll_bar",
-        56 => "separator", 62 => "status_bar", 64 => "text",
-        68 => "tool_bar", 69 => "tool_tip", 87 => "window",
+        1 => "alert",
+        2 => "animation",
+        7 => "check_box",
+        11 => "dialog",
+        14 => "document_frame",
+        15 => "drawing_area",
+        16 => "file_chooser",
+        18 => "filler",
+        22 => "frame",
+        25 => "application",
+        28 => "label",
+        30 => "list",
+        31 => "list_item",
+        34 => "menu_bar",
+        36 => "menu_item",
+        38 => "option_pane",
+        39 => "page_tab",
+        40 => "page_tab_list",
+        41 => "panel",
+        46 => "push_button",
+        50 => "scroll_bar",
+        56 => "separator",
+        62 => "status_bar",
+        64 => "text",
+        68 => "tool_bar",
+        69 => "tool_tip",
+        87 => "window",
         _ => "unknown",
     }
 }
@@ -72,7 +102,9 @@ fn role_name(id: u32) -> &'static str {
 fn has_state(states: &[u32], bit: u32) -> bool {
     let word = (bit / 32) as usize;
     let bit_in_word = bit % 32;
-    states.get(word).map_or(false, |w| (w >> bit_in_word) & 1 == 1)
+    states
+        .get(word)
+        .map_or(false, |w| (w >> bit_in_word) & 1 == 1)
 }
 
 fn main() {
@@ -88,7 +120,14 @@ fn main() {
     };
 
     // Get AT-SPI bus address
-    let reply = match dbus_call(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", &()) {
+    let reply = match dbus_call(
+        &session,
+        "org.a11y.Bus",
+        "/org/a11y/bus",
+        "org.a11y.Bus",
+        "GetAddress",
+        &(),
+    ) {
         Ok(r) => r,
         Err(e) => {
             println!("ERROR: Cannot get AT-SPI bus address: {}", e);
@@ -121,15 +160,26 @@ fn main() {
         .and_then(|v| v.try_into().ok())
         .unwrap_or(0);
 
-    println!("Desktop root has {} children (applications):\n", child_count);
+    println!(
+        "Desktop root has {} children (applications):\n",
+        child_count
+    );
 
     for i in 0..child_count {
-        let reply = match dbus_call(&conn, registry, root, ATSPI_ACCESSIBLE, "GetChildAtIndex", &(i,)) {
+        let reply = match dbus_call(
+            &conn,
+            registry,
+            root,
+            ATSPI_ACCESSIBLE,
+            "GetChildAtIndex",
+            &(i,),
+        ) {
             Ok(r) => r,
             Err(_) => continue,
         };
 
-        let deserialized: Result<(String, zbus::zvariant::OwnedObjectPath), _> = reply.body().deserialize();
+        let deserialized: Result<(String, zbus::zvariant::OwnedObjectPath), _> =
+            reply.body().deserialize();
         let (bus_name, path) = match deserialized {
             Ok(v) => (v.0, v.1.to_string()),
             Err(_) => continue,
@@ -145,7 +195,12 @@ fn main() {
 
         println!(
             "  App[{}]: name={:?} role={}({}) states=[{:?}] bus={}",
-            i, app_name, role_name(app_role), app_role, app_state, bus_name
+            i,
+            app_name,
+            role_name(app_role),
+            app_role,
+            app_state,
+            bus_name
         );
 
         // Get windows for this app
@@ -154,12 +209,20 @@ fn main() {
             .unwrap_or(0);
 
         for j in 0..win_count.min(5) {
-            let reply = match dbus_call(&conn, &bus_name, &path, ATSPI_ACCESSIBLE, "GetChildAtIndex", &(j,)) {
+            let reply = match dbus_call(
+                &conn,
+                &bus_name,
+                &path,
+                ATSPI_ACCESSIBLE,
+                "GetChildAtIndex",
+                &(j,),
+            ) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
 
-            let deserialized: Result<(String, zbus::zvariant::OwnedObjectPath), _> = reply.body().deserialize();
+            let deserialized: Result<(String, zbus::zvariant::OwnedObjectPath), _> =
+                reply.body().deserialize();
             let (wbus, wpath) = match deserialized {
                 Ok(v) => (v.0, v.1.to_string()),
                 Err(_) => continue,

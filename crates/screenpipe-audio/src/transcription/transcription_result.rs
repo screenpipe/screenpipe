@@ -92,10 +92,7 @@ pub async fn process_transcription_result(
     let speaker_id = Some(speaker.id);
     let mut chunk_id: Option<i64> = None;
 
-    debug!(
-        "device {} inserting audio chunk",
-        result.input.device
-    );
+    debug!("device {} inserting audio chunk", result.input.device);
     if let Some(id) = previous_transcript_id {
         if let Some(prev_transcript) = previous_transcript {
             // Apply PII removal to previous transcript update as well

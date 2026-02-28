@@ -135,10 +135,7 @@ pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "ffmpeg audio decode failed: {}",
-            stderr
-        ));
+        return Err(anyhow::anyhow!("ffmpeg audio decode failed: {}", stderr));
     }
 
     let samples: Vec<f32> = bytemuck::cast_slice(&output.stdout).to_vec();

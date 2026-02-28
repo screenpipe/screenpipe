@@ -2,8 +2,7 @@ use clap::ValueEnum;
 use clap::{Parser, Subcommand, ValueHint};
 use screenpipe_audio::{
     audio_manager::builder::TranscriptionMode,
-    core::engine::AudioTranscriptionEngine as CoreAudioTranscriptionEngine,
-    vad::VadEngineEnum,
+    core::engine::AudioTranscriptionEngine as CoreAudioTranscriptionEngine, vad::VadEngineEnum,
 };
 use screenpipe_core::Language;
 use std::path::PathBuf;

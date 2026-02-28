@@ -37,9 +37,9 @@ pub trait VadEngine: Send {
 }
 
 const FRAME_HISTORY: usize = 10; // Number of frames to consider for decision
-// On Windows, WASAPI captures at lower levels than CoreAudio, so Silero
-// returns lower speech probabilities for the same audio. Use a relaxed
-// threshold to avoid missing speech entirely.
+                                 // On Windows, WASAPI captures at lower levels than CoreAudio, so Silero
+                                 // returns lower speech probabilities for the same audio. Use a relaxed
+                                 // threshold to avoid missing speech entirely.
 #[cfg(target_os = "windows")]
 const SPEECH_THRESHOLD: f32 = 0.3;
 #[cfg(not(target_os = "windows"))]
@@ -63,4 +63,3 @@ pub async fn create_vad_engine(engine: VadEngineEnum) -> anyhow::Result<Box<dyn 
 
 unsafe impl Send for WebRtcVad {}
 unsafe impl Send for SileroVad {}
-

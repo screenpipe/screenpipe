@@ -31,7 +31,10 @@ pub async fn process_with_whisper(
     // and its internal no_speech_prob is unreliable (reports 0.0 on pure silence).
     let rms = (audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32).sqrt();
     if rms < MIN_RMS_ENERGY {
-        debug!("audio RMS {:.6} below threshold {:.6}, skipping whisper", rms, MIN_RMS_ENERGY);
+        debug!(
+            "audio RMS {:.6} below threshold {:.6}, skipping whisper",
+            rms, MIN_RMS_ENERGY
+        );
         return Ok(String::new());
     }
 

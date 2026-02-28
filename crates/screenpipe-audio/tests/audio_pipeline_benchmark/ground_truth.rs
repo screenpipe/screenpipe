@@ -97,7 +97,12 @@ impl ScenarioManifest {
 
     /// Generate per-second speech labels for a 30s chunk starting at `chunk_start_sec`.
     /// Returns (has_any_speech, speech_ratio) based on ground truth.
-    pub fn chunk_ground_truth(&self, channel: &str, chunk_start_sec: f64, chunk_duration_sec: f64) -> (bool, f64) {
+    pub fn chunk_ground_truth(
+        &self,
+        channel: &str,
+        chunk_start_sec: f64,
+        chunk_duration_sec: f64,
+    ) -> (bool, f64) {
         let labels = self.per_second_labels(channel);
         let start = chunk_start_sec.floor() as usize;
         let end = ((chunk_start_sec + chunk_duration_sec).ceil() as usize).min(labels.len());
@@ -134,24 +139,27 @@ mod tests {
 
     #[test]
     fn test_per_second_labels() {
-        let manifest = synthetic_manifest(10.0, vec![
-            SpeechSegment {
-                start_secs: 2.0,
-                end_secs: 5.0,
-                speaker_id: Some("alice".to_string()),
-                text: Some("hello".to_string()),
-                channel: "mic".to_string(),
-                is_speech: true,
-            },
-            SpeechSegment {
-                start_secs: 7.0,
-                end_secs: 9.0,
-                speaker_id: Some("bob".to_string()),
-                text: Some("hi".to_string()),
-                channel: "system".to_string(),
-                is_speech: true,
-            },
-        ]);
+        let manifest = synthetic_manifest(
+            10.0,
+            vec![
+                SpeechSegment {
+                    start_secs: 2.0,
+                    end_secs: 5.0,
+                    speaker_id: Some("alice".to_string()),
+                    text: Some("hello".to_string()),
+                    channel: "mic".to_string(),
+                    is_speech: true,
+                },
+                SpeechSegment {
+                    start_secs: 7.0,
+                    end_secs: 9.0,
+                    speaker_id: Some("bob".to_string()),
+                    text: Some("hi".to_string()),
+                    channel: "system".to_string(),
+                    is_speech: true,
+                },
+            ],
+        );
 
         let mic_labels = manifest.per_second_labels("mic");
         assert_eq!(mic_labels.len(), 10);
@@ -170,16 +178,17 @@ mod tests {
 
     #[test]
     fn test_chunk_ground_truth() {
-        let manifest = synthetic_manifest(60.0, vec![
-            SpeechSegment {
+        let manifest = synthetic_manifest(
+            60.0,
+            vec![SpeechSegment {
                 start_secs: 10.0,
                 end_secs: 20.0,
                 speaker_id: None,
                 text: None,
                 channel: "mic".to_string(),
                 is_speech: true,
-            },
-        ]);
+            }],
+        );
 
         // Chunk 0-30s: 10s of speech in 30s = 33%
         let (has_speech, ratio) = manifest.chunk_ground_truth("mic", 0.0, 30.0);

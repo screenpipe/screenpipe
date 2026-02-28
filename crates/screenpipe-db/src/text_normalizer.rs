@@ -220,10 +220,7 @@ mod tests {
     #[test]
     fn test_expand_filters_short_parts() {
         // Single char parts should be filtered out
-        assert_eq!(
-            expand_search_query("iPhone"),
-            r#"("iPhone"* OR "Phone"*)"#
-        );
+        assert_eq!(expand_search_query("iPhone"), r#"("iPhone"* OR "Phone"*)"#);
     }
 
     #[test]

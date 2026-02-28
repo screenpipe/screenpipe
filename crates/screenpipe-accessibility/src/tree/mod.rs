@@ -5,12 +5,12 @@
 //! Accessibility tree walker — periodically walks the macOS AX tree of the focused window,
 //! extracts all visible text, and stores it in the accessibility table.
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 
 pub mod cache;
 

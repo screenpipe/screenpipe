@@ -445,10 +445,19 @@ impl SCServer {
                 axum::routing::post(sync_api::sync_pipes_pull),
             )
             // Cloud Archive API routes
-            .route("/archive/init", axum::routing::post(crate::archive::archive_init))
-            .route("/archive/configure", axum::routing::post(crate::archive::archive_configure))
+            .route(
+                "/archive/init",
+                axum::routing::post(crate::archive::archive_init),
+            )
+            .route(
+                "/archive/configure",
+                axum::routing::post(crate::archive::archive_configure),
+            )
             .route("/archive/status", get(crate::archive::archive_status))
-            .route("/archive/run", axum::routing::post(crate::archive::archive_run))
+            .route(
+                "/archive/run",
+                axum::routing::post(crate::archive::archive_run),
+            )
             // Vision status endpoint (not in OpenAPI spec to avoid oasgen registration issues)
             .route("/vision/status", get(api_vision_status))
             // Vision pipeline metrics (not in OpenAPI spec)
@@ -519,7 +528,10 @@ impl SCServer {
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
-            .route("/frames/export", get(handle_video_export_ws).post(handle_video_export_post))
+            .route(
+                "/frames/export",
+                get(handle_video_export_ws).post(handle_video_export_post),
+            )
             .with_state(app_state.clone())
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {

@@ -5,7 +5,9 @@
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
 use crate::transcription::whisper::batch::process_with_whisper;
-use crate::transcription::whisper::model::{create_whisper_context_parameters, download_whisper_model};
+use crate::transcription::whisper::model::{
+    create_whisper_context_parameters, download_whisper_model,
+};
 use crate::transcription::VocabularyEntry;
 use anyhow::{anyhow, Result};
 use screenpipe_core::Language;
@@ -232,10 +234,7 @@ impl TranscriptionSession {
                 {
                     Ok(t) => Ok(t),
                     Err(e) => {
-                        error!(
-                            "device: {}, deepgram transcription failed: {:?}",
-                            device, e
-                        );
+                        error!("device: {}, deepgram transcription failed: {:?}", device, e);
                         Err(e)
                     }
                 }
@@ -243,9 +242,7 @@ impl TranscriptionSession {
 
             #[cfg(feature = "qwen3-asr")]
             Self::Qwen3Asr { model, .. } => {
-                let mut engine = model
-                    .lock()
-                    .map_err(|e| anyhow!("stt model lock: {}", e))?;
+                let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
                 let opts = audiopipe::TranscribeOptions::default();
                 let result = engine
                     .transcribe_with_sample_rate(audio, sample_rate, opts)
@@ -272,9 +269,7 @@ impl TranscriptionSession {
                 languages,
                 vocabulary,
                 ..
-            } => {
-                process_with_whisper(audio, languages.clone(), state, vocabulary).await
-            }
+            } => process_with_whisper(audio, languages.clone(), state, vocabulary).await,
         };
 
         // Post-processing: apply vocabulary replacements

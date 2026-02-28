@@ -314,12 +314,15 @@ impl MeetingDetector {
     }
 
     /// Returns the first active calendar event (2+ attendees, overlapping now).
-    fn active_calendar_event<'a>(&self, state: &'a MeetingState, now: i64) -> Option<&'a CalendarSignal> {
-        state.calendar_events.iter().find(|e| {
-            e.attendees.len() >= 2
-                && e.start_epoch_ms <= now
-                && e.end_epoch_ms > now
-        })
+    fn active_calendar_event<'a>(
+        &self,
+        state: &'a MeetingState,
+        now: i64,
+    ) -> Option<&'a CalendarSignal> {
+        state
+            .calendar_events
+            .iter()
+            .find(|e| e.attendees.len() >= 2 && e.start_epoch_ms <= now && e.end_epoch_ms > now)
     }
 
     /// Returns calendar context (title + attendees) for the active calendar meeting, if any.
@@ -327,10 +330,11 @@ impl MeetingDetector {
     pub async fn calendar_context(&self) -> Option<CalendarContext> {
         let state = self.state.read().await;
         let now = now_millis();
-        self.active_calendar_event(&state, now).map(|e| CalendarContext {
-            title: e.title.clone(),
-            attendees: e.attendees.clone(),
-        })
+        self.active_calendar_event(&state, now)
+            .map(|e| CalendarContext {
+                title: e.title.clone(),
+                attendees: e.attendees.clone(),
+            })
     }
 
     /// Returns whether a meeting is currently detected (atomic, lock-free for app path).
@@ -792,7 +796,8 @@ mod tests {
         let detector = MeetingDetector::new();
 
         // Set up a recent app meeting so audio detection is allowed (Fix 3)
-        detector.last_app_meeting_epoch_ms
+        detector
+            .last_app_meeting_epoch_ms
             .store(now_millis(), Ordering::Relaxed);
 
         // Simulate audio meeting start
@@ -810,10 +815,7 @@ mod tests {
             .store(expired_ts, Ordering::Relaxed);
 
         // This call transitions from active→inactive, starting cooldown
-        assert!(
-            !detector.is_in_meeting(),
-            "audio meeting should have ended"
-        );
+        assert!(!detector.is_in_meeting(), "audio meeting should have ended");
 
         // Now new speech arrives — should NOT re-trigger due to cooldown
         detector.on_audio_activity(&DeviceType::Input, true);
@@ -835,8 +837,7 @@ mod tests {
             .store(now_millis(), Ordering::Relaxed);
 
         // Simulate a cooldown that already expired
-        let expired_cooldown =
-            now_millis() - AUDIO_MEETING_COOLDOWN.as_millis() as i64 - 1000;
+        let expired_cooldown = now_millis() - AUDIO_MEETING_COOLDOWN.as_millis() as i64 - 1000;
         detector
             .last_audio_meeting_ended_ts
             .store(expired_cooldown, Ordering::Relaxed);
@@ -879,7 +880,9 @@ mod tests {
         let detector = MeetingDetector::new();
 
         // No meeting app ever focused — simulate normal desktop usage
-        detector.on_app_switch("Arc", Some("YouTube - Watch cool video")).await;
+        detector
+            .on_app_switch("Arc", Some("YouTube - Watch cool video"))
+            .await;
 
         // Both input and output have "speech" (really just noise)
         detector.on_audio_activity(&DeviceType::Input, true);
@@ -913,8 +916,12 @@ mod tests {
 
         // Round 1: audio meeting expires (45s pass)
         let expired = now_millis() - AUDIO_CALL_DETECTION_WINDOW.as_millis() as i64 - 1000;
-        detector.last_input_speech_ts.store(expired, Ordering::Relaxed);
-        detector.last_output_speech_ts.store(expired, Ordering::Relaxed);
+        detector
+            .last_input_speech_ts
+            .store(expired, Ordering::Relaxed);
+        detector
+            .last_output_speech_ts
+            .store(expired, Ordering::Relaxed);
         assert!(!detector.is_in_meeting(), "round 1: meeting should end");
 
         // Round 2: new audio arrives immediately — should be blocked by cooldown
@@ -957,9 +964,7 @@ mod tests {
             .contains("meet.google.com"));
 
         // Step 2: Tab to VS Code
-        detector
-            .on_app_switch("Visual Studio Code", None)
-            .await;
+        detector.on_app_switch("Visual Studio Code", None).await;
         assert!(
             detector.is_in_meeting(),
             "grace period should keep meeting active"
@@ -987,8 +992,12 @@ mod tests {
 
         // Step 5: Audio expires
         let expired = now_millis() - AUDIO_CALL_DETECTION_WINDOW.as_millis() as i64 - 1000;
-        detector.last_input_speech_ts.store(expired, Ordering::Relaxed);
-        detector.last_output_speech_ts.store(expired, Ordering::Relaxed);
+        detector
+            .last_input_speech_ts
+            .store(expired, Ordering::Relaxed);
+        detector
+            .last_output_speech_ts
+            .store(expired, Ordering::Relaxed);
         assert!(!detector.is_in_meeting(), "audio meeting should end");
 
         // Step 6: New audio during cooldown
@@ -1053,8 +1062,8 @@ mod tests {
         CalendarSignal {
             event_id: "future-event".to_string(),
             title: title.to_string(),
-            start_epoch_ms: now + 3_600_000,  // starts in 1 hour
-            end_epoch_ms: now + 7_200_000,     // ends in 2 hours
+            start_epoch_ms: now + 3_600_000, // starts in 1 hour
+            end_epoch_ms: now + 7_200_000,   // ends in 2 hours
             attendees: attendees.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -1065,8 +1074,8 @@ mod tests {
         CalendarSignal {
             event_id: "past-event".to_string(),
             title: title.to_string(),
-            start_epoch_ms: now - 7_200_000,  // started 2 hours ago
-            end_epoch_ms: now - 3_600_000,     // ended 1 hour ago
+            start_epoch_ms: now - 7_200_000, // started 2 hours ago
+            end_epoch_ms: now - 3_600_000,   // ended 1 hour ago
             attendees: attendees.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -1154,7 +1163,10 @@ mod tests {
     async fn test_calendar_provides_context() {
         let detector = MeetingDetector::new();
 
-        let events = vec![calendar_now("Sprint Planning", &["Alice", "Bob", "Charlie"])];
+        let events = vec![calendar_now(
+            "Sprint Planning",
+            &["Alice", "Bob", "Charlie"],
+        )];
         detector.on_calendar_events(events).await;
         detector.on_audio_activity(&DeviceType::Input, true);
 
@@ -1170,7 +1182,10 @@ mod tests {
         let detector = MeetingDetector::new();
 
         // No app meeting was ever detected — last_app_meeting_epoch_ms is 0
-        assert_eq!(detector.last_app_meeting_epoch_ms.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            detector.last_app_meeting_epoch_ms.load(Ordering::Relaxed),
+            0
+        );
 
         // Calendar + audio should still trigger (unlike audio-only which needs recent app)
         let events = vec![calendar_now("1:1 with Bob", &["Alice", "Bob"])];
@@ -1218,7 +1233,9 @@ mod tests {
 
         // Audio goes silent (expired timestamp)
         let expired = now_millis() - AUDIO_CALL_DETECTION_WINDOW.as_millis() as i64 - 1000;
-        detector.last_output_speech_ts.store(expired, Ordering::Relaxed);
+        detector
+            .last_output_speech_ts
+            .store(expired, Ordering::Relaxed);
 
         // Refresh the calendar meeting state
         detector.check_grace_period().await;

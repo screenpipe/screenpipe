@@ -824,8 +824,7 @@ pub async fn run_frame_ocr(
     let ocr_result = tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "macos")]
         {
-            let (text, json, _confidence) =
-                screenpipe_vision::perform_ocr_apple(&image, &[]);
+            let (text, json, _confidence) = screenpipe_vision::perform_ocr_apple(&image, &[]);
             (text, json)
         }
         #[cfg(not(target_os = "macos"))]
@@ -847,7 +846,10 @@ pub async fn run_frame_ocr(
             .insert_ocr_text(frame_id, &ocr_text, &ocr_text_json, engine)
             .await
         {
-            debug!("Failed to cache on-demand OCR for frame {}: {}", frame_id, e);
+            debug!(
+                "Failed to cache on-demand OCR for frame {}: {}",
+                frame_id, e
+            );
         }
     }
 

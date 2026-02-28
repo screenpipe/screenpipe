@@ -9,7 +9,7 @@
 //! redundancy compensates for VAD threshold issues.
 
 use crate::audio_fixtures::{self, SAMPLE_RATE};
-use crate::ground_truth::{ScenarioManifest, SpeechSegment, synthetic_manifest};
+use crate::ground_truth::{synthetic_manifest, ScenarioManifest, SpeechSegment};
 use crate::metrics::{self, CrossDeviceResult};
 
 use screenpipe_audio::utils::audio::normalize_v2;
@@ -208,8 +208,8 @@ async fn cross_device_coverage_synthetic() {
 #[tokio::test]
 #[ignore]
 async fn cross_device_coverage_dataset() {
-    let dataset_dir = std::env::var("AUDIO_BENCHMARK_DATASET")
-        .expect("set AUDIO_BENCHMARK_DATASET");
+    let dataset_dir =
+        std::env::var("AUDIO_BENCHMARK_DATASET").expect("set AUDIO_BENCHMARK_DATASET");
     let dataset_path = std::path::Path::new(&dataset_dir);
 
     println!("\n--- Cross-Device Coverage: Full Dataset ---");
@@ -243,8 +243,12 @@ async fn cross_device_coverage_dataset() {
         let mic_audio = audio_fixtures::load_wav(&mic_path).unwrap();
         let sys_audio = audio_fixtures::load_wav(&sys_path).unwrap();
 
-        results_current.push(analyze_cross_device(&mic_audio, &sys_audio, &manifest, 0.05, &mut vad));
-        results_proposed.push(analyze_cross_device(&mic_audio, &sys_audio, &manifest, 0.02, &mut vad));
+        results_current.push(analyze_cross_device(
+            &mic_audio, &sys_audio, &manifest, 0.05, &mut vad,
+        ));
+        results_proposed.push(analyze_cross_device(
+            &mic_audio, &sys_audio, &manifest, 0.02, &mut vad,
+        ));
     }
 
     println!("\n  Current threshold (0.05):");

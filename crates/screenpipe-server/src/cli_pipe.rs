@@ -155,24 +155,12 @@ pub fn handle_model_command(command: &ModelCommand) -> anyhow::Result<()> {
                 println!("no AI presets configured");
                 println!("\nhint: add presets in the app under Settings → AI");
             } else {
-                println!(
-                    "  {:<20} {:<15} {:<30} DEFAULT",
-                    "ID", "PROVIDER", "MODEL"
-                );
+                println!("  {:<20} {:<15} {:<30} DEFAULT", "ID", "PROVIDER", "MODEL");
                 println!("  {}", "-".repeat(72));
                 for p in &presets {
-                    let id = p
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let provider = p
-                        .get("provider")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let model = p
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let provider = p.get("provider").and_then(|v| v.as_str()).unwrap_or("?");
+                    let model = p.get("model").and_then(|v| v.as_str()).unwrap_or("?");
                     let is_default = p
                         .get("defaultPreset")
                         .and_then(|v| v.as_bool())

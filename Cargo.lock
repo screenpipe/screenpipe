@@ -5678,7 +5678,6 @@ version = "0.3.159"
 dependencies = [
  "anyhow",
  "async-trait",
- "audiopipe",
  "axum",
  "base64 0.22.1",
  "bincode",

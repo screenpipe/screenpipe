@@ -706,7 +706,12 @@ pub struct ElementRow {
 
 impl From<ElementRow> for Element {
     fn from(row: ElementRow) -> Self {
-        let bounds = match (row.left_bound, row.top_bound, row.width_bound, row.height_bound) {
+        let bounds = match (
+            row.left_bound,
+            row.top_bound,
+            row.width_bound,
+            row.height_bound,
+        ) {
             (Some(l), Some(t), Some(w), Some(h)) => Some(ElementBounds {
                 left: l,
                 top: t,

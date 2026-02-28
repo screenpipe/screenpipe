@@ -38,12 +38,18 @@ fn main() {
                         match etype {
                             "click" => {
                                 if let screenpipe_accessibility::events::EventData::Click {
-                                    x, y, button, ..
+                                    x,
+                                    y,
+                                    button,
+                                    ..
                                 } = &event.data
                                 {
                                     println!(
                                         "  [{:>5.1}s] CLICK button={} at ({}, {})",
-                                        start.elapsed().as_secs_f64(), button, x, y
+                                        start.elapsed().as_secs_f64(),
+                                        button,
+                                        x,
+                                        y
                                     );
                                 }
                             }
@@ -57,10 +63,7 @@ fn main() {
                                 }
                             }
                             "scroll" => {
-                                println!(
-                                    "  [{:>5.1}s] SCROLL",
-                                    start.elapsed().as_secs_f64()
-                                );
+                                println!("  [{:>5.1}s] SCROLL", start.elapsed().as_secs_f64());
                             }
                             "clipboard" => {
                                 if let Some(text) = event.text_content() {
@@ -73,12 +76,15 @@ fn main() {
                             }
                             "app_switch" => {
                                 if let screenpipe_accessibility::events::EventData::AppSwitch {
-                                    name, pid
+                                    name,
+                                    pid,
                                 } = &event.data
                                 {
                                     println!(
                                         "  [{:>5.1}s] APP_SWITCH: {:?} (pid={})",
-                                        start.elapsed().as_secs_f64(), name, pid
+                                        start.elapsed().as_secs_f64(),
+                                        name,
+                                        pid
                                     );
                                 }
                             }

@@ -282,8 +282,10 @@ fn build_input_stream(
             .build_input_stream(
                 &config.config(),
                 move |data: &[i32], _: &_| {
-                    let f32_data: Vec<f32> =
-                        data.iter().map(|&s| (s as f64 / 2147483648.0) as f32).collect();
+                    let f32_data: Vec<f32> = data
+                        .iter()
+                        .map(|&s| (s as f64 / 2147483648.0) as f32)
+                        .collect();
                     let mono = audio_to_mono(&f32_data, channels);
                     let _ = tx.send(mono);
                 },

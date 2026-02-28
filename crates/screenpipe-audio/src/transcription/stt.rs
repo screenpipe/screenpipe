@@ -54,8 +54,7 @@ pub async fn process_audio_input(
         capture_timestamp: audio.capture_timestamp,
     };
 
-    let is_output_device =
-        audio.device.device_type == crate::core::device::DeviceType::Output;
+    let is_output_device = audio.device.device_type == crate::core::device::DeviceType::Output;
     let (mut segments, speech_ratio_ok, speech_ratio) = prepare_segments(
         &audio_data,
         vad_engine,
@@ -93,14 +92,8 @@ pub async fn process_audio_input(
 
     while let Some(segment) = segments.recv().await {
         let path = file_path.clone();
-        let transcription_result = run_stt(
-            segment,
-            audio.device.clone(),
-            path,
-            timestamp,
-            session,
-        )
-        .await?;
+        let transcription_result =
+            run_stt(segment, audio.device.clone(), path, timestamp, session).await?;
 
         if output_sender.send(transcription_result).is_err() {
             break;

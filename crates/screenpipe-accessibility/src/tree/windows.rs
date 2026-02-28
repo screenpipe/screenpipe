@@ -345,7 +345,10 @@ fn extract_text_from_tree(
                 }
             }
         }
-    } else if ct.eq_ignore_ascii_case("Group") || ct.eq_ignore_ascii_case("Pane") || ct.eq_ignore_ascii_case("Custom") {
+    } else if ct.eq_ignore_ascii_case("Group")
+        || ct.eq_ignore_ascii_case("Pane")
+        || ct.eq_ignore_ascii_case("Custom")
+    {
         // Groups/Panes/Custom: extract if they have a name or value
         // Custom elements are common in Electron apps (web components mapped to UIA)
         if let Some(ref val) = node.value {

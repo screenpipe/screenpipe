@@ -270,9 +270,11 @@ pub async fn event_driven_capture_loop(
                     last_content_hash = result.content_hash;
                     last_db_write = Instant::now();
                     vision_metrics.record_capture();
-                    vision_metrics.record_db_write(Duration::from_millis(result.duration_ms as u64));
+                    vision_metrics
+                        .record_db_write(Duration::from_millis(result.duration_ms as u64));
                     if let Some(ref cache) = hot_frame_cache {
-                        push_to_hot_cache(cache, result, &device_name, &CaptureTrigger::Manual).await;
+                        push_to_hot_cache(cache, result, &device_name, &CaptureTrigger::Manual)
+                            .await;
                     }
                     info!(
                         "startup capture for monitor {}: frame_id={}, dur={}ms",
@@ -285,7 +287,10 @@ pub async fn event_driven_capture_loop(
             }
         }
     } else {
-        info!("screen is locked on startup, skipping initial capture for monitor {}", monitor_id);
+        info!(
+            "screen is locked on startup, skipping initial capture for monitor {}",
+            monitor_id
+        );
     }
 
     loop {
@@ -546,7 +551,9 @@ async fn do_capture(
                     if prev == new_hash && new_hash != 0 {
                         debug!(
                             "content dedup: skipping capture for monitor {} (hash={}, trigger={})",
-                            monitor_id, new_hash, trigger.as_str()
+                            monitor_id,
+                            new_hash,
+                            trigger.as_str()
                         );
                         return Ok(CaptureOutput {
                             result: None,
@@ -588,7 +595,10 @@ async fn do_capture(
             });
         } else if crate::sleep_monitor::screen_is_locked() {
             // Screen was marked locked but now a real app is focused — unlock
-            debug!("screen unlocked: app '{}' detected on monitor {}", app, monitor_id);
+            debug!(
+                "screen unlocked: app '{}' detected on monitor {}",
+                app, monitor_id
+            );
             crate::sleep_monitor::set_screen_locked(false);
         }
     } else if crate::sleep_monitor::screen_is_locked() {
@@ -623,9 +633,11 @@ async fn do_capture(
     let result = paired_capture(&ctx, tree_snapshot.as_ref()).await?;
     // Extract image from Arc for comparer reuse. Arc::try_unwrap succeeds
     // because paired_capture no longer retains a clone.
-    let image = Arc::try_unwrap(ctx.image)
-        .unwrap_or_else(|arc| (*arc).clone());
-    Ok(CaptureOutput { result: Some(result), image })
+    let image = Arc::try_unwrap(ctx.image).unwrap_or_else(|arc| (*arc).clone());
+    Ok(CaptureOutput {
+        result: Some(result),
+        image,
+    })
 }
 
 #[cfg(test)]

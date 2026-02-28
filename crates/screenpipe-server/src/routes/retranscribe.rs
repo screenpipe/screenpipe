@@ -95,7 +95,10 @@ pub async fn retranscribe_handler(
         .into_response();
     }
 
-    info!("retranscribe: found {} raw rows (may include dupes)", chunks.len());
+    info!(
+        "retranscribe: found {} raw rows (may include dupes)",
+        chunks.len()
+    );
 
     // 2. Get transcription config from audio manager
     let audio_manager = &state.audio_manager;
@@ -140,7 +143,10 @@ pub async fn retranscribe_handler(
     {
         Ok(e) => e,
         Err(e) => {
-            error!("failed to create transcription engine for retranscribe: {}", e);
+            error!(
+                "failed to create transcription engine for retranscribe: {}",
+                e
+            );
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to initialize transcription engine: {}", e),
@@ -193,10 +199,7 @@ pub async fn retranscribe_handler(
         };
 
         let device_name = chunk.device.as_deref().unwrap_or("unknown");
-        let transcription = match session
-            .transcribe(&samples, sample_rate, device_name)
-            .await
-        {
+        let transcription = match session.transcribe(&samples, sample_rate, device_name).await {
             Ok(text) => text,
             Err(e) => {
                 error!("STT failed for chunk {}: {}", chunk.id, e);
@@ -238,7 +241,11 @@ pub async fn retranscribe_handler(
         processed += 1;
     }
 
-    info!("retranscribe complete: {} chunks processed, {} transcription results", processed, results.len());
+    info!(
+        "retranscribe complete: {} chunks processed, {} transcription results",
+        processed,
+        results.len()
+    );
 
     let response = RetranscribeResponse {
         chunks_processed: processed,

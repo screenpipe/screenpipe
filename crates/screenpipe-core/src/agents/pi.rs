@@ -481,14 +481,18 @@ impl PiExecutor {
             // with stopReason "error".
             if llm_error.is_none() {
                 if let Ok(evt) = serde_json::from_str::<serde_json::Value>(&line) {
-                    let is_assistant = evt.get("message")
+                    let is_assistant = evt
+                        .get("message")
                         .and_then(|m| m.get("role"))
-                        .and_then(|r| r.as_str()) == Some("assistant");
-                    let stop_reason = evt.get("message")
+                        .and_then(|r| r.as_str())
+                        == Some("assistant");
+                    let stop_reason = evt
+                        .get("message")
                         .and_then(|m| m.get("stopReason"))
                         .and_then(|r| r.as_str());
                     if is_assistant && stop_reason == Some("error") {
-                        llm_error = evt.get("message")
+                        llm_error = evt
+                            .get("message")
                             .and_then(|m| m.get("errorMessage"))
                             .and_then(|e| e.as_str())
                             .map(|s| s.to_string());
@@ -890,7 +894,10 @@ fn build_async_command(path: &str) -> tokio::process::Command {
             }
         } else if path.ends_with(".cmd") || path.ends_with(".bat") {
             // Fallback: use cmd.exe /C (may mangle multi-line args)
-            warn!("could not resolve JS entry from {}, falling back to cmd.exe /C", path);
+            warn!(
+                "could not resolve JS entry from {}, falling back to cmd.exe /C",
+                path
+            );
             let mut c = tokio::process::Command::new("cmd.exe");
             c.args(["/C", path]);
             c

@@ -61,7 +61,10 @@ mod tests {
 
         assert_eq!(untranscribed.len(), 2);
         let ids: Vec<i64> = untranscribed.iter().map(|c| c.id).collect();
-        assert!(!ids.contains(&chunk1), "transcribed chunk should be excluded");
+        assert!(
+            !ids.contains(&chunk1),
+            "transcribed chunk should be excluded"
+        );
         assert!(ids.contains(&chunk2));
         assert!(ids.contains(&chunk3));
     }
@@ -134,13 +137,9 @@ mod tests {
         let ts2 = Utc::now() - Duration::minutes(20);
         let ts3 = Utc::now() - Duration::minutes(10);
 
-        db.insert_audio_chunk("first.mp4", Some(ts1))
-            .await
-            .unwrap();
+        db.insert_audio_chunk("first.mp4", Some(ts1)).await.unwrap();
         // Insert out of order
-        db.insert_audio_chunk("third.mp4", Some(ts3))
-            .await
-            .unwrap();
+        db.insert_audio_chunk("third.mp4", Some(ts3)).await.unwrap();
         db.insert_audio_chunk("second.mp4", Some(ts2))
             .await
             .unwrap();

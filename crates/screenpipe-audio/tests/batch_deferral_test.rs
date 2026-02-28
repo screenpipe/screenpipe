@@ -25,10 +25,16 @@ mod tests {
     #[tokio::test]
     async fn meeting_starts_when_meeting_app_focused() {
         let detector = MeetingDetector::new();
-        assert!(!detector.is_in_meeting(), "should not be in meeting initially");
+        assert!(
+            !detector.is_in_meeting(),
+            "should not be in meeting initially"
+        );
 
         detector.on_app_switch("zoom.us", None).await;
-        assert!(detector.is_in_meeting(), "should be in meeting after focusing Zoom");
+        assert!(
+            detector.is_in_meeting(),
+            "should be in meeting after focusing Zoom"
+        );
     }
 
     #[tokio::test]
@@ -281,10 +287,7 @@ mod tests {
 
         // Without a meeting detector, we can't defer — must transcribe
         let should_transcribe = meeting_detector.is_none();
-        assert!(
-            should_transcribe,
-            "no meeting detector → always transcribe"
-        );
+        assert!(should_transcribe, "no meeting detector → always transcribe");
     }
 
     // ---------------------------------------------------------------

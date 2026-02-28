@@ -17,7 +17,6 @@ oasgen = { workspace = true }
 screenpipe-events = { path = "../screenpipe-events" }
 screenpipe-vision = { path = "../screenpipe-vision" }
 screenpipe-audio = { path = "../screenpipe-audio" }
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "c92760e", default-features = false, features = ["qwen3-asr-ggml"], optional = true }
 screenpipe-core = { path = "../screenpipe-core", features = ["security", "cloud-sync"] }
 screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-accessibility = { path = "../screenpipe-accessibility", features = ["db"] }
@@ -124,7 +123,7 @@ vulkan = ["screenpipe-audio/vulkan"]
 debug-console = ["console-subscriber"]
 pulseaudio = ["screenpipe-audio/pulseaudio"]
 apple-intelligence = ["dep:screenpipe-apple-intelligence"]
-qwen3-asr = ["screenpipe-audio/qwen3-asr", "dep:audiopipe"]
+qwen3-asr = ["screenpipe-audio/qwen3-asr"]
 coreml = ["screenpipe-audio/coreml"]
 directml = ["screenpipe-audio/directml"]
 

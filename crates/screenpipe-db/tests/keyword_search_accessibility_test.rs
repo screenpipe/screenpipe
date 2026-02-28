@@ -225,13 +225,8 @@ mod tests {
         let db = setup_test_db().await;
 
         // Frame with accessibility text
-        insert_frame_with_accessibility(
-            &db,
-            "VSCode",
-            "editor",
-            "refactoring the phoenix module",
-        )
-        .await;
+        insert_frame_with_accessibility(&db, "VSCode", "editor", "refactoring the phoenix module")
+            .await;
 
         let results = db
             .search_for_grouping(

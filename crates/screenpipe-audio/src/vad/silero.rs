@@ -13,8 +13,7 @@ use vad_rs::{Vad, VadStatus};
 use crate::vad::FRAME_HISTORY;
 
 use super::{
-    VadEngine, DOWNLOADING, MODEL_PATH, SILENCE_THRESHOLD, SPEECH_FRAME_THRESHOLD,
-    SPEECH_THRESHOLD,
+    VadEngine, DOWNLOADING, MODEL_PATH, SILENCE_THRESHOLD, SPEECH_FRAME_THRESHOLD, SPEECH_THRESHOLD,
 };
 
 pub struct SileroVad {
@@ -158,11 +157,7 @@ impl SileroVad {
         }
 
         let threshold = self.effective_speech_threshold();
-        let speech_frames = self
-            .prob_history
-            .iter()
-            .filter(|&&p| p > threshold)
-            .count();
+        let speech_frames = self.prob_history.iter().filter(|&&p| p > threshold).count();
         let silence_frames = self
             .prob_history
             .iter()
@@ -177,7 +172,6 @@ impl SileroVad {
             VadStatus::Unknown
         }
     }
-
 }
 
 impl VadEngine for SileroVad {

@@ -304,7 +304,11 @@ fn find_input_devices() -> (Vec<evdev::Device>, Vec<evdev::Device>) {
         if let Some(keys) = supported {
             // Has letter keys → keyboard
             if keys.contains(evdev::KeyCode::KEY_A) && keys.contains(evdev::KeyCode::KEY_Z) {
-                debug!("Found keyboard: {} ({})", device.name().unwrap_or("?"), name);
+                debug!(
+                    "Found keyboard: {} ({})",
+                    device.name().unwrap_or("?"),
+                    name
+                );
                 keyboards.push(device);
                 continue;
             }
@@ -786,8 +790,7 @@ fn monitor_mice(
                             let app_name = current_app.lock().clone();
                             let window_title = current_window.lock().clone();
 
-                            let mut ui_event =
-                                UiEvent::click(Utc::now(), t, x, y, button, 1, 0);
+                            let mut ui_event = UiEvent::click(Utc::now(), t, x, y, button, 1, 0);
                             ui_event.app_name = app_name;
                             ui_event.window_title = window_title;
                             let _ = tx.try_send(ui_event);
@@ -1372,9 +1375,15 @@ mod tests {
     fn test_evdev_key_to_char() {
         assert_eq!(evdev_key_to_char(evdev::KeyCode::KEY_A, false), Some('a'));
         assert_eq!(evdev_key_to_char(evdev::KeyCode::KEY_A, true), Some('A'));
-        assert_eq!(evdev_key_to_char(evdev::KeyCode::KEY_SPACE, false), Some(' '));
+        assert_eq!(
+            evdev_key_to_char(evdev::KeyCode::KEY_SPACE, false),
+            Some(' ')
+        );
         assert_eq!(evdev_key_to_char(evdev::KeyCode::KEY_1, true), Some('!'));
-        assert_eq!(evdev_key_to_char(evdev::KeyCode::KEY_ENTER, false), Some('\n'));
+        assert_eq!(
+            evdev_key_to_char(evdev::KeyCode::KEY_ENTER, false),
+            Some('\n')
+        );
     }
 
     #[test]
