@@ -5,7 +5,7 @@
 use crate::commands::show_main_window;
 use crate::health::{get_recording_info, get_recording_status, DeviceKind, RecordingStatus};
 use crate::recording::RecordingState;
-use crate::store::{get_store, OnboardingStore};
+use crate::store::{get_store, OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window_api::ShowRewindWindow;
 use anyhow::Result;
@@ -61,6 +61,8 @@ struct MenuState {
     has_permission_issue: bool,
     /// Device names + active status for change detection
     devices: Vec<(String, bool)>,
+    disable_audio: bool,
+    disable_vision: bool,
 }
 
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
@@ -370,10 +372,27 @@ fn create_dynamic_menu(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if !dev_mode {
+        // Read current audio/screen settings
+        let (audio_disabled, vision_disabled) = SettingsStore::get(app)
+            .ok()
+            .flatten()
+            .map(|s| (s.disable_audio, s.disable_vision))
+            .unwrap_or((false, false));
+        let screen_label = if vision_disabled {
+            "Screen recording: Off"
+        } else {
+            "Screen recording: On"
+        };
+        let audio_label = if audio_disabled {
+            "Audio recording: Off"
+        } else {
+            "Audio recording: On"
+        };
+
         menu_builder = menu_builder
             .item(&PredefinedMenuItem::separator(app)?)
-            .item(&MenuItemBuilder::with_id("start_recording", "Start recording").build(app)?)
-            .item(&MenuItemBuilder::with_id("stop_recording", "Stop recording").build(app)?);
+            .item(&MenuItemBuilder::with_id("toggle_screen", screen_label).build(app)?)
+            .item(&MenuItemBuilder::with_id("toggle_audio", audio_label).build(app)?);
     }
 
     // Help and quit
@@ -437,11 +456,62 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app.emit("tray-show-chat", ());
             });
         }
-        "start_recording" => {
-            let _ = app_handle.emit("shortcut-start-recording", ());
+        "toggle_screen" => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Toggle disable_vision in settings
+                let toggled = match SettingsStore::get(&app) {
+                    Ok(Some(mut settings)) => {
+                        settings.disable_vision = !settings.disable_vision;
+                        let new_state = settings.disable_vision;
+                        if let Err(e) = settings.save(&app) {
+                            error!("failed to save settings after screen toggle: {}", e);
+                            return;
+                        }
+                        info!("screen recording toggled: disable_vision={}", new_state);
+                        true
+                    }
+                    _ => {
+                        error!("failed to read settings for screen toggle");
+                        false
+                    }
+                };
+
+                if toggled {
+                    let _ = app.emit("shortcut-stop-recording", ());
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let _ = app.emit("shortcut-start-recording", ());
+                }
+            });
         }
-        "stop_recording" => {
-            let _ = app_handle.emit("shortcut-stop-recording", ());
+        "toggle_audio" => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Toggle disable_audio in settings
+                let toggled = match SettingsStore::get(&app) {
+                    Ok(Some(mut settings)) => {
+                        settings.disable_audio = !settings.disable_audio;
+                        let new_state = settings.disable_audio;
+                        if let Err(e) = settings.save(&app) {
+                            error!("failed to save settings after audio toggle: {}", e);
+                            return;
+                        }
+                        info!("audio recording toggled: disable_audio={}", new_state);
+                        true
+                    }
+                    _ => {
+                        error!("failed to read settings for audio toggle");
+                        false
+                    }
+                };
+
+                if toggled {
+                    // Restart recording: stop then start after a short delay
+                    let _ = app.emit("shortcut-stop-recording", ());
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let _ = app.emit("shortcut-start-recording", ());
+                }
+            });
         }
         "fix_permissions" => {
             let app = app_handle.clone();
@@ -593,6 +663,14 @@ async fn update_menu_if_needed(
     };
 
     let recording_info = get_recording_info();
+
+    // Read audio/vision settings for menu state and tray title
+    let (disable_audio, disable_vision) = SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|s| (s.disable_audio, s.disable_vision))
+        .unwrap_or((false, false));
+
     let new_state = MenuState {
         shortcuts: get_current_shortcuts(app)?,
         recording_status: Some(recording_info.status),
@@ -603,6 +681,8 @@ async fn update_menu_if_needed(
             .iter()
             .map(|d| (d.name.clone(), d.active))
             .collect(),
+        disable_audio,
+        disable_vision,
     };
 
     // Compare with last state (poison-safe: run handler must not panic)
@@ -624,6 +704,9 @@ async fn update_menu_if_needed(
         let app_for_thread = app.clone();
         let update_item = update_item.clone();
         let has_perm_issue = new_state.has_permission_issue;
+        let recording_status = new_state.recording_status;
+        let da = new_state.disable_audio;
+        let dv = new_state.disable_vision;
         let _ = app.run_on_main_thread(move || {
             if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if let Some(tray) = app_for_thread.tray_by_id("screenpipe_main") {
@@ -643,6 +726,26 @@ async fn update_menu_if_needed(
                         "screenpipe"
                     };
                     let _ = tray.set_tooltip(Some(tooltip));
+
+                    // Set tray title with emoji status indicators (macOS only)
+                    #[cfg(target_os = "macos")]
+                    {
+                        let is_recording = matches!(
+                            recording_status,
+                            Some(RecordingStatus::Recording) | Some(RecordingStatus::Starting)
+                        );
+                        let title = if is_recording {
+                            match (dv, da) {
+                                (false, false) => " \u{1F5A5}\u{1F3A4}", // 🖥🎤
+                                (false, true)  => " \u{1F5A5}",          // 🖥
+                                (true, false)  => " \u{1F3A4}",          // 🎤
+                                (true, true)   => "",                     // both disabled
+                            }
+                        } else {
+                            ""
+                        };
+                        let _ = tray.set_title(Some(title));
+                    }
                 }
             })) {
                 let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
