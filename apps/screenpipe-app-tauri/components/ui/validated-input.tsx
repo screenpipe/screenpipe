@@ -35,6 +35,8 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
     maxLength,
     minLength,
     className,
+    onBlur,
+    onKeyDown,
     ...props
   }, ref) => {
     const [value, setValue] = useState(props.value?.toString() || "");
@@ -138,7 +140,13 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
             {...props}
             value={value}
             onChange={handleChange}
-            onBlur={() => setIsTouched(true)}
+            onBlur={(e) => {
+              setIsTouched(true);
+              onBlur?.(e);
+            }}
+            onKeyDown={(e) => {
+              onKeyDown?.(e);
+            }}
             className={cn(
               getInputVariant(),
               showValidationIcon && "pr-10",

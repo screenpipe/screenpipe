@@ -562,14 +562,16 @@ export function RecordingSettings() {
     }
   }, [allOpenAIModels, filterTranscriptionModels]);
 
-  // Fetch models when OpenAI Compatible is selected and endpoint changes
+  // Fetch models when OpenAI Compatible is selected - manually triggered
+  // (not on every keystroke - only on focus change or enter key)
   useEffect(() => {
     if (settings.audioTranscriptionEngine === 'openai-compatible') {
-      const endpoint = settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080';
       const apiKey = settings.openaiCompatibleApiKey;
+      // Use default endpoint if not set
+      const endpoint = settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080';
       fetchOpenAIModels(endpoint, apiKey);
     }
-  }, [settings.audioTranscriptionEngine, settings.openaiCompatibleEndpoint, settings.openaiCompatibleApiKey, fetchOpenAIModels]);
+  }, [settings.audioTranscriptionEngine, settings.openaiCompatibleApiKey, fetchOpenAIModels]);
 
   // Run transcription diagnostics (endpoint → auth → models → transcription test)
   const runTranscriptionDiagnostics = useCallback(async () => {
@@ -1400,6 +1402,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   label=""
                   value={settings.openaiCompatibleEndpoint || "http://127.0.0.1:8080"}
                   onChange={(value: string) => handleSettingsChange({ openaiCompatibleEndpoint: value }, true)}
+                  onBlur={() => fetchOpenAIModels(settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080', settings.openaiCompatibleApiKey)}
+                  onKeyDown={(e: React.KeyboardEvent) => {
+                    if (e.key === 'Enter') {
+                      fetchOpenAIModels(settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080', settings.openaiCompatibleApiKey);
+                    }
+                  }}
                   placeholder="API Endpoint (e.g., http://127.0.0.1:8080)"
                   className="h-7 text-xs"
                 />

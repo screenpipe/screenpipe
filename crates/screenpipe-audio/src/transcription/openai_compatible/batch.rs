@@ -8,6 +8,7 @@ use reqwest::{multipart, Client, Response};
 use screenpipe_core::Language;
 use serde_json::Value;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -17,6 +18,7 @@ use tracing::{debug, error, info};
 /// audio transcriptions API format (e.g., mlx-audio, llama.cpp, vLLM, etc.)
 ///
 /// # Arguments
+/// * `client` - Optional shared reqwest client for connection pooling. If None, creates a new client.
 /// * `endpoint` - Base URL of the API (e.g., "http://127.0.0.1:8080")
 /// * `api_key` - Optional API key for authentication
 /// * `model` - Model ID to use for transcription
@@ -27,6 +29,7 @@ use tracing::{debug, error, info};
 /// * `vocabulary` - Optional vocabulary/hotwords passed as `prompt` field
 ///   (used by VibeVoice-ASR `--context`, Whisper `--initial-prompt`, etc.)
 pub async fn transcribe_with_openai_compatible(
+    client: Option<Arc<Client>>,
     endpoint: &str,
     api_key: Option<&str>,
     model: &str,
@@ -44,9 +47,16 @@ pub async fn transcribe_with_openai_compatible(
     // Create a WAV file in memory
     let wav_data = create_wav_file(audio_data, sample_rate)?;
 
-    // Build the request (with timeout to prevent hanging on unresponsive endpoints)
-    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
-
+    // Use provided client or create a new one
+    let client = match client {
+        Some(c) => c,
+        None => Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(55))
+                .build()?
+        ),
+    };
+    
     // Build multipart form
     let mut form = multipart::Form::new()
         .text("model", model.to_string())

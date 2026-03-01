@@ -18,6 +18,7 @@ use crate::utils::audio::resample;
 use crate::utils::ffmpeg::{get_new_file_path, write_audio_to_file};
 use crate::vad::VadEngine;
 use anyhow::Result;
+use reqwest::Client;
 use screenpipe_core::Language;
 use std::path::PathBuf;
 use std::{sync::Arc, sync::Mutex as StdMutex};
@@ -50,11 +51,23 @@ impl AlternateStt for audiopipe::Model {
 }
 
 /// Configuration for OpenAI Compatible transcription engine
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OpenAICompatibleConfig {
     pub endpoint: String,
     pub api_key: Option<String>,
     pub model: String,
+    pub client: Option<Arc<Client>>,
+}
+
+impl Default for OpenAICompatibleConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://127.0.0.1:8080".to_string(),
+            api_key: None,
+            model: "whisper-1".to_string(),
+            client: None,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -146,11 +159,13 @@ pub async fn stt(
             endpoint: "http://127.0.0.1:8080".to_string(),
             api_key: None,
             model: "whisper-1".to_string(),
+            client: None,
         });
 
         // Collect vocabulary words for the prompt/context field
         let vocab_words: Vec<String> = vocabulary.iter().map(|v| v.word.clone()).collect();
         match transcribe_with_openai_compatible(
+            config.client.clone(),
             &config.endpoint,
             config.api_key.as_deref(),
             &config.model,

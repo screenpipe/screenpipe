@@ -7,6 +7,7 @@ pub mod utils;
 pub mod vad;
 pub use transcription::stt::stt;
 pub use transcription::{AudioInput, TranscriptionResult};
+pub use transcription::engine::TranscriptionEngine;
 pub mod speaker;
 pub mod transcription;
 pub use transcription::stt::OpenAICompatibleConfig;

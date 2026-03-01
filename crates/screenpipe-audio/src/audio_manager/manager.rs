@@ -418,6 +418,7 @@ impl AudioManager {
         let engine = TranscriptionEngine::new(
             audio_transcription_engine.clone(),
             deepgram_api_key.clone(),
+            openai_compatible_config.clone(),
             languages.clone(),
             vocabulary.clone(),
         )

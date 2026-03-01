@@ -165,6 +165,7 @@ pub async fn start_embedded_server(
             api_key: config.openai_compatible_api_key.clone(),
             model: config.openai_compatible_model.clone()
                 .unwrap_or_else(|| "whisper-1".to_string()),
+            client: None, // Will be created in TranscriptionEngine::new() if needed
         })
     } else {
         None

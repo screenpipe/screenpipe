@@ -4,12 +4,14 @@
 
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
+use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
 use crate::transcription::whisper::batch::process_with_whisper;
 use crate::transcription::whisper::model::{
     create_whisper_context_parameters, download_whisper_model,
 };
 use crate::transcription::VocabularyEntry;
 use anyhow::{anyhow, Result};
+use reqwest::Client;
 use screenpipe_core::Language;
 use std::sync::Arc;
 #[cfg(feature = "qwen3-asr")]
@@ -37,6 +39,14 @@ pub enum TranscriptionEngine {
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     },
+    OpenAICompatible {
+        endpoint: String,
+        api_key: Option<String>,
+        model: String,
+        client: Arc<Client>,
+        languages: Vec<Language>,
+        vocabulary: Vec<VocabularyEntry>,
+    },
     Disabled,
 }
 
@@ -45,6 +55,7 @@ impl TranscriptionEngine {
     pub async fn new(
         config: Arc<AudioTranscriptionEngine>,
         deepgram_api_key: Option<String>,
+        openai_compatible_config: Option<crate::transcription::stt::OpenAICompatibleConfig>,
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     ) -> Result<Self> {
@@ -55,6 +66,26 @@ impl TranscriptionEngine {
                 let api_key = deepgram_api_key.unwrap_or_default();
                 Ok(Self::Deepgram {
                     api_key,
+                    languages,
+                    vocabulary,
+                })
+            }
+
+            AudioTranscriptionEngine::OpenAICompatible => {
+                let oc_config = openai_compatible_config.unwrap_or_default();
+                let client = oc_config.client.unwrap_or_else(|| {
+                    Arc::new(
+                        Client::builder()
+                            .timeout(std::time::Duration::from_secs(55))
+                            .build()
+                            .expect("failed to create reqwest client"),
+                    )
+                });
+                Ok(Self::OpenAICompatible {
+                    endpoint: oc_config.endpoint,
+                    api_key: oc_config.api_key,
+                    model: oc_config.model,
+                    client,
                     languages,
                     vocabulary,
                 })
@@ -158,6 +189,21 @@ impl TranscriptionEngine {
                 languages: languages.clone(),
                 vocabulary: vocabulary.clone(),
             }),
+            Self::OpenAICompatible {
+                endpoint,
+                api_key,
+                model,
+                client,
+                languages,
+                vocabulary,
+            } => Ok(TranscriptionSession::OpenAICompatible {
+                endpoint: endpoint.clone(),
+                api_key: api_key.clone(),
+                model: model.clone(),
+                client: client.clone(),
+                languages: languages.clone(),
+                vocabulary: vocabulary.clone(),
+            }),
             Self::Disabled => Ok(TranscriptionSession::Disabled),
         }
     }
@@ -177,6 +223,7 @@ impl TranscriptionEngine {
             #[cfg(feature = "qwen3-asr")]
             Self::Qwen3Asr { .. } => AudioTranscriptionEngine::Qwen3Asr,
             Self::Deepgram { .. } => AudioTranscriptionEngine::Deepgram,
+            Self::OpenAICompatible { .. } => AudioTranscriptionEngine::OpenAICompatible,
             Self::Disabled => AudioTranscriptionEngine::Disabled,
         }
     }
@@ -200,6 +247,14 @@ pub enum TranscriptionSession {
     },
     Deepgram {
         api_key: String,
+        languages: Vec<Language>,
+        vocabulary: Vec<VocabularyEntry>,
+    },
+    OpenAICompatible {
+        endpoint: String,
+        api_key: Option<String>,
+        model: String,
+        client: Arc<Client>,
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     },
@@ -270,6 +325,40 @@ impl TranscriptionSession {
                 vocabulary,
                 ..
             } => process_with_whisper(audio, languages.clone(), state, vocabulary).await,
+
+            Self::OpenAICompatible {
+                endpoint,
+                api_key,
+                model,
+                client,
+                languages,
+                vocabulary,
+            } => {
+                // Convert vocabulary entries to words for the API
+                let vocab_words: Vec<String> = vocabulary.iter().map(|v| v.word.clone()).collect();
+                match transcribe_with_openai_compatible(
+                    Some(client.clone()),
+                    endpoint,
+                    api_key.as_deref(),
+                    model,
+                    audio,
+                    device,
+                    sample_rate,
+                    languages.clone(),
+                    &vocab_words,
+                )
+                .await
+                {
+                    Ok(t) => Ok(t),
+                    Err(e) => {
+                        error!(
+                            "device: {}, openai compatible transcription failed: {:?}",
+                            device, e
+                        );
+                        Err(e)
+                    }
+                }
+            }
         };
 
         // Post-processing: apply vocabulary replacements
@@ -280,6 +369,7 @@ impl TranscriptionSession {
                     #[cfg(feature = "qwen3-asr")]
                     Self::Qwen3Asr { vocabulary, .. } => vocabulary,
                     Self::Deepgram { vocabulary, .. } => vocabulary,
+                    Self::OpenAICompatible { vocabulary, .. } => vocabulary,
                     Self::Disabled => return Ok(text),
                 };
                 for entry in vocab {
