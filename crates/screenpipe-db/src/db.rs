@@ -2837,30 +2837,10 @@ impl DatabaseManager {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        // Check if ui_monitoring table exists first
-        let latest_ui: Option<(DateTime<Utc>,)> = match sqlx::query_scalar::<_, i32>(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_monitoring'",
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        {
-            Some(_) => {
-                sqlx::query_as(
-                    "SELECT timestamp FROM ui_monitoring WHERE timestamp IS NOT NULL AND timestamp != '' ORDER BY timestamp DESC LIMIT 1",
-                )
-                .fetch_optional(&self.pool)
-                .await?
-            }
-            None => {
-                debug!("ui_monitoring table does not exist");
-                None
-            }
-        };
-
         Ok((
             latest_frame.map(|f| f.0),
             latest_audio.map(|a| a.0),
-            latest_ui.map(|u| u.0),
+            None,
         ))
     }
 
@@ -3307,84 +3287,6 @@ impl DatabaseManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn search_ui_monitoring(
-        &self,
-        query: &str,
-        app_name: Option<&str>,
-        window_name: Option<&str>,
-        start_time: Option<DateTime<Utc>>,
-        end_time: Option<DateTime<Utc>>,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<UiContent>, sqlx::Error> {
-        // combine search aspects into single fts query
-        let mut fts_parts = Vec::new();
-        if !query.is_empty() {
-            fts_parts.push(crate::text_normalizer::sanitize_fts5_query(query));
-        }
-        if let Some(app) = app_name {
-            fts_parts.push(format!("app:\"{}\"", app.replace('"', "")));
-        }
-        if let Some(window) = window_name {
-            fts_parts.push(format!("window:\"{}\"", window.replace('"', "")));
-        }
-        let combined_query = fts_parts.join(" ");
-
-        let base_sql = if combined_query.is_empty() {
-            "ui_monitoring"
-        } else {
-            "ui_monitoring_fts JOIN ui_monitoring ON ui_monitoring.id = ui_monitoring_fts.rowid"
-        };
-
-        let where_clause = if combined_query.is_empty() {
-            "WHERE 1=1"
-        } else {
-            "WHERE ui_monitoring_fts MATCH ?1"
-        };
-
-        let sql = format!(
-            r#"
-            SELECT
-                ui_monitoring.id,
-                ui_monitoring.text_output,
-                ui_monitoring.timestamp,
-                ui_monitoring.app as app_name,
-                ui_monitoring.window as window_name,
-                ui_monitoring.initial_traversal_at,
-                video_chunks.file_path,
-                frames.offset_index,
-                frames.name as frame_name,
-                frames.browser_url
-            FROM {}
-            LEFT JOIN frames ON
-                frames.timestamp BETWEEN
-                    datetime(ui_monitoring.timestamp, '-1 seconds')
-                    AND datetime(ui_monitoring.timestamp, '+1 seconds')
-            LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
-            {}
-                AND (?2 IS NULL OR ui_monitoring.timestamp >= ?2)
-                AND (?3 IS NULL OR ui_monitoring.timestamp <= ?3)
-            GROUP BY ui_monitoring.id
-            ORDER BY ui_monitoring.timestamp DESC
-            LIMIT ?4 OFFSET ?5
-            "#,
-            base_sql, where_clause
-        );
-
-        sqlx::query_as(&sql)
-            .bind(if combined_query.is_empty() {
-                "*".to_owned()
-            } else {
-                combined_query
-            })
-            .bind(start_time)
-            .bind(end_time)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-    }
-
     /// Search accessibility table for accessibility tree text.
     /// This reads from the `accessibility` table (written by the tree walker).
     #[allow(clippy::too_many_arguments)]
@@ -3576,41 +3478,6 @@ impl DatabaseManager {
             .await?;
 
         Ok(rows)
-    }
-
-    // Add tags to UI monitoring entry
-    pub async fn add_tags_to_ui_monitoring(
-        &self,
-        ui_monitoring_id: i64,
-        tag_ids: &[i64],
-    ) -> Result<(), anyhow::Error> {
-        for tag_id in tag_ids {
-            sqlx::query(
-                "INSERT OR IGNORE INTO ui_monitoring_tags (ui_monitoring_id, tag_id) VALUES (?, ?)",
-            )
-            .bind(ui_monitoring_id)
-            .bind(tag_id)
-            .execute(&self.pool)
-            .await?;
-        }
-        Ok(())
-    }
-
-    // Get tags for UI monitoring entry
-    pub async fn get_ui_monitoring_tags(
-        &self,
-        ui_monitoring_id: i64,
-    ) -> Result<Vec<String>, anyhow::Error> {
-        let tags = sqlx::query_as::<_, (String,)>(
-            "SELECT t.name FROM tags t
-             JOIN ui_monitoring_tags ut ON t.id = ut.tag_id
-             WHERE ut.ui_monitoring_id = ?",
-        )
-        .bind(ui_monitoring_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(tags.into_iter().map(|t| t.0).collect())
     }
 
     pub async fn get_audio_chunks_for_speaker(
