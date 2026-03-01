@@ -119,10 +119,10 @@ pub async fn stop_screenpipe(
 
     let mut handle_guard = state.handle.lock().await;
     if let Some(handle) = handle_guard.take() {
-        handle.shutdown();
+        handle.shutdown_and_wait().await;
         state.is_starting.store(false, Ordering::SeqCst);
         // Wait for the old server to fully release port 3030
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         info!("Screenpipe server stopped");
         Ok(())
     } else {
@@ -204,8 +204,7 @@ pub async fn spawn_screenpipe(
             }
             // Shut it down — we're restarting intentionally
             if let Some(handle) = handle_guard.take() {
-                handle.shutdown();
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                handle.shutdown_and_wait().await;
             }
         }
     }

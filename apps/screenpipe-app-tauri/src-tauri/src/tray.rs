@@ -540,10 +540,10 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
                     let mut handle_guard = recording_state.handle.lock().await;
                     if let Some(handle) = handle_guard.take() {
-                        handle.shutdown();
-                        // Give the tree walker and other tasks time to notice the stop
-                        // signal and exit cleanly before we tear down the runtime.
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        // Wait for UI recorder tasks to actually finish before exiting.
+                        // This prevents the crash where the runtime tears down while
+                        // the tree walker is still mid-DB-write.
+                        handle.shutdown_and_wait().await;
                         info!("Screenpipe recording stopped successfully");
                     } else {
                         debug!("No recording running to stop");

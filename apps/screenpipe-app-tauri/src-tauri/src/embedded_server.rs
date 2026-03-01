@@ -42,6 +42,31 @@ impl EmbeddedServerHandle {
         }
         let _ = self.shutdown_tx.send(());
     }
+
+    /// Signal shutdown AND wait for the UI recorder tasks to finish.
+    /// This prevents the crash where the runtime is torn down while
+    /// the tree walker or event processor is still running.
+    pub async fn shutdown_and_wait(mut self) {
+        info!("Shutting down embedded screenpipe server (waiting for tasks)");
+        // Signal stop first
+        if let Some(ref ui_handle) = self.ui_recorder_handle {
+            ui_handle.stop();
+        }
+        let _ = self.shutdown_tx.send(());
+
+        // Now wait for UI recorder tasks to actually finish
+        if let Some(ui_handle) = self.ui_recorder_handle.take() {
+            info!("Waiting for UI recorder tasks to finish...");
+            // Timeout so we don't hang forever if a task is stuck
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                ui_handle.join(),
+            ).await {
+                Ok(()) => info!("UI recorder tasks finished cleanly"),
+                Err(_) => warn!("UI recorder tasks did not finish within 5s, proceeding with exit"),
+            }
+        }
+    }
 }
 
 /// Start the embedded screenpipe server
