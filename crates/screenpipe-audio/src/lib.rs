@@ -10,7 +10,7 @@ pub use transcription::{AudioInput, TranscriptionResult};
 pub use transcription::engine::TranscriptionEngine;
 pub mod speaker;
 pub mod transcription;
-pub use transcription::stt::OpenAICompatibleConfig;
+pub use transcription::stt::{OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL, OPENAI_COMPATIBLE_TIMEOUT_SECS};
 pub use utils::audio::pcm_decode;
 pub use utils::audio::resample;
 pub mod audio_manager;

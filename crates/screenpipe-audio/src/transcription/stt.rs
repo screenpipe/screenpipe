@@ -50,6 +50,15 @@ impl AlternateStt for audiopipe::Model {
     }
 }
 
+/// Default endpoint for OpenAI-compatible transcription servers.
+pub const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT: &str = "http://127.0.0.1:8080";
+
+/// Default model name for OpenAI-compatible transcription.
+pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "whisper-1";
+
+/// Timeout for OpenAI-compatible transcription requests.
+pub const OPENAI_COMPATIBLE_TIMEOUT_SECS: u64 = 30;
+
 /// Configuration for OpenAI Compatible transcription engine
 #[derive(Clone, Debug)]
 pub struct OpenAICompatibleConfig {
@@ -62,10 +71,29 @@ pub struct OpenAICompatibleConfig {
 impl Default for OpenAICompatibleConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://127.0.0.1:8080".to_string(),
+            endpoint: DEFAULT_OPENAI_COMPATIBLE_ENDPOINT.to_string(),
             api_key: None,
-            model: "whisper-1".to_string(),
+            model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
             client: None,
+        }
+    }
+}
+
+impl OpenAICompatibleConfig {
+    /// Returns a shared reqwest client, creating one if not already set.
+    /// This ensures connection pooling across calls using the same config.
+    pub fn get_or_create_client(&mut self) -> Arc<Client> {
+        if let Some(ref client) = self.client {
+            client.clone()
+        } else {
+            let client = Arc::new(
+                Client::builder()
+                    .timeout(std::time::Duration::from_secs(OPENAI_COMPATIBLE_TIMEOUT_SECS))
+                    .build()
+                    .expect("failed to create reqwest client"),
+            );
+            self.client = Some(client.clone());
+            client
         }
     }
 }
@@ -155,17 +183,13 @@ pub async fn stt(
         }
     } else if audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible.into() {
         // OpenAI Compatible implementation
-        let config = openai_compatible_config.unwrap_or_else(|| OpenAICompatibleConfig {
-            endpoint: "http://127.0.0.1:8080".to_string(),
-            api_key: None,
-            model: "whisper-1".to_string(),
-            client: None,
-        });
+        let mut config = openai_compatible_config.unwrap_or_default();
+        let client = config.get_or_create_client();
 
         // Collect vocabulary words for the prompt/context field
         let vocab_words: Vec<String> = vocabulary.iter().map(|v| v.word.clone()).collect();
         match transcribe_with_openai_compatible(
-            config.client.clone(),
+            Some(client),
             &config.endpoint,
             config.api_key.as_deref(),
             &config.model,

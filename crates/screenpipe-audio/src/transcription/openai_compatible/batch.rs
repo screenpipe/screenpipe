@@ -9,8 +9,9 @@ use screenpipe_core::Language;
 use serde_json::Value;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, error, info};
+
+use crate::transcription::stt::OPENAI_COMPATIBLE_TIMEOUT_SECS;
 
 /// Transcribe audio using an OpenAI-compatible API endpoint.
 ///
@@ -52,11 +53,10 @@ pub async fn transcribe_with_openai_compatible(
         Some(c) => c,
         None => Arc::new(
             Client::builder()
-                .timeout(Duration::from_secs(55))
-                .build()?
+                .timeout(std::time::Duration::from_secs(OPENAI_COMPATIBLE_TIMEOUT_SECS))
+                .build()?,
         ),
     };
-    
     // Build multipart form
     let mut form = multipart::Form::new()
         .text("model", model.to_string())

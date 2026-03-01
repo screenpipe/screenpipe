@@ -72,15 +72,8 @@ impl TranscriptionEngine {
             }
 
             AudioTranscriptionEngine::OpenAICompatible => {
-                let oc_config = openai_compatible_config.unwrap_or_default();
-                let client = oc_config.client.unwrap_or_else(|| {
-                    Arc::new(
-                        Client::builder()
-                            .timeout(std::time::Duration::from_secs(55))
-                            .build()
-                            .expect("failed to create reqwest client"),
-                    )
-                });
+                let mut oc_config = openai_compatible_config.unwrap_or_default();
+                let client = oc_config.get_or_create_client();
                 Ok(Self::OpenAICompatible {
                     endpoint: oc_config.endpoint,
                     api_key: oc_config.api_key,

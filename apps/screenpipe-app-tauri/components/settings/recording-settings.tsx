@@ -4,6 +4,8 @@
 
 "use client";
 
+const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
+
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Label } from "@/components/ui/label";
 import {
@@ -568,7 +570,7 @@ export function RecordingSettings() {
     if (settings.audioTranscriptionEngine === 'openai-compatible') {
       const apiKey = settings.openaiCompatibleApiKey;
       // Use default endpoint if not set
-      const endpoint = settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080';
+      const endpoint = settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
       fetchOpenAIModels(endpoint, apiKey);
     }
   }, [settings.audioTranscriptionEngine, settings.openaiCompatibleApiKey, fetchOpenAIModels]);
@@ -588,7 +590,7 @@ export function RecordingSettings() {
     });
     setTxDiagnosticsOpen(true);
 
-    const endpoint = settings.openaiCompatibleEndpoint || "http://127.0.0.1:8080";
+    const endpoint = settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
     const apiKey = settings.openaiCompatibleApiKey;
 
     const headers: Record<string, string> = {};
@@ -1400,12 +1402,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <ValidatedInput
                   id="openaiCompatibleEndpoint"
                   label=""
-                  value={settings.openaiCompatibleEndpoint || "http://127.0.0.1:8080"}
+                  value={settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT}
                   onChange={(value: string) => handleSettingsChange({ openaiCompatibleEndpoint: value }, true)}
-                  onBlur={() => fetchOpenAIModels(settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080', settings.openaiCompatibleApiKey)}
+                  onBlur={() => fetchOpenAIModels(settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, settings.openaiCompatibleApiKey)}
                   onKeyDown={(e: React.KeyboardEvent) => {
                     if (e.key === 'Enter') {
-                      fetchOpenAIModels(settings.openaiCompatibleEndpoint || 'http://127.0.0.1:8080', settings.openaiCompatibleApiKey);
+                      fetchOpenAIModels(settings.openaiCompatibleEndpoint || DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, settings.openaiCompatibleApiKey);
                     }
                   }}
                   placeholder="API Endpoint (e.g., http://127.0.0.1:8080)"

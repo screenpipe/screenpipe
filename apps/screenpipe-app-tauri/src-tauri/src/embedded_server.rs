@@ -155,17 +155,17 @@ pub async fn start_embedded_server(
 
     // Build audio manager
     use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-    use screenpipe_audio::transcription::stt::OpenAICompatibleConfig;
-    
+    use screenpipe_audio::transcription::stt::{OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL};
+
     // Build OpenAI Compatible config if applicable
     let openai_compatible_config = if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
         Some(OpenAICompatibleConfig {
             endpoint: config.openai_compatible_endpoint.clone()
-                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+                .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_ENDPOINT.to_string()),
             api_key: config.openai_compatible_api_key.clone(),
             model: config.openai_compatible_model.clone()
-                .unwrap_or_else(|| "whisper-1".to_string()),
-            client: None, // Will be created in TranscriptionEngine::new() if needed
+                .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string()),
+            client: None, // Will be created in TranscriptionEngine::new() via get_or_create_client()
         })
     } else {
         None
