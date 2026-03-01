@@ -5,6 +5,7 @@
 use crate::{window_api::ShowRewindWindow, store::OnboardingStore, updates::is_enterprise_build};
 use tauri::{Manager, Emitter};
 use tracing::{error, info, warn, debug};
+use std::fs;
 
 #[tauri::command]
 #[specta::specta]
@@ -1087,4 +1088,168 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         .set_text(text)
         .map_err(|e| format!("failed to set clipboard: {}", e))?;
     Ok(())
+}
+
+/// Delete all *.log files in ~/.screenpipe/. Returns bytes freed.
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_logs() -> Result<u64, String> {
+    let screenpipe_dir = dirs::home_dir()
+        .ok_or_else(|| "could not get home directory".to_string())?
+        .join(".screenpipe");
+
+    let mut freed: u64 = 0;
+    if let Ok(entries) = fs::read_dir(&screenpipe_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name.ends_with(".log") {
+                    if let Ok(meta) = fs::metadata(&path) {
+                        let size = meta.len();
+                        match fs::remove_file(&path) {
+                            Ok(_) => {
+                                info!("deleted log file: {} ({} bytes)", name, size);
+                                freed += size;
+                            }
+                            Err(e) => warn!("failed to delete log {}: {}", name, e),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    info!("clear_logs: freed {} bytes total", freed);
+    Ok(freed)
+}
+
+/// Delete recording files older than N days. Parses date from filename pattern
+/// *_YYYY-MM-DD_HH-MM-SS.ext in ~/.screenpipe/data/. Returns bytes freed.
+#[tauri::command(rename_all = "snake_case")]
+#[specta::specta]
+pub async fn delete_old_recordings(older_than_days: u32) -> Result<u64, String> {
+    let data_dir = dirs::home_dir()
+        .ok_or_else(|| "could not get home directory".to_string())?
+        .join(".screenpipe")
+        .join("data");
+
+    if !data_dir.exists() {
+        return Ok(0);
+    }
+
+    let cutoff = chrono::Local::now().date_naive()
+        - chrono::Duration::days(older_than_days as i64);
+
+    let date_re = regex::Regex::new(r"(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}-\d{2}\.\w+$")
+        .map_err(|e| e.to_string())?;
+
+    let mut freed: u64 = 0;
+
+    fn delete_old_in_dir(
+        dir: &std::path::Path,
+        cutoff: &chrono::NaiveDate,
+        date_re: &regex::Regex,
+        freed: &mut u64,
+    ) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    delete_old_in_dir(&path, cutoff, date_re, freed);
+                } else if path.is_file() {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if let Some(caps) = date_re.captures(&name) {
+                        if let Ok(file_date) = chrono::NaiveDate::parse_from_str(&caps[1], "%Y-%m-%d") {
+                            if file_date < *cutoff {
+                                if let Ok(meta) = fs::metadata(&path) {
+                                    let size = meta.len();
+                                    match fs::remove_file(&path) {
+                                        Ok(_) => {
+                                            info!("deleted old recording: {} ({} bytes)", name, size);
+                                            *freed += size;
+                                        }
+                                        Err(e) => warn!("failed to delete {}: {}", name, e),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    delete_old_in_dir(&data_dir, &cutoff, &date_re, &mut freed);
+    info!("delete_old_recordings: freed {} bytes total (older than {} days)", freed, older_than_days);
+    Ok(freed)
+}
+
+/// Delete all cached AI model files. Returns bytes freed.
+/// Removes pyannote models, silero VAD, and whisper HF cache.
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_model_cache() -> Result<u64, String> {
+    let mut freed: u64 = 0;
+
+    // Helper to delete all files in a directory (not the directory itself)
+    fn delete_dir_contents(dir: &std::path::Path, freed: &mut u64) {
+        if !dir.exists() {
+            return;
+        }
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(meta) = fs::metadata(&path) {
+                        let size = meta.len();
+                        match fs::remove_file(&path) {
+                            Ok(_) => {
+                                info!("deleted model: {} ({} bytes)", path.display(), size);
+                                *freed += size;
+                            }
+                            Err(e) => warn!("failed to delete {}: {}", path.display(), e),
+                        }
+                    }
+                } else if path.is_dir() {
+                    if let Ok(size) = crate::disk_usage::directory_size(&path) {
+                        let size = size.unwrap_or(0);
+                        match fs::remove_dir_all(&path) {
+                            Ok(_) => {
+                                info!("deleted model dir: {} ({} bytes)", path.display(), size);
+                                *freed += size;
+                            }
+                            Err(e) => warn!("failed to delete dir {}: {}", path.display(), e),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 1. Pyannote models
+    if let Ok(Some(cache_dir)) = crate::disk_usage::get_cache_dir() {
+        delete_dir_contents(&cache_dir.join("models"), &mut freed);
+        // 2. Silero VAD
+        delete_dir_contents(&cache_dir.join("vad"), &mut freed);
+    }
+
+    // 3. Whisper HF cache
+    if let Some(hub_dir) = crate::disk_usage::get_hf_hub_dir() {
+        let whisper_dir = hub_dir.join("models--ggerganov--whisper.cpp");
+        if whisper_dir.exists() {
+            if let Ok(size) = crate::disk_usage::directory_size(&whisper_dir) {
+                let size = size.unwrap_or(0);
+                match fs::remove_dir_all(&whisper_dir) {
+                    Ok(_) => {
+                        info!("deleted whisper HF cache: {} ({} bytes)", whisper_dir.display(), size);
+                        freed += size;
+                    }
+                    Err(e) => warn!("failed to delete whisper cache {}: {}", whisper_dir.display(), e),
+                }
+            }
+        }
+    }
+
+    info!("clear_model_cache: freed {} bytes total", freed);
+    Ok(freed)
 }

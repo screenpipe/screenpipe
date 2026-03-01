@@ -158,7 +158,7 @@ impl AnalyticsManager {
                     "disk_total_data_size": disk_usage.total_data_size,
                     "disk_total_cache_size": disk_usage.total_cache_size,
                     "disk_available_space": disk_usage.available_space,
-                    "disk_media_videos_size": disk_usage.media.videos_size,
+                    "disk_media_screen_size": disk_usage.media.screen_size,
                     "disk_media_audios_size": disk_usage.media.audios_size,
                 });
                 payload_props.extend(disk_data.as_object().unwrap().clone());

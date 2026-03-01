@@ -1224,6 +1224,10 @@ async fn main() {
                 // Browser logging
                 write_browser_log,
                 write_browser_logs,
+                // Disk usage cleanup commands
+                commands::clear_logs,
+                commands::delete_old_recordings,
+                commands::clear_model_cache,
                 // Commands from sync.rs
                 sync::get_sync_status,
                 sync::set_sync_enabled,
@@ -1496,6 +1500,10 @@ async fn main() {
             commands::rollback_to_version,
             // OCR commands
             commands::perform_ocr_on_image,
+            // Disk usage cleanup commands
+            commands::clear_logs,
+            commands::delete_old_recordings,
+            commands::clear_model_cache,
             // Voice training
             voice_training::train_voice,
             // Suggestions
