@@ -5723,6 +5723,7 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
+ "tower 0.4.13",
  "tower-http",
  "tracing",
  "tracing-appender",
