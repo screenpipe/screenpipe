@@ -412,4 +412,123 @@ mod tests {
             );
         }
     }
+
+    // ---------------------------------------------------------------
+    // 7. RMS threshold validation with real-world audio levels
+    //    Empirical data from macOS ScreenCaptureKit captures:
+    //      SCK silence:        RMS = 0.000000
+    //      SCK audio playing:  RMS = 0.002753
+    //      Loud output device: RMS = 0.061207
+    //      Mic ambient noise:  RMS = 0.004465
+    //    Output threshold: 0.001 (detects "any audio playing")
+    //    Input threshold:  0.05  (detects "someone speaking")
+    // ---------------------------------------------------------------
+
+    /// Mirrors the threshold logic in manager.rs audio receiver handler.
+    fn has_audio_activity(device_type: &DeviceType, rms: f32) -> bool {
+        match device_type {
+            DeviceType::Output => rms > 0.001,
+            DeviceType::Input => rms > 0.05,
+        }
+    }
+
+    #[test]
+    fn output_threshold_rejects_sck_silence() {
+        // Real SCK silence: RMS = 0.0
+        assert!(
+            !has_audio_activity(&DeviceType::Output, 0.0),
+            "SCK silence should not trigger activity"
+        );
+    }
+
+    #[test]
+    fn output_threshold_detects_sck_audio_playing() {
+        // Real SCK audio (YouTube): RMS = 0.002753
+        assert!(
+            has_audio_activity(&DeviceType::Output, 0.002753),
+            "SCK output with audio playing should trigger activity"
+        );
+    }
+
+    #[test]
+    fn output_threshold_detects_loud_output_device() {
+        // Real loud output device: RMS = 0.061
+        assert!(
+            has_audio_activity(&DeviceType::Output, 0.061),
+            "loud output device should trigger activity"
+        );
+    }
+
+    #[test]
+    fn input_threshold_rejects_ambient_noise() {
+        // Real mic ambient noise: RMS = 0.004
+        assert!(
+            !has_audio_activity(&DeviceType::Input, 0.004),
+            "mic ambient noise should not trigger activity"
+        );
+    }
+
+    #[test]
+    fn input_threshold_detects_speech() {
+        // Typical speech on mic: RMS ~0.08-0.3
+        assert!(
+            has_audio_activity(&DeviceType::Input, 0.08),
+            "mic speech should trigger activity"
+        );
+    }
+
+    #[tokio::test]
+    async fn sck_output_audio_triggers_deferral_in_batch_mode() {
+        // End-to-end: SCK output with YouTube audio → session detected → batch defers
+        let detector = MeetingDetector::new();
+
+        // Simulate the RMS check + on_audio_activity call as done in manager.rs
+        let sck_rms: f32 = 0.002753; // real measured value
+        let has_activity = has_audio_activity(&DeviceType::Output, sck_rms);
+        assert!(has_activity, "SCK output RMS should pass threshold");
+
+        detector.on_audio_activity(&DeviceType::Output, has_activity);
+
+        // Session should now be active
+        assert!(
+            detector.is_in_audio_session(),
+            "output audio session should be active after SCK audio"
+        );
+
+        // Batch mode should defer
+        let was = detector.is_in_audio_session();
+        detector.check_grace_period().await;
+        let now = detector.is_in_audio_session();
+        assert_eq!(
+            decide(true, was, now),
+            BatchDecision::Defer,
+            "batch mode should defer when SCK output has audio"
+        );
+    }
+
+    #[tokio::test]
+    async fn sck_silence_does_not_trigger_deferral() {
+        // End-to-end: SCK silence → no session → batch transcribes immediately
+        let detector = MeetingDetector::new();
+
+        let sck_silence_rms: f32 = 0.0;
+        let has_activity = has_audio_activity(&DeviceType::Output, sck_silence_rms);
+        assert!(!has_activity, "SCK silence should not pass threshold");
+
+        detector.on_audio_activity(&DeviceType::Output, has_activity);
+
+        assert!(
+            !detector.is_in_audio_session(),
+            "no session when output is silent"
+        );
+
+        let was = detector.is_in_audio_session();
+        detector.check_grace_period().await;
+        let now = detector.is_in_audio_session();
+        assert_eq!(
+            decide(true, was, now),
+            BatchDecision::TranscribeNow,
+            "batch should transcribe immediately when output is silent"
+        );
+    }
 }

@@ -307,7 +307,8 @@ export async function trackUsage(
 export async function getUsageStatus(
   env: Env,
   deviceId: string,
-  tier: UserTier
+  tier: UserTier,
+  userId?: string
 ): Promise<UsageStatus> {
   const today = getTodayUTC();
   const limits = TIER_CONFIG[tier];
@@ -337,6 +338,11 @@ export async function getUsageStatus(
     resets_at: getNextResetTime(),
     model_access: limits.allowedModels,
   };
+
+  // Fetch credit balance if user is logged in
+  if (userId) {
+    status.credits_balance = await getCreditBalance(env, userId);
+  }
 
   // Add upgrade options for non-subscribed users
   if (tier === 'anonymous') {

@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
-import { CreditCard, RefreshCw, Loader2, Sparkles, Zap } from "lucide-react";
+import { CreditCard, RefreshCw, Loader2, Sparkles, Zap, Wallet } from "lucide-react";
 
 const BILLING_API = "https://screenpi.pe/api/billing";
 const USAGE_API = "https://api.screenpi.pe/v1/usage";
@@ -25,6 +25,7 @@ interface UsageData {
   remaining: number;
   resets_at: string;
   model_access: string[];
+  credits_balance?: number;
 }
 
 interface BillingData {
@@ -302,7 +303,10 @@ export function BillingSection() {
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
                 {usage?.used_today ?? 0} / {usage?.limit_today ?? 0} queries
-                {usageRatio >= 1 && " — limit reached, using paid credits"}
+                {usageRatio >= 1 &&
+                  (usage?.credits_balance != null && usage.credits_balance > 0
+                    ? ` — using paid credits ($${usage.credits_balance.toFixed(2)} remaining)`
+                    : " — no credits remaining")}
               </p>
               {usage?.resets_at && (
                 <p className="text-xs text-muted-foreground">
@@ -313,6 +317,32 @@ export function BillingSection() {
           </>
         )}
       </Card>
+
+      {/* Credit balance */}
+      {usage?.credits_balance != null && (
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <Wallet className="h-4 w-4 text-muted-foreground" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-foreground">
+                  Credit balance
+                </p>
+                <p className="text-sm font-semibold text-foreground">
+                  ${usage.credits_balance.toFixed(2)}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {usageRatio >= 1 && usage.credits_balance > 0
+                  ? "daily limit reached — queries are using your credit balance"
+                  : usageRatio >= 1 && usage.credits_balance <= 0
+                    ? "no credits remaining — pipes using cloud AI will fail"
+                    : "credits are used after your daily free queries run out"}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Payment method */}
       {billing?.stripe_customer && (

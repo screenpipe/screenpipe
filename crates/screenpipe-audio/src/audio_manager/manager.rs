@@ -436,13 +436,21 @@ impl AudioManager {
             while let Ok(audio) = whisper_receiver.recv() {
                 debug!("received audio from device: {:?}", audio.device.name);
 
-                // Audio-based call detection: update meeting detector with speech activity
+                // Audio-based call detection: update meeting detector with speech activity.
+                // Output devices (SCK on macOS) produce much quieter audio than mic input,
+                // so we use a lower threshold. Empirical data from real SCK captures:
+                //   silence = 0.0, audio playing = 0.0028, loud output = 0.06
+                // For output we just need "is audio playing?" not "is someone speaking?"
                 if let Some(ref meeting) = meeting_detector {
                     let rms = {
                         let sum_sq: f32 = audio.data.iter().map(|&x| x * x).sum();
                         (sum_sq / audio.data.len() as f32).sqrt()
                     };
-                    meeting.on_audio_activity(&audio.device.device_type, rms > 0.05);
+                    let has_activity = match audio.device.device_type {
+                        crate::core::device::DeviceType::Output => rms > 0.001,
+                        crate::core::device::DeviceType::Input => rms > 0.05,
+                    };
+                    meeting.on_audio_activity(&audio.device.device_type, has_activity);
                 }
 
                 // ALWAYS persist audio to disk immediately, before any deferral.

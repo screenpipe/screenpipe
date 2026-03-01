@@ -350,8 +350,9 @@ fn browsing_suggestions(windows: &[WindowActivity]) -> Vec<Suggestion> {
         .collect();
 
     for w in browser_windows {
-        let title = if w.window_name.len() > 35 {
-            format!("{}...", &w.window_name[..32.min(w.window_name.len())])
+        let title = if w.window_name.chars().count() > 35 {
+            let truncated: String = w.window_name.chars().take(32).collect();
+            format!("{}...", truncated)
         } else {
             w.window_name.clone()
         };

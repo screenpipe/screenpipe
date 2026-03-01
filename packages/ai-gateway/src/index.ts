@@ -51,7 +51,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
-			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier);
+			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
 			return addCorsHeaders(createSuccessResponse(status));
 		}
 

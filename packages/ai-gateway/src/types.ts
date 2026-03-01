@@ -193,6 +193,7 @@ export interface UsageStatus {
 	remaining: number;
 	resets_at: string;
 	model_access: string[];
+	credits_balance?: number;
 	upgrade_options?: {
 		login?: { benefit: string };
 		subscribe?: { benefit: string };
