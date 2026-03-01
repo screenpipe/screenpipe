@@ -193,6 +193,12 @@ pub trait PipeStore: Send + Sync {
     /// Delete old executions, keeping only the newest `keep_per_pipe` per pipe.
     /// Returns the number of rows deleted.
     async fn cleanup_old_executions(&self, keep_per_pipe: i32) -> Result<u32>;
+
+    /// Get scheduler state for all pipes in a single query.
+    async fn get_all_scheduler_states(&self) -> Result<HashMap<String, SchedulerState>>;
+
+    /// Get recent executions for all pipes in a single query.
+    async fn get_all_executions(&self, limit_per_pipe: i32) -> Result<HashMap<String, Vec<PipeExecution>>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -615,13 +621,17 @@ impl PipeManager {
         };
         // locks released
 
-        // Pass 2: query DB for scheduler state (consecutive_failures)
+        // Pass 2: batch-query DB for all scheduler states (1 query instead of N)
+        let states = if let Some(ref store) = self.store {
+            store.get_all_scheduler_states().await.unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
         let mut result = Vec::with_capacity(partial.len());
         for (name, mut status) in partial {
-            if let Some(ref store) = self.store {
-                if let Ok(Some(state)) = store.get_scheduler_state(&name).await {
-                    status.consecutive_failures = state.consecutive_failures;
-                }
+            if let Some(state) = states.get(&name) {
+                status.consecutive_failures = state.consecutive_failures;
             }
             result.push(status);
         }
@@ -691,15 +701,24 @@ impl PipeManager {
         exec_limit: i32,
     ) -> Vec<(PipeStatus, Vec<PipeExecution>)> {
         let statuses = self.list_pipes().await;
-        let mut result = Vec::with_capacity(statuses.len());
-        for status in statuses {
-            let execs = self
-                .get_executions(&status.config.name, exec_limit)
+
+        // Batch-fetch all executions in 1 query instead of N
+        let mut all_execs = if let Some(ref store) = self.store {
+            store
+                .get_all_executions(exec_limit)
                 .await
-                .unwrap_or_default();
-            result.push((status, execs));
-        }
-        result
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        statuses
+            .into_iter()
+            .map(|status| {
+                let execs = all_execs.remove(&status.config.name).unwrap_or_default();
+                (status, execs)
+            })
+            .collect()
     }
 
     /// Run a pipe once (manual trigger or scheduled).
