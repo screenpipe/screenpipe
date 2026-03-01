@@ -14,6 +14,12 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_commit_hash() -> String {
+    option_env!("GIT_COMMIT_HASH").unwrap_or("unknown").to_string()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn write_browser_log(level: String, message: String) {
     match level.as_str() {
         "error" => error!("[webview] {}", message),

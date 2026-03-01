@@ -134,6 +134,9 @@ async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
+async getCommitHash() : Promise<string> {
+    return await TAURI_INVOKE("get_commit_hash");
+},
 async getDiskUsage(forceRefresh: boolean | null) : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_disk_usage", { forceRefresh }) };

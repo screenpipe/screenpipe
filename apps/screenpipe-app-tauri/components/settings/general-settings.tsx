@@ -23,12 +23,14 @@ export default function GeneralSettings() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [commitHash, setCommitHash] = useState<string | null>(null);
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
 
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch(() => {});
+    commands.getCommitHash().then(setCommitHash).catch(() => {});
   }, []);
 
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
@@ -183,7 +185,7 @@ export default function GeneralSettings() {
                   <Undo2 className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground">
-                      Version{currentVersion ? ` ${currentVersion}` : ""}
+                      Version{currentVersion ? ` ${currentVersion}` : ""}{commitHash ? ` (${commitHash})` : ""}
                     </h3>
                     <p className="text-xs text-muted-foreground">
                       install a previous version (at your own risk)
