@@ -20,6 +20,7 @@ screenpipe-audio = { path = "../screenpipe-audio" }
 screenpipe-core = { path = "../screenpipe-core", features = ["security", "cloud-sync"] }
 screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-accessibility = { path = "../screenpipe-accessibility", features = ["db"] }
+screenpipe-integrations = { path = "../screenpipe-integrations" }
 screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", optional = true }
 
 

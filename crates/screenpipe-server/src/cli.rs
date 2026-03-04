@@ -529,6 +529,7 @@ impl RecordArgs {
             analytics_enabled: !self.disable_telemetry,
             analytics_id: String::new(),
             vocabulary: vec![],
+            plaud_config: None, // Plaud configured via Tauri settings only
         }
     }
 }

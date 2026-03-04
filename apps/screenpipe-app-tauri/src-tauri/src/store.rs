@@ -716,6 +716,10 @@ impl SettingsStore {
                     .ok()
                 })
                 .unwrap_or_default(),
+            plaud_config: self
+                .extra
+                .get("plaudConfig")
+                .and_then(|v| serde_json::from_value::<screenpipe_integrations::plaud::PlaudConfig>(v.clone()).ok()),
         }
     }
 

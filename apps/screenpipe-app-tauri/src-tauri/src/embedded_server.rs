@@ -358,6 +358,18 @@ pub async fn start_embedded_server(
         info!("calendar bridge started for meeting detection");
     }
 
+    // Start Plaud sync if configured
+    if let Some(ref plaud_config) = config.plaud_config {
+        if plaud_config.enabled {
+            let _plaud_handle = screenpipe_integrations::plaud::start_plaud_sync(
+                plaud_config.clone(),
+                db.clone(),
+                local_data_dir.clone(),
+            );
+            info!("Plaud sync started");
+        }
+    }
+
     // Start calendar-assisted speaker identification
     let _speaker_id_handle =
         screenpipe_server::start_speaker_identification(db.clone(), config.user_name.clone());

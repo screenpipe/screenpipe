@@ -8,6 +8,7 @@ use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::VocabularyEntry;
 use screenpipe_audio::vad::VadEngineEnum;
 use screenpipe_core::Language;
+use screenpipe_integrations::plaud::PlaudConfig;
 use screenpipe_vision::PipelineMetrics;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,6 +76,9 @@ pub struct RecordingConfig {
 
     /// Custom vocabulary for transcription biasing and word replacement.
     pub vocabulary: Vec<VocabularyEntry>,
+
+    /// Plaud NotePin / Note Pro integration config.
+    pub plaud_config: Option<PlaudConfig>,
 }
 
 impl RecordingConfig {

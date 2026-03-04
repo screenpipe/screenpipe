@@ -125,6 +125,16 @@ export type Settings = SettingsStore & {
 	openaiCompatibleModel?: string;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
+	/** Plaud NotePin / Note Pro integration config */
+	plaudConfig?: {
+		enabled: boolean;
+		client_id: string;
+		secret_key: string;
+		user_id: string;
+		region: string;
+		sync_interval_secs: number;
+		backfill_days: number;
+	};
 }
 
 export function getEffectiveFilters(settings: Settings) {
