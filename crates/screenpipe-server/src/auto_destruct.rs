@@ -1,7 +1,7 @@
-use std::time::Duration;
-use tokio::time::sleep;
 #[cfg(target_os = "windows")]
 use std::process::Command;
+use std::time::Duration;
+use tokio::time::sleep;
 #[cfg(target_os = "windows")]
 use tracing::debug;
 use tracing::info;
