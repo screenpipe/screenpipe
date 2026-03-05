@@ -295,11 +295,8 @@ pub async fn process_audio_input(
         path
     } else {
         let capture_dt = chrono::DateTime::from_timestamp(timestamp as i64, 0);
-        let new_file_path = get_new_file_path_with_timestamp(
-            &audio.device.to_string(),
-            output_path,
-            capture_dt,
-        );
+        let new_file_path =
+            get_new_file_path_with_timestamp(&audio.device.to_string(), output_path, capture_dt);
         if let Err(e) = write_audio_to_file(
             &audio.data.to_vec(),
             audio.sample_rate,
