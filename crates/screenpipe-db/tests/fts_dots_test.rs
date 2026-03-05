@@ -61,9 +61,14 @@ mod tests {
             .await
             .unwrap();
 
-        db.insert_ocr_text(frame_id, "meeting notes", "", Arc::new(OcrEngine::Tesseract))
-            .await
-            .unwrap();
+        db.insert_ocr_text(
+            frame_id,
+            "meeting notes",
+            "",
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
 
         // Search with app_name containing a dot — must NOT cause FTS5 syntax error
         let results = db
@@ -236,9 +241,14 @@ mod tests {
             .await
             .unwrap();
 
-        db.insert_ocr_text(frame_id, "meeting notes", "", Arc::new(OcrEngine::Tesseract))
-            .await
-            .unwrap();
+        db.insert_ocr_text(
+            frame_id,
+            "meeting notes",
+            "",
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
 
         // count_search_results is called in parallel with search — must also handle dots
         let count = db
@@ -289,9 +299,14 @@ mod tests {
             .await
             .unwrap();
 
-        db.insert_ocr_text(frame_id, "meeting notes", "", Arc::new(OcrEngine::Tesseract))
-            .await
-            .unwrap();
+        db.insert_ocr_text(
+            frame_id,
+            "meeting notes",
+            "",
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
 
         // ContentType::All exercises OCR + Accessibility + Audio paths
         let count = db
@@ -582,10 +597,7 @@ mod tests {
             sanitize_fts5_query("com.apple.Safari"),
             r#""com.apple.Safari""#
         );
-        assert_eq!(
-            sanitize_fts5_query("192.168.1.1"),
-            r#""192.168.1.1""#
-        );
+        assert_eq!(sanitize_fts5_query("192.168.1.1"), r#""192.168.1.1""#);
     }
 
     #[test]
