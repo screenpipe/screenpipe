@@ -224,7 +224,10 @@ pub async fn reconcile_untranscribed(
             );
             for chunk in &valid_chunks {
                 if let Err(e) = db.delete_audio_chunk(chunk.id).await {
-                    warn!("reconciliation: failed to delete silent chunk {}: {}", chunk.id, e);
+                    warn!(
+                        "reconciliation: failed to delete silent chunk {}: {}",
+                        chunk.id, e
+                    );
                 }
                 let _ = std::fs::remove_file(&chunk.file_path);
             }
