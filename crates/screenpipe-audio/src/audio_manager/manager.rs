@@ -506,10 +506,8 @@ impl AudioManager {
                     } else {
                         audio.data.as_ref().to_vec()
                     };
-                    let capture_dt = chrono::DateTime::from_timestamp(
-                        audio.capture_timestamp as i64,
-                        0,
-                    );
+                    let capture_dt =
+                        chrono::DateTime::from_timestamp(audio.capture_timestamp as i64, 0);
                     let path = get_new_file_path_with_timestamp(
                         &audio.device.to_string(),
                         out,
