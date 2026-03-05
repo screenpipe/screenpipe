@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
+import { useDictation } from "@/lib/hooks/use-dictation";
+import { DictationButton } from "@/components/dictation-indicator";
 
 interface SpeakerResult {
   id: number;
@@ -308,6 +310,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   const OCR_PAGE_SIZE = 24;
   const TRANSCRIPTION_PAGE_SIZE = 30;
+
+  // Dictation hook for voice input
+  const { state: dictationState, toggleDictation } = useDictation({
+    onTranscription: (text) => {
+      // Append transcribed text to search query
+      setQuery((prev) => prev + (prev ? " " : "") + text);
+    },
+  });
 
   const debouncedQuery = useDebounce(query, 200);
   const { suggestions, isLoading: suggestionsLoading } = useSuggestions(isOpen);
@@ -1350,6 +1360,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             autoCapitalize="off"
             spellCheck={false}
             autoFocus
+          />
+          <DictationButton
+            state={dictationState}
+            onToggle={toggleDictation}
+            className="flex-shrink-0"
           />
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (

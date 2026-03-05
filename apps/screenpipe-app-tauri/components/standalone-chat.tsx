@@ -48,6 +48,8 @@ import { useImageUpload } from "@/components/hooks/use-image-upload";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useMentionSystem, STATIC_MENTION_SUGGESTIONS } from "@/components/hooks/use-mention-system";
 import { usePiEventHandler } from "@/components/hooks/use-pi-event-handler";
+import { useDictation } from "@/lib/hooks/use-dictation";
+import { DictationButton } from "@/components/dictation-indicator";
 
 const SCREENPIPE_API = "http://localhost:3030";
 const PI_CHAT_SESSION = "chat";
@@ -666,6 +668,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     forceRefresh: refreshSuggestions,
   } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
+
+  // Dictation hook for voice input
+  const { state: dictationState, transcribedText, toggleDictation } = useDictation({
+    onTranscription: (text) => {
+      // Append transcribed text to input
+      setInput((prev) => prev + (prev ? " " : "") + text);
+    },
+  });
 
   // Custom summary templates (persisted in settings)
   const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
@@ -2461,6 +2471,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   pastedImages.length > 0 && "pb-12" // Make room for image previews below
                 )}
                 style={{ maxHeight: "150px" }}
+              />
+
+              {/* Dictation button */}
+              <DictationButton
+                state={dictationState}
+                onToggle={toggleDictation}
+                disabled={isLoading || !canChat}
+                className="absolute right-3 bottom-2"
               />
 
               {/* Attached image previews below textarea */}
