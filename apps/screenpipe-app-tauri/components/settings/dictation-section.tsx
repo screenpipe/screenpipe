@@ -122,6 +122,8 @@ export function DictationSection() {
   // Sync shortcuts to backend after enabling/disabling
   const syncShortcuts = async () => {
     try {
+      // Wait for settings to persist before syncing
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       await invoke("update_global_shortcuts", {
         showShortcut: settings.showScreenpipeShortcut || "",
         startShortcut: settings.startRecordingShortcut || "",
@@ -183,9 +185,9 @@ export function DictationSection() {
         {isDictationEnabled && (
           <div className="flex items-center justify-between">
             <div className="space-y-1">
-              <h4 className="font-medium">start dictation</h4>
+              <h4 className="font-medium">toggle dictation</h4>
               <p className="text-sm text-muted-foreground">
-                start voice dictation (works globally)
+                start/stop voice dictation
               </p>
             </div>
             <div className="flex items-center gap-4">
