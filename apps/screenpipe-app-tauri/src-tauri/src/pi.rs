@@ -28,8 +28,9 @@ static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 
 /// On Windows, `.cmd` files cannot be spawned directly with `Command::new()` since
 /// Rust 1.77+ (CVE-2024-24576 fix). We must use `cmd.exe /C` to run them.
-/// `.exe` shims (from `bun add -g`) are native executables — run them directly.
-/// Only wrap non-exe paths (e.g. JS files) with bun.
+/// For `.exe` bun shims: resolve the JS entrypoint and run via `bun <cli.js>`
+/// so bun is always the explicit runtime (the shim's own bun-lookup can fall
+/// back to Node.js if bun isn't at the expected location).
 #[cfg(windows)]
 fn build_command_for_path(path: &str) -> Command {
     if path.ends_with(".cmd") || path.ends_with(".bat") {
@@ -37,7 +38,22 @@ fn build_command_for_path(path: &str) -> Command {
         cmd.args(["/C", path]);
         cmd
     } else if path.ends_with(".exe") {
-        Command::new(path)
+        // Bun global-install .exe shims need bun.exe to run the JS, but their
+        // internal bun-resolution can fail (falling back to Node.js) when the app
+        // is installed in a non-standard directory.  Resolve the actual JS
+        // entrypoint and run it with our known-good bun, just like Unix does.
+        if let Some(bun) = find_bun_executable() {
+            if let Some(js) = resolve_bun_global_entrypoint(path) {
+                info!("Resolved bun shim {} → JS entrypoint {}", path, js);
+                let mut cmd = Command::new(bun);
+                cmd.arg(js);
+                return cmd;
+            }
+            // Not a bun shim or resolution failed — run .exe directly
+            Command::new(path)
+        } else {
+            Command::new(path)
+        }
     } else if let Some(bun) = find_bun_executable() {
         let mut cmd = Command::new(bun);
         cmd.arg(path);
@@ -57,6 +73,90 @@ fn build_command_for_path(path: &str) -> Command {
         cmd
     } else {
         Command::new(path)
+    }
+}
+
+/// Given a bun global-install `.exe` shim path (e.g. `~/.bun/bin/pi.exe`),
+/// resolve the actual JS entrypoint by reading the package.json `bin` field
+/// from bun's global `node_modules`.
+/// Returns `None` if the path isn't a bun shim or resolution fails.
+#[cfg(windows)]
+fn resolve_bun_global_entrypoint(exe_path: &str) -> Option<String> {
+    let exe = Path::new(exe_path);
+    let stem = exe.file_stem()?.to_str()?; // "pi"
+
+    // Only resolve for known bun global dirs
+    let parent = exe.parent()?.to_str().unwrap_or_default();
+    let is_bun_dir = parent.ends_with(".bun\\bin")
+        || parent.ends_with(".bun/bin")
+        || parent.ends_with("bun\\bin")
+        || parent.ends_with("bun/bin");
+    if !is_bun_dir {
+        return None;
+    }
+
+    // Bun global modules live at ~/.bun/install/global/node_modules/
+    let home = dirs::home_dir()?;
+    let global_nm = home.join(".bun").join("install").join("global").join("node_modules");
+    if !global_nm.exists() {
+        debug!("Bun global node_modules not found at {}", global_nm.display());
+        return None;
+    }
+
+    // Walk top-level packages (including scoped @org/pkg) looking for a matching bin entry
+    for entry in std::fs::read_dir(&global_nm).ok()? {
+        let entry = entry.ok()?;
+        let pkg_path = entry.path();
+
+        // Handle scoped packages (@org/pkg)
+        if pkg_path.file_name()?.to_str()?.starts_with('@') {
+            for sub in std::fs::read_dir(&pkg_path).ok()?.flatten() {
+                if let Some(js) = check_package_bin(sub.path(), stem) {
+                    return Some(js);
+                }
+            }
+        } else if let Some(js) = check_package_bin(pkg_path, stem) {
+            return Some(js);
+        }
+    }
+
+    debug!("No package with bin '{}' found in {}", stem, global_nm.display());
+    None
+}
+
+/// Check if a package directory has a `bin` entry matching `bin_name`,
+/// and return the resolved absolute path to the JS file.
+#[cfg(windows)]
+fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<String> {
+    let pkg_json = pkg_dir.join("package.json");
+    if !pkg_json.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&pkg_json).ok()?;
+    let parsed: Value = serde_json::from_str(&content).ok()?;
+
+    // bin can be a string (single binary) or an object { name: path }
+    let bin_val = parsed.get("bin")?;
+    let relative = if let Some(obj) = bin_val.as_object() {
+        obj.get(bin_name)?.as_str()?.to_string()
+    } else if let Some(s) = bin_val.as_str() {
+        // Single-bin package — name must match package name
+        let pkg_name = parsed.get("name")?.as_str()?;
+        if pkg_name.ends_with(bin_name) || pkg_name == bin_name {
+            s.to_string()
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    let js_path = pkg_dir.join(&relative);
+    if js_path.exists() {
+        Some(js_path.to_string_lossy().to_string())
+    } else {
+        debug!("bin entry points to {} but file doesn't exist", js_path.display());
+        None
     }
 }
 

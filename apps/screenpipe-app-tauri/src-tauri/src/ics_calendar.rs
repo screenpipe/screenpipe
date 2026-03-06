@@ -11,7 +11,8 @@
 use crate::calendar::CalendarEventItem;
 use crate::store::IcsCalendarEntry;
 use crate::store::IcsCalendarSettingsStore;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
+use chrono_tz::Tz;
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
 use std::str::FromStr;
 use tauri::AppHandle;
@@ -24,12 +25,29 @@ fn date_perhaps_time_to_utc(dpt: &DatePerhapsTime) -> Option<DateTime<Utc>> {
         DatePerhapsTime::DateTime(cdt) => match cdt {
             CalendarDateTime::Utc(dt) => Some(*dt),
             CalendarDateTime::Floating(ndt) => {
-                // Treat floating as UTC (best effort)
-                Some(ndt.and_utc())
+                // Floating times have no timezone — assume local timezone
+                let local = Local::now().timezone();
+                local
+                    .from_local_datetime(ndt)
+                    .earliest()
+                    .map(|dt| dt.with_timezone(&Utc))
             }
-            CalendarDateTime::WithTimezone { date_time, .. } => {
-                // Best effort: treat as UTC since we don't have tz database here
-                Some(date_time.and_utc())
+            CalendarDateTime::WithTimezone { date_time, tzid } => {
+                // Parse TZID (e.g. "Australia/Brisbane", "America/New_York") and convert to UTC
+                match tzid.parse::<Tz>() {
+                    Ok(tz) => tz
+                        .from_local_datetime(date_time)
+                        .earliest()
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    Err(_) => {
+                        warn!("ics_calendar: unknown timezone '{}', falling back to local", tzid);
+                        let local = Local::now().timezone();
+                        local
+                            .from_local_datetime(date_time)
+                            .earliest()
+                            .map(|dt| dt.with_timezone(&Utc))
+                    }
+                }
             }
         },
         DatePerhapsTime::Date(d) => {

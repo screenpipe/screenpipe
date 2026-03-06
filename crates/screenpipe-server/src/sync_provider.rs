@@ -967,6 +967,8 @@ mod tests {
                 frame_sync_id: "abc-123".to_string(),
                 text: "Hello world".to_string(),
                 focused: true,
+                app_name: Some("Chrome".to_string()),
+                window_name: Some("Meeting".to_string()),
             }],
             transcriptions: Vec::new(),
             accessibility_records: Vec::new(),

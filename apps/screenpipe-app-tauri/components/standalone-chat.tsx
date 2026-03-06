@@ -743,6 +743,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
   const piStartInFlightRef = useRef(false);
   const piStoppedIntentionallyRef = useRef(false);
+  const piCrashCountRef = useRef(0);
+  const piLastCrashRef = useRef(0);
   const piThinkingStartRef = useRef<number | null>(null);
   const piSessionSyncedRef = useRef(false);
 
@@ -1850,8 +1852,28 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           setIsStreaming(false);
         }
 
-        // Always auto-restart — Pi is a singleton, keep it alive
-        const delay = 1500;
+        // Auto-restart with exponential backoff to avoid crash loops
+        const now = Date.now();
+        const MAX_CRASHES = 5;
+        const CRASH_WINDOW_MS = 60_000; // reset counter after 1 min of stability
+
+        // Reset crash counter if last crash was long ago (Pi was stable)
+        if (now - piLastCrashRef.current > CRASH_WINDOW_MS) {
+          piCrashCountRef.current = 0;
+        }
+        piCrashCountRef.current++;
+        piLastCrashRef.current = now;
+
+        if (piCrashCountRef.current > MAX_CRASHES) {
+          console.error(`[Pi] Crash loop detected (${piCrashCountRef.current} crashes in ${CRASH_WINDOW_MS / 1000}s) — stopping auto-restart. User action required.`);
+          setPiInfo(null);
+          return;
+        }
+
+        // Exponential backoff: 1.5s, 3s, 6s, 12s, 24s
+        const delay = 1500 * Math.pow(2, piCrashCountRef.current - 1);
+        console.log(`[Pi] Auto-restart attempt ${piCrashCountRef.current}/${MAX_CRASHES} in ${delay}ms`);
+
         setTimeout(async () => {
           if (!mounted) return;
           // Check if a newer Pi process is already running (race: stop → start → terminated)
@@ -1880,7 +1902,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 }
               } else {
                 console.error("[Pi] Auto-restart failed:", result.error);
-                // Don't give up — user can still trigger restart on next message
                 setPiInfo(null);
               }
             } catch (e) {
@@ -2182,6 +2203,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         if (result.status === "ok" && result.data.running) {
           setPiInfo(result.data);
           piSessionSyncedRef.current = false;
+          piCrashCountRef.current = 0; // reset crash loop counter on manual start
           // Keep running-config ref in sync so preset watcher doesn't re-trigger
           if (providerConfig) {
             piRunningConfigRef.current = { provider: providerConfig.provider, model: providerConfig.model, token: settings.user?.token ?? null };

@@ -1257,6 +1257,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             offset_index: 0,
             fps: 0.5,
+            machine_id: None,
             ocr_entries,
             audio_entries,
         }

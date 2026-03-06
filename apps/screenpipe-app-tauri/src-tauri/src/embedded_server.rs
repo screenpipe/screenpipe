@@ -371,6 +371,14 @@ pub async fn start_embedded_server(
     // Tracks system sleep/wake events and checks if recording degrades after wake
     start_sleep_monitor();
 
+    // Start background snapshot compaction (JPEG → MP4)
+    screenpipe_server::start_snapshot_compaction(
+        db.clone(),
+        config.video_quality.clone(),
+        shutdown_tx_clone.subscribe(),
+        power_manager.clone(),
+    );
+
     // Create and start HTTP server
     let mut server = SCServer::new(
         db.clone(),

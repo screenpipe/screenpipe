@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.2.48"
+version = "2.2.51"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -98,6 +98,7 @@ futures = "0.3.30"
 async-stream = "0.3"
 
 chrono = "0.4.39"
+chrono-tz = "0.10"
 tauri-plugin-opener = "2.5.3"
 uuid = { version = "1.0", features = ["v4"] }
 urlencoding = "2"

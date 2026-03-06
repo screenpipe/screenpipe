@@ -288,7 +288,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [speakerTranscriptions, setSpeakerTranscriptions] = useState<AudioTranscription[]>([]);
   const [isLoadingTranscriptions, setIsLoadingTranscriptions] = useState(false);
   const [selectedTranscriptionIndex, setSelectedTranscriptionIndex] = useState(0);
-  const [transcriptionFrames, setTranscriptionFrames] = useState<Map<string, number>>(new Map());
+  const [transcriptionFrames, setTranscriptionFrames] = useState<Map<string, { frame_id: number; app_name: string }>>(new Map());
 
   // Tag search state
   const [tagResults, setTagResults] = useState<TaggedFrame[]>([]);
@@ -301,8 +301,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   type ContentFilter = "all" | "screen" | "input";
   const [contentFilter, setContentFilter] = useState<ContentFilter>("all");
 
-  // App filter
+  // App filter (for screen results and speaker drill-down)
   const [appFilter, setAppFilter] = useState<string | null>(null);
+  const [speakerAppFilter, setSpeakerAppFilter] = useState<string | null>(null);
+  const [domainFilter, setDomainFilter] = useState<string | null>(null);
 
   // Pagination
   const [ocrOffset, setOcrOffset] = useState(0);
@@ -340,25 +342,173 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setCurrentResultIndex,
   } = useKeywordSearchStore();
 
-  // Compute app distribution from results and filter
-  const appCounts = useMemo(() => {
+  // --- Facet state (loaded async, independent of paginated results) ---
+  const [facetApps, setFacetApps] = useState<[string, number][]>([]);
+  const [facetDomains, setFacetDomains] = useState<[string, number][]>([]);
+  const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; timestamp: string; count: number }[]>([]);
+
+  // Build time range labels from raw rows
+  const buildTimeRanges = useCallback((rows: { timestamp: string; count: number }[]) => {
+    return rows.map(r => {
+      const d = new Date(r.timestamp);
+      let label: string;
+      if (isToday(d)) {
+        label = format(d, "h a");
+      } else if (isYesterday(d)) {
+        label = "yesterday " + format(d, "h a");
+      } else {
+        label = format(d, "MMM d");
+      }
+      return { label, timestamp: r.timestamp, count: r.count };
+    }).slice(0, 10);
+  }, []);
+
+  // Async facet loading — fires a lightweight SQL aggregation query
+  useEffect(() => {
+    const q = debouncedQuery.trim();
+    if (!q || q.startsWith("#") || q.startsWith("@")) {
+      setFacetApps([]);
+      setFacetDomains([]);
+      setFacetTimeRanges([]);
+      return;
+    }
+
+    let cancelled = false;
+    const escaped = q.replace(/"/g, '""');
+    const ftsQuery = q.split(/\s+/).map(w => `"${w.replace(/"/g, '""')}"`).join(" OR ");
+
+    // Fire all three facet queries in parallel
+    const fetchFacet = async (sql: string) => {
+      const resp = await fetch("http://localhost:3030/raw_sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: sql }),
+        signal: AbortSignal.timeout(5000),
+      });
+      return resp.ok ? resp.json() : [];
+    };
+
+    // App facet
+    fetchFacet(
+      `SELECT f.app_name as app, COUNT(*) as cnt
+       FROM ocr_text_fts fts
+       JOIN frames f ON fts.frame_id = f.id
+       WHERE fts.text MATCH '${escaped}'
+       AND f.app_name IS NOT NULL AND f.app_name != ''
+       GROUP BY f.app_name ORDER BY cnt DESC LIMIT 15`
+    ).then((rows: { app: string; cnt: number }[]) => {
+      if (!cancelled) setFacetApps(rows.map(r => [r.app, r.cnt]));
+    }).catch(() => {});
+
+    // Domain facet
+    fetchFacet(
+      `SELECT f.browser_url as url, COUNT(*) as cnt
+       FROM ocr_text_fts fts
+       JOIN frames f ON fts.frame_id = f.id
+       WHERE fts.text MATCH '${escaped}'
+       AND f.browser_url IS NOT NULL AND f.browser_url != ''
+       GROUP BY f.browser_url ORDER BY cnt DESC LIMIT 200`
+    ).then((rows: { url: string; cnt: number }[]) => {
+      if (cancelled) return;
+      // Aggregate by domain
+      const domainMap = new Map<string, number>();
+      for (const r of rows) {
+        try {
+          const domain = new URL(r.url).hostname.replace(/^www\./, "");
+          if (domain) domainMap.set(domain, (domainMap.get(domain) || 0) + r.cnt);
+        } catch { /* skip */ }
+      }
+      setFacetDomains([...domainMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8));
+    }).catch(() => {});
+
+    // Time facet — bucket by date (and by hour for today/yesterday)
+    fetchFacet(
+      `SELECT DATE(f.timestamp) as d, MIN(f.timestamp) as ts, COUNT(*) as cnt
+       FROM ocr_text_fts fts
+       JOIN frames f ON fts.frame_id = f.id
+       WHERE fts.text MATCH '${escaped}'
+       GROUP BY DATE(f.timestamp) ORDER BY d DESC LIMIT 30`
+    ).then((rows: { d: string; ts: string; cnt: number }[]) => {
+      if (cancelled) return;
+      setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ timestamp: r.ts, count: r.cnt }))));
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [debouncedQuery, buildTimeRanges]);
+
+  // Speaker time ranges (from loaded transcriptions — these are small enough)
+  const speakerTimeRanges = useMemo(() => {
+    if (speakerTranscriptions.length === 0) return [];
+    const buckets = new Map<string, { label: string; timestamp: string; count: number }>();
+    for (const t of speakerTranscriptions) {
+      const d = new Date(t.timestamp);
+      if (isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!buckets.has(key)) {
+        let label: string;
+        if (isToday(d)) label = format(d, "h a");
+        else if (isYesterday(d)) label = "yesterday " + format(d, "h a");
+        else label = format(d, "MMM d");
+        buckets.set(key, { label, timestamp: t.timestamp, count: 1 });
+      } else {
+        buckets.get(key)!.count++;
+      }
+    }
+    return [...buckets.values()]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 10);
+  }, [speakerTranscriptions]);
+
+  // Use facet data for filter chips (falls back to result-derived if facets not loaded yet)
+  const resultAppCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of searchResults) {
       counts.set(r.app_name, (counts.get(r.app_name) || 0) + 1);
     }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1]);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [searchResults]);
 
+  const appCounts = facetApps.length > 0 ? facetApps : resultAppCounts;
+  const domainCounts = facetDomains;
+  const timeRanges = facetTimeRanges;
+
+  // Compute app distribution from speaker transcription frames
+  const speakerAppCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const [, info] of transcriptionFrames) {
+      if (info.app_name) {
+        counts.set(info.app_name, (counts.get(info.app_name) || 0) + 1);
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [transcriptionFrames]);
+
+  // Filter speaker transcriptions by app
+  const filteredSpeakerTranscriptions = useMemo(() => {
+    if (!speakerAppFilter) return speakerTranscriptions;
+    return speakerTranscriptions.filter(t => {
+      const info = transcriptionFrames.get(t.timestamp);
+      return info?.app_name === speakerAppFilter;
+    });
+  }, [speakerTranscriptions, speakerAppFilter, transcriptionFrames]);
+
   const filteredResults = useMemo(() => {
-    if (!appFilter) return searchResults;
-    return searchResults.filter(r => r.app_name === appFilter);
-  }, [searchResults, appFilter]);
+    let results = searchResults;
+    if (appFilter) results = results.filter(r => r.app_name === appFilter);
+    if (domainFilter) results = results.filter(r => {
+      try { return new URL(r.url).hostname.replace(/^www\./, "") === domainFilter; } catch { return false; }
+    });
+    return results;
+  }, [searchResults, appFilter, domainFilter]);
 
   const filteredGroups = useMemo(() => {
-    if (!appFilter) return searchGroups;
-    return searchGroups.filter(g => g.representative.app_name === appFilter);
-  }, [searchGroups, appFilter]);
+    let groups = searchGroups;
+    if (appFilter) groups = groups.filter(g => g.representative.app_name === appFilter);
+    if (domainFilter) groups = groups.filter(g => {
+      try { return new URL(g.representative.url).hostname.replace(/^www\./, "") === domainFilter; } catch { return false; }
+    });
+    return groups;
+  }, [searchGroups, appFilter, domainFilter]);
 
   // Tokenize query for thumbnail highlights (split on spaces, filter empty)
   const queryTokens = useMemo(() => {
@@ -376,6 +526,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       resetSearch();
       clearHighlight();
       setAppFilter(null);
+      setDomainFilter(null);
       setContentFilter("all");
       setSpeakerResults([]);
       setTagResults([]);
@@ -413,6 +564,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setSpeakerResults([]);
       setTagResults([]);
       setAppFilter(null);
+      setDomainFilter(null);
       return;
     }
 
@@ -424,6 +576,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     }
 
     setAppFilter(null);
+    setDomainFilter(null);
     setContentFilter("all");
     setTagResults([]);
     setOcrOffset(0);
@@ -597,7 +750,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           const uniqueTimestamps = [...new Set(items.map(i => i.timestamp).filter(Boolean))];
           if (uniqueTimestamps.length > 0 && !cancelled) {
             try {
-              const map = new Map<string, number>();
+              const map = new Map<string, { frame_id: number; app_name: string }>();
               // Batch fetch: find closest frame within ±30s for each timestamp
               const promises = uniqueTimestamps.map(async (ts) => {
                 const d = new Date(ts);
@@ -608,13 +761,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
-                    query: `SELECT id as frame_id FROM frames WHERE timestamp >= '${lo}' AND timestamp <= '${hi}' ORDER BY ABS(julianday(timestamp) - julianday('${escaped}')) LIMIT 1`,
+                    query: `SELECT id as frame_id, app_name FROM frames WHERE timestamp >= '${lo}' AND timestamp <= '${hi}' ORDER BY ABS(julianday(timestamp) - julianday('${escaped}')) LIMIT 1`,
                   }),
                   signal: AbortSignal.timeout(3000),
                 });
                 if (resp.ok) {
-                  const rows: { frame_id: number }[] = await resp.json();
-                  if (rows.length > 0) map.set(ts, rows[0].frame_id);
+                  const rows: { frame_id: number; app_name: string }[] = await resp.json();
+                  if (rows.length > 0) map.set(ts, { frame_id: rows[0].frame_id, app_name: rows[0].app_name || "" });
                 }
               });
               await Promise.all(promises);
@@ -652,6 +805,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const handleBackFromSpeaker = useCallback(() => {
     setSelectedSpeaker(null);
     setSpeakerTranscriptions([]);
+    setSpeakerAppFilter(null);
     setSelectedTranscriptionIndex(0);
     setTranscriptionOffset(0);
     setHasMoreTranscriptions(true);
@@ -758,7 +912,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             break;
           case "ArrowDown":
             e.preventDefault();
-            setSelectedTranscriptionIndex(i => Math.min(i + 1, speakerTranscriptions.length - 1));
+            setSelectedTranscriptionIndex(i => Math.min(i + 1, filteredSpeakerTranscriptions.length - 1));
             break;
           case "ArrowUp":
             e.preventDefault();
@@ -766,8 +920,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             break;
           case "Enter":
             e.preventDefault();
-            if (speakerTranscriptions[selectedTranscriptionIndex]?.timestamp) {
-              onNavigateToTimestamp(speakerTranscriptions[selectedTranscriptionIndex].timestamp);
+            if (filteredSpeakerTranscriptions[selectedTranscriptionIndex]?.timestamp) {
+              onNavigateToTimestamp(filteredSpeakerTranscriptions[selectedTranscriptionIndex].timestamp);
               onClose();
             }
             break;
@@ -829,7 +983,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, filteredResults, selectedIndex, selectedSpeaker, speakerTranscriptions, selectedTranscriptionIndex, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
+  }, [isOpen, filteredResults, selectedIndex, selectedSpeaker, speakerTranscriptions, filteredSpeakerTranscriptions, selectedTranscriptionIndex, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -874,10 +1028,68 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {speakerTranscriptions.length > 0 && (
+          {/* App filter chips for speaker transcriptions */}
+          {speakerAppCounts.length > 1 && (
+            <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
+              <button
+                onClick={() => { setSpeakerAppFilter(null); setSelectedTranscriptionIndex(0); }}
+                className={cn(
+                  "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                  !speakerAppFilter
+                    ? "bg-foreground text-background border-foreground"
+                    : "border-border text-muted-foreground hover:border-foreground/40"
+                )}
+              >
+                all ({speakerTranscriptions.length})
+              </button>
+              {speakerAppCounts.map(([app, count]) => (
+                <button
+                  key={app}
+                  onClick={() => { setSpeakerAppFilter(speakerAppFilter === app ? null : app); setSelectedTranscriptionIndex(0); }}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                    speakerAppFilter === app
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border text-muted-foreground hover:border-foreground/40"
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`http://localhost:11435/app-icon?name=${encodeURIComponent(app)}`}
+                    className="w-4 h-4 rounded-sm object-contain"
+                    alt=""
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  />
+                  {app} ({count})
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Time range chips for speaker transcriptions */}
+          {speakerTimeRanges.length > 1 && (
+            <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
+              {speakerTimeRanges.map((range) => (
+                <button
+                  key={range.timestamp}
+                  onClick={() => {
+                    onNavigateToTimestamp(range.timestamp);
+                    onClose();
+                  }}
+                  className="px-2.5 py-1 text-[11px] rounded-full border border-border text-muted-foreground hover:border-foreground/40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <Clock className="w-3 h-3" />
+                  {range.label} ({range.count})
+                </button>
+              ))}
+            </div>
+          )}
+
+          {filteredSpeakerTranscriptions.length > 0 && (
             <div className="grid grid-cols-3 gap-3">
-              {speakerTranscriptions.map((t, index) => {
-                const frameId = transcriptionFrames.get(t.timestamp);
+              {filteredSpeakerTranscriptions.map((t, index) => {
+                const frameInfo = transcriptionFrames.get(t.timestamp);
+                const frameId = frameInfo?.frame_id;
                 return (
                   <div
                     key={`${t.timestamp}-${index}`}
@@ -1132,11 +1344,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
               {/* App filter chips */}
               {appCounts.length > 1 && (
-                <div className="flex gap-1.5 mb-3 flex-wrap">
+                <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
                   <button
                     onClick={() => { setAppFilter(null); setSelectedIndex(0); }}
                     className={cn(
-                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5",
+                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
                       !appFilter
                         ? "bg-foreground text-background border-foreground"
                         : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1149,7 +1361,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       key={app}
                       onClick={() => { setAppFilter(appFilter === app ? null : app); setSelectedIndex(0); }}
                       className={cn(
-                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5",
+                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
                         appFilter === app
                           ? "bg-foreground text-background border-foreground"
                           : "border-border text-muted-foreground hover:border-foreground/40"
@@ -1163,6 +1375,56 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                       />
                       {app} ({count})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Domain filter chips */}
+              {domainCounts.length > 1 && (
+                <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
+                  <button
+                    onClick={() => { setDomainFilter(null); setSelectedIndex(0); }}
+                    className={cn(
+                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                      !domainFilter
+                        ? "bg-foreground text-background border-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/40"
+                    )}
+                  >
+                    all sites
+                  </button>
+                  {domainCounts.map(([domain, count]) => (
+                    <button
+                      key={domain}
+                      onClick={() => { setDomainFilter(domainFilter === domain ? null : domain); setSelectedIndex(0); }}
+                      className={cn(
+                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                        domainFilter === domain
+                          ? "bg-foreground text-background border-foreground"
+                          : "border-border text-muted-foreground hover:border-foreground/40"
+                      )}
+                    >
+                      {domain} ({count})
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Time range chips */}
+              {timeRanges.length > 1 && (
+                <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
+                  {timeRanges.map((range) => (
+                    <button
+                      key={range.timestamp}
+                      onClick={() => {
+                        onNavigateToTimestamp(range.timestamp);
+                        onClose();
+                      }}
+                      className="px-2.5 py-1 text-[11px] rounded-full border border-border text-muted-foreground hover:border-foreground/40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      <Clock className="w-3 h-3" />
+                      {range.label} ({range.count})
                     </button>
                   ))}
                 </div>

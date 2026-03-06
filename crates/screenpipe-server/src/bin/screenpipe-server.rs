@@ -630,21 +630,20 @@ async fn main() -> anyhow::Result<()> {
     let db_clone = Arc::clone(&db);
     let output_path_clone = Arc::new(local_data_dir.join("data").to_string_lossy().into_owned());
     let shutdown_tx_clone = shutdown_tx.clone();
+
     let ignored_windows_clone = cli.ignored_windows.clone();
     let included_windows_clone = cli.included_windows.clone();
     // Create UI recorder config early before cli is moved
     let ui_recorder_config = config.to_ui_recorder_config();
 
-    // Create meeting detector for smart transcription mode.
+    // Create meeting detector regardless of transcription mode.
+    // Meeting detection uses app focus + audio RMS only (no transcription needed).
     // Shared between audio manager (checks state) and UI recorder (feeds events).
-    let meeting_detector: Option<Arc<MeetingDetector>> =
-        if config.transcription_mode == screenpipe_audio::audio_manager::TranscriptionMode::Batch {
-            let detector = Arc::new(MeetingDetector::new());
-            info!("batch mode: meeting detector enabled — used for metadata only");
-            Some(detector)
-        } else {
-            None
-        };
+    let meeting_detector: Option<Arc<MeetingDetector>> = {
+        let detector = Arc::new(MeetingDetector::new());
+        info!("meeting detector enabled — independent of transcription mode");
+        Some(detector)
+    };
 
     let mut audio_manager_builder = config
         .to_audio_manager_builder(
@@ -706,6 +705,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Start power manager — polls battery/thermal state and broadcasts profile changes
     let power_manager = start_power_manager();
+
+    // Start background snapshot compaction (JPEG → MP4)
+    screenpipe_server::start_snapshot_compaction(
+        db.clone(),
+        config.video_quality.clone(),
+        shutdown_tx.subscribe(),
+        power_manager.clone(),
+    );
 
     // Create VisionManager for event-driven capture on all monitors
     let (handle, capture_trigger_tx) = if !config.disable_vision {
