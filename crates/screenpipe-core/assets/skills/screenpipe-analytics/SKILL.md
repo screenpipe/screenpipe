@@ -56,8 +56,8 @@ CREATE TABLE frames (
 
 **Key facts:**
 - Frames are event-driven (accessibility captures fire on content change), NOT fixed-interval. Frame count does NOT reliably translate to screen time.
-- For accurate time estimates, use the `/activity-summary` endpoint which uses gap-based duration (consecutive frames with gaps < 5min = active time).
-- For raw SQL, approximate with gap analysis, NOT `COUNT(*) * 2 / 60` (which assumes fixed 0.5 fps and is wildly inaccurate).
+- **WARNING: Do NOT use SQL to answer "how long" / "time spent" / "which apps did I use most" questions.** Use the `/activity-summary` REST endpoint instead — it calculates accurate active session time. SQL frame counts can be off by 10x.
+- If you must use SQL for time estimation, use gap analysis (measure time between consecutive frames), NOT `COUNT(*) * 2 / 60`.
 - `app_name` is the focused application
 - `browser_url` is populated for browser windows
 - `window_name` contains document/tab titles

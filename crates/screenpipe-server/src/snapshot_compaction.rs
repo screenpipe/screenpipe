@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
+use crate::hot_frame_cache::HotFrameCache;
 use crate::power::{PowerManagerHandle, ThermalState};
 use crate::video::{finish_ffmpeg_process, video_quality_to_crf, write_frame_to_ffmpeg};
 
@@ -42,6 +43,7 @@ pub fn start_snapshot_compaction(
     video_quality: String,
     mut shutdown_rx: broadcast::Receiver<()>,
     power_manager: Arc<PowerManagerHandle>,
+    hot_frame_cache: Option<Arc<HotFrameCache>>,
 ) {
     tokio::spawn(async move {
         info!(
@@ -82,7 +84,7 @@ pub fn start_snapshot_compaction(
             };
 
             let compacted = tokio::select! {
-                result = run_compaction_cycle(&db, &video_quality, chunk_size) => {
+                result = run_compaction_cycle(&db, &video_quality, chunk_size, &hot_frame_cache) => {
                     match result {
                         Ok(n) => n,
                         Err(e) => {
@@ -126,6 +128,7 @@ async fn run_compaction_cycle(
     db: &DatabaseManager,
     video_quality: &str,
     chunk_size: usize,
+    hot_frame_cache: &Option<Arc<HotFrameCache>>,
 ) -> Result<usize> {
     let cutoff = Utc::now() - Duration::seconds(MIN_AGE_SECS);
 
@@ -159,13 +162,20 @@ async fn run_compaction_cycle(
 
     for (device_name, frames) in &by_device {
         for chunk in frames.chunks(chunk_size) {
-            if let Err(e) = compact_chunk(db, device_name, chunk, video_quality).await {
-                warn!(
-                    "snapshot compaction failed for device {} ({} frames): {}",
-                    device_name,
-                    chunk.len(),
-                    e
-                );
+            match compact_chunk(db, device_name, chunk, video_quality).await {
+                Ok(updates) => {
+                    if let (Some(cache), Some(updates)) = (hot_frame_cache, updates) {
+                        cache.update_compacted_frames(&updates).await;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "snapshot compaction failed for device {} ({} frames): {}",
+                        device_name,
+                        chunk.len(),
+                        e
+                    );
+                }
             }
         }
     }
@@ -174,14 +184,15 @@ async fn run_compaction_cycle(
 }
 
 /// Encode a batch of JPEG snapshots into a single MP4 chunk.
+/// Returns cache update info: Vec<(frame_id, mp4_path, offset_index, fps)>.
 async fn compact_chunk(
     db: &DatabaseManager,
     device_name: &str,
     frames: &[(i64, String, String)], // (frame_id, snapshot_path, timestamp_str)
     video_quality: &str,
-) -> Result<()> {
+) -> Result<Option<Vec<(i64, String, i64, f64)>>> {
     if frames.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let first_path = Path::new(&frames[0].1);
@@ -264,7 +275,7 @@ async fn compact_chunk(
 
     if encoded_count == 0 {
         let _ = tokio::fs::remove_file(&mp4_path).await;
-        return Ok(());
+        return Ok(None);
     }
 
     // Verify MP4 output
@@ -325,7 +336,14 @@ async fn compact_chunk(
         deleted
     );
 
-    Ok(())
+    // Return cache update info so hot_frame_cache can be patched
+    let cache_updates: Vec<(i64, String, i64, f64)> = frames
+        .iter()
+        .enumerate()
+        .map(|(offset, (frame_id, _, _))| (*frame_id, mp4_path_str.clone(), offset as i64, fps))
+        .collect();
+
+    Ok(Some(cache_updates))
 }
 
 /// Spawn ffmpeg with low CPU priority for background compaction.

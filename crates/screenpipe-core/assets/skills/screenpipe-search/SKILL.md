@@ -28,8 +28,8 @@ curl "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `q` | string | No | Search keywords. Be specific. |
-| `content_type` | string | No | `all` (default), `ocr`, `audio`, `input`, `accessibility` |
+| `q` | string | No | Search keywords. Be specific. Do NOT use for audio/meeting searches — transcriptions are noisy, q filters too aggressively. |
+| `content_type` | string | No | `all` (default), `ocr`, `audio` (use for meetings/calls), `input`, `accessibility` |
 | `limit` | integer | No | Max results 1-20. Default: 10 |
 | `offset` | integer | No | Pagination offset. Default: 0 |
 | `start_time` | ISO 8601 or relative | **Yes** | Start of time range. ALWAYS include this. Accepts ISO 8601 (`2024-01-15T10:00:00Z`) or relative (`16h ago`, `2d ago`, `30m ago`). |
@@ -63,9 +63,17 @@ Don't jump straight to heavy `/search` calls. Escalate through these steps, stop
 
 - "What was I doing?" → Step 1 only
 - "What did I work on in Chrome?" → Step 1 (identify Chrome usage) → Step 2 (search Chrome content)
+- "Summarize my meeting/call" → Step 2 directly with `content_type=audio`, NO q param
+- "How long did I spend on X?" → Step 1 (`/activity-summary` has accurate `active_minutes`)
+- "Which apps did I use today?" → Step 1 (`/activity-summary` — do NOT use frame counts or SQL)
 - "What button did I click?" → Step 1 (context) → Step 3 (elements with role=AXButton)
 - "Show me what I was looking at" → Step 1 → Step 2 (find frame_id) → Step 4 (fetch screenshot)
 - "What URLs did I visit?" → Step 1 (identify browser) → Step 3 (`/frames/{id}/context` for URLs)
+
+#### Common mistakes to avoid
+- Do NOT use raw frame counts or SQL `COUNT(*)` on frames table to estimate time spent — it's wildly inaccurate. Use `/activity-summary` which calculates actual active session time.
+- Do NOT use the `q` param when searching audio/meetings — transcriptions have noise/typos that cause q to miss relevant content. Search by time range and content_type=audio, then scan results.
+- Do NOT ask the user for clarification when their intent is clear. "Summarize my meeting" → search audio immediately. "What apps today?" → call activity-summary immediately.
 
 ### CRITICAL RULES
 

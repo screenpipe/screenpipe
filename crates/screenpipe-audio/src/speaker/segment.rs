@@ -72,8 +72,8 @@ fn create_speech_segment(
     let embedding = match get_speaker_embedding(embedding_extractor, segment_samples) {
         Ok(embedding) => embedding,
         Err(e) => {
-            error!("Failed to compute speaker embedding: {}", e);
-            vec![0.0; 512]
+            error!("Failed to compute speaker embedding, skipping segment: {}", e);
+            return Err(anyhow::anyhow!("speaker embedding extraction failed: {}", e));
         }
     };
     let speaker = {
@@ -203,8 +203,11 @@ impl SegmentIterator {
                         &self.embedding_manager,
                     ) {
                         Ok(segment) => segment,
-                        Err(e) => {
-                            return Err(e);
+                        Err(_) => {
+                            // Skip this segment (e.g. embedding extraction failed)
+                            self.is_speeching = false;
+                            self.offset += self.frame_size;
+                            continue;
                         }
                     };
 

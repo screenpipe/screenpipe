@@ -392,12 +392,22 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
     );
 
     let (session, sftp) = connect_sftp(config).await?;
-    let remote_base = &config.remote_path;
 
-    mkdir_p(&sftp, remote_base).await;
+    // Resolve ~ to absolute path — SFTP doesn't understand tilde
+    let remote_base = if config.remote_path.starts_with("~/") {
+        let home = sftp
+            .canonicalize(".")
+            .await
+            .unwrap_or_else(|_| "/home/".to_string() + &config.user);
+        format!("{}/{}", home.trim_end_matches('/'), &config.remote_path[2..])
+    } else {
+        config.remote_path.clone()
+    };
+
+    mkdir_p(&sftp, &remote_base).await;
 
     // List existing remote files for incremental sync
-    let remote_files = list_remote_recursive(&sftp, remote_base, "").await;
+    let remote_files = list_remote_recursive(&sftp, &remote_base, "").await;
     debug!("{} files already on remote", remote_files.len());
 
     let mut files_transferred: u64 = 0;
@@ -407,7 +417,7 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
     sync_dir(
         &sftp,
         data_dir,
-        remote_base,
+        &remote_base,
         "",
         &remote_files,
         &mut files_transferred,

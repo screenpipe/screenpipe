@@ -96,6 +96,7 @@ export function OpenClawCard() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredHost[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncCancelledRef = useRef(false);
 
   useEffect(() => {
     const loaded = loadConfig();
@@ -138,12 +139,14 @@ export function OpenClawCard() {
 
   const handleSyncNow = async () => {
     if (!config.host || !config.user) return;
+    syncCancelledRef.current = false;
     setIsSyncing(true);
     setSyncError(null);
     try {
       const result = await invoke<SyncResult>("remote_sync_now", {
         config: toRustConfig(config),
       });
+      if (syncCancelledRef.current) return;
       if (result.ok) {
         const now = new Date().toLocaleString();
         setLastSync(now);
@@ -154,10 +157,17 @@ export function OpenClawCard() {
       }
       posthog.capture("openclaw_sync_manual", { success: result.ok });
     } catch (e) {
+      if (syncCancelledRef.current) return;
       setSyncError(String(e));
       posthog.capture("openclaw_sync_manual", { success: false });
     }
     setIsSyncing(false);
+  };
+
+  const handleCancelSync = () => {
+    syncCancelledRef.current = true;
+    setIsSyncing(false);
+    setSyncError(null);
   };
 
   useEffect(() => {
@@ -381,21 +391,26 @@ export function OpenClawCard() {
                   {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : "test"}
                 </Button>
 
-                <Button
-                  onClick={handleSyncNow}
-                  disabled={isSyncing}
-                  size="sm"
-                  className="h-7 text-xs w-24"
-                >
-                  {isSyncing ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <>
-                      <RefreshCw className="h-3 w-3 mr-1" />
-                      sync now
-                    </>
-                  )}
-                </Button>
+                {isSyncing ? (
+                  <Button
+                    onClick={handleCancelSync}
+                    variant="destructive"
+                    size="sm"
+                    className="h-7 text-xs w-24"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    cancel
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleSyncNow}
+                    size="sm"
+                    className="h-7 text-xs w-24"
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    sync now
+                  </Button>
+                )}
 
                 <div className="flex items-center gap-1.5 ml-auto">
                   <span className="text-xs text-muted-foreground">auto</span>

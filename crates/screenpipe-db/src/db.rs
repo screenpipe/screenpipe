@@ -759,14 +759,19 @@ impl DatabaseManager {
         audio_chunk_id: i64,
         transcription: &str,
     ) -> Result<i64, sqlx::Error> {
-        let text_length = transcription.len() as i64;
+        // Never overwrite a transcription with empty text (overlap cleanup can produce "")
+        let trimmed = transcription.trim();
+        if trimmed.is_empty() {
+            return Ok(0);
+        }
+        let text_length = trimmed.len() as i64;
         let mut tx = self.begin_immediate_with_retry().await?;
 
         // Insert the full transcription
         let affected = sqlx::query(
             "UPDATE audio_transcriptions SET transcription = ?1, text_length = ?2 WHERE audio_chunk_id = ?3",
         )
-        .bind(transcription)
+        .bind(trimmed)
         .bind(text_length)
         .bind(audio_chunk_id)
         .execute(&mut **tx.conn())
@@ -937,7 +942,7 @@ impl DatabaseManager {
         &self,
         embedding: &[f32],
     ) -> Result<Option<Speaker>, SqlxError> {
-        let speaker_threshold = 0.8;
+        let speaker_threshold = 0.55;
         let bytes: &[u8] = embedding.as_bytes();
 
         // First try matching against stored embeddings (up to 10 per speaker)
@@ -1088,6 +1093,35 @@ impl DatabaseManager {
         .await?;
 
         Ok(rows)
+    }
+
+    /// Get the dominant unnamed speaker on input devices.
+    /// Returns the speaker_id with the most transcriptions on input that has no name set.
+    /// Requires at least `min_count` transcriptions to be considered reliable.
+    pub async fn get_dominant_unnamed_input_speaker(
+        &self,
+        min_count: i32,
+    ) -> Result<Option<i64>, SqlxError> {
+        let result = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT at.speaker_id
+            FROM audio_transcriptions at
+            INNER JOIN speakers s ON at.speaker_id = s.id
+            WHERE at.is_input_device = 1
+                AND at.speaker_id IS NOT NULL
+                AND (s.name IS NULL OR s.name = '')
+                AND (s.hallucination IS NULL OR s.hallucination = 0)
+            GROUP BY at.speaker_id
+            HAVING COUNT(*) >= ?1
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(min_count)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result)
     }
 
     pub async fn update_speaker_name(&self, speaker_id: i64, name: &str) -> Result<i64, SqlxError> {
@@ -4885,7 +4919,7 @@ LIMIT ? OFFSET ?
         //          their embeddings are similar to target. This prevents one similar
         //          embedding from stealing all transcriptions from an unrelated speaker.
         if propagate_similar {
-            let threshold = 0.8;
+            let threshold = 0.55;
             let min_absorption_ratio = 0.5; // >50% of embeddings must match
 
             // Read-only: for each other speaker, count matching vs total embeddings

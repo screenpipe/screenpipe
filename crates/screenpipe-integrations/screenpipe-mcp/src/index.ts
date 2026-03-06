@@ -48,7 +48,7 @@ const SCREENPIPE_API = `http://localhost:${port}`;
 const server = new Server(
   {
     name: "screenpipe",
-    version: "0.8.3",
+    version: "0.8.5",
   },
   {
     capabilities: {
@@ -68,10 +68,14 @@ const BASE_TOOLS: Tool[] = [
       "Returns timestamped results with app context. " +
       "Call with no parameters to get recent activity. " +
       "Use the 'screenpipe://context' resource for current time when building time-based queries.\n\n" +
+      "WHEN TO USE WHICH content_type:\n" +
+      "- For meetings/calls/conversations: content_type='audio', do NOT use q param (transcriptions are noisy, q filters too aggressively)\n" +
+      "- For screen text/reading: content_type='all' or 'accessibility'\n" +
+      "- For time spent/app usage questions: use activity-summary tool instead (this tool returns content, not time stats)\n\n" +
       "SEARCH STRATEGY: First search with ONLY time params (start_time/end_time) — no q, no app_name, no content_type. " +
       "This gives ground truth of what's recorded. Scan results to find correct app_name values, then narrow with filters using exact observed values. " +
-      "App names are case-sensitive and may differ from user input (e.g. 'Discord' vs 'Discord.exe'). " +
-      "The q param searches captured text (accessibility/OCR), NOT app names. NEVER report 'no data' after one filtered search — verify with unfiltered time-only search first.\n\n" +
+      "App names are case-sensitive (e.g. 'Discord' vs 'Discord.exe'). " +
+      "The q param searches captured text, NOT app names. NEVER report 'no data' after one filtered search — verify with unfiltered time-only search first.\n\n" +
       "DEEP LINKS: When referencing specific moments, create clickable links using IDs from search results:\n" +
       "- OCR results (PREFERRED): [10:30 AM — Chrome](screenpipe://frame/12345) — use content.frame_id from the result\n" +
       "- Audio results: [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from result\n" +
@@ -85,12 +89,12 @@ const BASE_TOOLS: Tool[] = [
       properties: {
         q: {
           type: "string",
-          description: "Search query. Optional - omit to return all recent content.",
+          description: "Search query (full-text search on captured text). Optional - omit to return all content in time range. IMPORTANT: Do NOT use q for audio/meeting searches — transcriptions are noisy and q filters too aggressively. Only use q when searching for specific text the user saw on screen.",
         },
         content_type: {
           type: "string",
           enum: ["all", "ocr", "audio", "input", "accessibility"],
-          description: "Content type filter: 'ocr' (screen text via OCR, legacy fallback), 'audio' (transcriptions), 'input' (clicks, keystrokes, clipboard, app switches), 'accessibility' (accessibility tree text, preferred for screen content), 'all'. Default: 'all'.",
+          description: "Content type filter: 'audio' (transcriptions — use for meetings/calls/conversations), 'accessibility' (accessibility tree text, preferred for screen content), 'ocr' (screen text via OCR, legacy fallback), 'input' (clicks, keystrokes, clipboard, app switches), 'all'. Default: 'all'. For meeting/call queries, ALWAYS use 'audio'.",
           default: "all",
         },
         limit: {
@@ -229,9 +233,14 @@ const BASE_TOOLS: Tool[] = [
       "Get a lightweight compressed activity overview for a time range (~200-500 tokens). " +
       "Returns app usage (name, frame count, active minutes, first/last seen), recent accessibility texts, and audio speaker summary. " +
       "Minutes are based on active session time (consecutive frames with gaps < 5min count as active). " +
-      "first_seen/last_seen show the wall-clock span per app. " +
-      "Use this FIRST for broad questions like 'what was I doing?' before drilling into search-content or search-elements. " +
-      "Much cheaper than search-content for getting an overview.",
+      "first_seen/last_seen show the wall-clock span per app.\n\n" +
+      "USE THIS TOOL (not search-content or raw SQL) for:\n" +
+      "- 'how long did I spend on X?' → active_minutes per app\n" +
+      "- 'which apps did I use today?' → app list sorted by active_minutes\n" +
+      "- 'what was I doing?' → broad overview before drilling deeper\n" +
+      "- Any time-spent or app-usage question\n\n" +
+      "WARNING: Do NOT estimate time from raw frame counts or SQL queries — those are inaccurate. " +
+      "This endpoint calculates actual active session time correctly.",
     annotations: {
       title: "Activity Summary",
       readOnlyHint: true,
@@ -424,6 +433,20 @@ Screenpipe captures four types of data:
 - **Get keyboard input**: \`{"content_type": "input"}\`
 - **Get audio only**: \`{"content_type": "audio"}\`
 
+## Common User Requests → Correct Tool Choice
+| User says | Use this tool | Key params |
+|-----------|--------------|------------|
+| "summarize my meeting/call" | search-content | content_type:"audio", NO q param, start_time |
+| "what did they/I say about X" | search-content | content_type:"audio", NO q param (scan results manually) |
+| "how long on X" / "which apps" / "time spent" | activity-summary | start_time, end_time |
+| "what was I doing" | activity-summary | start_time, end_time (then drill into search-content) |
+| "what was I reading/looking at" | search-content | content_type:"all", start_time |
+
+## Behavior Rules
+- Act immediately on clear requests. NEVER ask "what time range?" or "which content type?" when the intent is obvious.
+- If search returns empty, silently retry with wider time range or fewer filters. Do NOT ask the user what to change.
+- For meetings: ALWAYS use content_type:"audio" and do NOT use the q param. Transcriptions are noisy — q filters too aggressively and misses relevant content.
+
 ## search-content
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -452,6 +475,15 @@ Screenpipe captures four types of data:
 ## Chat History
 Previous screenpipe chat conversations are stored as individual JSON files in ~/.screenpipe/chats/{conversation-id}.json
 Each file contains: id, title, messages[], createdAt, updatedAt. You can read these files to reference or search previous conversations.
+
+## Speaker Management
+screenpipe auto-identifies speakers in audio. API endpoints for managing them:
+- \`GET /speakers/unnamed?limit=10\` — list unnamed speakers
+- \`GET /speakers/search?name=John\` — search by name
+- \`POST /speakers/update\` with \`{"id": 5, "name": "John"}\` — rename a speaker
+- \`POST /speakers/merge\` with \`{"speaker_to_keep_id": 1, "speaker_to_merge_id": 2}\` — merge duplicates
+- \`GET /speakers/similar?speaker_id=5\` — find similar speakers for merging
+- \`POST /speakers/reassign\` — reassign audio chunk to different speaker
 
 ## Tips
 1. Read screenpipe://context first to get current timestamps

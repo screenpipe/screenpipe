@@ -304,9 +304,62 @@ pub fn start_speaker_identification(
     db: Arc<screenpipe_db::DatabaseManager>,
     user_name: Option<String>,
 ) -> tokio::task::JoinHandle<()> {
+    // Auto-name the dominant input speaker as the user (runs independently of meetings)
+    if let Some(name) = user_name.clone() {
+        if !name.trim().is_empty() {
+            let db2 = db.clone();
+            tokio::spawn(async move {
+                auto_name_input_speaker(db2, &name).await;
+            });
+        }
+    }
+
     tokio::spawn(async move {
         run_speaker_identification_loop(db, user_name).await;
     })
+}
+
+/// Periodically checks for the dominant unnamed speaker on the input device
+/// and auto-labels them as the user. This works outside of meetings — any time
+/// the user is talking into their mic, the system learns who they are.
+async fn auto_name_input_speaker(db: Arc<screenpipe_db::DatabaseManager>, user_name: &str) {
+    // Wait a bit for initial audio to accumulate
+    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
+    let min_transcriptions = 10; // need enough data to be confident
+
+    loop {
+        interval.tick().await;
+
+        match db.get_dominant_unnamed_input_speaker(min_transcriptions).await {
+            Ok(Some(speaker_id)) => {
+                match db.update_speaker_name(speaker_id, user_name).await {
+                    Ok(_) => {
+                        info!(
+                            "auto speaker identification: named dominant input speaker {} as '{}'",
+                            speaker_id, user_name
+                        );
+                        // Done — the dominant input speaker is now named.
+                        // Keep running in case new unnamed speakers accumulate
+                        // (e.g. after centroid drift creates a new cluster for the same person).
+                    }
+                    Err(e) => {
+                        warn!(
+                            "auto speaker identification: failed to name speaker {}: {}",
+                            speaker_id, e
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                debug!("auto speaker identification: no dominant unnamed input speaker yet");
+            }
+            Err(e) => {
+                debug!("auto speaker identification: DB query failed: {}", e);
+            }
+        }
+    }
 }
 
 async fn run_speaker_identification_loop(

@@ -712,6 +712,7 @@ async fn main() -> anyhow::Result<()> {
         config.video_quality.clone(),
         shutdown_tx.subscribe(),
         power_manager.clone(),
+        Some(hot_frame_cache.clone()),
     );
 
     // Create VisionManager for event-driven capture on all monitors

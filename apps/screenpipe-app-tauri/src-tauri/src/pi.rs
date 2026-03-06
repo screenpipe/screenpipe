@@ -383,7 +383,34 @@ fn parse_where_output(stdout: &str) -> Option<String> {
 }
 
 /// Find pi executable
+/// Returns the screenpipe-managed pi install directory (`~/.screenpipe/pi-agent/`).
+fn pi_local_install_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".screenpipe").join("pi-agent"))
+}
+
+/// Find the JS entrypoint for the locally-installed pi package.
+fn find_local_pi_entrypoint() -> Option<String> {
+    let dir = pi_local_install_dir()?;
+    let cli_js = dir
+        .join("node_modules")
+        .join("@mariozechner")
+        .join("pi-coding-agent")
+        .join("dist")
+        .join("cli.js");
+    if cli_js.exists() {
+        Some(cli_js.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 fn find_pi_executable() -> Option<String> {
+    // 1. Check screenpipe-managed local install first (preferred — we control the deps)
+    if let Some(js) = find_local_pi_entrypoint() {
+        return Some(js);
+    }
+
+    // 2. Fallback to global install locations
     let home = dirs::home_dir()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -966,7 +993,7 @@ pub async fn pi_start_inner(
                 .ok_or_else(|| {
                     let bun_found = find_bun_executable().is_some();
                     if bun_found {
-                        format!("Pi not found after install attempt. Install manually with: bun add -g {}", PI_PACKAGE)
+                        format!("Pi not found after install attempt. Try restarting the app or delete ~/.screenpipe/pi-agent and restart.")
                     } else {
                         format!("Pi not found: bun is not installed. Screenpipe needs bun to run the AI assistant. Expected bundled bun next to the app executable.")
                     }
@@ -1437,10 +1464,16 @@ pub async fn pi_install(app: AppHandle) -> Result<(), String> {
 
     let bun = find_bun_executable().ok_or("Could not find bun. Install from https://bun.sh")?;
 
+    let install_dir = pi_local_install_dir()
+        .ok_or("Cannot determine home directory for Pi install")?;
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|e| format!("Failed to create Pi install dir: {}", e))?;
+
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let mut cmd = std::process::Command::new(&bun);
-        cmd.args(["add", "-g", PI_PACKAGE]);
+        cmd.current_dir(&install_dir)
+            .args(["add", PI_PACKAGE]);
 
         // On Windows, prevent console window from appearing
         #[cfg(windows)]
@@ -1817,12 +1850,15 @@ fn ensure_bash_available() -> Option<String> {
 }
 
 /// Background Pi installation — call once from app setup.
+/// Installs pi into `~/.screenpipe/pi-agent/` (local install, not global)
+/// so we fully control the dependency tree and avoid version conflicts.
 /// Runs on a dedicated thread, never panics, never blocks the caller.
 /// Sets `PI_INSTALL_DONE` when finished so `pi_start` can wait for it.
 pub fn ensure_pi_installed_background() {
-    // If Pi is already installed, mark done immediately
-    if find_pi_executable().is_some() {
-        debug!("Pi already installed, skipping background install");
+    // If Pi is already installed locally, mark done immediately.
+    // We specifically check the local install (not global) to ensure we control the deps.
+    if find_local_pi_entrypoint().is_some() {
+        debug!("Pi already installed locally, skipping background install");
         PI_INSTALL_DONE.store(true, Ordering::SeqCst);
         return;
     }
@@ -1839,10 +1875,24 @@ pub fn ensure_pi_installed_background() {
                     }
                 };
 
-                info!("Pi not found — installing via bun in background");
+                let install_dir = match pi_local_install_dir() {
+                    Some(d) => d,
+                    None => {
+                        warn!("Cannot determine home directory for Pi install");
+                        return;
+                    }
+                };
+
+                if let Err(e) = std::fs::create_dir_all(&install_dir) {
+                    warn!("Failed to create Pi install dir {}: {}", install_dir.display(), e);
+                    return;
+                }
+
+                info!("Pi not found — installing into {} via bun", install_dir.display());
 
                 let mut cmd = std::process::Command::new(&bun);
-                cmd.args(["add", "-g", PI_PACKAGE]);
+                cmd.current_dir(&install_dir)
+                    .args(["add", PI_PACKAGE]);
 
                 #[cfg(windows)]
                 {
@@ -1853,7 +1903,7 @@ pub fn ensure_pi_installed_background() {
 
                 match cmd.output() {
                     Ok(output) if output.status.success() => {
-                        info!("Pi installed successfully in background");
+                        info!("Pi installed successfully into {}", install_dir.display());
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);

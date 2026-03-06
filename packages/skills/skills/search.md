@@ -21,7 +21,7 @@ Full-text search across all screen recordings using SQLite FTS5.
 sqlite3 ~/.screenpipe/db.sqlite "
   SELECT f.timestamp, o.app_name, o.window_name, snippet(ocr_text_fts, 1, '>>>', '<<<', '...', 30) as match
   FROM ocr_text_fts
-  JOIN ocr_text o ON ocr_text_fts.frame_id = o.frame_id
+  JOIN ocr_text o ON o.rowid = ocr_text_fts.rowid
   JOIN frames f ON o.frame_id = f.id
   WHERE ocr_text_fts MATCH 'error'
   ORDER BY f.timestamp DESC

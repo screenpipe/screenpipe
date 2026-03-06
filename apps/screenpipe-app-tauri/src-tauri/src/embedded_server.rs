@@ -377,6 +377,7 @@ pub async fn start_embedded_server(
         config.video_quality.clone(),
         shutdown_tx_clone.subscribe(),
         power_manager.clone(),
+        Some(hot_frame_cache.clone()),
     );
 
     // Create and start HTTP server

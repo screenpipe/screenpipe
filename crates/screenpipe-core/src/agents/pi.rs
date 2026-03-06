@@ -740,7 +740,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
 
         let pi_path = find_pi_executable()
-            .ok_or_else(|| anyhow!("pi not found. install with: bun add -g {}", PI_PACKAGE))?;
+            .ok_or_else(|| anyhow!("pi not found. try restarting the app or delete ~/.screenpipe/pi-agent and restart"))?;
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
         info!(
@@ -822,7 +822,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
 
         let pi_path = find_pi_executable()
-            .ok_or_else(|| anyhow!("pi not found. install with: bun add -g {}", PI_PACKAGE))?;
+            .ok_or_else(|| anyhow!("pi not found. try restarting the app or delete ~/.screenpipe/pi-agent and restart"))?;
 
         info!(
             "pipe streaming using provider: {}, model: {}",
@@ -894,10 +894,16 @@ impl AgentExecutor for PiExecutor {
         let bun = find_bun_executable()
             .ok_or_else(|| anyhow!("bun not found — install from https://bun.sh"))?;
 
-        info!("installing pi via bun …");
+        let install_dir = pi_local_install_dir()
+            .ok_or_else(|| anyhow!("cannot determine home directory for Pi install"))?;
+
+        std::fs::create_dir_all(&install_dir)?;
+
+        info!("installing pi into {} via bun …", install_dir.display());
 
         let mut cmd = std::process::Command::new(&bun);
-        cmd.args(["add", "-g", PI_PACKAGE]);
+        cmd.current_dir(&install_dir)
+            .args(["add", PI_PACKAGE]);
 
         #[cfg(windows)]
         {
@@ -908,7 +914,7 @@ impl AgentExecutor for PiExecutor {
 
         let output = cmd.output()?;
         if output.status.success() {
-            info!("pi installed successfully");
+            info!("pi installed successfully into {}", install_dir.display());
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -966,7 +972,34 @@ pub fn find_bun_executable() -> Option<String> {
     paths.into_iter().find(|p| std::path::Path::new(p).exists())
 }
 
+/// Returns the screenpipe-managed pi install directory (`~/.screenpipe/pi-agent/`).
+fn pi_local_install_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".screenpipe").join("pi-agent"))
+}
+
+/// Find the JS entrypoint for the locally-installed pi package.
+fn find_local_pi_entrypoint() -> Option<String> {
+    let dir = pi_local_install_dir()?;
+    let cli_js = dir
+        .join("node_modules")
+        .join("@mariozechner")
+        .join("pi-coding-agent")
+        .join("dist")
+        .join("cli.js");
+    if cli_js.exists() {
+        Some(cli_js.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 pub fn find_pi_executable() -> Option<String> {
+    // 1. Check screenpipe-managed local install first (preferred — we control the deps)
+    if let Some(js) = find_local_pi_entrypoint() {
+        return Some(js);
+    }
+
+    // 2. Fallback to global install locations
     let home = dirs::home_dir()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -1081,6 +1114,18 @@ fn build_async_command(path: &str) -> tokio::process::Command {
             let mut c = tokio::process::Command::new("cmd.exe");
             c.args(["/C", path]);
             c
+        } else if path.ends_with(".js") {
+            // Local install returns a .js entrypoint — run with bun
+            if let Some(bun) = find_bun_executable() {
+                let mut c = tokio::process::Command::new(&bun);
+                c.arg(path);
+                debug!("running pi JS entrypoint via bun: {} {}", bun, path);
+                c
+            } else {
+                let mut c = tokio::process::Command::new("node");
+                c.arg(path);
+                c
+            }
         } else {
             tokio::process::Command::new(path)
         };

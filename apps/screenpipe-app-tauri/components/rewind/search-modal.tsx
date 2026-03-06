@@ -394,26 +394,42 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       return resp.ok ? resp.json() : [];
     };
 
-    // App facet
+    // App facet (accessibility + OCR)
     fetchFacet(
-      `SELECT f.app_name as app, COUNT(*) as cnt
-       FROM ocr_text_fts fts
-       JOIN frames f ON fts.frame_id = f.id
-       WHERE fts.text MATCH '${escaped}'
-       AND f.app_name IS NOT NULL AND f.app_name != ''
-       GROUP BY f.app_name ORDER BY cnt DESC LIMIT 15`
+      `SELECT app, SUM(cnt) as cnt FROM (
+         SELECT a.app_name as app, COUNT(*) as cnt
+         FROM accessibility_fts af JOIN accessibility a ON a.id = af.rowid
+         WHERE af.text_content MATCH '${escaped}'
+         AND a.app_name IS NOT NULL AND a.app_name != ''
+         GROUP BY a.app_name
+         UNION ALL
+         SELECT f.app_name as app, COUNT(*) as cnt
+         FROM ocr_text_fts otf JOIN ocr_text o ON o.rowid = otf.rowid
+         JOIN frames f ON o.frame_id = f.id
+         WHERE otf.text MATCH '${escaped}'
+         AND f.app_name IS NOT NULL AND f.app_name != ''
+         GROUP BY f.app_name
+       ) GROUP BY app ORDER BY cnt DESC LIMIT 15`
     ).then((rows: { app: string; cnt: number }[]) => {
       if (!cancelled) setFacetApps(rows.map(r => [r.app, r.cnt]));
     }).catch(() => {});
 
-    // Domain facet
+    // Domain facet (accessibility + OCR)
     fetchFacet(
-      `SELECT f.browser_url as url, COUNT(*) as cnt
-       FROM ocr_text_fts fts
-       JOIN frames f ON fts.frame_id = f.id
-       WHERE fts.text MATCH '${escaped}'
-       AND f.browser_url IS NOT NULL AND f.browser_url != ''
-       GROUP BY f.browser_url ORDER BY cnt DESC LIMIT 200`
+      `SELECT url, SUM(cnt) as cnt FROM (
+         SELECT a.browser_url as url, COUNT(*) as cnt
+         FROM accessibility_fts af JOIN accessibility a ON a.id = af.rowid
+         WHERE af.text_content MATCH '${escaped}'
+         AND a.browser_url IS NOT NULL AND a.browser_url != ''
+         GROUP BY a.browser_url
+         UNION ALL
+         SELECT f.browser_url as url, COUNT(*) as cnt
+         FROM ocr_text_fts otf JOIN ocr_text o ON o.rowid = otf.rowid
+         JOIN frames f ON o.frame_id = f.id
+         WHERE otf.text MATCH '${escaped}'
+         AND f.browser_url IS NOT NULL AND f.browser_url != ''
+         GROUP BY f.browser_url
+       ) GROUP BY url ORDER BY cnt DESC LIMIT 200`
     ).then((rows: { url: string; cnt: number }[]) => {
       if (cancelled) return;
       // Aggregate by domain
@@ -427,13 +443,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setFacetDomains([...domainMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8));
     }).catch(() => {});
 
-    // Time facet — bucket by date (and by hour for today/yesterday)
+    // Time facet — bucket by date (accessibility + OCR)
     fetchFacet(
-      `SELECT DATE(f.timestamp) as d, MIN(f.timestamp) as ts, COUNT(*) as cnt
-       FROM ocr_text_fts fts
-       JOIN frames f ON fts.frame_id = f.id
-       WHERE fts.text MATCH '${escaped}'
-       GROUP BY DATE(f.timestamp) ORDER BY d DESC LIMIT 30`
+      `SELECT d, MIN(ts) as ts, SUM(cnt) as cnt FROM (
+         SELECT DATE(a.timestamp) as d, MIN(a.timestamp) as ts, COUNT(*) as cnt
+         FROM accessibility_fts af JOIN accessibility a ON a.id = af.rowid
+         WHERE af.text_content MATCH '${escaped}'
+         GROUP BY DATE(a.timestamp)
+         UNION ALL
+         SELECT DATE(f.timestamp) as d, MIN(f.timestamp) as ts, COUNT(*) as cnt
+         FROM ocr_text_fts otf JOIN ocr_text o ON o.rowid = otf.rowid
+         JOIN frames f ON o.frame_id = f.id
+         WHERE otf.text MATCH '${escaped}'
+         GROUP BY DATE(f.timestamp)
+       ) GROUP BY d ORDER BY d DESC LIMIT 30`
     ).then((rows: { d: string; ts: string; cnt: number }[]) => {
       if (cancelled) return;
       setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ timestamp: r.ts, count: r.cnt }))));

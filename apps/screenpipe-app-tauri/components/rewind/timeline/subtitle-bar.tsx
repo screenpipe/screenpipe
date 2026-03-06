@@ -224,11 +224,12 @@ function SubtitleLine({
 	});
 
 	const text = entry.transcription.trim();
-	// Only show "transcribing..." for recent chunks (< 2 min old).
-	// Older empty chunks are just silence — hide them entirely.
-	const ageMs = currentTime - entry.timestamp.getTime();
-	const isPending = !text && ageMs < 120_000;
-	if (!text && ageMs >= 120_000) return null;
+	// Only show "transcribing..." for chunks < 2 min old in *wall clock* time.
+	// Using Date.now() instead of timeline position so old empty chunks
+	// don't forever show as "transcribing..." when browsing history.
+	const wallAgeMs = Date.now() - entry.timestamp.getTime();
+	const isPending = !text && wallAgeMs < 120_000;
+	if (!text && wallAgeMs >= 120_000) return null;
 
 	return (
 		<div

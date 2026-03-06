@@ -902,7 +902,10 @@ export function PipesSection() {
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" disabled={refreshing} onClick={async () => {
             setRefreshing(true);
-            await fetchPipes();
+            await Promise.all([
+              fetchPipes(),
+              new Promise((r) => setTimeout(r, 2000)),
+            ]);
             setRefreshing(false);
           }}>
             {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}

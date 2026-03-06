@@ -294,6 +294,29 @@ impl HotFrameCache {
         let audio_map = self.audio.read().await;
         find_audio_for_frame(&audio_map, frame_ts)
     }
+
+    /// Update cached frames after snapshot compaction.
+    /// Replaces snapshot_path with the MP4 chunk path and sets offset_index/fps
+    /// so the frontend uses video seek instead of direct file loading.
+    pub async fn update_compacted_frames(
+        &self,
+        compacted: &[(i64, String, i64, f64)], // (frame_id, mp4_path, offset_index, fps)
+    ) {
+        let mut frames = self.frames.write().await;
+        // Build a lookup by frame_id for O(n) scan
+        let mut updates: std::collections::HashMap<i64, (&str, i64, f64)> =
+            std::collections::HashMap::with_capacity(compacted.len());
+        for (fid, path, offset, fps) in compacted {
+            updates.insert(*fid, (path.as_str(), *offset, *fps));
+        }
+        for (_, hot) in frames.iter_mut() {
+            if let Some((mp4_path, offset, fps)) = updates.get(&hot.frame_id) {
+                hot.snapshot_path = mp4_path.to_string();
+                hot.offset_index = *offset;
+                hot.fps = *fps;
+            }
+        }
+    }
 }
 
 /// Find audio entries within ±60s of a frame timestamp.
