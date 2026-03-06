@@ -588,49 +588,36 @@ export function AudioTranscript({
 		const { data, hasMeeting, isOngoing, canSummarize } = summarizeInfo;
 		if (!canSummarize) return;
 
-		// Build transcript lines, skip empty transcriptions
-		const lines = data.items
-			.filter((item) => item.audio.transcription && item.audio.transcription.trim().length > 0)
-			.map((item) => {
-				const { speakerName } = getSpeakerInfo(item.audio);
-				const time = item.audio.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-				const name = speakerName || (item.audio.is_input ? "me" : "speaker");
-				return `[${time}] ${name}: ${item.audio.transcription}`;
-			});
+		const timeRange = data.timeRange;
+		if (!timeRange) return;
 
-		// Truncate very long transcripts (cap at 500 lines)
-		const MAX_LINES = 500;
-		let truncated = false;
-		let transcriptLines = lines;
-		if (lines.length > MAX_LINES) {
-			transcriptLines = lines.slice(-MAX_LINES);
-			truncated = true;
-		}
+		const startUtc = timeRange.start.toISOString();
+		const endUtc = timeRange.end.toISOString();
+		const startLocal = timeRange.start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		const endLocal = timeRange.end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-		const timeRange = data.timeRange
-			? `${data.timeRange.start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} – ${data.timeRange.end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-			: "";
+		const speakers = data.participants
+			.map((p) => p.name || `speaker-${p.id}`)
+			.join(", ");
 
-		const label = hasMeeting
-			? `meeting transcript (${timeRange})`
-			: `nearby audio transcript (${timeRange})`;
+		const label = hasMeeting ? "meeting" : "audio";
+		const ongoingNote = isOngoing ? " (still in progress)" : "";
 
-		const truncationNote = truncated
-			? `\n\n(note: transcript was truncated to the most recent ${MAX_LINES} segments out of ${lines.length} total)`
-			: "";
-
-		const ongoingNote = isOngoing ? " (meeting still in progress)" : "";
-
-		const context = `here is my ${label}${ongoingNote}:\n\n${transcriptLines.join("\n")}${truncationNote}`;
+		const context = [
+			`${label} from ${startLocal} to ${endLocal}${ongoingNote}`,
+			speakers ? `participants: ${speakers}` : "",
+			`segments: ${data.items.length}`,
+			`use screenpipe search API with content_type=audio, start_time=${startUtc}, end_time=${endUtc} to fetch the transcript`,
+		].filter(Boolean).join("\n");
 
 		const meetingPipe = templatePipes.find((p) => p.name === "meeting-summary");
 		const fallbackPrompt = isOngoing
-			? "summarize this meeting so far with key takeaways and action items identified to this point"
-			: "summarize this meeting with key takeaways and action items";
+			? `query the audio transcriptions from ${startLocal} to ${endLocal} and summarize this meeting so far with key takeaways and action items`
+			: `query the audio transcriptions from ${startLocal} to ${endLocal} and summarize this meeting with key takeaways and action items`;
 		const prompt = meetingPipe?.prompt || fallbackPrompt;
 
 		await showChatWithPrefill({ context, prompt, autoSend: true });
-	}, [summarizeInfo, getSpeakerInfo, templatePipes]);
+	}, [summarizeInfo, templatePipes]);
 
 	const isVisible = useMemo(() => {
 		return conversationData.items.length > 0 || activeMeeting != null;

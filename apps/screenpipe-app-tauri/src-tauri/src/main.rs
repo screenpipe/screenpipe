@@ -1950,9 +1950,6 @@ async fn main() {
             let server_shutdown_tx = spawn_server(app_handle.clone(), 11435);
             app.manage(server_shutdown_tx);
 
-            // Dev mode check
-            let use_dev_mode = store.dev_mode;
-            info!("use_dev_mode: {}", use_dev_mode);
 
             // Startup permission gate: check permissions immediately after onboarding
             // and show recovery window if any critical permission is missing.
@@ -1980,9 +1977,9 @@ async fn main() {
                 }
             }
 
-            // Start embedded server in non-dev mode
-            // Use a dedicated thread with its own tokio runtime to avoid competing with Tauri's UI runtime
-            if !use_dev_mode {
+            // Start embedded server on a dedicated thread with its own tokio runtime
+            // to avoid competing with Tauri's UI runtime
+            {
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
                 let recording_state = app_handle.state::<RecordingState>();
@@ -2094,8 +2091,6 @@ async fn main() {
                         });
                     })
                     .expect("Failed to spawn server thread");
-            } else {
-                debug!("Skipping server start: dev_mode enabled");
             }
 
             // Initialize update check
