@@ -85,6 +85,9 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 
     console.log("[dictation-context] Starting server-side dictation...");
 
+    // Clear previous transcription
+    setTranscribedText("");
+
     // Set state first to prevent race condition with window auto-start
     setState("recording");
     notifySubscribers({ type: "stateChange", state: "recording" });

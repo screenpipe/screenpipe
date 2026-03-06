@@ -1100,6 +1100,41 @@ impl ShowRewindWindow {
                 }
             }
 
+            // Dictation window needs panel behavior on macOS to show above fullscreen
+            if id.label() == RewindWindowId::Dictation.label() {
+                #[cfg(target_os = "macos")]
+                {
+                    let app_clone = app.clone();
+                    run_on_main_thread_safe(app, move || {
+                        use objc::{msg_send, sel, sel_impl};
+                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+
+                        if let Ok(panel) = app_clone.get_webview_panel(RewindWindowId::Dictation.label())
+                        {
+                            // Level 1001 to appear above fullscreen apps
+                            panel.set_level(1001);
+                            // Move to active space
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            );
+                            panel.order_front_regardless();
+                            panel.make_key_window();
+                        }
+                    });
+
+                    return Ok(window);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.show().ok();
+                    window.set_focus().ok();
+                    return Ok(window);
+                }
+            }
+
             info!("showing window: {:?}", id.label());
 
             window.show().ok();

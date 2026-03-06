@@ -43,7 +43,7 @@ export default function DictationPage() {
     if (state === "idle" && !fullText) {
       const timer = setTimeout(() => {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().close();
+          getCurrentWindow().hide();
         });
       }, 500);
       return () => clearTimeout(timer);
@@ -55,9 +55,9 @@ export default function DictationPage() {
     if (state === "idle" && fullText) {
       cancelAutoClose();
       autoCloseTimerRef.current = setTimeout(() => {
-        // Close window via Tauri
+        // Hide window via Tauri (not close, so it can be reused)
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().close();
+          getCurrentWindow().hide();
         });
       }, 10000);
     }
@@ -70,12 +70,12 @@ export default function DictationPage() {
       await navigator.clipboard.writeText(fullText);
       setCopied(true);
       toast({ title: "copied to clipboard" });
-      // Stop dictation before closing
+      // Stop dictation before hiding
       stopDictation();
       // Auto-dismiss after successful copy
       setTimeout(() => {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().close();
+          getCurrentWindow().hide();
         });
       }, 1500);
     } catch (err) {
@@ -89,7 +89,7 @@ export default function DictationPage() {
       stopDictation();
     }
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-      getCurrentWindow().close();
+      getCurrentWindow().hide();
     });
     cancelAutoClose();
   }, [state, stopDictation, cancelAutoClose]);
