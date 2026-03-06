@@ -675,6 +675,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       // Append transcribed text to input
       setInput((prev) => prev + (prev ? " " : "") + text);
     },
+    onError: (error) => {
+      toast({ title: "dictation error", description: error, variant: "destructive" });
+    },
   });
 
   // Custom summary templates (persisted in settings)
