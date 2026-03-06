@@ -80,6 +80,8 @@ export default function DictationPage() {
       await navigator.clipboard.writeText(fullText);
       setCopied(true);
       toast({ title: "copied to clipboard" });
+      // Stop dictation before closing
+      stopDictation();
       // Auto-dismiss after successful copy
       setTimeout(() => {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
@@ -90,7 +92,7 @@ export default function DictationPage() {
       console.error("[dictation] Copy failed:", err);
       toast({ title: "failed to copy", variant: "destructive" });
     }
-  }, [fullText]);
+  }, [fullText, stopDictation]);
 
   const handleClose = useCallback(() => {
     if (state === "recording") {
