@@ -591,44 +591,8 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             let app = &app_for_closure;
             info!("dictation shortcut triggered");
             
-            // Show the main window if not visible (same pattern as search shortcut)
-            #[cfg(target_os = "macos")]
-            {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-                if let Some(window) = app.get_webview_window(label) {
-                    if !window.is_visible().unwrap_or(false) {
-                        show_main_window(app, false);
-                    }
-                } else {
-                    show_main_window(app, false);
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-                if let Some(window) = app.get_webview_window(label) {
-                    if !window.is_visible().unwrap_or(false) {
-                        show_main_window(app, false);
-                    }
-                } else {
-                    show_main_window(app, false);
-                }
-            }
-            
-            // Emit event so the frontend can handle dictation
-            let _ = app.emit("shortcut-dictation", ());
+            // Show the dictation window (independent of main window)
+            let _ = window_api::ShowRewindWindow::Dictation.show(app);
         });
     })
     .await?;

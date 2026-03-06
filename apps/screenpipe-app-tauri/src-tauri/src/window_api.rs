@@ -556,6 +556,7 @@ pub enum RewindWindowId {
     Onboarding,
     Chat,
     PermissionRecovery,
+    Dictation,
 }
 
 impl FromStr for RewindWindowId {
@@ -569,6 +570,7 @@ impl FromStr for RewindWindowId {
             "onboarding" => Ok(RewindWindowId::Onboarding),
             "chat" => Ok(RewindWindowId::Chat),
             "permission-recovery" => Ok(RewindWindowId::PermissionRecovery),
+            "dictation" => Ok(RewindWindowId::Dictation),
             _ => Ok(RewindWindowId::Main),
         }
     }
@@ -583,6 +585,7 @@ impl std::fmt::Display for RewindWindowId {
             RewindWindowId::Onboarding => write!(f, "onboarding"),
             RewindWindowId::Chat => write!(f, "chat"),
             RewindWindowId::PermissionRecovery => write!(f, "permission-recovery"),
+            RewindWindowId::Dictation => write!(f, "dictation"),
         }
     }
 }
@@ -596,6 +599,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::Chat => "chat",
             RewindWindowId::PermissionRecovery => "permission-recovery",
+            RewindWindowId::Dictation => "dictation",
         }
     }
 
@@ -607,6 +611,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::Chat => "ai chat",
             RewindWindowId::PermissionRecovery => "fix permissions",
+            RewindWindowId::Dictation => "dictation",
         }
     }
 
@@ -618,6 +623,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => (450.0, 500.0),
             RewindWindowId::Chat => (600.0, 750.0),
             RewindWindowId::PermissionRecovery => (500.0, 580.0),
+            RewindWindowId::Dictation => (400.0, 200.0),
         })
     }
 
@@ -649,6 +655,7 @@ pub enum ShowRewindWindow {
     Onboarding,
     Chat,
     PermissionRecovery,
+    Dictation,
 }
 
 impl ShowRewindWindow {
@@ -721,6 +728,7 @@ impl ShowRewindWindow {
             ShowRewindWindow::Onboarding => RewindWindowId::Onboarding,
             ShowRewindWindow::Chat => RewindWindowId::Chat,
             ShowRewindWindow::PermissionRecovery => RewindWindowId::PermissionRecovery,
+            ShowRewindWindow::Dictation => RewindWindowId::Dictation,
         }
     }
 
@@ -734,6 +742,7 @@ impl ShowRewindWindow {
             ShowRewindWindow::Onboarding => None,
             ShowRewindWindow::Chat => None,
             ShowRewindWindow::PermissionRecovery => None,
+            ShowRewindWindow::Dictation => None,
         }
     }
 
@@ -1844,6 +1853,69 @@ impl ShowRewindWindow {
                         }
                     });
                 }
+
+                window
+            }
+            ShowRewindWindow::Dictation => {
+                #[cfg(target_os = "macos")]
+                let window = {
+                    let builder = self
+                        .window_builder(app, "/dictation")
+                        .inner_size(450.0, 180.0)
+                        .min_inner_size(350.0, 150.0)
+                        .max_inner_size(600.0, 300.0)
+                        .resizable(true)
+                        .focused(true)
+                        .visible(true)
+                        .always_on_top(true)
+                        .hidden_title(true);
+                    let window = builder.build()?;
+
+                    // Convert to panel for fullscreen support
+                    if let Ok(_panel) = window.to_panel() {
+                        let window_clone = window.clone();
+                        run_on_main_thread_safe(app, move || {
+                            use objc::{msg_send, sel, sel_impl};
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+
+                            if let Ok(panel) = window_clone.to_panel() {
+                                // Level 1001 to appear above fullscreen apps
+                                panel.set_level(1001);
+                                // NonActivatingPanel so clicking doesn't activate app
+                                unsafe {
+                                    let current: i32 = msg_send![&*panel, styleMask];
+                                    panel.set_style_mask(current | 128);
+                                }
+                                panel.set_hides_on_deactivate(false);
+                                // Draggable by background
+                                let _: () = unsafe {
+                                    msg_send![&*panel, setMovableByWindowBackground: true]
+                                };
+                                // Move to active space
+                                panel.set_collection_behaviour(
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                );
+                            }
+                        });
+                    }
+
+                    window
+                };
+
+                #[cfg(not(target_os = "macos"))]
+                let window = {
+                    let builder = self
+                        .window_builder(app, "/dictation")
+                        .inner_size(450.0, 180.0)
+                        .min_inner_size(350.0, 150.0)
+                        .max_inner_size(600.0, 300.0)
+                        .resizable(true)
+                        .focused(true)
+                        .always_on_top(true);
+                    builder.build()?
+                };
 
                 window
             }

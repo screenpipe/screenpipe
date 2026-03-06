@@ -220,18 +220,6 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen for DOM events dispatched by deeplink-handler
-  useEffect(() => {
-    const handler = () => {
-      console.log("[dictation-context] DOM toggle-dictation event received");
-      toggleDictation();
-    };
-    window.addEventListener("toggle-dictation", handler);
-    return () => {
-      window.removeEventListener("toggle-dictation", handler);
-    };
-  }, [toggleDictation]);
-
   return (
     <DictationContext.Provider
       value={{
