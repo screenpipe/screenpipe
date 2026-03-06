@@ -25,6 +25,7 @@ import {
   UserPlus,
   Monitor,
   Mic,
+  Headset,
   Volume2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -35,6 +36,7 @@ import { AccountSection } from "@/components/settings/account-section";
 import ShortcutSection from "@/components/settings/shortcut-section";
 import { AIPresets } from "@/components/settings/ai-presets";
 import { RecordingSettings } from "@/components/settings/recording-settings";
+import { DictationSection } from "@/components/settings/dictation-section";
 import GeneralSettings from "@/components/settings/general-settings";
 import { DiskUsageSection } from "@/components/settings/disk-usage-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
@@ -65,6 +67,7 @@ type MainSection = "home" | "timeline" | "pipes" | "help";
 type SettingsModalSection =
   | "account"
   | "recording"
+  | "dictation"
   | "ai"
   | "general"
   | "shortcuts"
@@ -78,13 +81,13 @@ type SettingsModalSection =
 // All valid URL sections (main + modal)
 const ALL_SECTIONS = [
   "home", "timeline", "pipes", "help",
-  "account", "recording", "ai", "general", "shortcuts",
+  "account", "recording", "dictation", "ai", "general", "shortcuts",
   "connections", "disk-usage", "cloud-archive", "cloud-sync", "team", "referral",
   "feedback", // backwards compat → maps to "help"
 ];
 
 const MODAL_SECTIONS = new Set<string>([
-  "account", "recording", "ai", "general", "shortcuts",
+  "account", "recording", "dictation", "ai", "general", "shortcuts",
   "connections", "disk-usage", "cloud-archive", "cloud-sync", "team", "referral",
 ]);
 
@@ -235,6 +238,8 @@ function SettingsPageContent() {
         return <AccountSection />;
       case "recording":
         return <RecordingSettings />;
+      case "dictation":
+        return <DictationSection />;
       case "shortcuts":
         return <ShortcutSection />;
       case "disk-usage":
@@ -263,6 +268,7 @@ function SettingsPageContent() {
   const settingsModalSections: { id: SettingsModalSection; label: string; icon: React.ReactNode; group?: string }[] = [
     { id: "general", label: "General", icon: <SettingsIcon className="h-4 w-4" />, group: "settings" },
     { id: "recording", label: "Recording", icon: <Video className="h-4 w-4" />, group: "settings" },
+    { id: "dictation", label: "Dictation", icon: <Headset className="h-4 w-4" />, group: "settings" },
     { id: "ai", label: "AI", icon: <Brain className="h-4 w-4" />, group: "settings" },
     { id: "shortcuts", label: "Shortcuts", icon: <Keyboard className="h-4 w-4" />, group: "settings" },
     { id: "connections", label: "Connections", icon: <Plug className="h-4 w-4" />, group: "settings" },
