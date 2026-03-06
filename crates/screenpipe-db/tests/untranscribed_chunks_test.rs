@@ -137,9 +137,13 @@ mod tests {
         let ts2 = Utc::now() - Duration::minutes(20);
         let ts3 = Utc::now() - Duration::minutes(10);
 
-        db.insert_audio_chunk("oldest.mp4", Some(ts1)).await.unwrap();
+        db.insert_audio_chunk("oldest.mp4", Some(ts1))
+            .await
+            .unwrap();
         // Insert out of order
-        db.insert_audio_chunk("newest.mp4", Some(ts3)).await.unwrap();
+        db.insert_audio_chunk("newest.mp4", Some(ts3))
+            .await
+            .unwrap();
         db.insert_audio_chunk("middle.mp4", Some(ts2))
             .await
             .unwrap();

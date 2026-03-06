@@ -471,7 +471,7 @@ pub async fn event_driven_capture_loop(
                                 monitor_id,
                                 e
                             );
-                        } else if consecutive_capture_errors % 100 == 0 {
+                        } else if consecutive_capture_errors.is_multiple_of(100) {
                             // Periodic reminder at warn level (no Sentry flood)
                             warn!(
                                 "monitor {} capture still failing ({} consecutive errors): {}",

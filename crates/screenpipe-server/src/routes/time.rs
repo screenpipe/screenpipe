@@ -14,7 +14,7 @@ fn parse_relative_time(s: &str) -> Option<DateTime<Utc>> {
         return Some(Utc::now());
     }
 
-    let trimmed = s.strip_suffix("ago").or_else(|| Some(s))?.trim();
+    let trimmed = s.strip_suffix("ago").or(Some(s))?.trim();
 
     // Find where the numeric part ends and the unit starts
     let num_end = trimmed

@@ -68,3 +68,91 @@ export async function decryptConfig(
   );
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
+
+// --- Passphrase-based key wrapping for secure invite flow ---
+
+const PBKDF2_ITERATIONS = 600_000;
+
+/** Generate a random 8-character alphanumeric passphrase */
+export function generatePassphrase(): string {
+  const chars = "abcdefghijkmnpqrstuvwxyz23456789"; // no ambiguous: 0/O, 1/l
+  const arr = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(arr, (b) => chars[b % chars.length]).join("");
+}
+
+/** Wrap a team key with a passphrase using PBKDF2 + AES-GCM */
+export async function wrapKeyWithPassphrase(
+  teamKey: CryptoKey,
+  passphrase: string
+): Promise<{ encrypted_key: string; salt: string; nonce: string }> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+
+  const wrappingKey = await deriveKeyFromPassphrase(passphrase, salt);
+  const rawKey = await crypto.subtle.exportKey("raw", teamKey);
+
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce },
+    wrappingKey,
+    rawKey
+  );
+
+  return {
+    encrypted_key: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
+    salt: btoa(String.fromCharCode(...salt)),
+    nonce: btoa(String.fromCharCode(...nonce)),
+  };
+}
+
+/** Unwrap a team key using passphrase */
+export async function unwrapKeyWithPassphrase(
+  encrypted_key: string,
+  salt: string,
+  nonce: string,
+  passphrase: string
+): Promise<CryptoKey> {
+  const saltBytes = Uint8Array.from(atob(salt), (c) => c.charCodeAt(0));
+  const nonceBytes = Uint8Array.from(atob(nonce), (c) => c.charCodeAt(0));
+  const ciphertextBytes = Uint8Array.from(atob(encrypted_key), (c) =>
+    c.charCodeAt(0)
+  );
+
+  const wrappingKey = await deriveKeyFromPassphrase(passphrase, saltBytes);
+
+  const rawKey = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: nonceBytes },
+    wrappingKey,
+    ciphertextBytes
+  );
+
+  return crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, true, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+async function deriveKeyFromPassphrase(
+  passphrase: string,
+  salt: Uint8Array
+): Promise<CryptoKey> {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: PBKDF2_ITERATIONS,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}

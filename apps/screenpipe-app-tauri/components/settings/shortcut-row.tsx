@@ -243,17 +243,23 @@ const ShortcutRow = ({
       </div>
       <div className="flex items-center gap-4">
         <button
-          onClick={() => setIsRecording(true)}
+          onClick={() => {
+            if (getShortcutState() === ShortcutState.DISABLED) return;
+            setIsRecording(true);
+          }}
           className={cn(
             "relative min-w-[140px] rounded-md border px-3 py-2 text-sm",
             "bg-muted/50 hover:bg-muted/70 transition-colors",
             "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring",
             isRecording && "border-primary",
-            !value && "text-muted-foreground"
+            (!value || getShortcutState() === ShortcutState.DISABLED) && "text-muted-foreground",
+            getShortcutState() === ShortcutState.DISABLED && "opacity-50 cursor-not-allowed"
           )}
         >
           {isRecording ? (
             <span className="animate-pulse">recording...</span>
+          ) : getShortcutState() === ShortcutState.DISABLED ? (
+            <span>Disabled</span>
           ) : (
             <span className="flex items-center justify-between gap-2">
               {currentKeys.map((key, i) => (
@@ -276,6 +282,7 @@ const ShortcutRow = ({
           checked={getShortcutState() === ShortcutState.ENABLED}
           disabled={getShortcutState() === ShortcutState.UNASSIGNED}
           onCheckedChange={async (checked) => {
+            if (isRecording) setIsRecording(false);
             if (checked && value) {
               console.log("re-enabling shortcut", value);
               await handleEnableShortcut(value);

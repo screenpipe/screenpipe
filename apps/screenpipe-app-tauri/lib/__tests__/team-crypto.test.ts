@@ -9,6 +9,9 @@ import {
   importTeamKey,
   encryptConfig,
   decryptConfig,
+  generatePassphrase,
+  wrapKeyWithPassphrase,
+  unwrapKeyWithPassphrase,
 } from "../team-crypto";
 
 describe("team-crypto", () => {
@@ -170,7 +173,7 @@ describe("team-crypto", () => {
     });
   });
 
-  describe("invite link key flow", () => {
+  describe("invite link key flow (legacy)", () => {
     it("should simulate full invite link flow: generate → export → URL → import → decrypt", async () => {
       // admin creates team and generates key
       const adminKey = await generateTeamKey();
@@ -194,6 +197,84 @@ describe("team-crypto", () => {
       const memberKey = await importTeamKey(keyFromUrl);
 
       // member decrypts the config
+      const decrypted = await decryptConfig(
+        encrypted.value_encrypted,
+        encrypted.nonce,
+        memberKey
+      );
+      expect(decrypted).toEqual(pipeConfig);
+    });
+  });
+
+  describe("passphrase-based key wrapping", () => {
+    it("should generate 8-character passphrases", () => {
+      const passphrase = generatePassphrase();
+      expect(passphrase.length).toBe(8);
+      expect(/^[a-z0-9]+$/.test(passphrase)).toBe(true);
+    });
+
+    it("should generate unique passphrases", () => {
+      const p1 = generatePassphrase();
+      const p2 = generatePassphrase();
+      expect(p1).not.toBe(p2);
+    });
+
+    it("should round-trip wrap → unwrap with correct passphrase", async () => {
+      const teamKey = await generateTeamKey();
+      const passphrase = generatePassphrase();
+
+      const wrapped = await wrapKeyWithPassphrase(teamKey, passphrase);
+      expect(wrapped.encrypted_key).toBeDefined();
+      expect(wrapped.salt).toBeDefined();
+      expect(wrapped.nonce).toBeDefined();
+
+      const unwrapped = await unwrapKeyWithPassphrase(
+        wrapped.encrypted_key,
+        wrapped.salt,
+        wrapped.nonce,
+        passphrase
+      );
+
+      // verify same key material
+      const raw1 = new Uint8Array(await crypto.subtle.exportKey("raw", teamKey));
+      const raw2 = new Uint8Array(await crypto.subtle.exportKey("raw", unwrapped));
+      expect(raw1).toEqual(raw2);
+    });
+
+    it("should fail to unwrap with wrong passphrase", async () => {
+      const teamKey = await generateTeamKey();
+      const wrapped = await wrapKeyWithPassphrase(teamKey, "correctpass");
+
+      await expect(
+        unwrapKeyWithPassphrase(
+          wrapped.encrypted_key,
+          wrapped.salt,
+          wrapped.nonce,
+          "wrongpass"
+        )
+      ).rejects.toThrow();
+    });
+
+    it("should simulate full secure invite flow: wrap → claim → unwrap → decrypt", async () => {
+      // admin generates team key and encrypts a config
+      const adminKey = await generateTeamKey();
+      const pipeConfig = { pipe_id: "compliance", enabled: true };
+      const encrypted = await encryptConfig(pipeConfig, adminKey);
+
+      // admin wraps key with passphrase for invite
+      const passphrase = generatePassphrase();
+      const wrapped = await wrapKeyWithPassphrase(adminKey, passphrase);
+
+      // simulate: wrapped blob stored on server, claim token in invite URL
+      // member fetches blob from server, unwraps with passphrase
+      const memberKey = await unwrapKeyWithPassphrase(
+        wrapped.encrypted_key,
+        wrapped.salt,
+        wrapped.nonce,
+        passphrase
+      );
+
+      // member decrypts config
       const decrypted = await decryptConfig(
         encrypted.value_encrypted,
         encrypted.nonce,

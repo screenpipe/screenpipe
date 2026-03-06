@@ -112,7 +112,7 @@ async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
             "grant_type": "refresh_token",
             "client_id": CLIENT_ID,
             "refresh_token": refresh_token,
-            "scope": "openid profile email",
+            "scope": "openid profile email offline_access model.request api.model.read",
         }))
         .send()
         .await
@@ -238,7 +238,7 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
         .append_pair("response_type", "code")
         .append_pair("client_id", CLIENT_ID)
         .append_pair("redirect_uri", &redirect_uri)
-        .append_pair("scope", "openid profile email offline_access")
+        .append_pair("scope", "openid profile email offline_access model.request api.model.read")
         .append_pair("code_challenge", &code_challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("id_token_add_organizations", "true")

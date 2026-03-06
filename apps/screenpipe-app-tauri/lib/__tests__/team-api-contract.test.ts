@@ -9,6 +9,9 @@ import {
   importTeamKey,
   encryptConfig,
   decryptConfig,
+  generatePassphrase,
+  wrapKeyWithPassphrase,
+  unwrapKeyWithPassphrase,
 } from "../team-crypto";
 
 /**
@@ -181,11 +184,10 @@ describe("team API contract", () => {
     });
   });
 
-  describe("invite link E2E flow", () => {
-    it("admin creates team → generates invite → member joins → decrypts configs", async () => {
+  describe("secure invite E2E flow", () => {
+    it("admin wraps key → uploads claim → member fetches claim → unwraps → decrypts configs", async () => {
       // Step 1: admin creates team and key
       const adminKey = await generateTeamKey();
-      const keyBase64 = await exportTeamKey(adminKey);
 
       // Step 2: admin pushes config (encrypted)
       const pipeConfig = {
@@ -195,24 +197,60 @@ describe("team API contract", () => {
       };
       const encryptedForBackend = await encryptConfig(pipeConfig, adminKey);
 
-      // Step 3: admin generates invite link
-      const inviteLink = `screenpipe://join-team?team_id=${MOCK_TEAM_ID}&key=${encodeURIComponent(keyBase64)}`;
+      // Step 3: admin wraps key with passphrase
+      const passphrase = generatePassphrase();
+      const wrapped = await wrapKeyWithPassphrase(adminKey, passphrase);
 
-      // Step 4: member receives link, extracts key
+      // Step 4: admin uploads wrapped blob to server (POST /api/team/key-claim)
+      // server returns claim_token
+      const mockClaimToken = "claim-abc-123";
+
+      // Step 5: invite link contains NO key material
+      const inviteLink = `screenpipe://join-team?team_id=${MOCK_TEAM_ID}&invite_token=tok-xyz&claim=${mockClaimToken}`;
       const url = new URL(inviteLink);
-      const teamId = url.searchParams.get("team_id");
-      const keyParam = url.searchParams.get("key");
 
-      expect(teamId).toBe(MOCK_TEAM_ID);
-      expect(keyParam).toBeDefined();
+      expect(url.searchParams.get("team_id")).toBe(MOCK_TEAM_ID);
+      expect(url.searchParams.get("claim")).toBe(mockClaimToken);
+      expect(url.searchParams.has("key")).toBe(false); // NO raw key in URL
 
-      // Step 5: member imports key
-      const memberKey = await importTeamKey(decodeURIComponent(keyParam!));
+      // Step 6: member fetches wrapped blob from server (GET /api/team/key-claim/:token)
+      // server returns: { encrypted_key, salt, nonce }
 
-      // Step 6: member fetches configs from backend and decrypts
+      // Step 7: member unwraps with passphrase (shared out-of-band)
+      const memberKey = await unwrapKeyWithPassphrase(
+        wrapped.encrypted_key,
+        wrapped.salt,
+        wrapped.nonce,
+        passphrase
+      );
+
+      // Step 8: member decrypts configs
       const decrypted = await decryptConfig(
         encryptedForBackend.value_encrypted,
         encryptedForBackend.nonce,
+        memberKey
+      );
+      expect(decrypted).toEqual(pipeConfig);
+    });
+  });
+
+  describe("legacy invite link E2E flow (backwards compat)", () => {
+    it("old invite links with raw key still work", async () => {
+      const adminKey = await generateTeamKey();
+      const keyBase64 = await exportTeamKey(adminKey);
+
+      const pipeConfig = { pipe_id: "legacy-pipe", enabled: true };
+      const encrypted = await encryptConfig(pipeConfig, adminKey);
+
+      // old-style link with key= param
+      const inviteLink = `screenpipe://join-team?team_id=${MOCK_TEAM_ID}&key=${encodeURIComponent(keyBase64)}`;
+      const url = new URL(inviteLink);
+      const keyParam = url.searchParams.get("key");
+
+      const memberKey = await importTeamKey(decodeURIComponent(keyParam!));
+      const decrypted = await decryptConfig(
+        encrypted.value_encrypted,
+        encrypted.nonce,
         memberKey
       );
       expect(decrypted).toEqual(pipeConfig);

@@ -28,9 +28,20 @@ pub fn detect_hardware_capability() -> HardwareCapability {
     let cpu_cores = sys.cpus().len();
     let total_memory_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
 
-    let is_weak = !has_gpu && (cpu_cores < 8 || total_memory_gb < 8.0);
+    let is_weak = cfg!(target_os = "windows") || (!has_gpu && (cpu_cores < 8 || total_memory_gb < 8.0));
 
-    let (recommended_engine, reason) = if has_gpu {
+    let is_windows = cfg!(target_os = "windows");
+
+    let (recommended_engine, reason) = if is_windows {
+        // Windows lacks Metal/CoreML — local whisper is significantly slower
+        (
+            "screenpipe-cloud".to_string(),
+            format!(
+                "Windows lacks GPU acceleration for local transcription ({} cores, {:.1} GB RAM). Cloud engines are recommended for speed and accuracy.",
+                cpu_cores, total_memory_gb
+            ),
+        )
+    } else if has_gpu {
         (
             "whisper-large-v3-turbo".to_string(),
             format!(

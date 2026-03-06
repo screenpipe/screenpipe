@@ -55,6 +55,19 @@ pub fn start_snapshot_compaction(
         loop {
             let state = power_manager.current_state().await;
 
+            // Skip compaction on battery — disk space isn't urgent enough to drain battery
+            if !state.on_ac {
+                debug!("snapshot compaction: skipping — on battery");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(POLL_INTERVAL_SECS)) => {}
+                    _ = shutdown_rx.recv() => {
+                        info!("snapshot compaction worker shutting down");
+                        break;
+                    }
+                }
+                continue;
+            }
+
             // Adapt batch size and delay based on thermal state
             let (chunk_size, inter_chunk_delay_secs) = match state.thermal_state {
                 ThermalState::Nominal | ThermalState::Fair => (MAX_FRAMES_PER_CHUNK, 0u64),
@@ -214,17 +227,12 @@ async fn compact_chunk(
         jpeg_total_bytes as f64 / 1_048_576.0
     );
 
-    // Encode JPEGs → MP4 via ffmpeg (low-priority, capped threads, raw RGB pipe)
-    let mut child =
-        start_ffmpeg_lowpri(&mp4_path_str, fps, video_quality, frame_w, frame_h).await?;
+    // Encode JPEGs → MP4 via ffmpeg (low-priority, capped threads, JPEG passthrough)
+    let mut child = start_ffmpeg_lowpri(&mp4_path_str, fps, video_quality).await?;
     let mut stdin = child
         .stdin
         .take()
         .ok_or_else(|| anyhow::anyhow!("ffmpeg stdin not available"))?;
-
-    // Pre-calculate target dimensions (must match what ffmpeg expects)
-    let target_w = (frame_w / 2) * 2;
-    let target_h = (frame_h / 2) * 2;
 
     let mut encoded_count = 0u32;
     for (_, snapshot_path, _) in frames {
@@ -234,24 +242,19 @@ async fn compact_chunk(
             continue;
         }
 
-        // Decode JPEG → raw RGB bytes (no PNG re-encode needed)
-        match image::open(jpeg_path) {
-            Ok(img) => {
-                // Resize if dimensions don't match (handles mixed-resolution edge case)
-                let img = if img.width() != target_w || img.height() != target_h {
-                    img.resize_exact(target_w, target_h, image::imageops::FilterType::Nearest)
-                } else {
-                    img
-                };
-                let rgb = img.to_rgb8();
-                if let Err(e) = write_frame_to_ffmpeg(&mut stdin, rgb.as_raw()).await {
+        // Pass raw JPEG bytes directly to ffmpeg (no Rust-side decode needed)
+        match tokio::fs::read(jpeg_path).await {
+            Ok(jpeg_bytes) => {
+                if let Err(e) = write_frame_to_ffmpeg(&mut stdin, &jpeg_bytes).await {
                     error!("failed to write frame to ffmpeg: {}", e);
                     break;
                 }
                 encoded_count += 1;
+                // Pace writes to avoid CPU spikes — spread encoding over time
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             Err(e) => {
-                warn!("failed to open snapshot {}: {}", snapshot_path, e);
+                warn!("failed to read snapshot {}: {}", snapshot_path, e);
                 continue;
             }
         }
@@ -300,7 +303,10 @@ async fn compact_chunk(
     for (_, snapshot_path, _) in frames {
         match tokio::fs::remove_file(snapshot_path).await {
             Ok(_) => deleted += 1,
-            Err(e) => debug!("failed to delete compacted snapshot {}: {}", snapshot_path, e),
+            Err(e) => debug!(
+                "failed to delete compacted snapshot {}: {}",
+                snapshot_path, e
+            ),
         }
     }
 
@@ -323,24 +329,19 @@ async fn compact_chunk(
 }
 
 /// Spawn ffmpeg with low CPU priority for background compaction.
-/// Uses `nice` on unix to lower scheduling priority, limits x265
-/// internal thread pool to 1, and caps ffmpeg threads to 1.
+/// Uses `nice` on unix / IDLE_PRIORITY_CLASS on Windows.
+/// Accepts JPEG passthrough (image2pipe mjpeg) so Rust doesn't need to decode.
+/// Limits x265 internal threading to 1 pool with 1 thread.
 async fn start_ffmpeg_lowpri(
     output_file: &str,
     fps: f64,
     video_quality: &str,
-    width: u32,
-    height: u32,
 ) -> Result<tokio::process::Child> {
-    let ffmpeg_path = screenpipe_core::find_ffmpeg_path()
-        .ok_or_else(|| anyhow::anyhow!("ffmpeg not found"))?;
+    let ffmpeg_path =
+        screenpipe_core::find_ffmpeg_path().ok_or_else(|| anyhow::anyhow!("ffmpeg not found"))?;
 
     let fps_str = fps.to_string();
     let crf = video_quality_to_crf(video_quality);
-    // Ensure even dimensions for h265
-    let w = (width / 2) * 2;
-    let h = (height / 2) * 2;
-    let size_str = format!("{}x{}", w, h);
 
     // On unix, wrap with `nice -n 19` for lowest scheduling priority
     #[cfg(unix)]
@@ -355,20 +356,33 @@ async fn start_ffmpeg_lowpri(
 
     command
         .args([
-            "-f", "rawvideo",
-            "-pixel_format", "rgb24",
-            "-video_size", &size_str,
-            "-r", &fps_str,
-            "-i", "-",
-            "-vcodec", "libx265",
-            "-tag:v", "hvc1",
-            "-preset", "ultrafast",
-            "-crf", crf,
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "-r",
+            &fps_str,
+            "-i",
+            "-",
+            "-vf",
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-vcodec",
+            "libx265",
+            "-tag:v",
+            "hvc1",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            crf,
             // Limit x265 internal threading to 1 pool with 1 thread
-            "-x265-params", "pools=1:frame-threads=1:bframes=0",
-            "-threads", "1",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "-pix_fmt", "yuv420p",
+            "-x265-params",
+            "pools=1:frame-threads=1:bframes=0",
+            "-threads",
+            "1",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "-pix_fmt",
+            "yuv420p",
             output_file,
         ])
         .stdin(std::process::Stdio::piped())
@@ -377,8 +391,11 @@ async fn start_ffmpeg_lowpri(
 
     #[cfg(windows)]
     {
+        // IDLE_PRIORITY_CLASS: only run when CPU is otherwise idle
+        // CREATE_NO_WINDOW: no console window
+        const IDLE_PRIORITY_CLASS: u32 = 0x00000040;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(IDLE_PRIORITY_CLASS | CREATE_NO_WINDOW);
     }
 
     Ok(command.spawn()?)

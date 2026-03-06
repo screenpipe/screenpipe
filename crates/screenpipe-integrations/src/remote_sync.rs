@@ -51,9 +51,7 @@ pub struct DiscoveredHost {
 
 /// Skip SQLite journal files (copying mid-write corrupts the DB).
 fn should_skip(name: &str) -> bool {
-    name.ends_with(".sqlite-wal")
-        || name.ends_with(".sqlite-shm")
-        || name.ends_with(".lock")
+    name.ends_with(".sqlite-wal") || name.ends_with(".sqlite-shm") || name.ends_with(".lock")
 }
 
 /// Screenpipe skill file dropped on the remote so AI agents know how to query the data.
@@ -154,10 +152,13 @@ async fn load_private_key(key_path: &str) -> Result<Arc<russh::keys::PrivateKey>
 
 async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>, SftpSession)> {
     let key = load_private_key(&config.key_path).await?;
-    let mut session =
-        client::connect(Arc::new(client::Config::default()), (config.host.as_str(), config.port), SshHandler)
-            .await
-            .with_context(|| format!("SSH connection to {}:{} failed", config.host, config.port))?;
+    let mut session = client::connect(
+        Arc::new(client::Config::default()),
+        (config.host.as_str(), config.port),
+        SshHandler,
+    )
+    .await
+    .with_context(|| format!("SSH connection to {}:{} failed", config.host, config.port))?;
 
     // Use SHA-256 for RSA keys (servers reject SHA-1 "ssh-rsa" by default now).
     // For non-RSA keys (ed25519, ecdsa) the hash_alg is ignored.
@@ -167,11 +168,22 @@ async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>
         .await
         .context("SSH authentication failed")?;
     if !auth.success() {
-        anyhow::bail!("SSH auth rejected for {}@{}:{}", config.user, config.host, config.port);
+        anyhow::bail!(
+            "SSH auth rejected for {}@{}:{}",
+            config.user,
+            config.host,
+            config.port
+        );
     }
 
-    let channel = session.channel_open_session().await.context("failed to open SSH channel")?;
-    channel.request_subsystem(true, "sftp").await.context("SFTP subsystem request failed")?;
+    let channel = session
+        .channel_open_session()
+        .await
+        .context("failed to open SSH channel")?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .context("SFTP subsystem request failed")?;
     let sftp = SftpSession::new(channel.into_stream())
         .await
         .map_err(|e| anyhow::anyhow!("SFTP init failed: {}", e))?;
@@ -182,7 +194,10 @@ async fn connect_sftp(config: &SyncConfig) -> Result<(client::Handle<SshHandler>
 // ── File transfer helpers ───────────────────────────────────────────────
 
 async fn mkdir_p(sftp: &SftpSession, path: &str) {
-    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty() && *p != "~").collect();
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != "~")
+        .collect();
     let mut current = if path.starts_with('/') {
         String::from("/")
     } else if path.starts_with("~/") {
@@ -351,7 +366,10 @@ pub async fn sync_to_remote(config: &SyncConfig, data_dir: &Path) -> SyncResult 
 }
 
 async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<SyncResult> {
-    info!("sync starting → {}@{}:{}", config.user, config.host, config.port);
+    info!(
+        "sync starting → {}@{}:{}",
+        config.user, config.host, config.port
+    );
 
     let (session, sftp) = connect_sftp(config).await?;
     let remote_base = &config.remote_path;
@@ -384,10 +402,15 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
         let _ = f.shutdown().await;
     }
 
-    info!("sync done: {} files, {} bytes", files_transferred, bytes_transferred);
+    info!(
+        "sync done: {} files, {} bytes",
+        files_transferred, bytes_transferred
+    );
 
     drop(sftp);
-    let _ = session.disconnect(russh::Disconnect::ByApplication, "", "").await;
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
 
     Ok(SyncResult {
         ok: true,
@@ -402,7 +425,9 @@ pub async fn test_connection(config: &SyncConfig) -> Result<()> {
     let (session, sftp) = connect_sftp(config).await?;
     info!("SSH OK → {}@{}:{}", config.user, config.host, config.port);
     drop(sftp);
-    let _ = session.disconnect(russh::Disconnect::ByApplication, "", "").await;
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
     Ok(())
 }
 
@@ -424,7 +449,11 @@ async fn discover_default_key() -> Option<String> {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with("id_")
             && !name.ends_with(".pub")
-            && entry.file_type().await.map(|ft| ft.is_file()).unwrap_or(false)
+            && entry
+                .file_type()
+                .await
+                .map(|ft| ft.is_file())
+                .unwrap_or(false)
         {
             found_keys.push(name);
         }
@@ -519,8 +548,11 @@ fn parse_ssh_config(content: &str) -> Vec<DiscoveredHost> {
         if t.is_empty() || t.starts_with('#') {
             continue;
         }
-        let (k, v) = match t.find(|c: char| c == ' ' || c == '=' || c == '\t') {
-            Some(pos) => (t[..pos].trim(), t[pos + 1..].trim().trim_matches('=').trim()),
+        let (k, v) = match t.find([' ', '=', '\t']) {
+            Some(pos) => (
+                t[..pos].trim(),
+                t[pos + 1..].trim().trim_matches('=').trim(),
+            ),
             None => continue,
         };
         match k.to_lowercase().as_str() {
@@ -625,7 +657,10 @@ async fn discover_tailscale() -> Vec<DiscoveredHost> {
                 .and_then(|a| a.first())
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let online = peer.get("Online").and_then(|v| v.as_bool()).unwrap_or(false);
+            let online = peer
+                .get("Online")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !ip.is_empty() && online {
                 let label = peer
                     .get("DNSName")
@@ -664,7 +699,8 @@ mod tests {
 
     #[test]
     fn test_parse_known_hosts() {
-        let content = "1.2.3.4 ssh-ed25519 AAAA\n[vps.com]:2222 ssh-rsa AAAA\n|1|hash ssh-rsa AAAA\n";
+        let content =
+            "1.2.3.4 ssh-ed25519 AAAA\n[vps.com]:2222 ssh-rsa AAAA\n|1|hash ssh-rsa AAAA\n";
         let hosts = parse_known_hosts(content);
         assert!(hosts.iter().any(|h| h.host == "1.2.3.4"));
         assert!(hosts.iter().any(|h| h.host == "vps.com" && h.port == 2222));

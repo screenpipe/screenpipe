@@ -53,6 +53,12 @@ export function TeamSection() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [passphraseInput, setPassphraseInput] = useState("");
+  const [pendingJoin, setPendingJoin] = useState<{
+    teamId: string;
+    claimToken: string;
+    inviteToken?: string;
+  } | null>(null);
 
   const handleRemoveFilterItem = async (config: TeamConfig, filterToRemove: string) => {
     const currentFilters = (config.value as { filters?: string[] })?.filters || [];
@@ -90,16 +96,29 @@ export function TeamSection() {
             try {
               const parsed = new URL(url);
               const teamId = parsed.searchParams.get("team_id");
-              const key = parsed.searchParams.get("key");
               const inviteToken = parsed.searchParams.get("invite_token");
-              if (teamId && key) {
-                setJoining(true);
-                await team.joinTeam(
+              const claimToken = parsed.searchParams.get("claim");
+              const legacyKey = parsed.searchParams.get("key");
+
+              if (teamId && claimToken) {
+                // new secure flow: need passphrase from user
+                setPendingJoin({
                   teamId,
-                  decodeURIComponent(key),
-                  inviteToken ? decodeURIComponent(inviteToken) : undefined
-                );
-                posthog.capture("team_joined", { source: "deep_link" });
+                  claimToken: decodeURIComponent(claimToken),
+                  inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+                });
+                toast({
+                  title: "enter passphrase to join team",
+                  description: "ask the admin for the passphrase they received when creating the invite",
+                });
+              } else if (teamId && legacyKey) {
+                // legacy flow: raw key in URL (old invite links)
+                setJoining(true);
+                await team.joinTeam(teamId, {
+                  legacyBase64Key: decodeURIComponent(legacyKey),
+                  inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+                });
+                posthog.capture("team_joined", { source: "deep_link_legacy" });
                 toast({
                   title: "joined team!",
                   description: "you are now a team member",
@@ -147,21 +166,61 @@ export function TeamSection() {
 
   const handleJoinFromLink = async () => {
     if (!inviteInput.trim()) return;
-    setJoining(true);
     try {
       const parsed = new URL(inviteInput.trim());
       const teamId = parsed.searchParams.get("team_id");
-      const key = parsed.searchParams.get("key");
       const inviteToken = parsed.searchParams.get("invite_token");
-      if (!teamId || !key) throw new Error("invalid invite link — must contain team_id and key");
-      await team.joinTeam(
-        teamId,
-        decodeURIComponent(key),
-        inviteToken ? decodeURIComponent(inviteToken) : undefined
-      );
-      posthog.capture("team_joined", { source: "invite_link" });
-      setInviteInput("");
-      setShowJoinInput(false);
+      const claimToken = parsed.searchParams.get("claim");
+      const legacyKey = parsed.searchParams.get("key");
+
+      if (!teamId) throw new Error("invalid invite link — missing team_id");
+
+      if (claimToken) {
+        // new secure flow: prompt for passphrase
+        setPendingJoin({
+          teamId,
+          claimToken: decodeURIComponent(claimToken),
+          inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+        });
+        setInviteInput("");
+        setShowJoinInput(false);
+      } else if (legacyKey) {
+        // legacy flow: raw key in URL
+        setJoining(true);
+        await team.joinTeam(teamId, {
+          legacyBase64Key: decodeURIComponent(legacyKey),
+          inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+        });
+        posthog.capture("team_joined", { source: "invite_link_legacy" });
+        setInviteInput("");
+        setShowJoinInput(false);
+        toast({ title: "joined team!" });
+      } else {
+        throw new Error("invalid invite link — missing claim or key parameter");
+      }
+    } catch (err: any) {
+      toast({
+        title: "failed to join team",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  const handleJoinWithPassphrase = async () => {
+    if (!pendingJoin || !passphraseInput.trim()) return;
+    setJoining(true);
+    try {
+      await team.joinTeam(pendingJoin.teamId, {
+        claimToken: pendingJoin.claimToken,
+        passphrase: passphraseInput.trim().toLowerCase(),
+        inviteToken: pendingJoin.inviteToken,
+      });
+      posthog.capture("team_joined", { source: "secure_invite" });
+      setPendingJoin(null);
+      setPassphraseInput("");
       toast({ title: "joined team!" });
     } catch (err: any) {
       toast({
@@ -296,6 +355,65 @@ export function TeamSection() {
     );
   }
 
+  // passphrase prompt for joining (shown when user clicked a secure invite link)
+  if (pendingJoin) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Join Team
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            enter the passphrase from your team admin to complete joining
+          </p>
+        </div>
+
+        <Card className="p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <Lock className="h-5 w-5 text-muted-foreground mt-0.5" />
+            <div>
+              <h3 className="text-sm font-medium">passphrase required</h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                your admin shared a passphrase separately (verbally, Signal, etc.)
+                — enter it below to decrypt the team encryption key
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              placeholder="e.g. abc23def"
+              value={passphraseInput}
+              onChange={(e) => setPassphraseInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleJoinWithPassphrase()}
+              className="font-mono text-lg tracking-widest max-w-xs"
+              autoFocus
+            />
+            <Button
+              onClick={handleJoinWithPassphrase}
+              disabled={joining || !passphraseInput.trim()}
+            >
+              {joining ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+              ) : (
+                <Lock className="h-4 w-4 mr-1.5" />
+              )}
+              join
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPendingJoin(null);
+                setPassphraseInput("");
+              }}
+            >
+              cancel
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   // no team yet
   if (!team.team) {
     return (
@@ -346,7 +464,7 @@ export function TeamSection() {
           {showJoinInput ? (
             <div className="flex gap-2">
               <Input
-                placeholder="screenpipe://join-team?team_id=...&key=..."
+                placeholder="screenpipe://join-team?team_id=...&claim=..."
                 value={inviteInput}
                 onChange={(e) => setInviteInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleJoinFromLink()}
@@ -429,9 +547,8 @@ export function TeamSection() {
               invite link
             </h3>
           </div>
-          <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3" />
-            contains your encryption key — share only via secure channel
+          <p className="text-xs text-muted-foreground mb-2">
+            share this link with your teammate — it does not contain the encryption key
           </p>
           <div className="flex gap-2 items-stretch">
             <Input
@@ -447,6 +564,33 @@ export function TeamSection() {
               )}
             </Button>
           </div>
+          {team.invitePassphrase && (
+            <div className="mt-3 p-3 rounded-md bg-muted/50 border">
+              <p className="text-xs font-medium mb-1 flex items-center gap-1">
+                <Lock className="h-3 w-3" />
+                passphrase (share separately — verbally or via secure channel)
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="text-lg font-bold tracking-widest select-all">
+                  {team.invitePassphrase}
+                </code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(team.invitePassphrase!);
+                    toast({ title: "passphrase copied" });
+                  }}
+                >
+                  <Copy className="h-3 w-3" />
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                your teammate will need this to decrypt the team encryption key
+              </p>
+            </div>
+          )}
         </Card>
       )}
 

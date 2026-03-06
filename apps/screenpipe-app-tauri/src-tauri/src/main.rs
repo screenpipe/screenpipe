@@ -295,7 +295,21 @@ impl ShortcutConfig {
     }
 
     fn is_disabled(&self, shortcut_type: &str) -> bool {
+        // The Rust side uses short keys like "show", "start_recording", etc.
+        // but the frontend stores camelCase names like "showScreenpipeShortcut",
+        // "startRecordingShortcut", etc. Check both forms.
+        let frontend_key = match shortcut_type {
+            "show" => "showScreenpipeShortcut",
+            "start_recording" => "startRecordingShortcut",
+            "stop_recording" => "stopRecordingShortcut",
+            "start_audio" => "startAudioShortcut",
+            "stop_audio" => "stopAudioShortcut",
+            "show_chat" => "showChatShortcut",
+            "search" => "searchShortcut",
+            _ => shortcut_type,
+        };
         self.disabled.contains(&shortcut_type.to_string())
+            || self.disabled.contains(&frontend_key.to_string())
     }
 }
 

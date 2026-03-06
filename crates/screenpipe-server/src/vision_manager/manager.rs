@@ -270,7 +270,7 @@ impl VisionManager {
         let vision_metrics = self.config.vision_metrics.clone();
         let hot_frame_cache = self.hot_frame_cache.clone();
         let use_pii_removal = self.config.use_pii_removal;
-        let power_profile_rx = self.power_profile_rx.as_ref().map(|rx| rx.clone());
+        let power_profile_rx = self.power_profile_rx.clone();
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",

@@ -179,7 +179,7 @@ fn macos_thermal_and_low_power() -> (ThermalState, bool) {
         // thermalState returns NSProcessInfoThermalState (NSInteger)
         // 0 = Nominal, 1 = Fair, 2 = Serious, 3 = Critical
         let sel_thermal = sel_registerName(CString::new("thermalState").unwrap().as_ptr());
-        let thermal_raw: c_long = std::mem::transmute(objc_msgSend(process_info, sel_thermal));
+        let thermal_raw: c_long = objc_msgSend(process_info, sel_thermal) as i64;
         let thermal = match thermal_raw {
             0 => ThermalState::Nominal,
             1 => ThermalState::Fair,
@@ -191,7 +191,7 @@ fn macos_thermal_and_low_power() -> (ThermalState, bool) {
         // isLowPowerModeEnabled returns BOOL (signed char, 0 or 1)
         let sel_low_power =
             sel_registerName(CString::new("isLowPowerModeEnabled").unwrap().as_ptr());
-        let low_power_raw: c_long = std::mem::transmute(objc_msgSend(process_info, sel_low_power));
+        let low_power_raw: c_long = objc_msgSend(process_info, sel_low_power) as i64;
         let low_power = low_power_raw != 0;
 
         (thermal, low_power)

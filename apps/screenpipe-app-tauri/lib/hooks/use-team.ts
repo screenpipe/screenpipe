@@ -10,6 +10,9 @@ import {
   importTeamKey,
   encryptConfig,
   decryptConfig,
+  generatePassphrase,
+  wrapKeyWithPassphrase,
+  unwrapKeyWithPassphrase,
 } from "../team-crypto";
 
 const API = "https://screenpi.pe/api/team";
@@ -50,6 +53,7 @@ interface TeamState {
   members: TeamMember[];
   configs: TeamConfig[];
   inviteLink: string | null;
+  invitePassphrase: string | null;
   loading: boolean;
   error: string | null;
 }
@@ -99,6 +103,7 @@ export function useTeam() {
     members: [],
     configs: [],
     inviteLink: null,
+    invitePassphrase: null,
     loading: true,
     error: null,
   });
@@ -145,11 +150,14 @@ export function useTeam() {
       teamKeyRef.current = key;
 
       // generate invite link if admin and has key
-      // the invite link contains the encryption key + a server-generated invite token
-      // email invites use a separate token (no key sent to server)
+      // the invite link NO LONGER contains the raw encryption key
+      // instead: key is wrapped with a passphrase, uploaded to server as a one-time claim
+      // admin shares passphrase separately via secure channel
       let inviteLink: string | null = null;
+      let invitePassphrase: string | null = null;
       if (data.role === "admin" && key) {
         try {
+          // 1. generate invite token
           const tokenRes = await fetch(`${API}/invite`, {
             method: "POST",
             headers: headers(),
@@ -160,13 +168,28 @@ export function useTeam() {
           });
           if (tokenRes.ok) {
             const tokenData = await tokenRes.json();
-            const b64Key = await exportTeamKey(key);
-            inviteLink = `screenpipe://join-team?team_id=${data.team.id}&key=${encodeURIComponent(b64Key)}&invite_token=${tokenData.invite_token}`;
+
+            // 2. wrap key with passphrase and upload to server
+            const passphrase = generatePassphrase();
+            const wrapped = await wrapKeyWithPassphrase(key, passphrase);
+
+            const claimRes = await fetch(`${API}/key-claim`, {
+              method: "POST",
+              headers: headers(),
+              body: JSON.stringify({
+                invite_token: tokenData.invite_token,
+                ...wrapped,
+              }),
+            });
+
+            if (claimRes.ok) {
+              const claimData = await claimRes.json();
+              inviteLink = `screenpipe://join-team?team_id=${data.team.id}&invite_token=${tokenData.invite_token}&claim=${claimData.claim_token}`;
+              invitePassphrase = passphrase;
+            }
           }
         } catch {
-          // fall back to link without token (won't work for joining, but shows the key)
-          const b64Key = await exportTeamKey(key);
-          inviteLink = `screenpipe://join-team?team_id=${data.team.id}&key=${encodeURIComponent(b64Key)}`;
+          // invite generation failed — user can retry
         }
       }
 
@@ -175,6 +198,7 @@ export function useTeam() {
         team: data.team,
         role: data.role,
         inviteLink,
+        invitePassphrase,
         loading: false,
       }));
 
@@ -264,13 +288,51 @@ export function useTeam() {
     [token, fetchTeam]
   );
 
-  // join team from invite link (contains key) or from email invite (token only, key shared separately)
+  // join team via:
+  // 1. new flow: claim token + passphrase (key fetched from server, unwrapped locally)
+  // 2. legacy flow: raw base64 key in URL (backwards compat for old invite links)
   const joinTeam = useCallback(
-    async (teamId: string, base64Key: string, inviteToken?: string) => {
+    async (
+      teamId: string,
+      opts: {
+        claimToken?: string;
+        passphrase?: string;
+        legacyBase64Key?: string;
+        inviteToken?: string;
+      }
+    ) => {
       if (!token) throw new Error("not logged in");
 
-      // import and store the key
-      const key = await importTeamKey(base64Key);
+      let key: CryptoKey;
+
+      if (opts.legacyBase64Key) {
+        // legacy flow: raw key in URL (old invite links)
+        key = await importTeamKey(opts.legacyBase64Key);
+      } else if (opts.claimToken && opts.passphrase) {
+        // new flow: fetch wrapped key from server, unwrap with passphrase
+        const claimRes = await fetch(
+          `${API}/key-claim/${encodeURIComponent(opts.claimToken)}`,
+          { headers: headers() }
+        );
+        if (!claimRes.ok) {
+          const err = await claimRes.json();
+          throw new Error(err.error || "failed to claim encryption key");
+        }
+        const claimData = await claimRes.json();
+        try {
+          key = await unwrapKeyWithPassphrase(
+            claimData.encrypted_key,
+            claimData.salt,
+            claimData.nonce,
+            opts.passphrase
+          );
+        } catch {
+          throw new Error("incorrect passphrase — could not decrypt team key");
+        }
+      } else {
+        throw new Error("invite link is missing key information");
+      }
+
       await saveTeamKeyToStore(teamId, key);
       teamKeyRef.current = key;
 
@@ -279,7 +341,7 @@ export function useTeam() {
         headers: headers(),
         body: JSON.stringify({
           team_id: teamId,
-          invite_token: inviteToken || "direct",
+          invite_token: opts.inviteToken || "direct",
         }),
       });
       if (!res.ok) {
@@ -316,6 +378,7 @@ export function useTeam() {
       members: [],
       configs: [],
       inviteLink: null,
+      invitePassphrase: null,
       loading: false,
       error: null,
     });
@@ -344,6 +407,7 @@ export function useTeam() {
       members: [],
       configs: [],
       inviteLink: null,
+      invitePassphrase: null,
       loading: false,
       error: null,
     });

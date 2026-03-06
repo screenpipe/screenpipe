@@ -224,7 +224,10 @@ pub async fn reconcile_untranscribed(
             );
             for chunk in &valid_chunks {
                 if let Err(e) = db.delete_audio_chunk(chunk.id).await {
-                    warn!("reconciliation: failed to delete silent chunk {}: {}", chunk.id, e);
+                    warn!(
+                        "reconciliation: failed to delete silent chunk {}: {}",
+                        chunk.id, e
+                    );
                 }
                 let _ = std::fs::remove_file(&chunk.file_path);
             }
@@ -305,8 +308,7 @@ fn write_pending(data_dir: &Path, pending: &PendingTranscription) -> std::io::Re
     let dir = pending_dir(data_dir);
     let filename = format!("chunk-{}.json", pending.audio_chunk_id);
     let path = dir.join(filename);
-    let json = serde_json::to_string(pending)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string(pending).map_err(std::io::Error::other)?;
     std::fs::write(&path, json)?;
     debug!(
         "reconciliation: wrote pending transcription for chunk {} to {:?}",

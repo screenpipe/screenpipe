@@ -298,7 +298,12 @@ impl SyncClient {
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-                warn!("upload retry {}/{} after {:?}", attempt + 1, MAX_RETRIES, backoff);
+                warn!(
+                    "upload retry {}/{} after {:?}",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
@@ -337,7 +342,8 @@ impl SyncClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| SyncError::Network("upload failed after retries".to_string())))
+        Err(last_err
+            .unwrap_or_else(|| SyncError::Network("upload failed after retries".to_string())))
     }
 
     /// Mark an upload as completed.
@@ -390,7 +396,12 @@ impl SyncClient {
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-                warn!("download retry {}/{} after {:?}", attempt + 1, MAX_RETRIES, backoff);
+                warn!(
+                    "download retry {}/{} after {:?}",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
@@ -405,14 +416,22 @@ impl SyncClient {
                     let status = response.status();
                     if status.is_client_error() {
                         let body = response.text().await.unwrap_or_default();
-                        let body_preview = if body.len() > 500 { &body[..500] } else { &body };
+                        let body_preview = if body.len() > 500 {
+                            &body[..500]
+                        } else {
+                            &body
+                        };
                         return Err(SyncError::Server(format!(
                             "S3 download failed with status: {} body: {}",
                             status, body_preview
                         )));
                     }
                     let body = response.text().await.unwrap_or_default();
-                    let body_preview = if body.len() > 500 { &body[..500] } else { &body };
+                    let body_preview = if body.len() > 500 {
+                        &body[..500]
+                    } else {
+                        &body
+                    };
                     last_err = Some(SyncError::Server(format!(
                         "S3 download failed with status: {} body: {}",
                         status, body_preview
@@ -424,7 +443,8 @@ impl SyncClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| SyncError::Network("download failed after retries".to_string())))
+        Err(last_err
+            .unwrap_or_else(|| SyncError::Network("download failed after retries".to_string())))
     }
 
     // =========================================================================
@@ -574,7 +594,13 @@ impl SyncClient {
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-                warn!("POST {} retry {}/{} after {:?}", path, attempt + 1, MAX_RETRIES, backoff);
+                warn!(
+                    "POST {} retry {}/{} after {:?}",
+                    path,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
@@ -597,7 +623,8 @@ impl SyncClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| SyncError::Network(format!("POST {} failed after retries", path))))
+        Err(last_err
+            .unwrap_or_else(|| SyncError::Network(format!("POST {} failed after retries", path))))
     }
 
     async fn get<R: for<'de> Deserialize<'de>>(&self, path: &str) -> SyncResult<R> {
@@ -607,7 +634,13 @@ impl SyncClient {
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-                warn!("GET {} retry {}/{} after {:?}", path, attempt + 1, MAX_RETRIES, backoff);
+                warn!(
+                    "GET {} retry {}/{} after {:?}",
+                    path,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
             }
 
@@ -629,7 +662,8 @@ impl SyncClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| SyncError::Network(format!("GET {} failed after retries", path))))
+        Err(last_err
+            .unwrap_or_else(|| SyncError::Network(format!("GET {} failed after retries", path))))
     }
 
     async fn handle_response<R: for<'de> Deserialize<'de>>(

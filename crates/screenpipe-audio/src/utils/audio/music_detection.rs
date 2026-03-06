@@ -74,19 +74,19 @@ pub fn filter_music_frames(audio_data: &mut [f32]) {
 
     // Phase 2: sliding majority vote (3 of 5)
     let mut confirmed_music = vec![false; num_windows];
-    for i in 0..num_windows {
+    for (i, confirmed) in confirmed_music.iter_mut().enumerate() {
         let vote_start = i.saturating_sub(VOTE_WINDOW / 2);
         let vote_end = (i + VOTE_WINDOW / 2 + 1).min(num_windows);
         let music_count = candidates[vote_start..vote_end]
             .iter()
             .filter(|&&c| c)
             .count();
-        confirmed_music[i] = music_count >= VOTE_MAJORITY;
+        *confirmed = music_count >= VOTE_MAJORITY;
     }
 
     // Phase 3: zero out confirmed music windows
-    for i in 0..num_windows {
-        if confirmed_music[i] {
+    for (i, &is_music) in confirmed_music.iter().enumerate() {
+        if is_music {
             let start = i * WINDOW_SIZE;
             let end = start + WINDOW_SIZE;
             audio_data[start..end].fill(0.0);

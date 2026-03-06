@@ -1,6 +1,8 @@
 use super::segment::get_segments;
 use crate::{
-    utils::audio::{average_noise_spectrum, filter_music_frames, normalize_v2, spectral_subtraction},
+    utils::audio::{
+        average_noise_spectrum, filter_music_frames, normalize_v2, spectral_subtraction,
+    },
     vad::VadEngine,
 };
 use anyhow::Result;

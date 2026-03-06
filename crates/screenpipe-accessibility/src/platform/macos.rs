@@ -818,7 +818,7 @@ fn run_app_observer(
 
     // NSWorkspace still helps for session/space lifecycle changes, but app-to-app
     // reattachment comes from AX notifications on the observed app itself.
-    let _workspace_observers = vec![
+    let _workspace_observers = [
         notification_center.add_observer_guard(
             ns::workspace::notification::did_activate_app(),
             None,

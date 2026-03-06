@@ -13,19 +13,15 @@ use serde::{Deserialize, Serialize};
 /// User's power mode preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PowerMode {
     /// Automatically switch based on battery state.
     Auto,
     /// Always use full performance (ignore battery).
+    #[default]
     Performance,
     /// Always use battery saver (even on AC).
     BatterySaver,
-}
-
-impl Default for PowerMode {
-    fn default() -> Self {
-        Self::Performance
-    }
 }
 
 /// Active power profile name.

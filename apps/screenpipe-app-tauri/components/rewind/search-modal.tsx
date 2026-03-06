@@ -307,6 +307,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [appFilter, setAppFilter] = useState<string | null>(null);
   const [speakerAppFilter, setSpeakerAppFilter] = useState<string | null>(null);
   const [domainFilter, setDomainFilter] = useState<string | null>(null);
+  // Time filter — stores the date string (YYYY-MM-DD) from a time range chip
+  const [timeFilter, setTimeFilter] = useState<string | null>(null);
+  const [speakerTimeFilter, setSpeakerTimeFilter] = useState<string | null>(null);
 
   // Pagination
   const [ocrOffset, setOcrOffset] = useState(0);
@@ -347,12 +350,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // --- Facet state (loaded async, independent of paginated results) ---
   const [facetApps, setFacetApps] = useState<[string, number][]>([]);
   const [facetDomains, setFacetDomains] = useState<[string, number][]>([]);
-  const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; timestamp: string; count: number }[]>([]);
+  const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; dateKey: string; timestamp: string; count: number }[]>([]);
 
   // Build time range labels from raw rows
   const buildTimeRanges = useCallback((rows: { timestamp: string; count: number }[]) => {
     return rows.map(r => {
       const d = new Date(r.timestamp);
+      const dateKey = format(d, "yyyy-MM-dd");
       let label: string;
       if (isToday(d)) {
         label = format(d, "h a");
@@ -361,7 +365,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       } else {
         label = format(d, "MMM d");
       }
-      return { label, timestamp: r.timestamp, count: r.count };
+      return { label, dateKey, timestamp: r.timestamp, count: r.count };
     }).slice(0, 10);
   }, []);
 
@@ -441,17 +445,18 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // Speaker time ranges (from loaded transcriptions — these are small enough)
   const speakerTimeRanges = useMemo(() => {
     if (speakerTranscriptions.length === 0) return [];
-    const buckets = new Map<string, { label: string; timestamp: string; count: number }>();
+    const buckets = new Map<string, { label: string; dateKey: string; timestamp: string; count: number }>();
     for (const t of speakerTranscriptions) {
       const d = new Date(t.timestamp);
       if (isNaN(d.getTime())) continue;
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!buckets.has(key)) {
+        const dateKey = format(d, "yyyy-MM-dd");
         let label: string;
         if (isToday(d)) label = format(d, "h a");
         else if (isYesterday(d)) label = "yesterday " + format(d, "h a");
         else label = format(d, "MMM d");
-        buckets.set(key, { label, timestamp: t.timestamp, count: 1 });
+        buckets.set(key, { label, dateKey, timestamp: t.timestamp, count: 1 });
       } else {
         buckets.get(key)!.count++;
       }
@@ -485,14 +490,21 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [transcriptionFrames]);
 
-  // Filter speaker transcriptions by app
+  // Filter speaker transcriptions by app and time
   const filteredSpeakerTranscriptions = useMemo(() => {
-    if (!speakerAppFilter) return speakerTranscriptions;
-    return speakerTranscriptions.filter(t => {
+    let items = speakerTranscriptions;
+    if (speakerAppFilter) items = items.filter(t => {
       const info = transcriptionFrames.get(t.timestamp);
       return info?.app_name === speakerAppFilter;
     });
-  }, [speakerTranscriptions, speakerAppFilter, transcriptionFrames]);
+    if (speakerTimeFilter) items = items.filter(t => t.timestamp.startsWith(speakerTimeFilter));
+    return items;
+  }, [speakerTranscriptions, speakerAppFilter, speakerTimeFilter, transcriptionFrames]);
+
+  const matchesTimeFilter = useCallback((timestamp: string) => {
+    if (!timeFilter) return true;
+    return timestamp.startsWith(timeFilter);
+  }, [timeFilter]);
 
   const filteredResults = useMemo(() => {
     let results = searchResults;
@@ -500,8 +512,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     if (domainFilter) results = results.filter(r => {
       try { return new URL(r.url).hostname.replace(/^www\./, "") === domainFilter; } catch { return false; }
     });
+    if (timeFilter) results = results.filter(r => matchesTimeFilter(r.timestamp));
     return results;
-  }, [searchResults, appFilter, domainFilter]);
+  }, [searchResults, appFilter, domainFilter, timeFilter, matchesTimeFilter]);
 
   const filteredGroups = useMemo(() => {
     let groups = searchGroups;
@@ -509,6 +522,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     if (domainFilter) groups = groups.filter(g => {
       try { return new URL(g.representative.url).hostname.replace(/^www\./, "") === domainFilter; } catch { return false; }
     });
+    if (timeFilter) groups = groups.filter(g => matchesTimeFilter(g.representative.timestamp));
     return groups;
   }, [searchGroups, appFilter, domainFilter]);
 
@@ -529,6 +543,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       clearHighlight();
       setAppFilter(null);
       setDomainFilter(null);
+      setTimeFilter(null);
       setContentFilter("all");
       setSpeakerResults([]);
       setTagResults([]);
@@ -567,6 +582,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setTagResults([]);
       setAppFilter(null);
       setDomainFilter(null);
+      setTimeFilter(null);
       return;
     }
 
@@ -579,6 +595,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
     setAppFilter(null);
     setDomainFilter(null);
+    setTimeFilter(null);
     setContentFilter("all");
     setTagResults([]);
     setOcrOffset(0);
@@ -808,6 +825,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setSelectedSpeaker(null);
     setSpeakerTranscriptions([]);
     setSpeakerAppFilter(null);
+    setSpeakerTimeFilter(null);
     setSelectedTranscriptionIndex(0);
     setTranscriptionOffset(0);
     setHasMoreTranscriptions(true);
@@ -1068,17 +1086,31 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {/* Time range chips for speaker transcriptions */}
+          {/* Time range filter chips for speaker transcriptions */}
           {speakerTimeRanges.length > 1 && (
             <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
+              <button
+                onClick={() => { setSpeakerTimeFilter(null); setSelectedTranscriptionIndex(0); }}
+                className={cn(
+                  "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                  !speakerTimeFilter
+                    ? "bg-foreground text-background border-foreground"
+                    : "border-border text-muted-foreground hover:border-foreground/40"
+                )}
+              >
+                <Clock className="w-3 h-3" />
+                all dates
+              </button>
               {speakerTimeRanges.map((range) => (
                 <button
-                  key={range.timestamp}
-                  onClick={() => {
-                    onNavigateToTimestamp(range.timestamp);
-                    onClose();
-                  }}
-                  className="px-2.5 py-1 text-[11px] rounded-full border border-border text-muted-foreground hover:border-foreground/40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                  key={range.dateKey}
+                  onClick={() => { setSpeakerTimeFilter(speakerTimeFilter === range.dateKey ? null : range.dateKey); setSelectedTranscriptionIndex(0); }}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0",
+                    speakerTimeFilter === range.dateKey
+                      ? "bg-foreground text-background border-foreground"
+                      : "border-border text-muted-foreground hover:border-foreground/40"
+                  )}
                 >
                   <Clock className="w-3 h-3" />
                   {range.label} ({range.count})
@@ -1413,17 +1445,31 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 </div>
               )}
 
-              {/* Time range chips */}
+              {/* Time range filter chips */}
               {timeRanges.length > 1 && (
                 <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
+                  <button
+                    onClick={() => { setTimeFilter(null); setSelectedIndex(0); }}
+                    className={cn(
+                      "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
+                      !timeFilter
+                        ? "bg-foreground text-background border-foreground"
+                        : "border-border text-muted-foreground hover:border-foreground/40"
+                    )}
+                  >
+                    <Clock className="w-3 h-3" />
+                    all dates
+                  </button>
                   {timeRanges.map((range) => (
                     <button
-                      key={range.timestamp}
-                      onClick={() => {
-                        onNavigateToTimestamp(range.timestamp);
-                        onClose();
-                      }}
-                      className="px-2.5 py-1 text-[11px] rounded-full border border-border text-muted-foreground hover:border-foreground/40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                      key={range.dateKey}
+                      onClick={() => { setTimeFilter(timeFilter === range.dateKey ? null : range.dateKey); setSelectedIndex(0); }}
+                      className={cn(
+                        "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0",
+                        timeFilter === range.dateKey
+                          ? "bg-foreground text-background border-foreground"
+                          : "border-border text-muted-foreground hover:border-foreground/40"
+                      )}
                     >
                       <Clock className="w-3 h-3" />
                       {range.label} ({range.count})
