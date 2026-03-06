@@ -80,24 +80,88 @@ Restart OpenClaw to load the skill.
 
 ## different machines
 
-If OpenClaw runs on a remote server (e.g., a VPS) and screenpipe runs on your laptop/desktop, you need to expose screenpipe's API to the remote machine securely.
+If OpenClaw runs on a remote server (e.g., a VPS) and screenpipe runs on your laptop/desktop, you need to expose screenpipe to the remote machine. There are two approaches: **MCP over HTTP** (recommended) and **REST API with custom skills** (fallback).
 
-### option A: Tailscale (easiest)
+### MCP over HTTP (recommended)
 
-[Tailscale](https://tailscale.com) creates a private network between your devices — no port forwarding, no config files.
+Screenpipe's MCP server supports [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), so OpenClaw can connect to it as a proper MCP server over the network — all tools, fully described, structured calls. No curl workarounds needed.
 
-1. Install Tailscale on both machines (your computer + OpenClaw server)
-2. Run `tailscale up` on both
-3. Find your computer's Tailscale IP: `tailscale ip`
-4. On your OpenClaw server, verify connectivity:
+**Step 1:** On your computer (where screenpipe runs), start the HTTP MCP server:
 
 ```bash
-curl http://<your-tailscale-ip>:3030/health
+npx screenpipe-mcp-http --port 3031
 ```
 
-5. Create an OpenClaw skill that queries your screenpipe over Tailscale:
+This starts the MCP server on `http://localhost:3031/mcp`.
 
-Create `~/openclaw/skills/screenpipe/skill.md`:
+**Step 2:** Expose port 3031 to your OpenClaw server using one of:
+
+<AccordionGroup>
+<Accordion title="Tailscale (easiest)">
+[Tailscale](https://tailscale.com) creates a private network between your devices — no port forwarding, no config files.
+
+1. Install Tailscale on both machines
+2. Run `tailscale up` on both
+3. Find your computer's Tailscale IP: `tailscale ip`
+4. Verify: `curl http://<tailscale-ip>:3031/health`
+
+Your MCP URL will be `http://<tailscale-ip>:3031/mcp`.
+</Accordion>
+
+<Accordion title="SSH tunnel">
+Forward the MCP port over SSH:
+
+```bash
+# on your computer (where screenpipe runs)
+ssh -R 3031:localhost:3031 user@openclaw-server
+
+# or persistent with autossh
+autossh -M 0 -f -N -R 3031:localhost:3031 user@openclaw-server
+```
+
+Your MCP URL will be `http://localhost:3031/mcp` (on the OpenClaw server).
+</Accordion>
+
+<Accordion title="Cloudflare Tunnel">
+```bash
+# on your computer
+cloudflared tunnel --url http://localhost:3031
+```
+
+Your MCP URL will be the `https://` URL cloudflared gives you, with `/mcp` appended.
+</Accordion>
+</AccordionGroup>
+
+**Step 3:** Configure OpenClaw to use the remote MCP server:
+
+```json
+{
+  "mcpServers": {
+    "screenpipe": {
+      "url": "http://<your-mcp-url>:3031/mcp"
+    }
+  }
+}
+```
+
+Replace `<your-mcp-url>` with the appropriate address from step 2 (Tailscale IP, `localhost` for SSH tunnel, or Cloudflare URL).
+
+Restart OpenClaw — it now has full MCP access to screenpipe with all tools, parameters, and structured responses. No custom skills needed.
+
+<Tip>
+The HTTP MCP transport means OpenClaw gets the same experience remotely as it does locally — tool discovery, typed parameters, structured results. This is the same approach [Pieces uses](https://github.com/pieces-app/pro_tips/blob/main/guides/MCP/Connecting%20to%20PiecesOS%20from%20the%20Outside%20World%20via%20Ngrok.md) to expose MCP over the network.
+</Tip>
+
+### REST API with custom skills (fallback)
+
+If OpenClaw doesn't support HTTP MCP transport, you can fall back to custom skills that call screenpipe's REST API directly. This works but is less structured — OpenClaw won't get MCP tool discovery or typed parameters.
+
+#### option A: Tailscale + REST
+
+1. Install [Tailscale](https://tailscale.com) on both machines, run `tailscale up` on both
+2. Find your Tailscale IP: `tailscale ip`
+3. Verify: `curl http://<tailscale-ip>:3030/health`
+4. Create `~/openclaw/skills/screenpipe/skill.md`:
 
 ````markdown
 ---
@@ -109,7 +173,7 @@ tools:
 
 # screenpipe skill
 
-Query the user's screen history via their screenpipe API.
+Query the user's screen history via their screenpipe REST API at http://TAILSCALE_IP:3030.
 
 ## search content
 
@@ -120,11 +184,14 @@ curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&limit=20"
 ## filter by type
 
 ```bash
-# screen content
-curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&content_type=ocr"
+# screen content (accessibility + OCR)
+curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&content_type=all"
 
 # audio transcriptions
 curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&content_type=audio"
+
+# user input (keyboard, clicks, clipboard)
+curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&content_type=input"
 ```
 
 ## filter by app
@@ -132,30 +199,47 @@ curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&content_type=audio"
 ```bash
 curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&app_name=Chrome"
 ```
+
+## filter by time
+
+```bash
+curl -s "http://TAILSCALE_IP:3030/search?q=QUERY&start_time=2024-01-15T10:00:00Z&end_time=2024-01-15T18:00:00Z"
+```
+
+## activity summary (lightweight overview)
+
+```bash
+curl -s "http://TAILSCALE_IP:3030/activity-summary?start_time=2024-01-15T10:00:00Z&end_time=2024-01-15T18:00:00Z"
+```
+
+## list meetings
+
+```bash
+curl -s "http://TAILSCALE_IP:3030/meetings?limit=20"
+```
+
+## search UI elements
+
+```bash
+curl -s "http://TAILSCALE_IP:3030/elements?q=QUERY&limit=50"
+```
 ````
 
 Replace `TAILSCALE_IP` with your actual Tailscale IP (e.g., `100.64.x.x`).
 
-### option B: SSH tunnel
-
-If you don't want to install Tailscale, forward screenpipe's port over SSH:
+#### option B: SSH tunnel + REST
 
 ```bash
-# run on your computer (where screenpipe runs)
+# on your computer (where screenpipe runs)
 ssh -R 3030:localhost:3030 user@openclaw-server
-```
 
-This makes screenpipe available at `localhost:3030` on your OpenClaw server. Then use the same skill as the "same machine" setup.
-
-To keep the tunnel running permanently, use autossh:
-
-```bash
+# or persistent
 autossh -M 0 -f -N -R 3030:localhost:3030 user@openclaw-server
 ```
 
-### option C: Cloudflare Tunnel
+This makes screenpipe available at `localhost:3030` on your OpenClaw server. Then use the same skill as the "same machine" custom skill setup, replacing the URL accordingly.
 
-[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) exposes screenpipe behind a domain with Cloudflare's network.
+#### option C: Cloudflare Tunnel + REST
 
 ```bash
 # on your computer
@@ -163,6 +247,21 @@ cloudflared tunnel --url http://localhost:3030
 ```
 
 Then point your OpenClaw skill at the tunnel URL.
+
+## available MCP tools
+
+When connected via MCP (stdio or HTTP), OpenClaw gets access to these tools:
+
+| Tool | Description |
+|------|-------------|
+| **search-content** | Search screen text (accessibility/OCR), audio transcriptions, user input. Supports time range, app, window, and speaker filters. |
+| **activity-summary** | Lightweight overview of app usage, audio speakers, and recent texts for a time range (~200 tokens). |
+| **search-elements** | Search structured UI elements (buttons, links, text fields) from the accessibility tree. |
+| **frame-context** | Get full accessibility tree, URLs, and text for a specific frame. |
+| **list-meetings** | List detected meetings with duration, app, and attendees. |
+| **export-video** | Export screen recordings as MP4 for a time range. |
+
+The MCP server also provides **resources** (`screenpipe://context` for current time, `screenpipe://guide` for search strategy) and **prompts** (search-recent, find-in-app, meeting-notes).
 
 ## example prompts
 
@@ -174,6 +273,8 @@ Once configured, message OpenClaw from any chat app:
 - "summarize my meetings from last week"
 - "what tabs did I have open when researching that bug?"
 - "when did I last see the budget spreadsheet?"
+- "what did I copy to clipboard recently?"
+- "show me what buttons I clicked in Figma today"
 
 ## troubleshooting
 

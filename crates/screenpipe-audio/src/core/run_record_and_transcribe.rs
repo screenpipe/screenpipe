@@ -79,7 +79,7 @@ pub async fn run_record_and_transcribe(
     }
 
     // Flush remaining audio on exit
-    flush_audio(
+    if let Err(e) = flush_audio(
         &mut collected_audio,
         0,
         segment_start_time,
@@ -89,7 +89,9 @@ pub async fn run_record_and_transcribe(
         &metrics,
     )
     .await
-    .ok();
+    {
+        warn!("final flush failed for {}: {}", device_name, e);
+    }
 
     info!("stopped recording for {}", device_name);
     Ok(())

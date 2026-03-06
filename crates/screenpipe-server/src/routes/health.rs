@@ -435,10 +435,7 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                     (None, None)
                 };
 
-            let device_names: Vec<String> = audio_devices
-                .iter()
-                .map(|d| d.to_string())
-                .collect();
+            let device_names: Vec<String> = audio_devices.iter().map(|d| d.to_string()).collect();
 
             Some(AudioPipelineHealthInfo {
                 uptime_secs: audio_snap.uptime_secs,
@@ -459,7 +456,11 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                 chunks_received: Some(audio_snap.chunks_received),
                 process_errors: Some(audio_snap.process_errors),
                 audio_level_rms: Some(audio_snap.audio_level_rms),
-                audio_devices: if device_names.is_empty() { None } else { Some(device_names) },
+                audio_devices: if device_names.is_empty() {
+                    None
+                } else {
+                    Some(device_names)
+                },
                 // Batch/Smart mode
                 transcription_mode: if audio_snap.segments_deferred > 0
                     || audio_snap.segments_batch_processed > 0

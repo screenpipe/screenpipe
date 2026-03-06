@@ -27,7 +27,7 @@ use tracing::{debug, warn};
 /// trigger capture simultaneously.
 static OCR_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 fn ocr_semaphore() -> &'static Semaphore {
-    OCR_SEMAPHORE.get_or_init(|| Semaphore::new(2))
+    OCR_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 /// Context for a paired capture operation — replaces positional arguments.

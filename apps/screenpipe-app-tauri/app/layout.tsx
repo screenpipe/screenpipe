@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { useEffect } from "react";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
+import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { usePathname } from "next/navigation";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -199,6 +200,7 @@ export default function RootLayout({
         <body className={`${inter.className} scrollbar-hide`}>
           {!isOverlay && <DeeplinkHandler />}
           {!isOverlay && <ShortcutTracker />}
+          {!isOverlay && <PipeInstallDialog />}
           {children}
           {!isOverlay && <Toaster />}
         </body>

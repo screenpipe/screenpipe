@@ -84,11 +84,6 @@ fn install_onnxruntime() {
     use reqwest::blocking::Client;
     use std::time::Duration;
     use std::{path::Path, process::Command};
-    // Set static CRT for Windows MSVC target
-    if env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc" {
-        println!("cargo:rustc-env=KNF_STATIC_CRT=1");
-        println!("cargo:rustc-flag=-C target-feature=+crt-static");
-    }
 
     // Use CPU-only onnxruntime — GPU (DirectML) causes issues on Intel integrated GPUs
     let target_dir =

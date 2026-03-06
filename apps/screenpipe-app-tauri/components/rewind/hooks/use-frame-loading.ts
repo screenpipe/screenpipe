@@ -418,6 +418,8 @@ export function useFrameLoading(opts: {
 	// Preload adjacent video chunks so crossing chunk boundaries feels instant
 	useEffect(() => {
 		if (!adjacentFrames?.length) return;
+		let cancelled = false;
+		const preloadElements: HTMLVideoElement[] = [];
 		const seen = new Set<string>();
 		if (debouncedFrame?.filePath) seen.add(debouncedFrame.filePath);
 		for (const frame of adjacentFrames) {
@@ -428,17 +430,26 @@ export function useFrameLoading(opts: {
 			seen.add(path);
 			// Preload video chunk: create a hidden video element to trigger browser cache
 			getVideoUrl(path).then((url) => {
-				if (!url) return;
+				if (!url || cancelled) return;
 				const v = document.createElement("video");
+				preloadElements.push(v);
 				v.preload = "auto";
 				v.muted = true;
 				v.src = url;
 				// Load just enough for metadata + first frame, then discard
-				v.addEventListener("loadeddata", () => { v.src = ""; }, { once: true });
-				v.addEventListener("error", () => { v.src = ""; }, { once: true });
+				v.addEventListener("loadeddata", () => { v.src = ""; v.removeAttribute("src"); v.load(); }, { once: true });
+				v.addEventListener("error", () => { v.src = ""; v.removeAttribute("src"); }, { once: true });
 				v.load();
 			});
 		}
+		return () => {
+			cancelled = true;
+			for (const v of preloadElements) {
+				v.src = "";
+				v.removeAttribute("src");
+				v.load();
+			}
+		};
 	}, [adjacentFrames, debouncedFrame?.filePath, getVideoUrl]);
 
 	// Update rendered dimensions on resize (needed for TextOverlay positioning)

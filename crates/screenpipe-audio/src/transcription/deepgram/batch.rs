@@ -150,7 +150,10 @@ async fn handle_deepgram_response(
             let body_text = resp.text().await.unwrap_or_default();
 
             // Detect firewall/proxy/captive portal interference
-            if content_type.contains("text/html") || body_text.starts_with("<!") || body_text.starts_with("<html") {
+            if content_type.contains("text/html")
+                || body_text.starts_with("<!")
+                || body_text.starts_with("<html")
+            {
                 error!(
                     "device: {}, deepgram request blocked — received HTML instead of JSON (status {}). \
                      this usually means a firewall, corporate proxy, or captive portal is intercepting \
@@ -186,7 +189,8 @@ async fn handle_deepgram_response(
                     device, status
                 );
                 return Err(anyhow::anyhow!(
-                    "Deepgram returned empty response (HTTP {})", status
+                    "Deepgram returned empty response (HTTP {})",
+                    status
                 ));
             }
 
@@ -264,7 +268,10 @@ async fn handle_deepgram_response(
                 ));
             }
 
-            error!("device: {}, failed to send request to Deepgram API: {:?}", device, e);
+            error!(
+                "device: {}, failed to send request to Deepgram API: {:?}",
+                device, e
+            );
             Err(anyhow::anyhow!(
                 "Failed to send request to Deepgram API: {:?}",
                 e

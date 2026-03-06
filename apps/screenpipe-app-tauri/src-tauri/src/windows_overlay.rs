@@ -15,8 +15,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Extended window styles for overlay behavior
-/// Note: Removed WS_EX_NOACTIVATE so window can receive keyboard focus for shortcuts
-const OVERLAY_EX_STYLE: i32 = (WS_EX_LAYERED.0 | WS_EX_TOOLWINDOW.0) as i32;
+/// Note: WS_EX_TOOLWINDOW removed so the app always appears in the Windows
+/// taskbar. WS_EX_NOACTIVATE also removed so window can receive keyboard focus.
+const OVERLAY_EX_STYLE: i32 = WS_EX_LAYERED.0 as i32;
 const CLICK_THROUGH_STYLE: i32 = WS_EX_TRANSPARENT.0 as i32;
 
 /// Retrieves the HWND from a Tauri WebviewWindow

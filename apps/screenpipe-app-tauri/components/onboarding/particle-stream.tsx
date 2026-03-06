@@ -233,7 +233,20 @@ export function ParticleStream({
 
     const cx = width / 2, cy = height * 0.42;
 
+    let stopped = false;
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(animRef.current);
+      } else if (!stopped) {
+        animRef.current = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     function draw() {
+      if (stopped) return;
+
       const p = progressRef.current;
       const f = ++frameRef.current;
       const s = state;
@@ -538,8 +551,14 @@ export function ParticleStream({
     }
 
     const w = width, h = height; // closure
-    draw();
-    return () => cancelAnimationFrame(animRef.current);
+    if (!document.hidden) {
+      animRef.current = requestAnimationFrame(draw);
+    }
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(animRef.current);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [width, height]);
 
   return (

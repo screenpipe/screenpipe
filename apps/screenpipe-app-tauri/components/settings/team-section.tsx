@@ -91,9 +91,14 @@ export function TeamSection() {
               const parsed = new URL(url);
               const teamId = parsed.searchParams.get("team_id");
               const key = parsed.searchParams.get("key");
+              const inviteToken = parsed.searchParams.get("invite_token");
               if (teamId && key) {
                 setJoining(true);
-                await team.joinTeam(teamId, decodeURIComponent(key));
+                await team.joinTeam(
+                  teamId,
+                  decodeURIComponent(key),
+                  inviteToken ? decodeURIComponent(inviteToken) : undefined
+                );
                 posthog.capture("team_joined", { source: "deep_link" });
                 toast({
                   title: "joined team!",
@@ -147,8 +152,13 @@ export function TeamSection() {
       const parsed = new URL(inviteInput.trim());
       const teamId = parsed.searchParams.get("team_id");
       const key = parsed.searchParams.get("key");
-      if (!teamId || !key) throw new Error("invalid invite link");
-      await team.joinTeam(teamId, decodeURIComponent(key));
+      const inviteToken = parsed.searchParams.get("invite_token");
+      if (!teamId || !key) throw new Error("invalid invite link — must contain team_id and key");
+      await team.joinTeam(
+        teamId,
+        decodeURIComponent(key),
+        inviteToken ? decodeURIComponent(inviteToken) : undefined
+      );
       posthog.capture("team_joined", { source: "invite_link" });
       setInviteInput("");
       setShowJoinInput(false);
@@ -209,7 +219,10 @@ export function TeamSection() {
       await team.sendInviteEmail(inviteEmail.trim());
       posthog.capture("team_invite_email_sent");
       setInviteEmail("");
-      toast({ title: "invite sent", description: `email sent to ${inviteEmail.trim()}` });
+      toast({
+        title: "invite sent",
+        description: `email sent to ${inviteEmail.trim()} — share the invite link (with key) via a secure channel`,
+      });
     } catch (err: any) {
       toast({
         title: "failed to send invite",

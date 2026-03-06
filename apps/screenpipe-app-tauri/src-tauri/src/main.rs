@@ -72,6 +72,7 @@ mod chatgpt_oauth;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod livetext;
+mod remote_sync_commands;
 
 pub use server::*;
 
@@ -1552,7 +1553,11 @@ async fn main() {
             // Config commands
             config::validate_data_dir,
             // Hardware detection
-            hardware::get_hardware_capability
+            hardware::get_hardware_capability,
+            // Remote sync (OpenClaw)
+            remote_sync_commands::remote_sync_test,
+            remote_sync_commands::remote_sync_now,
+            remote_sync_commands::remote_sync_discover_hosts
         ])
         .setup(move |app| {
             //deep link register_all

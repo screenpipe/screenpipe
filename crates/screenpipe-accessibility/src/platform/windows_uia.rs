@@ -28,11 +28,10 @@ use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, CUIAutomation, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
     IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationTreeWalker, TreeScope_Element,
-    TreeScope_Subtree,
-    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId,
-    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsEnabledPropertyId,
-    UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_ValueValuePropertyId,
-    UIA_PROPERTY_ID,
+    TreeScope_Subtree, UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
+    UIA_ClassNamePropertyId, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
+    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
+    UIA_ValueValuePropertyId, UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, PeekMessageW,
@@ -142,9 +141,7 @@ impl UiaContext {
             // handful of titlebar nodes. When this happens, fall back to
             // TreeWalker which makes individual COM calls per element.
             if count <= 10 {
-                if let Some(walker_root) =
-                    self.capture_window_tree_walker(hwnd, max_elements)
-                {
+                if let Some(walker_root) = self.capture_window_tree_walker(hwnd, max_elements) {
                     let walker_count = walker_root.node_count();
                     if walker_count > count {
                         debug!(
@@ -220,11 +217,7 @@ impl UiaContext {
                             .GetNextSiblingElementBuildCache(&current, &self.walker_cache_request)
                         {
                             Ok(next) => {
-                                children.push(self.build_node_walker(
-                                    &next,
-                                    max_elements,
-                                    count,
-                                ));
+                                children.push(self.build_node_walker(&next, max_elements, count));
                                 current = next;
                             }
                             Err(_) => break,

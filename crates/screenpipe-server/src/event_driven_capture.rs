@@ -536,6 +536,7 @@ async fn push_to_hot_cache(
         capture_trigger: trigger.as_str().to_string(),
         offset_index: 0,
         fps: 0.033,
+        machine_id: None,
     };
     cache.push_frame(hot).await;
 }

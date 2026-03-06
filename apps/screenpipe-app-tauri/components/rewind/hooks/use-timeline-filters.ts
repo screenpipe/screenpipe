@@ -124,6 +124,20 @@ export function useTimelineFilters(opts: {
 		return clamped;
 	}, [selectedDeviceId, allDeviceIds.length, frames]);
 
+	// Snap an index to the nearest frame matching ALL active filters.
+	// Used by the scroll/click handler so the user can't land on dimmed frames.
+	const snapToFiltered = useCallback((idx: number): number => {
+		if (!matchingIndices) return idx;
+		const clamped = Math.max(0, Math.min(idx, frames.length - 1));
+		let best = matchingIndices[0];
+		let bestDist = Math.abs(best - clamped);
+		for (let j = 1; j < matchingIndices.length; j++) {
+			const dist = Math.abs(matchingIndices[j] - clamped);
+			if (dist < bestDist) { best = matchingIndices[j]; bestDist = dist; }
+		}
+		return best;
+	}, [matchingIndices, frames.length]);
+
 	// When monitor filter changes, snap to nearest matching frame
 	const handleDeviceChange = useCallback((deviceId: string) => {
 		setSelectedDeviceId(deviceId);
@@ -222,5 +236,6 @@ export function useTimelineFilters(opts: {
 		selectedAppNameRef,
 		snapToDevice,
 		snapToApp,
+		snapToFiltered,
 	};
 }

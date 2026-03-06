@@ -1,6 +1,7 @@
-use std::process::Command;
 use std::time::Duration;
 use tokio::time::sleep;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 #[cfg(target_os = "windows")]
 use tracing::debug;
 use tracing::info;
@@ -78,16 +79,14 @@ pub async fn watch_pid(pid: u32) -> bool {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let output = Command::new("ps")
-                .args(["-p", &pid.to_string()])
-                .output()
-                .expect("failed to execute process check command");
-
-            if !output.status.success() || output.stdout.is_empty() {
+            // Use kill(pid, 0) — a zero-cost syscall that checks if process exists
+            // without spawning a child process every second.
+            let alive = unsafe { libc::kill(pid as i32, 0) };
+            if alive != 0 {
                 return true;
             }
         }
 
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(5)).await;
     }
 }

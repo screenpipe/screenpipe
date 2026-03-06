@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Datelike, Utc};
 use std::collections::BTreeMap;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 use tracing::{info, warn};
 
 use crate::video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame};
@@ -30,6 +30,7 @@ pub struct HotFrame {
     pub capture_trigger: String,
     pub offset_index: i64,
     pub fps: f64,
+    pub machine_id: Option<String>,
 }
 
 /// Cached audio entry from audio transcription pipeline.
@@ -63,6 +64,10 @@ pub struct HotFrameCache {
     /// and extended by push_frame (live capture). The streaming handler uses
     /// this to skip the DB backfill when the cache already covers the range.
     cache_warm_start: RwLock<Option<DateTime<Utc>>>,
+    /// Signals when warm_from_db has completed. WS handlers wait on this
+    /// before responding to time-range requests so they don't return empty.
+    warm_ready_tx: watch::Sender<bool>,
+    warm_ready_rx: watch::Receiver<bool>,
 }
 
 impl Default for HotFrameCache {
@@ -76,6 +81,7 @@ impl HotFrameCache {
     pub fn new() -> Self {
         let (frame_tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
+        let (warm_tx, warm_rx) = watch::channel(false);
         Self {
             frames: RwLock::new(BTreeMap::new()),
             audio: RwLock::new(BTreeMap::new()),
@@ -83,6 +89,8 @@ impl HotFrameCache {
             audio_notify: audio_tx,
             cache_day: RwLock::new(Utc::now().ordinal()),
             cache_warm_start: RwLock::new(None),
+            warm_ready_tx: warm_tx,
+            warm_ready_rx: warm_rx,
         }
     }
 
@@ -177,6 +185,23 @@ impl HotFrameCache {
         ts.ordinal() == *day && ts.year() == Utc::now().year()
     }
 
+    /// Wait until warm_from_db has completed (or timeout after `max_wait`).
+    /// Returns true if warm completed, false if timed out.
+    pub async fn wait_warm(&self, max_wait: std::time::Duration) -> bool {
+        if *self.warm_ready_rx.borrow() {
+            return true;
+        }
+        let mut rx = self.warm_ready_rx.clone();
+        let result = tokio::time::timeout(max_wait, rx.wait_for(|v| *v)).await;
+        match result {
+            Ok(Ok(_)) => true,
+            _ => {
+                warn!("hot_frame_cache: wait_warm timed out after {:?}", max_wait);
+                false
+            }
+        }
+    }
+
     /// Warm the cache from DB on cold start (load last N hours).
     pub async fn warm_from_db(&self, db: &screenpipe_db::DatabaseManager, hours: i64) {
         let end = Utc::now();
@@ -208,6 +233,7 @@ impl HotFrameCache {
                             capture_trigger: String::new(),
                             offset_index: frame_data.offset_index,
                             fps: frame_data.fps,
+                            machine_id: frame_data.machine_id.clone(),
                         };
                         frames.insert((hot.timestamp, hot.frame_id), hot);
                         frame_count += 1;
@@ -238,10 +264,13 @@ impl HotFrameCache {
                     }
                 }
 
-                // Set cache coverage — use the query start time (not earliest
-                // frame) so we know the DB was scanned from `start` even if
-                // there were no frames in the early portion of the range.
-                *self.cache_warm_start.write().await = Some(start);
+                // Only set cache coverage if we actually found frames. When the
+                // cache is empty (e.g. vision disabled, fresh install), we must
+                // NOT claim coverage — otherwise the streaming handler skips
+                // the DB backfill and the timeline stays permanently empty.
+                if frame_count > 0 {
+                    *self.cache_warm_start.write().await = Some(start);
+                }
 
                 info!(
                     "hot_frame_cache: warmed with {} frame entries, coverage from {}",
@@ -252,6 +281,9 @@ impl HotFrameCache {
                 warn!("hot_frame_cache: failed to warm from DB: {}", e);
             }
         }
+
+        // Signal that warm is complete (even on failure — callers should not block forever)
+        let _ = self.warm_ready_tx.send(true);
     }
 }
 
@@ -311,6 +343,7 @@ fn hot_frame_to_timeseries(hot: &HotFrame, audio_entries: Vec<AudioEntry>) -> Ti
             browser_url: hot.browser_url.clone(),
         },
         audio_entries,
+        machine_id: hot.machine_id.clone(),
     };
 
     TimeSeriesFrame {
@@ -343,6 +376,7 @@ mod tests {
             capture_trigger: "click".to_string(),
             offset_index: 0,
             fps: 0.033,
+            machine_id: None,
         };
 
         cache.push_frame(frame).await;
@@ -375,6 +409,7 @@ mod tests {
                 capture_trigger: "idle".to_string(),
                 offset_index: 0,
                 fps: 0.033,
+                machine_id: None,
             })
             .await;
 
@@ -424,6 +459,7 @@ mod tests {
             capture_trigger: "click".to_string(),
             offset_index: 0,
             fps: 0.033,
+            machine_id: None,
         };
 
         cache.push_frame(frame).await;

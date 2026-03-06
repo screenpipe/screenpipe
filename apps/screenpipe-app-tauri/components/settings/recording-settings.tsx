@@ -1188,18 +1188,18 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio</h2>
 
-        {/* Disable Audio */}
+        {/* Audio Recording Toggle */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Disable audio recording</h3>
-                  <p className="text-xs text-muted-foreground">Turn off audio capture completely</p>
+                  <h3 className="text-sm font-medium text-foreground">Audio recording</h3>
+                  <p className="text-xs text-muted-foreground">Capture audio from microphone and system</p>
                 </div>
               </div>
-              <Switch id="disableAudio" checked={settings.disableAudio} onCheckedChange={handleDisableAudioChange} />
+              <Switch id="disableAudio" checked={!settings.disableAudio} onCheckedChange={(checked) => handleDisableAudioChange(!checked)} />
             </div>
           </CardContent>
         </Card>
@@ -1786,18 +1786,18 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Screen</h2>
 
-        {/* Disable Screen Recording */}
+        {/* Screen Recording Toggle */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Disable screen recording</h3>
-                  <p className="text-xs text-muted-foreground">Turn off screen capture completely</p>
+                  <h3 className="text-sm font-medium text-foreground">Screen recording</h3>
+                  <p className="text-xs text-muted-foreground">Capture screenshots from your monitors</p>
                 </div>
               </div>
-              <Switch id="disableVision" checked={settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: checked }, true)} />
+              <Switch id="disableVision" checked={!settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: !checked }, true)} />
             </div>
           </CardContent>
         </Card>

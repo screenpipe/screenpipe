@@ -1,4 +1,4 @@
 [toolchain]
-channel = "1.92.0"
+channel = "1.93.1"
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 components = ["rustfmt", "clippy"]

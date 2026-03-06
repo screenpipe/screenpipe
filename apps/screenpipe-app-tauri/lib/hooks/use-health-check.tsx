@@ -169,7 +169,7 @@ export function useHealthCheck() {
 
         // Start retry interval if not already running
         if (!retryIntervalRef.current) {
-          retryIntervalRef.current = setInterval(fetchHealth, 3000);
+          retryIntervalRef.current = setInterval(fetchHealth, 10000);
         }
       };
 
@@ -201,7 +201,7 @@ export function useHealthCheck() {
 
         // Only start retry if this wasn't a manual close
         if (!retryIntervalRef.current && event.code !== 1000) {
-          retryIntervalRef.current = setInterval(fetchHealth, 3000);
+          retryIntervalRef.current = setInterval(fetchHealth, 10000);
         }
       };
     } catch (error) {
@@ -217,7 +217,7 @@ export function useHealthCheck() {
       }
 
       if (!retryIntervalRef.current) {
-        retryIntervalRef.current = setInterval(fetchHealth, 3000);
+        retryIntervalRef.current = setInterval(fetchHealth, 10000);
       }
     }
   }, [setServerDown]); // stable deps — no cycle

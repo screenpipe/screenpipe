@@ -12,6 +12,7 @@ import EngineStartup from "@/components/onboarding/engine-startup";
 import ReadContent from "@/components/onboarding/read-content";
 import ShortcutGate from "@/components/onboarding/shortcut-gate";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
+import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 
@@ -41,6 +42,14 @@ export default function OnboardingPage() {
   const [isVisible, setIsVisible] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const { onboardingData, isLoading } = useOnboarding();
+  const isEnterprise = useIsEnterpriseBuild();
+
+  // Enterprise builds skip the login slide
+  useEffect(() => {
+    if (isEnterprise && currentSlide === "login") {
+      setCurrentSlide("permissions");
+    }
+  }, [isEnterprise, currentSlide]);
 
   // Restore saved step on mount
   useEffect(() => {

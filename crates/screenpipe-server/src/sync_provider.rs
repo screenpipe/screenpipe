@@ -8,6 +8,7 @@ use chrono::Utc;
 use screenpipe_core::sync::{BlobType, PendingBlob, SyncDataProvider, SyncError, SyncResult};
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -62,6 +63,12 @@ pub struct OcrRecord {
     pub frame_sync_id: String,
     pub text: String,
     pub focused: bool,
+    /// App name from the source machine (added to avoid empty ocr_text.app_name on import)
+    #[serde(default)]
+    pub app_name: Option<String>,
+    /// Window name from the source machine
+    #[serde(default)]
+    pub window_name: Option<String>,
 }
 
 /// Audio transcription record for sync
@@ -102,6 +109,32 @@ pub struct UiEventSyncRecord {
     pub modifiers: Option<i32>,
     pub element_role: Option<String>,
     pub element_name: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub relative_ms: Option<i32>,
+    #[serde(default)]
+    pub delta_x: Option<i32>,
+    #[serde(default)]
+    pub delta_y: Option<i32>,
+    #[serde(default)]
+    pub button: Option<i32>,
+    #[serde(default)]
+    pub click_count: Option<i32>,
+    #[serde(default)]
+    pub text_length: Option<i32>,
+    #[serde(default)]
+    pub app_pid: Option<i32>,
+    #[serde(default)]
+    pub element_value: Option<String>,
+    #[serde(default)]
+    pub element_description: Option<String>,
+    #[serde(default)]
+    pub element_automation_id: Option<String>,
+    #[serde(default)]
+    pub element_bounds: Option<String>,
+    #[serde(default)]
+    pub frame_id: Option<i64>,
 }
 
 /// Current schema version for sync chunks
@@ -151,10 +184,10 @@ impl ScreenpipeSyncProvider {
         let time_start = frames.first().map(|f| f.1.clone()).unwrap();
         let time_end = frames.last().map(|f| f.1.clone()).unwrap();
 
-        // Get OCR for these frames
-        let ocr_results: Vec<(i64, String, bool)> = sqlx::query_as(
+        // Get OCR for these frames (include app_name/window_name for cross-machine sync)
+        let ocr_results: Vec<(i64, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT frame_id, text, focused
+            SELECT frame_id, text, focused, app_name, window_name
             FROM ocr_text
             WHERE frame_id IN (SELECT value FROM json_each(?))
             "#,
@@ -188,7 +221,7 @@ impl ScreenpipeSyncProvider {
         // Build OCR records
         let ocr_records: Vec<OcrRecord> = ocr_results
             .into_iter()
-            .filter_map(|(frame_id, text, focused)| {
+            .filter_map(|(frame_id, text, focused, app_name, window_name)| {
                 frame_sync_map
                     .get(&frame_id)
                     .map(|frame_sync_id| OcrRecord {
@@ -196,6 +229,8 @@ impl ScreenpipeSyncProvider {
                         frame_sync_id: frame_sync_id.clone(),
                         text,
                         focused,
+                        app_name,
+                        window_name,
                     })
             })
             .collect();
@@ -338,25 +373,13 @@ impl ScreenpipeSyncProvider {
     ) -> SyncResult<Option<(SyncChunk, String, String)>> {
         let pool = &self.db.pool;
 
-        #[allow(clippy::type_complexity)]
-        let records: Vec<(
-            i64,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i32>,
-            Option<i32>,
-            Option<i32>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let records = sqlx::query(
             r#"
             SELECT id, timestamp, event_type, app_name, window_title, browser_url,
-                   text_content, x, y, key_code, modifiers, element_role, element_name
+                   text_content, x, y, key_code, modifiers, element_role, element_name,
+                   session_id, relative_ms, delta_x, delta_y, button, click_count,
+                   text_length, app_pid, element_value, element_description,
+                   element_automation_id, element_bounds, frame_id
             FROM ui_events
             WHERE synced_at IS NULL
             ORDER BY timestamp ASC
@@ -372,42 +395,39 @@ impl ScreenpipeSyncProvider {
             return Ok(None);
         }
 
-        let time_start = records.first().map(|r| r.1.clone()).unwrap();
-        let time_end = records.last().map(|r| r.1.clone()).unwrap();
+        let time_start: String = records.first().unwrap().get("timestamp");
+        let time_end: String = records.last().unwrap().get("timestamp");
 
         let ui_events: Vec<UiEventSyncRecord> = records
             .into_iter()
-            .map(
-                |(
-                    _,
-                    timestamp,
-                    event_type,
-                    app_name,
-                    window_title,
-                    browser_url,
-                    text_content,
-                    x,
-                    y,
-                    key_code,
-                    modifiers,
-                    element_role,
-                    element_name,
-                )| UiEventSyncRecord {
-                    sync_id: Uuid::new_v4().to_string(),
-                    timestamp,
-                    event_type,
-                    app_name,
-                    window_title,
-                    browser_url,
-                    text_content,
-                    x,
-                    y,
-                    key_code,
-                    modifiers,
-                    element_role,
-                    element_name,
-                },
-            )
+            .map(|r| UiEventSyncRecord {
+                sync_id: Uuid::new_v4().to_string(),
+                timestamp: r.get("timestamp"),
+                event_type: r.get("event_type"),
+                app_name: r.get("app_name"),
+                window_title: r.get("window_title"),
+                browser_url: r.get("browser_url"),
+                text_content: r.get("text_content"),
+                x: r.get("x"),
+                y: r.get("y"),
+                key_code: r.get("key_code"),
+                modifiers: r.get("modifiers"),
+                element_role: r.get("element_role"),
+                element_name: r.get("element_name"),
+                session_id: r.get("session_id"),
+                relative_ms: r.get("relative_ms"),
+                delta_x: r.get("delta_x"),
+                delta_y: r.get("delta_y"),
+                button: r.get("button"),
+                click_count: r.get("click_count"),
+                text_length: r.get("text_length"),
+                app_pid: r.get("app_pid"),
+                element_value: r.get("element_value"),
+                element_description: r.get("element_description"),
+                element_automation_id: r.get("element_automation_id"),
+                element_bounds: r.get("element_bounds"),
+                frame_id: r.get("frame_id"),
+            })
             .collect();
 
         let chunk = SyncChunk {
@@ -527,6 +547,13 @@ impl ScreenpipeSyncProvider {
             std::collections::HashMap::new()
         };
 
+        // Build frame_sync_id -> FrameRecord map for fallback app_name/window_name
+        let frame_record_map: std::collections::HashMap<&str, &FrameRecord> = chunk
+            .frames
+            .iter()
+            .map(|f| (f.sync_id.as_str(), f))
+            .collect();
+
         // Import OCR
         for ocr in &chunk.ocr_records {
             if let Some(&frame_id) = frame_id_map.get(&ocr.frame_sync_id) {
@@ -543,15 +570,30 @@ impl ScreenpipeSyncProvider {
                     continue;
                 }
 
+                // Resolve app_name/window_name: prefer OCR record, fall back to frame record
+                // (old schema chunks won't have these fields on OcrRecord)
+                let frame_rec = frame_record_map.get(ocr.frame_sync_id.as_str());
+                let app_name = ocr
+                    .app_name
+                    .as_deref()
+                    .or_else(|| frame_rec.and_then(|f| f.app_name.as_deref()))
+                    .unwrap_or("");
+                let window_name = ocr
+                    .window_name
+                    .as_deref()
+                    .or_else(|| frame_rec.and_then(|f| f.window_name.as_deref()));
+
                 sqlx::query(
                     r#"
-                    INSERT INTO ocr_text (frame_id, text, focused, sync_id, synced_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO ocr_text (frame_id, text, focused, app_name, window_name, sync_id, synced_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(frame_id)
                 .bind(&ocr.text)
                 .bind(ocr.focused)
+                .bind(app_name)
+                .bind(window_name)
                 .bind(&ocr.sync_id)
                 .bind(Utc::now().to_rfc3339())
                 .execute(pool)
@@ -678,8 +720,11 @@ impl ScreenpipeSyncProvider {
                 r#"
                 INSERT INTO ui_events (timestamp, event_type, app_name, window_title, browser_url,
                     text_content, x, y, key_code, modifiers, element_role, element_name,
+                    session_id, relative_ms, delta_x, delta_y, button, click_count,
+                    text_length, app_pid, element_value, element_description,
+                    element_automation_id, element_bounds, frame_id,
                     sync_id, machine_id, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&event.timestamp)
@@ -694,6 +739,19 @@ impl ScreenpipeSyncProvider {
             .bind(event.modifiers)
             .bind(&event.element_role)
             .bind(&event.element_name)
+            .bind(&event.session_id)
+            .bind(event.relative_ms)
+            .bind(event.delta_x)
+            .bind(event.delta_y)
+            .bind(event.button)
+            .bind(event.click_count)
+            .bind(event.text_length)
+            .bind(event.app_pid)
+            .bind(&event.element_value)
+            .bind(&event.element_description)
+            .bind(&event.element_automation_id)
+            .bind(&event.element_bounds)
+            .bind(event.frame_id)
             .bind(&event.sync_id)
             .bind(&chunk.machine_id)
             .bind(Utc::now().to_rfc3339())

@@ -4,6 +4,7 @@
 #
 # Enterprise Windows build only. Manual trigger (workflow_dispatch).
 # Builds with tauri.enterprise.conf.json, creates .intunewin, uploads to R2.
+# Signs all binaries (screenpipe-app.exe, sidecars) AND the NSIS installer with SSL.com EV cert.
 # Does not run as part of consumer release — keeps consumer releases fast.
 name: Release Enterprise (Windows)
 
@@ -93,11 +94,6 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun install
 
-      - name: Install vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3"
-
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -110,35 +106,6 @@ jobs:
             Remove-Item 7z-installer.exe
           }
           echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Cache LLVM
-        id: cache-llvm
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\Program Files\LLVM
-            ${{ runner.temp }}\llvm
-          key: llvm-10.0-windows-${{ hashFiles('.github/workflows/release-enterprise-windows.yml') }}
-
-      - name: Install LLVM and Clang
-        if: steps.cache-llvm.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          $llvmPath = "C:\Program Files\LLVM"
-          if (Test-Path "$llvmPath\bin\clang.exe") { Write-Host "LLVM already installed"; exit 0 }
-          if (!(Test-Path $llvmPath)) {
-            New-Item -ItemType Directory -Force -Path $llvmPath | Out-Null
-            $acl = Get-Acl $llvmPath
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users","FullControl","Allow")
-            $acl.SetAccessRule($rule)
-            Set-Acl $llvmPath $acl
-          }
-          $installerUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/LLVM-10.0.0-win64.exe"
-          $installerPath = Join-Path $env:TEMP "LLVM-10.0.0-win64.exe"
-          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
-          Start-Process -FilePath $installerPath -ArgumentList "/S","/D=$llvmPath" -Wait -NoNewWindow
-          Remove-Item $installerPath -Force
-          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install wget (Windows)
         shell: powershell
@@ -174,10 +141,22 @@ jobs:
         run: |
           echo "ORT_STRATEGY=system" >> $GITHUB_ENV
           echo "ORT_LIB_LOCATION=${{ github.workspace }}/ort-system-lib" >> $GITHUB_ENV
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          echo "AWS_LC_SYS_PREBUILT_NASM=1" >> $GITHUB_ENV
 
       - name: Use enterprise config
         shell: bash
         run: cp apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
+
+      - name: Install CodeSignTool for binary signing
+        shell: powershell
+        run: |
+          $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
+          Write-Host "Downloading CodeSignTool..."
+          Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" -OutFile "$env:RUNNER_TEMP\cst.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$cstDest" -Force
+          echo "CODESIGNTOOL_PATH=$cstDest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "CodeSignTool installed at $cstDest"
 
       - name: Build (enterprise, Windows x64)
         uses: tauri-apps/tauri-action@v0.5.17
@@ -186,6 +165,10 @@ jobs:
           CI: true
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
@@ -193,9 +176,7 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
-          VCPKG_STATIC_LINKAGE: "true"
-          KNF_STATIC_CRT: "1"
+          RUSTFLAGS: "-C link-arg=/LTCG"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF"
         with:
           args: "--target x86_64-pc-windows-msvc --features enterprise-build"
@@ -213,45 +194,40 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          # Install CodeSignTool
-          $cstDir = "$env:RUNNER_TEMP\CodeSignTool"
-          $cstUrl = "https://www.ssl.com/download/codesigntool-for-windows/"
-          Write-Host "Downloading CodeSignTool..."
-          Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" -OutFile "$env:RUNNER_TEMP\cst.zip"
-          Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$env:RUNNER_TEMP" -Force
-          # Find the extracted folder
-          $cstDir = Get-ChildItem "$env:RUNNER_TEMP\CodeSignTool*" -Directory | Select-Object -First 1
-          if (-not $cstDir) { throw "CodeSignTool extraction failed" }
-          Write-Host "CodeSignTool at: $($cstDir.FullName)"
+          # CodeSignTool already installed in earlier step
+          $cstDest = $env:CODESIGNTOOL_PATH
+          $jarFile = Get-ChildItem $cstDest -Recurse -Filter "code_sign_tool*.jar" | Select-Object -First 1
+          $javaFile = Get-ChildItem $cstDest -Recurse -Filter "java.exe" | Select-Object -First 1
+          if (-not $jarFile) { throw "CodeSignTool jar not found" }
+          if (-not $javaFile) { throw "Java not found in CodeSignTool" }
 
           # Find the installer exe
           $nsisDir = "apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
           $exe = Get-ChildItem "$nsisDir/*.exe" | Select-Object -First 1
           if (-not $exe) { throw "No installer exe found in $nsisDir" }
-          Write-Host "Signing: $($exe.Name)"
+          Write-Host "Signing installer: $($exe.Name)"
 
           # Sign with CodeSignTool
-          $javaPath = Join-Path $cstDir.FullName "jdk-11.0.2\bin\java.exe"
-          $jarPath = Join-Path $cstDir.FullName "jar\code_sign_tool-1.3.2.jar"
-          $signedDir = Join-Path $cstDir.FullName "signed"
+          $signedDir = Join-Path $cstDest "signed_installer"
           if (Test-Path $signedDir) { Remove-Item $signedDir -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
 
-          & $javaPath -jar $jarPath sign `
+          Push-Location $cstDest
+          & $javaFile.FullName -jar $jarFile.FullName sign `
             "-username=$env:ESIGNER_USERNAME" `
             "-password=$env:ESIGNER_PASSWORD" `
             "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
             "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
             "-input_file_path=$($exe.FullName)" `
             "-output_dir_path=$signedDir"
+          Pop-Location
 
           if ($LASTEXITCODE -ne 0) { throw "Code signing failed with exit code $LASTEXITCODE" }
 
-          # Copy signed exe back
           $signedExe = Join-Path $signedDir $exe.Name
           if (-not (Test-Path $signedExe)) { throw "Signed file not found at $signedExe" }
           Copy-Item $signedExe $exe.FullName -Force
-          Write-Host "✅ Installer signed: $($exe.Name)"
+          Write-Host "Installer signed: $($exe.Name)"
 
           # Regenerate Tauri .sig file for the signed exe
           $sigFile = "$($exe.FullName).sig"
@@ -262,7 +238,7 @@ jobs:
             Push-Location apps/screenpipe-app-tauri
             bunx tauri signer sign $exe.FullName --private-key-path $keyFile --password $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
             Pop-Location
-            Write-Host "✅ Tauri signature regenerated"
+            Write-Host "Tauri signature regenerated"
           }
 
       - name: Create .intunewin and upload to R2
@@ -292,15 +268,15 @@ jobs:
           Write-Host "Uploading enterprise Windows bundles for v$version to R2..."
           Get-ChildItem "$nsisDir/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
             aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
+            Write-Host "  $($_.Name)"
           }
           Get-ChildItem "$nsisDir/*.nsis.zip","$nsisDir/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
             aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
+            Write-Host "  $($_.Name)"
           }
           if ($intunewinPath) {
             aws s3 cp $intunewinPath "$r2Prefix/$(Split-Path -Leaf $intunewinPath)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $(Split-Path -Leaf $intunewinPath)"
+            Write-Host "  $(Split-Path -Leaf $intunewinPath)"
           }
           Write-Host "R2 enterprise upload complete for Windows"
 

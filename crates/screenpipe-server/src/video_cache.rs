@@ -34,6 +34,7 @@ pub struct DeviceFrame {
     pub image_data: Vec<u8>,
     pub metadata: FrameMetadata,
     pub audio_entries: Vec<AudioEntry>,
+    pub machine_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -543,6 +544,7 @@ impl FrameCache {
                                     end_time: a.end_time,
                                 })
                                 .collect(),
+                            machine_id: chunk.machine_id.clone(),
                         });
                     }
                     _ => {
@@ -846,6 +848,7 @@ async fn extract_frame(
                             end_time: a.end_time,
                         })
                         .collect(),
+                    machine_id: chunk.machine_id.clone(),
                 }],
             })
             .await?;

@@ -25,6 +25,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@ee/*": [
+        "../../ee/desktop/*"
       ]
     },
     "types": ["@wdio/globals/types", "@wdio/mocha-framework","@tauri-apps/api"]

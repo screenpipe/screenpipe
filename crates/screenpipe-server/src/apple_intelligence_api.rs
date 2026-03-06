@@ -358,9 +358,16 @@ fn parse_tool_calls(text: &str) -> (Option<String>, Vec<ToolCall>) {
 /// GET /ai/status
 pub async fn ai_status() -> Json<StatusResponse> {
     let avail = check_availability();
+    let is_available = avail == Availability::Available;
+    let status_str = avail.to_string();
+    if is_available {
+        info!("apple intelligence status: available");
+    } else {
+        warn!("apple intelligence status: {} (not available)", status_str);
+    }
     Json(StatusResponse {
-        available: avail == Availability::Available,
-        status: avail.to_string(),
+        available: is_available,
+        status: status_str,
         model: MODEL_ID.to_string(),
     })
 }

@@ -145,10 +145,29 @@ export function useTeam() {
       teamKeyRef.current = key;
 
       // generate invite link if admin and has key
+      // the invite link contains the encryption key + a server-generated invite token
+      // email invites use a separate token (no key sent to server)
       let inviteLink: string | null = null;
       if (data.role === "admin" && key) {
-        const b64Key = await exportTeamKey(key);
-        inviteLink = `screenpipe://join-team?team_id=${data.team.id}&key=${encodeURIComponent(b64Key)}`;
+        try {
+          const tokenRes = await fetch(`${API}/invite`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              email: "link-invite@placeholder",
+              team_name: data.team.name,
+            }),
+          });
+          if (tokenRes.ok) {
+            const tokenData = await tokenRes.json();
+            const b64Key = await exportTeamKey(key);
+            inviteLink = `screenpipe://join-team?team_id=${data.team.id}&key=${encodeURIComponent(b64Key)}&invite_token=${tokenData.invite_token}`;
+          }
+        } catch {
+          // fall back to link without token (won't work for joining, but shows the key)
+          const b64Key = await exportTeamKey(key);
+          inviteLink = `screenpipe://join-team?team_id=${data.team.id}&key=${encodeURIComponent(b64Key)}`;
+        }
       }
 
       setState((s) => ({
@@ -245,12 +264,12 @@ export function useTeam() {
     [token, fetchTeam]
   );
 
-  // join team (from invite link)
+  // join team from invite link (contains key) or from email invite (token only, key shared separately)
   const joinTeam = useCallback(
-    async (teamId: string, base64Key: string) => {
+    async (teamId: string, base64Key: string, inviteToken?: string) => {
       if (!token) throw new Error("not logged in");
 
-      // import and store the key first
+      // import and store the key
       const key = await importTeamKey(base64Key);
       await saveTeamKeyToStore(teamId, key);
       teamKeyRef.current = key;
@@ -258,7 +277,10 @@ export function useTeam() {
       const res = await fetch(`${API}/join`, {
         method: "POST",
         headers: headers(),
-        body: JSON.stringify({ team_id: teamId }),
+        body: JSON.stringify({
+          team_id: teamId,
+          invite_token: inviteToken || "direct",
+        }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -399,10 +421,11 @@ export function useTeam() {
     [token, fetchConfigs]
   );
 
-  // send email invite (calls server API)
+  // send email invite — server generates a token, email contains token only (no key)
+  // the admin must share the encryption key separately via secure channel
   const sendInviteEmail = useCallback(
-    async (email: string) => {
-      if (!token || !state.inviteLink || !state.team)
+    async (email: string): Promise<{ invite_token: string }> => {
+      if (!token || !state.team)
         throw new Error("no team");
       let res: Response;
       try {
@@ -412,7 +435,6 @@ export function useTeam() {
           body: JSON.stringify({
             email,
             team_name: state.team.name,
-            invite_link: state.inviteLink,
           }),
         });
       } catch {
@@ -426,9 +448,35 @@ export function useTeam() {
         } catch {}
         throw new Error(msg);
       }
+      return res.json();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [token, state.inviteLink, state.team]
+    [token, state.team]
+  );
+
+  // generate an invite token (without sending email)
+  const generateInviteToken = useCallback(
+    async (): Promise<string> => {
+      if (!token || !state.team)
+        throw new Error("no team");
+
+      const res = await fetch(`${API}/invite`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          email: "manual-invite@placeholder",
+          team_name: state.team.name,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "failed to generate invite");
+      }
+      const data = await res.json();
+      return data.invite_token;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [token, state.team]
   );
 
   // auto-fetch on mount + when token changes
@@ -447,5 +495,6 @@ export function useTeam() {
     pushConfig,
     deleteConfig,
     sendInviteEmail,
+    generateInviteToken,
   };
 }

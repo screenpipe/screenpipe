@@ -26,7 +26,6 @@ const config = {
 	windows: {
 		ffmpegName: 'ffmpeg-8.0.1-full_build-shared',
 		ffmpegUrl: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-full_build-shared.7z',
-		vcpkgPackages: ['opencl', 'onnxruntime-gpu'],
 	},
 	linux: {
 		aptPackages: [
@@ -288,23 +287,81 @@ if (platform == 'linux') {
 	}
 }
 
+// VC Redist discovery (Windows): vswhere + standard locations so pre_build/pre_dev and CI both work.
+// Microsoft.VC143.CRT = VS 2022 (v143) / 2015–2022 redist family; still current as of 2025.
+const PROGRAM_FILES_X86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+const PROGRAM_FILES_LIST = [process.env['ProgramFiles(x86)'], process.env['ProgramFiles']].filter(Boolean);
+const VS_EDITIONS = ['Enterprise', 'Professional', 'Community', 'BuildTools'];
+const VS_YEARS = ['2025', '2022', '2019', '2017'];
+const VSWHERE_DIR = path.join(PROGRAM_FILES_X86, 'Microsoft Visual Studio', 'Installer');
+
+/** Resolve VC\\Redist\\MSVC\\{version} to the latest version subfolder and return x64 CRT path, or null */
+async function getMsvcCrtDirFromInstallRoot(installRoot) {
+	const msvcPath = path.join(installRoot, 'VC', 'Redist', 'MSVC');
+	try {
+		const versions = await fs.readdir(msvcPath);
+		const numeric = versions.filter((v) => /^\d+\.\d+\.\d+/.test(v)).sort();
+		if (numeric.length === 0) return null;
+		const latest = numeric[numeric.length - 1];
+		const crtDir = path.join(msvcPath, latest, 'x64', 'Microsoft.VC143.CRT');
+		await fs.access(path.join(crtDir, 'vcruntime140.dll'));
+		return crtDir;
+	} catch {
+		return null;
+	}
+}
+
+/** Find Microsoft.VC143.CRT dir: VCToolsRedistDir → vswhere → standard paths */
+async function findVc143CrtDir() {
+	if (process.env.VCToolsRedistDir) {
+		const crtDir = path.join(process.env.VCToolsRedistDir, 'x64', 'Microsoft.VC143.CRT');
+		try {
+			await fs.access(path.join(crtDir, 'vcruntime140.dll'));
+			console.log('Using VCToolsRedistDir:', crtDir);
+			return crtDir;
+		} catch (e) {
+			console.warn('VCToolsRedistDir set but CRT not found:', e.message);
+		}
+	}
+
+	const vswhereExe = path.join(VSWHERE_DIR, 'vswhere.exe');
+	try {
+		if (await fs.access(vswhereExe).then(() => true).catch(() => false)) {
+			const installDir = (await $`"${vswhereExe}" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.text()).trim();
+			if (installDir) {
+				const crtDir = await getMsvcCrtDirFromInstallRoot(installDir);
+				if (crtDir) {
+					console.log('Found with vswhere:', crtDir);
+					return crtDir;
+				}
+			}
+		}
+	} catch (e) {
+		console.warn('vswhere failed:', e.message);
+	}
+
+	for (const progFiles of PROGRAM_FILES_LIST) {
+		for (const year of VS_YEARS) {
+			for (const edition of VS_EDITIONS) {
+				const installRoot = path.join(progFiles, 'Microsoft Visual Studio', year, edition);
+				const crtDir = await getMsvcCrtDirFromInstallRoot(installRoot);
+				if (crtDir) {
+					console.log('Found in standard location:', crtDir);
+					return crtDir;
+				}
+			}
+		}
+	}
+
+	throw new Error('Microsoft VC143 CRT not found. Install Visual Studio with C++ tools or set VCToolsRedistDir.');
+}
+
 // Copy VC143 CRT DLLs into src-tauri/vcredist for Tauri bundle (Windows only)
 async function copyVcredistDlls() {
 	const vcredistDir = path.join(cwd, 'vcredist');
 	await fs.mkdir(vcredistDir, { recursive: true });
 
-	let crtDir;
-	if (process.env.VCToolsRedistDir) {
-		crtDir = path.join(process.env.VCToolsRedistDir, 'x64', 'Microsoft.VC143.CRT');
-	} else {
-		const vswhere = path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
-		const installDir = (await $`"${vswhere}" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.text()).trim();
-		const msvcPath = path.join(installDir, 'VC', 'Redist', 'MSVC');
-		const versions = await fs.readdir(msvcPath);
-		versions.sort();
-		const latest = versions[versions.length - 1];
-		crtDir = path.join(msvcPath, latest, 'x64', 'Microsoft.VC143.CRT');
-	}
+	const crtDir = await findVc143CrtDir();
 
 	const dlls = ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
 	for (const dll of dlls) {
@@ -334,12 +391,8 @@ if (platform == 'windows') {
 				await copyVcredistDlls();
 			} catch (err) {
 				console.warn('Skipping VC redist DLL copy (optional outside CI):', err.message);
-			}
 		}
-
-	// Setup vcpkg packages with environment variables set inline
-	// TODO is this even used? dont we use build.rs for this?
-	// await $`SystemDrive=${process.env.SYSTEMDRIVE} SystemRoot=${process.env.SYSTEMROOT} windir=${process.env.WINDIR} ${process.env.VCPKG_ROOT}\\vcpkg.exe install ${config.windows.vcpkgPackages}`.quiet()
+	}
 }
 
 /* ########## macOS ########## */

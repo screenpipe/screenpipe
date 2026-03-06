@@ -42,7 +42,7 @@ use crate::{
     },
     utils::{
         audio::resample,
-        ffmpeg::{get_new_file_path, write_audio_to_file},
+        ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
     },
     vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
     AudioInput, TranscriptionResult,
@@ -368,6 +368,7 @@ impl AudioManager {
                 (record_and_transcribe_handle.await, Ok(Ok(())))
             };
 
+            // Check for JoinError (task panic/cancel)
             if record_result.is_err() || realtime_result.is_err() {
                 let mut e = anyhow!("record_device failed");
 
@@ -386,12 +387,31 @@ impl AudioManager {
                 return Err(e);
             }
 
-            debug!(
-                "recording handle for device {} quit unexpectedly",
+            // Check for inner Result errors (record_and_transcribe returned Err)
+            if let Ok(Err(ref e)) = record_result {
+                warn!(
+                    "recording for device {} exited with error: {}",
+                    device_clone, e
+                );
+                return Err(anyhow!("record_device {} failed: {}", device_clone, e));
+            }
+            if let Ok(Err(ref e)) = realtime_result {
+                warn!(
+                    "realtime recording for device {} exited with error: {}",
+                    device_clone, e
+                );
+                return Err(anyhow!("realtime {} failed: {}", device_clone, e));
+            }
+
+            warn!(
+                "recording handle for device {} exited unexpectedly with Ok",
                 device_clone
             );
 
-            Ok(())
+            Err(anyhow!(
+                "recording handle for device {} exited unexpectedly",
+                device_clone
+            ))
         });
 
         Ok(recording_handle)
@@ -486,7 +506,15 @@ impl AudioManager {
                     } else {
                         audio.data.as_ref().to_vec()
                     };
-                    let path = get_new_file_path(&audio.device.to_string(), out);
+                    let capture_dt = chrono::DateTime::from_timestamp(
+                        audio.capture_timestamp as i64,
+                        0,
+                    );
+                    let path = get_new_file_path_with_timestamp(
+                        &audio.device.to_string(),
+                        out,
+                        capture_dt,
+                    );
                     if let Err(e) =
                         write_audio_to_file(&resampled, SAMPLE_RATE, &PathBuf::from(&path), false)
                     {
@@ -496,7 +524,9 @@ impl AudioManager {
                         debug!("audio persisted to disk: {}", path);
                         // Insert into DB immediately so retranscribe can find this audio
                         // even if transcription is deferred. No transcription yet — just the chunk.
-                        if let Err(e) = db.insert_audio_chunk(&path, None).await {
+                        // Use the original capture timestamp so audio appears at the correct
+                        // position on the timeline, not when processing happened.
+                        if let Err(e) = db.insert_audio_chunk(&path, capture_dt).await {
                             error!("failed to insert audio chunk into db: {:?}", e);
                         }
                         Some(path)
@@ -517,8 +547,8 @@ impl AudioManager {
                         // Detect session-end: either the transition happened during
                         // check_grace_period (was=true, now=false), OR it happened
                         // between chunks (was=false, now=false, but we had deferred).
-                        let session_just_ended = (was_in_session && !now_in_session)
-                            || (!now_in_session && had_deferred_segments);
+                        let session_just_ended =
+                            !now_in_session && (was_in_session || had_deferred_segments);
 
                         // Max deferral cap: force reconciliation if we've been
                         // deferring longer than MAX_DEFERRAL_SECS, even during an

@@ -113,17 +113,17 @@ async fn test_concurrent_ocr_searches_dont_starve_pool() {
 
     // The write task should complete quickly (< 5s) even with 4 concurrent searches.
     // Without the semaphore, the write could be starved for 10+ seconds.
-    assert!(
-        write_ok,
-        "write task should succeed"
-    );
+    assert!(write_ok, "write task should succeed");
     assert!(
         write_elapsed < Duration::from_secs(5),
         "write should complete in <5s (got {:.2}s) — pool not starved",
         write_elapsed.as_secs_f64()
     );
 
-    println!("\nPASS: write completed in {:.2}s while 4 OCR searches ran concurrently", write_elapsed.as_secs_f64());
+    println!(
+        "\nPASS: write completed in {:.2}s while 4 OCR searches ran concurrently",
+        write_elapsed.as_secs_f64()
+    );
 }
 
 /// Test that the 30s timeout on search would fire for pathologically slow queries.

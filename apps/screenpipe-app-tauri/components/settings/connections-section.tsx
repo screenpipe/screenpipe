@@ -14,11 +14,12 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
-import { join, homeDir } from "@tauri-apps/api/path";
+import { join, homeDir, tempDir } from "@tauri-apps/api/path";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { CalendarCard } from "./calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
+import { OpenClawCard } from "./openclaw-card";
 
 const GITHUB_RELEASES_API = "https://api.github.com/repos/screenpipe/screenpipe/releases";
 
@@ -136,30 +137,7 @@ async function getInstalledMcpVersion(): Promise<string | null> {
   }
 }
 
-async function installClaudeMcp(): Promise<void> {
-  const configPath = await getClaudeConfigPath();
-  if (!configPath) throw new Error("unsupported platform");
 
-  let config: Record<string, unknown> = {};
-  try {
-    const content = await readTextFile(configPath);
-    config = JSON.parse(content);
-  } catch {
-    // file doesn't exist or invalid JSON — start fresh
-  }
-
-  if (!config.mcpServers || typeof config.mcpServers !== "object") {
-    config.mcpServers = {};
-  }
-
-  (config.mcpServers as Record<string, unknown>).screenpipe = {
-    command: "npx",
-    args: ["-y", "screenpipe-mcp"],
-  };
-
-  const encoder = new TextEncoder();
-  await writeFile(configPath, encoder.encode(JSON.stringify(config, null, 2)));
-}
 
 function CursorLogo({ className }: { className?: string }) {
   return (
@@ -544,33 +522,30 @@ export function ConnectionsSection() {
     try {
       setDownloadState("downloading");
 
-      // Write directly to Claude's config file (no .mcpb dance)
-      await installClaudeMcp();
+      // Download the .mcpb file and open it — Claude Desktop handles the rest
+      const release = await getLatestMcpRelease();
+      const response = await tauriFetch(release.url, { method: "GET" });
+      if (!response.ok) throw new Error("failed to download .mcpb file");
+
+      const data = new Uint8Array(await response.arrayBuffer());
+      const tmp = await tempDir();
+      const mcpbPath = await join(tmp, "screenpipe.mcpb");
+      await writeFile(mcpbPath, data);
+
+      // Open the .mcpb file — Claude Desktop will register the MCP server
+      const os = platform();
+      if (os === "macos") {
+        await Command.create("open", [mcpbPath]).execute();
+      } else if (os === "windows") {
+        await Command.create("cmd", ["/c", "start", "", mcpbPath]).execute();
+      }
 
       setDownloadState("downloaded");
-
-      // Try to open Claude Desktop so user can start using it
-      const os = platform();
-      try {
-        if (os === "macos") {
-          const cmd = Command.create("open", ["-a", "Claude"]);
-          await cmd.execute();
-        } else if (os === "windows") {
-          const claudeExe = await findClaudeExeOnWindows();
-          if (claudeExe) {
-            const cmd = Command.create("cmd", ["/c", "start", "", claudeExe]);
-            await cmd.execute();
-          }
-        }
-      } catch { /* ignore — Claude will pick it up next launch */ }
     } catch (error) {
       console.error("failed to install claude mcp:", error instanceof Error ? error.message : String(error));
-
       await message(
-        "Failed to write Claude config.\n\nYou can manually add screenpipe to Claude Desktop config:\n\n" +
-        JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp"] } } }, null, 2) +
-        "\n\nConfig location:\n• macOS: ~/Library/Application Support/Claude/claude_desktop_config.json\n• Windows: %APPDATA%/Claude/claude_desktop_config.json",
-        { title: "Claude MCP Setup", kind: "error" }
+        "could not connect to claude desktop.\n\nmake sure claude desktop is installed and has been opened at least once, then try again.\n\ndownload: https://claude.ai/download",
+        { title: "claude mcp setup", kind: "error" }
       );
       setDownloadState("idle");
     }
@@ -726,6 +701,9 @@ export function ConnectionsSection() {
 
         {/* ICS Calendar (subscription feeds) */}
         <IcsCalendarCard />
+
+        {/* OpenClaw Sync (rsync over SSH to VPS) */}
+        <OpenClawCard />
 
         {/* Docs link */}
         <button

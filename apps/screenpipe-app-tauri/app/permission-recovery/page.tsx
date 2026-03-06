@@ -5,9 +5,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Monitor, Mic, Keyboard, Globe, Check, RefreshCw, ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { commands, type OSPermission } from "@/lib/utils/tauri";
+import { Monitor, Mic, Keyboard, Globe, Check, RefreshCw } from "lucide-react";
+import { commands } from "@/lib/utils/tauri";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 
@@ -24,31 +23,50 @@ function PermissionRow({
   status: "granted" | "denied" | "checking";
   onFix: () => void;
 }) {
+  const isGranted = status === "granted";
   return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center space-x-3">
-        <div className="text-muted-foreground">{icon}</div>
-        <div>
-          <span className="font-mono text-sm">{label}</span>
-          <span className="font-mono text-xs text-muted-foreground ml-2">{description}</span>
+    <button
+      onClick={isGranted ? undefined : onFix}
+      disabled={isGranted || status === "checking"}
+      className="w-full flex items-center gap-3 px-4 py-3 border border-border/50 transition-all group disabled:cursor-default hover:enabled:bg-foreground hover:enabled:text-background"
+    >
+      <div
+        className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+          isGranted ? "bg-foreground/10" : "bg-muted group-hover:bg-background/10"
+        }`}
+      >
+        <div
+          className={`transition-colors ${
+            isGranted ? "text-foreground" : "text-muted-foreground group-hover:text-background/70"
+          }`}
+        >
+          {status === "checking" ? (
+            <RefreshCw className="w-3 h-3 animate-spin" />
+          ) : isGranted ? (
+            <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+          ) : (
+            icon
+          )}
         </div>
       </div>
-      {status === "checking" ? (
-        <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground" />
-      ) : status === "granted" ? (
-        <span className="font-mono text-xs text-muted-foreground">ok</span>
-      ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onFix}
-          className="font-mono text-xs h-7"
-        >
-          <ExternalLink className="w-3 h-3 mr-1" />
-          fix
-        </Button>
-      )}
-    </div>
+
+      <div className="flex flex-col items-start min-w-0">
+        <span className="font-mono text-xs font-medium">{label}</span>
+        <span className="font-mono text-[10px] text-muted-foreground group-hover:enabled:text-background/50 leading-tight">
+          {description}
+        </span>
+      </div>
+
+      <div className="ml-auto shrink-0">
+        {isGranted ? (
+          <span className="font-mono text-[10px] text-muted-foreground">ok</span>
+        ) : status === "checking" ? null : (
+          <span className="font-mono text-[10px] text-muted-foreground group-hover:text-background/70">
+            grant →
+          </span>
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -109,9 +127,11 @@ export default function PermissionRecoveryPage() {
     }
   }, [permissions, arcChecked, arcInstalled, arcAutomationOk]);
 
-  const openSettings = async (permission: OSPermission) => {
+  const handleFix = async (permission: Parameters<typeof commands.requestPermission>[0]) => {
     posthog.capture("permission_recovery_manual_fix", { permission });
-    try { await commands.openPermissionSettings(permission); } catch {}
+    try { await commands.requestPermission(permission); } catch {}
+    // Immediate recheck after requesting
+    await checkPermissions();
   };
 
   const screenStatus = permissions?.screenRecording === "granted" || permissions?.screenRecording === "notNeeded"
@@ -148,20 +168,20 @@ export default function PermissionRecoveryPage() {
               </p>
             </div>
 
-            <div className="divide-y divide-border">
+            <div className="space-y-2">
               <PermissionRow
                 icon={<Monitor className="w-4 h-4" strokeWidth={1.5} />}
                 label="screen"
                 description="capture display"
                 status={screenStatus}
-                onFix={() => openSettings("screenRecording")}
+                onFix={() => handleFix("screenRecording")}
               />
               <PermissionRow
                 icon={<Mic className="w-4 h-4" strokeWidth={1.5} />}
                 label="microphone"
                 description="transcribe audio"
                 status={micStatus}
-                onFix={() => openSettings("microphone")}
+                onFix={() => handleFix("microphone")}
               />
               {isMacOS && (
                 <PermissionRow
@@ -169,7 +189,7 @@ export default function PermissionRecoveryPage() {
                   label="accessibility"
                   description="shortcuts"
                   status={accessibilityStatus}
-                  onFix={() => openSettings("accessibility")}
+                  onFix={() => handleFix("accessibility")}
                 />
               )}
               {isMacOS && arcInstalled && (

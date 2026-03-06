@@ -14,6 +14,7 @@ use screenpipe_core::sync::{BlobType, SyncClientConfig, SyncManager};
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::Row;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -642,24 +643,13 @@ async fn get_archive_chunk(
 
     // Get UI events in range
     #[allow(clippy::type_complexity)]
-    let ui_events: Vec<(
-        i64,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-        Option<i32>,
-        Option<i32>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let ui_events = sqlx::query(
         r#"
         SELECT id, timestamp, event_type, app_name, window_title, browser_url,
-               text_content, x, y, key_code, modifiers, element_role, element_name
+               text_content, x, y, key_code, modifiers, element_role, element_name,
+               session_id, relative_ms, delta_x, delta_y, button, click_count,
+               text_length, app_pid, element_value, element_description,
+               element_automation_id, element_bounds, frame_id
         FROM ui_events
         WHERE timestamp >= ? AND timestamp < ?
         ORDER BY timestamp ASC
@@ -692,7 +682,7 @@ async fn get_archive_chunk(
         all_timestamps.push(&a.1);
     }
     for u in &ui_events {
-        all_timestamps.push(&u.1);
+        all_timestamps.push(u.get::<&str, _>("timestamp"));
     }
     all_timestamps.sort();
 
@@ -719,11 +709,11 @@ async fn get_archive_chunk(
         });
     }
 
-    // Get OCR for frames
+    // Get OCR for frames (include app_name/window_name for cross-machine sync)
     let ocr_records = if !frame_ids.is_empty() {
-        let ocr_results: Vec<(i64, String, bool)> = sqlx::query_as(
+        let ocr_results: Vec<(i64, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT frame_id, text, focused
+            SELECT frame_id, text, focused, app_name, window_name
             FROM ocr_text
             WHERE frame_id IN (SELECT value FROM json_each(?))
             "#,
@@ -734,7 +724,7 @@ async fn get_archive_chunk(
 
         ocr_results
             .into_iter()
-            .filter_map(|(frame_id, text, focused)| {
+            .filter_map(|(frame_id, text, focused, app_name, window_name)| {
                 frame_sync_map
                     .get(&frame_id)
                     .map(|frame_sync_id| OcrRecord {
@@ -742,6 +732,8 @@ async fn get_archive_chunk(
                         frame_sync_id: frame_sync_id.clone(),
                         text,
                         focused,
+                        app_name,
+                        window_name,
                     })
             })
             .collect()
@@ -784,39 +776,34 @@ async fn get_archive_chunk(
     // Build UI event records
     let ui_event_records: Vec<UiEventSyncRecord> = ui_events
         .into_iter()
-        .map(
-            |(
-                _,
-                timestamp,
-                event_type,
-                app_name,
-                window_title,
-                browser_url,
-                text_content,
-                x,
-                y,
-                key_code,
-                modifiers,
-                element_role,
-                element_name,
-            )| {
-                UiEventSyncRecord {
-                    sync_id: Uuid::new_v4().to_string(),
-                    timestamp,
-                    event_type,
-                    app_name,
-                    window_title,
-                    browser_url,
-                    text_content,
-                    x,
-                    y,
-                    key_code,
-                    modifiers,
-                    element_role,
-                    element_name,
-                }
-            },
-        )
+        .map(|r| UiEventSyncRecord {
+            sync_id: Uuid::new_v4().to_string(),
+            timestamp: r.get("timestamp"),
+            event_type: r.get("event_type"),
+            app_name: r.get("app_name"),
+            window_title: r.get("window_title"),
+            browser_url: r.get("browser_url"),
+            text_content: r.get("text_content"),
+            x: r.get("x"),
+            y: r.get("y"),
+            key_code: r.get("key_code"),
+            modifiers: r.get("modifiers"),
+            element_role: r.get("element_role"),
+            element_name: r.get("element_name"),
+            session_id: r.get("session_id"),
+            relative_ms: r.get("relative_ms"),
+            delta_x: r.get("delta_x"),
+            delta_y: r.get("delta_y"),
+            button: r.get("button"),
+            click_count: r.get("click_count"),
+            text_length: r.get("text_length"),
+            app_pid: r.get("app_pid"),
+            element_value: r.get("element_value"),
+            element_description: r.get("element_description"),
+            element_automation_id: r.get("element_automation_id"),
+            element_bounds: r.get("element_bounds"),
+            frame_id: r.get("frame_id"),
+        })
         .collect();
 
     Ok(Some(SyncChunk {

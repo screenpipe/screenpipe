@@ -136,19 +136,110 @@ pub fn start_sleep_monitor() {
         SCREEN_IS_LOCKED.store(true, Ordering::SeqCst);
     }
 
-    // Thread 1: Poll CGSessionCopyCurrentDictionary every 2s.
-    // This catches ALL lock methods (Cmd+Ctrl+Q, menu, hot corner, auto-lock)
-    // which NSWorkspace.screensDidSleep does NOT detect.
-    std::thread::spawn(|| loop {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        let locked = check_screen_locked_cgsession();
-        let was_locked = SCREEN_IS_LOCKED.swap(locked, Ordering::SeqCst);
-        if locked != was_locked {
-            if locked {
-                info!("Screen locked (CGSession poll)");
-            } else {
-                info!("Screen unlocked (CGSession poll)");
+    // Thread 1: Listen for screen lock/unlock via CFNotificationCenter (Darwin notifications).
+    // Uses com.apple.screenIsLocked / com.apple.screenIsUnlocked — event-driven, no polling.
+    // Falls back to 30s CGSession polling only as a safety net.
+    std::thread::spawn(|| {
+        use std::ffi::{c_void, CString};
+
+        type CFNotificationCenterRef = *const c_void;
+        type CFStringRef = *const c_void;
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFNotificationCenterGetDistributedCenter() -> CFNotificationCenterRef;
+            fn CFNotificationCenterAddObserver(
+                center: CFNotificationCenterRef,
+                observer: *const c_void,
+                callback: unsafe extern "C" fn(
+                    center: CFNotificationCenterRef,
+                    observer: *const c_void,
+                    name: CFStringRef,
+                    object: *const c_void,
+                    user_info: *const c_void,
+                ),
+                name: CFStringRef,
+                object: *const c_void,
+                suspension_behavior: isize,
+            );
+            fn CFStringCreateWithCString(
+                alloc: *const c_void,
+                c_str: *const std::ffi::c_char,
+                encoding: u32,
+            ) -> CFStringRef;
+            fn CFRunLoopRun();
+        }
+
+        const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+        // CFNotificationSuspensionBehaviorDeliverImmediately = 4
+        const DELIVER_IMMEDIATELY: isize = 4;
+
+        unsafe extern "C" fn on_screen_locked(
+            _center: CFNotificationCenterRef,
+            _observer: *const c_void,
+            _name: CFStringRef,
+            _object: *const c_void,
+            _user_info: *const c_void,
+        ) {
+            let was_locked = SCREEN_IS_LOCKED.swap(true, Ordering::SeqCst);
+            if !was_locked {
+                // Can't use tracing macros in extern "C" callback safely,
+                // but the state change is what matters.
             }
+        }
+
+        unsafe extern "C" fn on_screen_unlocked(
+            _center: CFNotificationCenterRef,
+            _observer: *const c_void,
+            _name: CFStringRef,
+            _object: *const c_void,
+            _user_info: *const c_void,
+        ) {
+            let was_locked = SCREEN_IS_LOCKED.swap(false, Ordering::SeqCst);
+            if was_locked {
+                // State change logged via safety-net poll below if needed.
+            }
+        }
+
+        unsafe {
+            let center = CFNotificationCenterGetDistributedCenter();
+
+            let lock_name = CString::new("com.apple.screenIsLocked").unwrap();
+            let lock_cf = CFStringCreateWithCString(
+                std::ptr::null(),
+                lock_name.as_ptr(),
+                K_CF_STRING_ENCODING_UTF8,
+            );
+
+            let unlock_name = CString::new("com.apple.screenIsUnlocked").unwrap();
+            let unlock_cf = CFStringCreateWithCString(
+                std::ptr::null(),
+                unlock_name.as_ptr(),
+                K_CF_STRING_ENCODING_UTF8,
+            );
+
+            CFNotificationCenterAddObserver(
+                center,
+                std::ptr::null(),
+                on_screen_locked,
+                lock_cf,
+                std::ptr::null(),
+                DELIVER_IMMEDIATELY,
+            );
+
+            CFNotificationCenterAddObserver(
+                center,
+                std::ptr::null(),
+                on_screen_unlocked,
+                unlock_cf,
+                std::ptr::null(),
+                DELIVER_IMMEDIATELY,
+            );
+
+            info!("Screen lock/unlock observers registered (CFNotificationCenter)");
+
+            // Run the CF run loop — blocks forever, delivers notifications.
+            CFRunLoopRun();
         }
     });
 

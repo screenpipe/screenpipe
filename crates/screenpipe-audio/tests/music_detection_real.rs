@@ -41,7 +41,10 @@ macro_rules! skip_if_no_fixture {
         match load_pcm($name) {
             Some(audio) => audio,
             None => {
-                eprintln!("[SKIP] fixture {} not found — run fixture generation first", $name);
+                eprintln!(
+                    "[SKIP] fixture {} not found — run fixture generation first",
+                    $name
+                );
                 return;
             }
         }
@@ -68,7 +71,9 @@ fn test_music_output_should_be_filtered() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[music_sample_1] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed > 0.50,
@@ -83,7 +88,9 @@ fn test_music_output_2_should_be_filtered() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[music_sample_2] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed > 0.50,
@@ -98,7 +105,9 @@ fn test_music_via_mic_should_be_filtered() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[music_mic_1] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed > 0.30,
@@ -113,7 +122,9 @@ fn test_speech_should_be_preserved() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[speech_sample_1] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed < 0.20,
@@ -128,7 +139,9 @@ fn test_speech_2_should_be_preserved() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[speech_sample_2] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed < 0.20,
@@ -143,7 +156,9 @@ fn test_speech_3_should_be_preserved() {
     let (orig, filt, removed) = filter_and_measure(&mut audio);
     eprintln!(
         "[speech_sample_3] orig_energy={:.2}, filt_energy={:.2}, removed={:.1}%",
-        orig, filt, removed * 100.0
+        orig,
+        filt,
+        removed * 100.0
     );
     assert!(
         removed < 0.20,

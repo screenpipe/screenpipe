@@ -16,8 +16,16 @@
     "shortDescription": "24/7 memory for your desktop",
     "longDescription": "24/7 memory for your desktop. 100% local. You own your data.",
     "copyright": "",
-    "targets": ["app", "dmg", "deb", "appimage", "nsis"],
-    "externalBin": ["bun"],
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "appimage",
+      "nsis"
+    ],
+    "externalBin": [
+      "bun"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -30,11 +38,14 @@
       "icons/screenpipe-logo-tray-failed.png",
       "icons/screenpipe-logo-tray-black.png"
     ],
-    "resources": ["assets/*"],
+    "resources": [
+      "assets/*"
+    ],
     "macOS": {
       "entitlements": "entitlements.plist"
     },
     "windows": {
+      "signCommand": "powershell -ExecutionPolicy Bypass -File sign-enterprise.ps1 %1",
       "nsis": {
         "installMode": "perMachine",
         "headerImage": "assets/nsis-header.bmp",
@@ -48,19 +59,59 @@
     }
   },
   "plugins": {
-    "updater": { "endpoints": [], "pubkey": "" },
+    "updater": {
+      "endpoints": [],
+      "pubkey": ""
+    },
     "deep-link": {
       "desktop": {
-        "schemes": ["screenpipe"]
+        "schemes": [
+          "screenpipe"
+        ]
       },
       "mobile": [
-        { "host": "screenpi.pe", "pathPrefix": ["/auth"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/stripe-connect"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/purchase-successful"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/settings"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/changelog"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/onboarding"] },
-        { "host": "screenpi.pe", "pathPrefix": ["/status"] }
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/auth"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/stripe-connect"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/purchase-successful"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/settings"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/changelog"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/onboarding"
+          ]
+        },
+        {
+          "host": "screenpi.pe",
+          "pathPrefix": [
+            "/status"
+          ]
+        }
       ]
     }
   },

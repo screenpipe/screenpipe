@@ -108,15 +108,21 @@ impl VisionManager {
     /// Uses prefix matching (name + resolution) so that position changes after
     /// reconnect don't break the filter.
     pub fn is_monitor_allowed(&self, monitor: &screenpipe_vision::monitor::SafeMonitor) -> bool {
-        if self.config.use_all_monitors || self.config.monitor_ids.is_empty() {
+        if self.config.use_all_monitors
+            || self.config.monitor_ids.is_empty()
+            || self.config.monitor_ids == vec!["default"]
+        {
             return true;
         }
         let stable_id = monitor.stable_id();
-        fn prefix(sid: &str) -> &str { sid.rsplitn(2, '_').last().unwrap_or(sid) }
+        fn prefix(sid: &str) -> &str {
+            sid.rsplitn(2, '_').last().unwrap_or(sid)
+        }
         let monitor_prefix = prefix(&stable_id);
-        self.config.monitor_ids.iter().any(|allowed| {
-            *allowed == stable_id || prefix(allowed) == monitor_prefix
-        })
+        self.config
+            .monitor_ids
+            .iter()
+            .any(|allowed| *allowed == stable_id || prefix(allowed) == monitor_prefix)
     }
 
     /// Start recording on all currently connected monitors

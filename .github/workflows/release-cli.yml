@@ -241,11 +241,6 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "10.0"
-
       # sccache disabled temporarily due to GitHub Actions cache outage
       # - name: Setup sccache
       #   uses: mozilla-actions/sccache-action@v0.0.7
@@ -295,11 +290,11 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: "none"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
-          VCPKG_STATIC_LINKAGE: "true"
-          KNF_STATIC_CRT: 1
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          AWS_LC_SYS_PREBUILT_NASM: "1"
         run: |
           cargo build --release --target x86_64-pc-windows-msvc
 
@@ -421,15 +416,6 @@ jobs:
             libpipewire-0.3-dev \
             libgbm-dev \
             libegl-dev
-
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v1
-        with:
-          version: "14.0"
-
-      - name: Set LIBCLANG_PATH
-        run: |
-          echo "LIBCLANG_PATH=$(llvm-config --prefix)/lib" >> $GITHUB_ENV
 
       - uses: actions/cache@v4
         with:

@@ -499,12 +499,6 @@ jobs:
         working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
         run: bun install
 
-      - name: Install vcpkg
-        if: matrix.os_type == 'windows'
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3"
-
       - name: Set up MSVC
         if: matrix.os_type == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -525,53 +519,6 @@ jobs:
           }
           echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "C:\Program Files\7-Zip\7z.exe" i
-
-      - name: Cache LLVM
-        if: matrix.os_type == 'windows'
-        id: cache-llvm
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\Program Files\LLVM
-            ${{ runner.temp }}\llvm
-          key: llvm-10.0-windows-${{ hashFiles('.github/workflows/release-app.yml') }}
-
-      - name: Install LLVM and Clang
-        if: matrix.os_type == 'windows' && steps.cache-llvm.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          $llvmPath = "C:\Program Files\LLVM"
-          # Skip if already installed (self-hosted runners)
-          if (Test-Path "$llvmPath\bin\clang.exe") {
-            Write-Host "LLVM already installed, skipping download"
-          } else {
-            # Create LLVM directory with proper permissions
-            if (!(Test-Path $llvmPath)) {
-              New-Item -ItemType Directory -Force -Path $llvmPath | Out-Null
-              $acl = Get-Acl $llvmPath
-              $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users","FullControl","Allow")
-              $acl.SetAccessRule($rule)
-              Set-Acl $llvmPath $acl
-            }
-
-            # Download and install LLVM
-            $installerUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/LLVM-10.0.0-win64.exe"
-            $installerPath = Join-Path $env:TEMP "LLVM-10.0.0-win64.exe"
-
-            Write-Host "Downloading LLVM installer..."
-            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
-
-            Write-Host "Installing LLVM..."
-            Start-Process -FilePath $installerPath -ArgumentList "/S","/D=$llvmPath" -Wait -NoNewWindow
-
-            Remove-Item $installerPath -Force
-
-            # Verify installation
-            if (!(Test-Path "$llvmPath\bin\clang.exe")) {
-              throw "LLVM installation failed - clang.exe not found"
-            }
-          }
-          Write-Host "LLVM installation completed successfully"
 
       - name: Persist MSVC cl.exe path
         if: matrix.os_type == 'windows'
@@ -656,6 +603,8 @@ jobs:
         run: |
           echo "ORT_STRATEGY=system" >> $GITHUB_ENV
           echo "ORT_LIB_LOCATION=${{ github.workspace }}/ort-system-lib" >> $GITHUB_ENV
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          echo "AWS_LC_SYS_PREBUILT_NASM=1" >> $GITHUB_ENV
 
       - name: Use production config for release
         shell: bash
@@ -853,9 +802,7 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: ${{ matrix.os_type == 'windows' && 'abort' || 'unwind' }}
           CARGO_PROFILE_RELEASE_INCREMENTAL: ${{ matrix.os_type == 'windows' && 'false' || 'true' }}
-          RUSTFLAGS: ${{ matrix.os_type == 'windows' && '-C target-feature=+crt-static -C link-arg=/LTCG' || '' }}
-          VCPKG_STATIC_LINKAGE: "true"
-          KNF_STATIC_CRT: ${{ matrix.os_type == 'windows' && '1' || '' }}
+          RUSTFLAGS: ${{ matrix.os_type == 'windows' && '-C link-arg=/LTCG' || '' }}
           # ORT_STRATEGY and ORT_LIB_LOCATION set via GITHUB_ENV in Windows-only step above
           # Fix whisper.cpp crash on newer CPUs (Lunar Lake, etc.) that lack AVX-512
           # GitHub windows-2022 runners have Xeon CPUs with AVX-512, but GGML_NATIVE=ON

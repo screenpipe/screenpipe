@@ -47,6 +47,7 @@ use crate::{
     sync_api::{self, SyncState},
     video_cache::FrameCache,
 };
+use dashmap::DashMap;
 use lru::LruCache;
 use moka::future::Cache as MokaCache;
 use serde_json::json;
@@ -137,6 +138,9 @@ pub struct AppState {
     /// Limits concurrent ffmpeg frame extractions to prevent CPU thrashing
     /// when many thumbnails are requested in parallel (e.g., search results).
     pub frame_extraction_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Active pipe permission tokens — maps token string to resolved permissions.
+    pub pipe_permissions:
+        Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
     /// Hot frame cache — in-memory cache for today's frames.
     /// Timeline WS reads from here instead of polling the DB.
     pub hot_frame_cache: Arc<HotFrameCache>,
@@ -161,6 +165,9 @@ pub struct SCServer {
     pub hot_frame_cache: Option<Arc<HotFrameCache>>,
     /// Power manager handle — set this before starting to enable /power endpoints.
     pub power_manager: Option<Arc<crate::power::PowerManagerHandle>>,
+    /// Shared pipe permission token registry — set before starting so PipeManager can use it.
+    pub pipe_permissions:
+        Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
 }
 
 impl SCServer {
@@ -191,6 +198,7 @@ impl SCServer {
             audio_metrics,
             hot_frame_cache: None,
             power_manager: None,
+            pipe_permissions: Arc::new(DashMap::new()),
         }
     }
 
@@ -416,6 +424,7 @@ impl SCServer {
             frame_extraction_semaphore: Arc::new(tokio::sync::Semaphore::new(3)),
             hot_frame_cache,
             archive_state: crate::archive::ArchiveState::new(),
+            pipe_permissions: self.pipe_permissions.clone(),
         });
 
         let cors = CorsLayer::new()
@@ -594,6 +603,10 @@ impl SCServer {
                 get(handle_video_export_ws).post(handle_video_export_post),
             )
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::pipe_permissions_middleware::pipe_permissions_layer,
+            ))
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {
                     let counter = app_state.api_request_count.clone();
@@ -602,6 +615,9 @@ impl SCServer {
                         next.run(req).await
                     }
                 },
+            ))
+            .layer(axum::middleware::from_fn(
+                crate::routes::timezone::timestamp_middleware,
             ))
             .layer(cors)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))

@@ -20,7 +20,9 @@ use std::time::Instant;
 use tracing::debug;
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
@@ -478,7 +480,15 @@ fn extract_text_from_tree(
 
     // Recurse into children
     for child in &node.children {
-        extract_text_from_tree(child, depth + 1, max_depth, buffer, nodes, browser_url, monitor_rect);
+        extract_text_from_tree(
+            child,
+            depth + 1,
+            max_depth,
+            buffer,
+            nodes,
+            browser_url,
+            monitor_rect,
+        );
     }
 }
 

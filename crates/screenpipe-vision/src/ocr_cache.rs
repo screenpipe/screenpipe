@@ -397,15 +397,18 @@ mod tests {
         use image::{DynamicImage, RgbaImage};
 
         let img1 = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-            100, 100,
+            100,
+            100,
             image::Rgba([255, 0, 0, 255]),
         ));
         let img2 = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-            100, 100,
+            100,
+            100,
             image::Rgba([255, 0, 0, 255]),
         ));
         let img3 = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-            100, 100,
+            100,
+            100,
             image::Rgba([0, 255, 0, 255]),
         ));
 

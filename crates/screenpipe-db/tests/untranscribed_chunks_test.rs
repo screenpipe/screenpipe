@@ -130,27 +130,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ordered_by_timestamp_ascending() {
+    async fn test_ordered_by_timestamp_descending() {
         let db = setup_test_db().await;
 
         let ts1 = Utc::now() - Duration::minutes(30);
         let ts2 = Utc::now() - Duration::minutes(20);
         let ts3 = Utc::now() - Duration::minutes(10);
 
-        db.insert_audio_chunk("first.mp4", Some(ts1)).await.unwrap();
+        db.insert_audio_chunk("oldest.mp4", Some(ts1)).await.unwrap();
         // Insert out of order
-        db.insert_audio_chunk("third.mp4", Some(ts3)).await.unwrap();
-        db.insert_audio_chunk("second.mp4", Some(ts2))
+        db.insert_audio_chunk("newest.mp4", Some(ts3)).await.unwrap();
+        db.insert_audio_chunk("middle.mp4", Some(ts2))
             .await
             .unwrap();
 
         let since = Utc::now() - Duration::hours(1);
         let untranscribed = db.get_untranscribed_chunks(since, 100).await.unwrap();
 
+        // Newest first — ensures recent audio gets transcribed before old backlog
         assert_eq!(untranscribed.len(), 3);
-        assert_eq!(untranscribed[0].file_path, "first.mp4");
-        assert_eq!(untranscribed[1].file_path, "second.mp4");
-        assert_eq!(untranscribed[2].file_path, "third.mp4");
+        assert_eq!(untranscribed[0].file_path, "newest.mp4");
+        assert_eq!(untranscribed[1].file_path, "middle.mp4");
+        assert_eq!(untranscribed[2].file_path, "oldest.mp4");
     }
 
     #[tokio::test]

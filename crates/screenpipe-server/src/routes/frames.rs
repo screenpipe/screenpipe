@@ -838,8 +838,7 @@ pub async fn run_frame_ocr(
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let ocr_result = tokio::task::spawn_blocking(move || {
-        let (text, json, _confidence) =
-            screenpipe_vision::perform_ocr_tesseract(&image, vec![]);
+        let (text, json, _confidence) = screenpipe_vision::perform_ocr_tesseract(&image, vec![]);
         (text, json)
     })
     .await

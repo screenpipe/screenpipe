@@ -13,6 +13,8 @@ use specta::Type;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -897,7 +899,38 @@ pub async fn pi_start_inner(
         if let Some(bun_dir) = std::path::Path::new(&bun_path).parent() {
             let current_path = std::env::var("PATH").unwrap_or_default();
             let sep = if cfg!(windows) { ";" } else { ":" };
-            let new_path = format!("{}{}{}", bun_dir.display(), sep, current_path);
+            let mut new_path = format!("{}{}{}", bun_dir.display(), sep, current_path);
+
+            // On Windows, ensure bash is available for Pi's bash tool.
+            // Downloads PortableGit on first use if no bash is found (~50MB, one-time).
+            #[cfg(windows)]
+            {
+                let bash_result = tokio::task::spawn_blocking(ensure_bash_available)
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!("bash setup task panicked (non-fatal): {:?}", e);
+                        None
+                    });
+                match bash_result {
+                    Some(bash_dir) => {
+                        // Also add the usr/bin dir which has common unix utils (grep, cat, etc.)
+                        let usr_bin = Path::new(&bash_dir)
+                            .parent()  // git-portable/
+                            .map(|p| p.join("usr").join("bin"));
+                        new_path = format!("{}{}{}", bash_dir, sep, new_path);
+                        if let Some(ref ub) = usr_bin {
+                            if ub.exists() {
+                                new_path = format!("{}{}{}", ub.display(), sep, new_path);
+                            }
+                        }
+                        info!("Injected bash dir into PATH for pi: {}", bash_dir);
+                    }
+                    None => {
+                        warn!("bash not available — Pi's bash tool may fail on Windows");
+                    }
+                }
+            }
+
             cmd.env("PATH", new_path);
             debug!("Injected bun dir into PATH for pi: {}", bun_dir.display());
         }
@@ -1394,6 +1427,293 @@ fn find_bun_executable() -> Option<String> {
         warn!("Bun not found in any checked path");
     }
     result
+}
+
+/// Find a bash executable on Windows. Returns None on non-Windows platforms
+/// (where bash is always available). Checks:
+/// 1. Our bundled PortableGit in %LOCALAPPDATA%\screenpipe\git-portable\
+/// 2. Standard Git for Windows install
+/// 3. bash.exe on PATH (Git Bash, MSYS2, WSL, etc.)
+#[cfg(windows)]
+fn find_bash_executable() -> Option<String> {
+    // 1. Bundled PortableGit in screenpipe's data directory
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let bundled = PathBuf::from(&local_app_data)
+            .join("screenpipe")
+            .join("git-portable")
+            .join("bin")
+            .join("bash.exe");
+        if bundled.exists() {
+            info!("Found bundled bash at: {}", bundled.display());
+            return Some(bundled.to_string_lossy().to_string());
+        }
+    }
+
+    // 2. Standard Git for Windows locations
+    let standard_paths = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ];
+    for p in &standard_paths {
+        if Path::new(p).exists() {
+            info!("Found system bash at: {}", p);
+            return Some(p.to_string());
+        }
+    }
+
+    // 3. Try `where bash` on PATH
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        if let Ok(output) = std::process::Command::new("where")
+            .arg("bash")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let path = line.trim().to_string();
+                    if !path.is_empty() && Path::new(&path).exists() {
+                        info!("Found bash on PATH: {}", path);
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("No bash executable found on Windows");
+    None
+}
+
+/// Download and extract PortableGit to provide bash on Windows.
+/// This is a blocking function — call from a background thread.
+/// Returns Ok(path_to_bash_exe) on success.
+#[cfg(windows)]
+fn download_portable_git() -> Result<String, String> {
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "LOCALAPPDATA env var not set".to_string())?;
+    let screenpipe_dir = PathBuf::from(&local_app_data).join("screenpipe");
+    let git_dir = screenpipe_dir.join("git-portable");
+    let bash_path = git_dir.join("bin").join("bash.exe");
+
+    // Already downloaded
+    if bash_path.exists() {
+        info!("PortableGit already present at {}", git_dir.display());
+        return Ok(bash_path.to_string_lossy().to_string());
+    }
+
+    // Pinned version for reproducibility
+    const PORTABLE_GIT_VERSION: &str = "2.47.1";
+    const PORTABLE_GIT_URL: &str = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/PortableGit-2.47.1-64-bit.7z.exe";
+    const PORTABLE_GIT_SHA256: &str = "4f3f21f4effcb659566883ee1ed3ae403e5b3d7a0699cee455f6cd765e1ac39c";
+
+    info!(
+        "Downloading PortableGit {} for bash support...",
+        PORTABLE_GIT_VERSION
+    );
+
+    // Create parent directories
+    std::fs::create_dir_all(&screenpipe_dir)
+        .map_err(|e| format!("Failed to create screenpipe data dir: {}", e))?;
+
+    // Download to temp file
+    let temp_file = std::env::temp_dir()
+        .join(format!("PortableGit-{}-64-bit.7z.exe", PORTABLE_GIT_VERSION));
+
+    // Use bun or curl to download (bun is always available since we bundle it)
+    let download_result = if let Some(bun) = find_bun_executable() {
+        let script = format!(
+            r#"const r = await fetch("{}"); if (!r.ok) throw new Error(r.statusText); const b = await r.arrayBuffer(); require("fs").writeFileSync("{}", Buffer.from(b));"#,
+            PORTABLE_GIT_URL,
+            temp_file.to_string_lossy().replace('\\', "\\\\")
+        );
+        let mut cmd = std::process::Command::new(&bun);
+        cmd.args(["--eval", &script]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
+    } else {
+        // Fallback: try curl.exe (ships with Windows 10+)
+        let mut cmd = std::process::Command::new("curl.exe");
+        cmd.args(["-fSL", "-o", &temp_file.to_string_lossy(), PORTABLE_GIT_URL]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
+    };
+
+    match download_result {
+        Ok(output) if output.status.success() => {
+            info!("PortableGit downloaded to {}", temp_file.display());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = std::fs::remove_file(&temp_file);
+            return Err(format!("PortableGit download failed: {}", stderr));
+        }
+        Err(e) => {
+            return Err(format!("Failed to run download command: {}", e));
+        }
+    }
+
+    // Verify SHA256 using certutil (built into Windows)
+    let digest = {
+        let mut cmd = std::process::Command::new("certutil");
+        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
+                stdout
+                    .lines()
+                    .nth(1)
+                    .map(|l| l.trim().replace(' ', "").to_lowercase())
+                    .unwrap_or_default()
+            }
+            _ => {
+                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
+                String::new()
+            }
+        }
+    };
+
+    if !digest.is_empty() && digest != PORTABLE_GIT_SHA256 {
+        let _ = std::fs::remove_file(&temp_file);
+        return Err(format!(
+            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
+            PORTABLE_GIT_SHA256, digest
+        ));
+    }
+    if !digest.is_empty() {
+        info!("SHA256 verified: {}", digest);
+    }
+
+    // Extract: PortableGit .7z.exe is a self-extracting archive.
+    // Run it with -o<dir> -y to extract silently.
+    info!("Extracting PortableGit to {}...", git_dir.display());
+
+    // Extract to a temp directory first (atomic: rename on success)
+    let extract_temp = screenpipe_dir.join("git-portable-extracting");
+    let _ = std::fs::remove_dir_all(&extract_temp);
+
+    {
+        let mut cmd = std::process::Command::new(&temp_file);
+        cmd.args([&format!("-o{}", extract_temp.to_string_lossy()), "-y"]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                info!("PortableGit extracted successfully");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("PortableGit extraction failed: {}", stderr));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&extract_temp);
+                let _ = std::fs::remove_file(&temp_file);
+                return Err(format!("Failed to run PortableGit extractor: {}", e));
+            }
+        }
+    }
+
+    // Verify extraction produced bash.exe
+    let extracted_bash = extract_temp.join("bin").join("bash.exe");
+    if !extracted_bash.exists() {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        let _ = std::fs::remove_file(&temp_file);
+        return Err("Extraction completed but bash.exe not found in expected location".to_string());
+    }
+
+    // Run post-install.bat if present (required by PortableGit)
+    let post_install = extract_temp.join("post-install.bat");
+    if post_install.exists() {
+        info!("Running PortableGit post-install.bat...");
+        let mut cmd = std::process::Command::new("cmd.exe");
+        cmd.args(["/C", &post_install.to_string_lossy()])
+            .current_dir(&extract_temp);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                info!("post-install.bat completed successfully");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("post-install.bat returned non-zero (non-fatal): {}", stderr);
+            }
+            Err(e) => {
+                warn!("Failed to run post-install.bat (non-fatal): {}", e);
+            }
+        }
+    }
+
+    // Atomic rename: move extracted dir to final location
+    let _ = std::fs::remove_dir_all(&git_dir);
+    std::fs::rename(&extract_temp, &git_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&extract_temp);
+        format!("Failed to move extracted PortableGit to final location: {}", e)
+    })?;
+
+    // Clean up temp download
+    let _ = std::fs::remove_file(&temp_file);
+
+    let final_bash = git_dir.join("bin").join("bash.exe");
+    info!(
+        "PortableGit setup complete. bash at: {}",
+        final_bash.display()
+    );
+    Ok(final_bash.to_string_lossy().to_string())
+}
+
+/// Ensure bash is available on Windows. If not found, downloads PortableGit.
+/// Safe to call — never crashes, only logs warnings on failure.
+/// Returns the bash bin directory (for PATH injection) or None.
+#[cfg(windows)]
+fn ensure_bash_available() -> Option<String> {
+    if let Some(bash_path) = find_bash_executable() {
+        return Path::new(&bash_path)
+            .parent()
+            .map(|d| d.to_string_lossy().to_string());
+    }
+
+    info!("No bash found on Windows, attempting to download PortableGit...");
+    match download_portable_git() {
+        Ok(bash_path) => {
+            info!("PortableGit installed, bash available at: {}", bash_path);
+            Path::new(&bash_path)
+                .parent()
+                .map(|d| d.to_string_lossy().to_string())
+        }
+        Err(e) => {
+            warn!(
+                "Failed to set up bash for Windows (AI chat may not work correctly): {}. \
+                 Install Git for Windows from https://git-scm.com/download/win to fix this.",
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Background Pi installation — call once from app setup.

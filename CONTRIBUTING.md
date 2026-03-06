@@ -71,30 +71,18 @@ before you begin:
    irm https://bun.sh/install.ps1 | iex
    ```
 
-3. **clone and setup vcpkg**:
+3. **set environment variables**:
    ```powershell
-   cd C:\dev
-   $env:DEV_DIR = $(pwd)
-   git clone https://github.com/microsoft/vcpkg.git
-   cd vcpkg
-   ./bootstrap-vcpkg.bat -disableMetrics
-   ./vcpkg.exe integrate install --disable-metrics
-   ./vcpkg.exe install ffmpeg:x64-windows
-   ```
-
-4. **set environment variables**:
-   ```powershell
-   [System.Environment]::SetEnvironmentVariable('PKG_CONFIG_PATH', "$env:DEV_DIR\vcpkg\packages\ffmpeg_x64-windows\lib\pkgconfig", 'User')
-   [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', "$env:DEV_DIR\vcpkg", 'User')
    [System.Environment]::SetEnvironmentVariable('LIBCLANG_PATH', 'C:\Program Files\LLVM\bin', 'User')
    [System.Environment]::SetEnvironmentVariable('PATH', "$([System.Environment]::GetEnvironmentVariable('PATH', 'User'));C:\Program Files (x86)\GnuWin32\bin", 'User')
    ```
-5. **clone the project**:
+
+4. **clone the project**:
    ```powershell
       git clone https://github.com/screenpipe/screenpipe.git
       cd screenpipe
    ```
-6. **make sure vcredist is present on system**:
+5. **make sure vcredist is present on system**:
    - make sure your in root of the project i.e screenpipe
 
    ```powershell
@@ -126,7 +114,7 @@ before you begin:
    Write-Host "vcruntime140.dll copied successfully!"
    ```
 
-8. **build**:
+6. **build**:
    ```powershell
    cd screenpipe
    cargo build --release

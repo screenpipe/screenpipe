@@ -6,7 +6,7 @@ exclude = ["apps/screenpipe-app-tauri/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.168"
+version = "0.3.171"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -28,7 +28,6 @@ crossbeam = "0.8.4"
 dashmap = "6.1.0"
 image = "0.25"
 criterion = { version = "0.5.1", features = ["async_tokio"] }
-vcpkg = "0.2"
 cc = "1.0"
 oasgen = { version = "0.22.0", features = ["axum", "chrono"] }
 once_cell = "1.20.2"
@@ -43,11 +42,6 @@ reqwest-middleware = "0.4.1"
 [patch.crates-io]
 # enables chinese mirror (hf is banned in china) and native-tls
 hf-hub = { git = "https://github.com/neo773/hf-hub" }
-
-[workspace.metadata.vcpkg]
-git = "https://github.com/microsoft/vcpkg"
-rev = "2023.04.15"
-dynamic = true
 
 [profile.release]
 codegen-units = 1

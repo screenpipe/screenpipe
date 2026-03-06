@@ -535,7 +535,7 @@ impl DatabaseManager {
              FROM audio_chunks ac
              LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
              WHERE at.id IS NULL AND ac.timestamp >= ?1
-             ORDER BY ac.timestamp ASC
+             ORDER BY ac.timestamp DESC
              LIMIT ?2",
         )
         .bind(since)
@@ -3175,10 +3175,12 @@ impl DatabaseManager {
             COALESCE(vc.device_name, f.device_name) as screen_device,
             COALESCE(vc.file_path, f.snapshot_path) as video_path,
             COALESCE(vc.fps, 0.033) as chunk_fps,
-            f.browser_url
+            f.browser_url,
+            f.machine_id
         FROM frames f
         LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
         WHERE f.timestamp >= ?1 AND f.timestamp <= ?2
+          AND COALESCE(vc.file_path, f.snapshot_path, '') NOT LIKE 'cloud://%'
         ORDER BY f.timestamp DESC, f.offset_index DESC
         LIMIT 10000
     "#;
@@ -3234,6 +3236,7 @@ impl DatabaseManager {
                 timestamp,
                 offset_index,
                 fps: chunk_fps,
+                machine_id: row.try_get("machine_id").ok(),
                 ocr_entries: Vec::new(),
                 audio_entries: Vec::new(),
             });

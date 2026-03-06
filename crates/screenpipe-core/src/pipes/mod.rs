@@ -10,6 +10,7 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+pub mod permissions;
 pub mod sync;
 
 use crate::agents::{
@@ -60,6 +61,55 @@ pub struct PipeConfig {
     /// When set, overrides `model` and `provider` at runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+
+    // -- Data permissions (all optional, backwards compatible) ---------------
+    /// Only data from these apps reaches the pipe (case-insensitive).
+    #[serde(default, alias = "allow-apps", skip_serializing_if = "Vec::is_empty")]
+    pub allow_apps: Vec<String>,
+    /// Data from these apps is always blocked (wins over allow_apps).
+    #[serde(default, alias = "deny-apps", skip_serializing_if = "Vec::is_empty")]
+    pub deny_apps: Vec<String>,
+    /// Only matching window titles pass (glob patterns, case-insensitive).
+    #[serde(
+        default,
+        alias = "allow-windows",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub allow_windows: Vec<String>,
+    /// Matching window titles are blocked (glob, wins over allow).
+    #[serde(default, alias = "deny-windows", skip_serializing_if = "Vec::is_empty")]
+    pub deny_windows: Vec<String>,
+    /// Allowed content types: "ocr", "audio", "input", "accessibility".
+    #[serde(
+        default,
+        alias = "allow-content-types",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub allow_content_types: Vec<String>,
+    /// Blocked content types (wins over allow).
+    #[serde(
+        default,
+        alias = "deny-content-types",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub deny_content_types: Vec<String>,
+    /// Daily time window, e.g. "09:00-17:00". Supports midnight wrap.
+    #[serde(default, alias = "time-range", skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<String>,
+    /// Allowed days, e.g. "Mon,Tue,Wed,Thu,Fri".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days: Option<String>,
+    /// Whether this pipe can use /raw_sql. Default: false.
+    #[serde(default, alias = "allow-raw-sql", skip_serializing_if = "is_false")]
+    pub allow_raw_sql: bool,
+    /// Whether this pipe can access /frames/* (screenshots). Default: true.
+    #[serde(
+        default = "default_true",
+        alias = "allow-frames",
+        skip_serializing_if = "is_true"
+    )]
+    pub allow_frames: bool,
+
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
@@ -82,6 +132,12 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+}
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Result of a single pipe run.
@@ -376,6 +432,73 @@ pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, &str) + Send + Sync>;
 /// Default execution timeout: 5 minutes.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
+/// Set up permissions for a Pi pipe: install extension, filtered skills,
+/// write the permissions JSON file, and register the token with the server.
+/// Returns the generated token (if any) so the caller can clean it up later.
+fn setup_pipe_permissions(
+    pipe_dir: &Path,
+    config: &PipeConfig,
+    token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
+) -> Option<String> {
+    if let Err(e) = PiExecutor::ensure_permissions_extension(pipe_dir, config) {
+        warn!("failed to install permissions extension: {}", e);
+    }
+    if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
+        warn!("failed to install filtered skills: {}", e);
+    }
+
+    let mut perms = permissions::PipePermissions::from_config(config);
+
+    if perms.has_any_restrictions() {
+        // Generate a unique pipe token for server-side enforcement
+        use rand::Rng;
+        let suffix: u64 = rand::thread_rng().gen();
+        let t = format!("sp_pipe_{:016x}", suffix);
+        perms.pipe_token = Some(t.clone());
+
+        // Register with server middleware
+        if let Some(registry) = token_registry {
+            let registry = registry.clone();
+            let perms_clone = perms.clone();
+            let t_clone = t.clone();
+            tokio::spawn(async move {
+                registry.register_token(t_clone, perms_clone).await;
+            });
+        }
+
+        // Write permissions JSON for the extension to read
+        let perms_path = pipe_dir.join(".screenpipe-permissions.json");
+        match serde_json::to_string(&perms) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&perms_path, &json) {
+                    warn!("failed to write permissions file: {}", e);
+                }
+            }
+            Err(e) => warn!("failed to serialize permissions: {}", e),
+        }
+
+        Some(t)
+    } else {
+        // Clean up any stale permissions file
+        let _ = std::fs::remove_file(pipe_dir.join(".screenpipe-permissions.json"));
+        None
+    }
+}
+
+/// Remove a pipe token from the server registry.
+fn cleanup_pipe_token(
+    token: &str,
+    token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
+) {
+    if let Some(registry) = token_registry {
+        let registry = registry.clone();
+        let token = token.to_string();
+        tokio::spawn(async move {
+            registry.remove_token(&token).await;
+        });
+    }
+}
+
 pub struct PipeManager {
     /// `~/.screenpipe/pipes/`
     pipes_dir: PathBuf,
@@ -404,6 +527,8 @@ pub struct PipeManager {
     api_port: u16,
     /// Timestamp of last reload_pipes() disk scan, for debouncing.
     last_reload: Arc<Mutex<Instant>>,
+    /// Optional token registry for server-side permission enforcement.
+    token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
 }
 
 impl PipeManager {
@@ -429,7 +554,13 @@ impl PipeManager {
             last_reload: Arc::new(Mutex::new(
                 Instant::now() - std::time::Duration::from_secs(10),
             )),
+            token_registry: None,
         }
+    }
+
+    /// Set a token registry for server-side permission enforcement.
+    pub fn set_token_registry(&mut self, registry: Arc<dyn permissions::PipeTokenRegistry>) {
+        self.token_registry = Some(registry);
     }
 
     /// Set a callback to be invoked after each scheduled pipe run.
@@ -871,6 +1002,7 @@ impl PipeManager {
         });
 
         // Pre-configure pi
+        let mut pipe_token: Option<String> = None;
         if config.agent == "pi" {
             if let Err(e) = PiExecutor::ensure_pi_config(
                 executor.user_token(),
@@ -881,7 +1013,10 @@ impl PipeManager {
             ) {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
+
+            pipe_token = setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref());
         }
+        let token_registry_ref = self.token_registry.clone();
 
         // Clone everything needed for the background task
         let running_ref = self.running.clone();
@@ -958,12 +1093,13 @@ impl PipeManager {
                     } else {
                         "failed"
                     };
+                    let filtered_stdout = filter_ndjson_stdout(&output.stdout);
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
                                 id,
                                 status,
-                                &truncate_string(&output.stdout, 50_000),
+                                &truncate_string(&filtered_stdout, 50_000),
                                 &truncate_string(&output.stderr, 10_000),
                                 None,
                                 error_type.as_deref(),
@@ -981,7 +1117,7 @@ impl PipeManager {
                         started_at,
                         finished_at,
                         success: output.success,
-                        stdout: truncate_string(&output.stdout, 10_000),
+                        stdout: truncate_string(&filtered_stdout, 10_000),
                         stderr: truncate_string(&output.stderr, 5_000),
                     }
                 }
@@ -1072,6 +1208,11 @@ impl PipeManager {
 
             if let Some(ref cb) = on_complete {
                 cb(&name_for_cb, success, duration_secs);
+            }
+
+            // Clean up pipe token from server registry
+            if let Some(ref token) = pipe_token {
+                cleanup_pipe_token(token, token_registry_ref.as_ref());
             }
         });
 
@@ -1218,6 +1359,7 @@ impl PipeManager {
 
         // Pre-configure pi with the pipe's provider so models.json has the
         // right entry before the agent subprocess starts.
+        let mut pipe_token: Option<String> = None;
         if config.agent == "pi" {
             if let Err(e) = PiExecutor::ensure_pi_config(
                 None,
@@ -1228,6 +1370,12 @@ impl PipeManager {
             ) {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
+
+            pipe_token = setup_pipe_permissions(
+                &self.pipes_dir.join(name),
+                &config,
+                self.token_registry.as_ref(),
+            );
         }
 
         // Run with timeout + streaming
@@ -1390,6 +1538,11 @@ impl PipeManager {
                 }
             }
         };
+
+        // Clean up pipe token from server registry
+        if let Some(ref token) = pipe_token {
+            cleanup_pipe_token(token, self.token_registry.as_ref());
+        }
 
         // Save log (in-memory + disk)
         self.append_log(name, &log).await;
@@ -1687,6 +1840,7 @@ impl PipeManager {
         let on_output_line = self.on_output_line.clone();
         let store = self.store.clone();
         let api_port = self.api_port;
+        let token_registry = self.token_registry.clone();
 
         tokio::spawn(async move {
             info!("pipe scheduler started");
@@ -1803,6 +1957,7 @@ impl PipeManager {
                     };
 
                     // Pre-configure pi with the pipe's provider
+                    let mut pipe_token: Option<String> = None;
                     if config.agent == "pi" {
                         if let Err(e) = PiExecutor::ensure_pi_config(
                             executor.user_token(),
@@ -1813,6 +1968,12 @@ impl PipeManager {
                         ) {
                             warn!("scheduler: failed to pre-configure pi provider: {}", e);
                         }
+
+                        pipe_token = setup_pipe_permissions(
+                            &pipes_dir.join(name),
+                            config,
+                            token_registry.as_ref(),
+                        );
                     }
 
                     // Check if history/session continuation is enabled
@@ -1835,6 +1996,7 @@ impl PipeManager {
                     let on_complete = on_run_complete.clone();
                     let on_output = on_output_line.clone();
                     let store_ref = store.clone();
+                    let token_registry_ref = token_registry.clone();
 
                     tokio::spawn(async move {
                         // Create DB execution row
@@ -2084,6 +2246,11 @@ impl PipeManager {
                         // Fire run-complete callback (analytics, etc.)
                         if let Some(ref cb) = on_complete {
                             cb(&name_for_cb, success, duration_secs);
+                        }
+
+                        // Clean up pipe token from server registry
+                        if let Some(ref token) = pipe_token {
+                            cleanup_pipe_token(token, token_registry_ref.as_ref());
                         }
                     });
                 }
@@ -2421,6 +2588,37 @@ fn parse_duration_str(s: &str) -> Option<std::time::Duration> {
 // Utility helpers
 // ---------------------------------------------------------------------------
 
+/// Filter NDJSON stdout to remove bulky streaming events before storage.
+/// `toolcall_delta` and `thinking_delta` events are only useful for live
+/// streaming — they dominate the output and push useful `text_delta` /
+/// `message_end` / `agent_end` events past the truncation limit.
+fn filter_ndjson_stdout(s: &str) -> String {
+    // Quick check: if it doesn't look like NDJSON, return as-is
+    if !s.starts_with('{') {
+        return s.to_string();
+    }
+
+    let mut out = String::with_capacity(s.len() / 2);
+    for line in s.split('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Only filter JSON lines that are complete objects
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            // Fast substring check before paying for a full JSON parse
+            if trimmed.contains("\"toolcall_delta\"") || trimmed.contains("\"thinking_delta\"") {
+                continue;
+            }
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -2593,6 +2791,16 @@ mod tests {
             model: "claude-haiku-4-5".to_string(),
             provider: None,
             preset: Some("default".to_string()),
+            allow_apps: vec![],
+            deny_apps: vec![],
+            allow_windows: vec![],
+            deny_windows: vec![],
+            allow_content_types: vec![],
+            deny_content_types: vec![],
+            time_range: None,
+            days: None,
+            allow_raw_sql: false,
+            allow_frames: true,
             config: HashMap::new(),
         };
         let body = "Do something useful";
@@ -2677,6 +2885,16 @@ mod tests {
             model: "test-model".to_string(),
             provider: None,
             preset: None,
+            allow_apps: vec![],
+            deny_apps: vec![],
+            allow_windows: vec![],
+            deny_windows: vec![],
+            allow_content_types: vec![],
+            deny_content_types: vec![],
+            time_range: None,
+            days: None,
+            allow_raw_sql: false,
+            allow_frames: true,
             config: HashMap::new(),
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None);
@@ -2695,6 +2913,16 @@ mod tests {
             model: "test-model".to_string(),
             provider: None,
             preset: None,
+            allow_apps: vec![],
+            deny_apps: vec![],
+            allow_windows: vec![],
+            deny_windows: vec![],
+            allow_content_types: vec![],
+            deny_content_types: vec![],
+            time_range: None,
+            days: None,
+            allow_raw_sql: false,
+            allow_frames: true,
             config: HashMap::new(),
         };
         let prompt = render_prompt_with_port(&config, "hello", 3030, None);
@@ -2711,6 +2939,16 @@ mod tests {
             model: "test-model".to_string(),
             provider: None,
             preset: None,
+            allow_apps: vec![],
+            deny_apps: vec![],
+            allow_windows: vec![],
+            deny_windows: vec![],
+            allow_content_types: vec![],
+            deny_content_types: vec![],
+            time_range: None,
+            days: None,
+            allow_raw_sql: false,
+            allow_frames: true,
             config: HashMap::new(),
         };
         let prompt = render_prompt_with_port(
@@ -2734,6 +2972,16 @@ mod tests {
             model: "test-model".to_string(),
             provider: None,
             preset: None,
+            allow_apps: vec![],
+            deny_apps: vec![],
+            allow_windows: vec![],
+            deny_windows: vec![],
+            allow_content_types: vec![],
+            deny_content_types: vec![],
+            time_range: None,
+            days: None,
+            allow_raw_sql: false,
+            allow_frames: true,
             config: HashMap::new(),
         };
         let prompt = render_prompt_with_port(&config, "body text", 3030, None);
@@ -2797,6 +3045,16 @@ mod tests {
                 model: "test".to_string(),
                 provider: None,
                 preset: None,
+                allow_apps: vec![],
+                deny_apps: vec![],
+                allow_windows: vec![],
+                deny_windows: vec![],
+                allow_content_types: vec![],
+                deny_content_types: vec![],
+                time_range: None,
+                days: None,
+                allow_raw_sql: false,
+                allow_frames: true,
                 config: HashMap::new(),
             },
             last_run: None,
@@ -2901,5 +3159,4 @@ mod tests {
             .unwrap_or(false);
         assert!(!history, "history should default to false");
     }
-
 }

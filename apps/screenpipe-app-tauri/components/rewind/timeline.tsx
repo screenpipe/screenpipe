@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 
-import { Loader2, RotateCcw, AlertCircle, X, Sparkles, Globe, Lock, ExternalLink } from "lucide-react";
+import { Loader2, RotateCcw, AlertCircle, X, Sparkles, Globe, Lock, ExternalLink, MonitorOff, Settings } from "lucide-react";
 import { SearchModal } from "@/components/rewind/search-modal";
 import { commands } from "@/lib/utils/tauri";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -51,6 +51,7 @@ export interface DeviceFrameResponse {
 	fps: number;
 	metadata: DeviceMetadata;
 	audio: AudioData[];
+	machine_id?: string;
 }
 
 export interface DeviceMetadata {
@@ -193,6 +194,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		selectedAppNameRef,
 		snapToDevice,
 		snapToApp,
+		snapToFiltered,
 	} = useTimelineFilters({
 		frames,
 		currentIndex,
@@ -544,7 +546,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			return;
 		}
 		if (!currentFrame && frames.length > 0) {
-			const first = snapToDevice(0);
+			let first = snapToDevice(0);
+			first = snapToFiltered(first);
 			setCurrentFrame(frames[first]);
 			setCurrentIndex(first);
 		}
@@ -953,41 +956,66 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	
 					{!currentFrame && !showBlockingLoader && !error && frames.length === 0 && !isLoading ? (
 						<div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-background via-background to-muted/20">
-							<div className="text-center p-8 max-w-md">
-								{/* Animated icon */}
-								<div className="relative mx-auto mb-8 w-24 h-24">
-									{/* Pulsing rings */}
-									<div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-ping" style={{ animationDuration: '3s' }} />
-									<div className="absolute inset-2 rounded-full border-2 border-primary/30 animate-ping" style={{ animationDuration: '3s', animationDelay: '0.5s' }} />
-									<div className="absolute inset-4 rounded-full border-2 border-primary/40 animate-ping" style={{ animationDuration: '3s', animationDelay: '1s' }} />
-									{/* Center icon */}
-									<div className="absolute inset-0 flex items-center justify-center">
-										<div className="w-16 h-16 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
-											<Sparkles className="w-8 h-8 text-primary animate-pulse" />
+							{health?.frame_status === "disabled" ? (
+								<div className="text-center p-8 max-w-md">
+									<div className="mx-auto mb-8 w-24 h-24 flex items-center justify-center">
+										<div className="w-16 h-16 rounded-full bg-muted/50 border border-border flex items-center justify-center">
+											<MonitorOff className="w-8 h-8 text-muted-foreground" />
 										</div>
 									</div>
+
+									<h3 className="text-xl font-semibold text-foreground mb-3">
+										Screen recording is off
+									</h3>
+									<p className="text-muted-foreground mb-6 leading-relaxed">
+										Enable screen recording in settings to start capturing your timeline.
+									</p>
+
+									<button
+										onClick={() => commands.showWindow({ Settings: { page: null } })}
+										className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-full text-sm font-medium hover:bg-primary/90 transition-colors"
+									>
+										<Settings className="w-4 h-4" />
+										Open settings
+									</button>
 								</div>
+							) : (
+								<div className="text-center p-8 max-w-md">
+									{/* Animated icon */}
+									<div className="relative mx-auto mb-8 w-24 h-24">
+										{/* Pulsing rings */}
+										<div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-ping" style={{ animationDuration: '3s' }} />
+										<div className="absolute inset-2 rounded-full border-2 border-primary/30 animate-ping" style={{ animationDuration: '3s', animationDelay: '0.5s' }} />
+										<div className="absolute inset-4 rounded-full border-2 border-primary/40 animate-ping" style={{ animationDuration: '3s', animationDelay: '1s' }} />
+										{/* Center icon */}
+										<div className="absolute inset-0 flex items-center justify-center">
+											<div className="w-16 h-16 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+												<Sparkles className="w-8 h-8 text-primary animate-pulse" />
+											</div>
+										</div>
+									</div>
 
-								<h3 className="text-xl font-semibold text-foreground mb-3">
-									Building Your Memory
-								</h3>
-								<p className="text-muted-foreground mb-6 leading-relaxed">
-									Screenpipe is recording your screen activity. Your timeline will appear here as frames are captured.
-								</p>
+									<h3 className="text-xl font-semibold text-foreground mb-3">
+										Building Your Memory
+									</h3>
+									<p className="text-muted-foreground mb-6 leading-relaxed">
+										Screenpipe is recording your screen activity. Your timeline will appear here as frames are captured.
+									</p>
 
-								{/* Friendly suggestion */}
-								<div className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-full border border-border text-sm text-muted-foreground">
-									<span className="relative flex h-2 w-2">
-										<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-										<span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-									</span>
-									Recording in progress
+									{/* Friendly suggestion */}
+									<div className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-full border border-border text-sm text-muted-foreground">
+										<span className="relative flex h-2 w-2">
+											<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+											<span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+										</span>
+										Recording in progress
+									</div>
+
+									<p className="text-xs text-muted-foreground mt-6">
+										Check back in a few minutes
+									</p>
 								</div>
-
-								<p className="text-xs text-muted-foreground mt-6">
-									Check back in a few minutes
-								</p>
-							</div>
+							)}
 						</div>
 					) : null}
 				</div>
@@ -1171,7 +1199,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 										bestIdx = i;
 									}
 								}
-								const snapped = snapToDevice(bestIdx);
+								let snapped = snapToDevice(bestIdx);
+								snapped = snapToFiltered(snapped);
 								setCurrentIndex(snapped);
 								setCurrentFrame(frames[snapped]);
 							}}
@@ -1223,6 +1252,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 								pausePlayback();
 								let snapped = snapToDevice(index);
 								snapped = snapToApp(snapped);
+								snapped = snapToFiltered(snapped);
 								setCurrentIndex(snapped);
 								if (frames[snapped]) {
 									setCurrentFrame(frames[snapped]);

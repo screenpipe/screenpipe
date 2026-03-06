@@ -103,18 +103,8 @@ jobs:
         with:
           bun-version: 1.2.2
 
-      - name: Install vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: "2a3138723698306f4261632c92dc782f586167e3"
-
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "10.0"
 
       - name: Install 7zip
         shell: powershell
@@ -150,26 +140,29 @@ jobs:
 
       - name: Run specific Windows OCR cargo test
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
-          KNF_STATIC_CRT: 1
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
 
       - name: Run PII removal tests
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
-          KNF_STATIC_CRT: 1
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-core pii_removal --release --target x86_64-pc-windows-msvc
 
       - name: Run PII redaction tests
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/LTCG"
+          RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
-          KNF_STATIC_CRT: 1
+          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+          AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-server --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc
 
       # pipes_test removed — pipe manager system deleted in #2212

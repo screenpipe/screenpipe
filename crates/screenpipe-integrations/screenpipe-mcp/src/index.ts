@@ -449,6 +449,10 @@ Screenpipe captures four types of data:
 4. **Fetch frame-context** for URLs and accessibility tree of specific frames
 5. **Screenshots** (include_frames=true) only when text isn't enough
 
+## Chat History
+Previous screenpipe chat conversations are stored as individual JSON files in ~/.screenpipe/chats/{conversation-id}.json
+Each file contains: id, title, messages[], createdAt, updatedAt. You can read these files to reference or search previous conversations.
+
 ## Tips
 1. Read screenpipe://context first to get current timestamps
 2. Use activity-summary before search-content for broad overview questions

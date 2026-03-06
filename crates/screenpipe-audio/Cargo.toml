@@ -40,7 +40,7 @@ hf-hub = "0.3.2"
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
 rubato = "0.15.0"
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", rev = "d38738df8dc54b12d2918494586ba0817c3cb12f", features = [
+whisper-rs = { git = "https://github.com/tazz4843/whisper-rs.git", rev = "d38738df8dc54b12d2918494586ba0817c3cb12f", features = [
   "tracing_backend",
 ] } # pin revision to avoid breaking changes
 
@@ -78,7 +78,7 @@ realfft = "3.4.0"
 ndarray = "0.16"
 ort = "=2.0.0-rc.6"
 ort-sys = "=2.0.0-rc.6"
-knf-rs = { git = "https://github.com/Neptune650/knf-rs.git" }
+knf-rs = "0.3.2"
 futures = "0.3.31"
 deepgram = "0.6.4"
 audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "c92760e", default-features = false, features = ["qwen3-asr-ggml"], optional = true }

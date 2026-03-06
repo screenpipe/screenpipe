@@ -3,8 +3,11 @@
 //! This module provides the HTTP client for communicating with the
 //! Screenpipe cloud sync API.
 
+use std::time::Duration;
+
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use super::blob::{BlobMetadata, BlobType};
 use super::error::{SyncError, SyncResult};
@@ -64,18 +67,35 @@ impl SyncClientConfig {
 /// Client for sync API operations.
 pub struct SyncClient {
     config: SyncClientConfig,
+    /// Short-timeout client for metadata/API calls
     http: Client,
+    /// Long-timeout client for blob uploads/downloads
+    http_transfer: Client,
 }
+
+/// Maximum retries for transient network errors.
+const MAX_RETRIES: u32 = 3;
+/// Initial backoff delay between retries.
+const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 
 impl SyncClient {
     /// Create a new sync client.
     pub fn new(config: SyncClientConfig) -> SyncResult<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| SyncError::Network(format!("failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { config, http })
+        let http_transfer = Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| SyncError::Network(format!("failed to create transfer client: {}", e)))?;
+
+        Ok(Self {
+            config,
+            http,
+            http_transfer,
+        })
     }
 
     /// Get the device ID.
@@ -274,25 +294,50 @@ impl SyncClient {
     /// and require the upload token in the URL path. The URL format is:
     /// `{supabaseUrl}/storage/v1/object/upload/sign/{bucket}/{path}?token={token}`
     pub async fn upload_to_s3(&self, upload_url: &str, data: &[u8]) -> SyncResult<()> {
-        let response = self
-            .http
-            .put(upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .header("x-upsert", "true")
-            .body(data.to_vec())
-            .send()
-            .await?;
+        let mut last_err = None;
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
+                warn!("upload retry {}/{} after {:?}", attempt + 1, MAX_RETRIES, backoff);
+                tokio::time::sleep(backoff).await;
+            }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(SyncError::Server(format!(
-                "S3 upload failed with status: {} body: {}",
-                status, body
-            )));
+            let result = self
+                .http_transfer
+                .put(upload_url)
+                .header("Content-Type", "application/octet-stream")
+                .header("x-upsert", "true")
+                .body(data.to_vec())
+                .send()
+                .await;
+
+            match result {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        return Ok(());
+                    }
+                    let status = response.status();
+                    // Don't retry client errors (4xx)
+                    if status.is_client_error() {
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(SyncError::Server(format!(
+                            "S3 upload failed with status: {} body: {}",
+                            status, body
+                        )));
+                    }
+                    let body = response.text().await.unwrap_or_default();
+                    last_err = Some(SyncError::Server(format!(
+                        "S3 upload failed with status: {} body: {}",
+                        status, body
+                    )));
+                }
+                Err(e) => {
+                    last_err = Some(SyncError::Network(e.to_string()));
+                }
+            }
         }
 
-        Ok(())
+        Err(last_err.unwrap_or_else(|| SyncError::Network("upload failed after retries".to_string())))
     }
 
     /// Mark an upload as completed.
@@ -341,25 +386,45 @@ impl SyncClient {
 
     /// Download encrypted data from S3.
     pub async fn download_from_s3(&self, download_url: &str) -> SyncResult<Vec<u8>> {
-        let response = self.http.get(download_url).send().await?;
+        let mut last_err = None;
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
+                warn!("download retry {}/{} after {:?}", attempt + 1, MAX_RETRIES, backoff);
+                tokio::time::sleep(backoff).await;
+            }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // Truncate body to avoid flooding logs with large XML error responses
-            let body_preview = if body.len() > 500 {
-                &body[..500]
-            } else {
-                &body
-            };
-            return Err(SyncError::Server(format!(
-                "S3 download failed with status: {} body: {}",
-                status, body_preview
-            )));
+            let result = self.http_transfer.get(download_url).send().await;
+
+            match result {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        let bytes = response.bytes().await?;
+                        return Ok(bytes.to_vec());
+                    }
+                    let status = response.status();
+                    if status.is_client_error() {
+                        let body = response.text().await.unwrap_or_default();
+                        let body_preview = if body.len() > 500 { &body[..500] } else { &body };
+                        return Err(SyncError::Server(format!(
+                            "S3 download failed with status: {} body: {}",
+                            status, body_preview
+                        )));
+                    }
+                    let body = response.text().await.unwrap_or_default();
+                    let body_preview = if body.len() > 500 { &body[..500] } else { &body };
+                    last_err = Some(SyncError::Server(format!(
+                        "S3 download failed with status: {} body: {}",
+                        status, body_preview
+                    )));
+                }
+                Err(e) => {
+                    last_err = Some(SyncError::Network(e.to_string()));
+                }
+            }
         }
 
-        let bytes = response.bytes().await?;
-        Ok(bytes.to_vec())
+        Err(last_err.unwrap_or_else(|| SyncError::Network("download failed after retries".to_string())))
     }
 
     // =========================================================================
@@ -504,37 +569,67 @@ impl SyncClient {
         body: &T,
     ) -> SyncResult<R> {
         let url = format!("{}{}", self.config.api_url, path);
+        let mut last_err = None;
 
-        let response = self
-            .http
-            .post(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.config.auth_token),
-            )
-            .header("X-Device-Id", &self.config.device_id)
-            .json(body)
-            .send()
-            .await?;
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
+                warn!("POST {} retry {}/{} after {:?}", path, attempt + 1, MAX_RETRIES, backoff);
+                tokio::time::sleep(backoff).await;
+            }
 
-        self.handle_response(response).await
+            match self
+                .http
+                .post(&url)
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.config.auth_token),
+                )
+                .header("X-Device-Id", &self.config.device_id)
+                .json(body)
+                .send()
+                .await
+            {
+                Ok(response) => return self.handle_response(response).await,
+                Err(e) => {
+                    last_err = Some(SyncError::Network(e.to_string()));
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| SyncError::Network(format!("POST {} failed after retries", path))))
     }
 
     async fn get<R: for<'de> Deserialize<'de>>(&self, path: &str) -> SyncResult<R> {
         let url = format!("{}{}", self.config.api_url, path);
+        let mut last_err = None;
 
-        let response = self
-            .http
-            .get(&url)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.config.auth_token),
-            )
-            .header("X-Device-Id", &self.config.device_id)
-            .send()
-            .await?;
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
+                warn!("GET {} retry {}/{} after {:?}", path, attempt + 1, MAX_RETRIES, backoff);
+                tokio::time::sleep(backoff).await;
+            }
 
-        self.handle_response(response).await
+            match self
+                .http
+                .get(&url)
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.config.auth_token),
+                )
+                .header("X-Device-Id", &self.config.device_id)
+                .send()
+                .await
+            {
+                Ok(response) => return self.handle_response(response).await,
+                Err(e) => {
+                    last_err = Some(SyncError::Network(e.to_string()));
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| SyncError::Network(format!("GET {} failed after retries", path))))
     }
 
     async fn handle_response<R: for<'de> Deserialize<'de>>(

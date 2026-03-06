@@ -12,7 +12,7 @@ import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 let frameBuffer: StreamTimeSeriesResponse[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let progressUpdateTimer: ReturnType<typeof setTimeout> | null = null;
-const FLUSH_INTERVAL_MS = 150; // Flush every 150ms for smooth progressive loading
+const FLUSH_INTERVAL_MS = 500; // Flush every 500ms to reduce CPU usage
 const PROGRESS_UPDATE_INTERVAL_MS = 500; // Only update progress indicator every 500ms to prevent flickering
 
 // Connection retry logic - don't show error immediately, server might be starting
@@ -21,11 +21,12 @@ let errorGraceTimer: ReturnType<typeof setTimeout> | null = null;
 const MAX_SILENT_RETRIES = 5; // Increased from 3 - retry more before showing error
 const RETRY_DELAY_MS = 2000; // Wait 2 seconds between retries
 
-// Request timeout logic - retry if no frames arrive
+// Request timeout logic - retry with exponential backoff (never give up)
 let requestTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let requestRetryCount = 0;
-const REQUEST_TIMEOUT_MS = 5000; // 5 seconds to receive frames
-const MAX_REQUEST_RETRIES = 3; // Retry request 3 times before giving up
+const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
+const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
+// No MAX_REQUEST_RETRIES — keep retrying forever with backoff
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -259,10 +260,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 			requestRetryCount = 0; // Reset retry count on success
 
-			// Add new timestamps to the Set
-			const updatedTimestamps = new Set(state.frameTimestamps);
+			// Add new timestamps to the existing Set in-place (avoid cloning 40k+ entries)
 			newUniqueFrames.forEach((frame) => {
-				updatedTimestamps.add(frame.timestamp);
+				state.frameTimestamps.add(frame.timestamp);
 			});
 
 			// Single sort per flush instead of per-message
@@ -299,7 +299,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 			return {
 				frames: mergedFrames,
-				frameTimestamps: updatedTimestamps,
+				frameTimestamps: state.frameTimestamps,
 				isLoading: false,
 				loadingProgress: {
 					loaded: mergedFrames.length,
@@ -430,30 +430,31 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle audio updates from batch/reconciliation — merge
 				// transcription into existing frames near the audio timestamp.
+				// Mutates frames in-place to avoid cloning the entire 40k+ array
+				// on every audio update (major GC pressure on WebKitGTK/Linux).
 				if (data.type === "audio_update" && data.audio) {
-					set((state) => {
-						const audioTs = new Date(data.timestamp).getTime();
-						const pad = 60_000; // ±60s window matching server
-						let updated = false;
-						const updatedFrames = state.frames.map((frame) => {
-							const frameTs = new Date(frame.timestamp).getTime();
-							if (Math.abs(frameTs - audioTs) > pad) return frame;
-							// Check if this audio is already attached
-							const isDuplicate = frame.devices?.some((d: any) =>
-								d.audio?.some((a: any) => a.audio_chunk_id === data.audio.audio_chunk_id)
-							);
-							if (isDuplicate) return frame;
-							updated = true;
-							return {
-								...frame,
-								devices: frame.devices?.map((d: any) => ({
-									...d,
-									audio: [...(d.audio || []), data.audio],
-								})),
-							};
-						});
-						return updated ? { frames: updatedFrames } : {};
-					});
+					const { frames } = get();
+					const audioTs = new Date(data.timestamp).getTime();
+					const pad = 60_000; // ±60s window matching server
+					let updated = false;
+					for (let i = 0; i < frames.length; i++) {
+						const frame = frames[i];
+						const frameTs = new Date(frame.timestamp).getTime();
+						if (Math.abs(frameTs - audioTs) > pad) continue;
+						const isDuplicate = frame.devices?.some((d: any) =>
+							d.audio?.some((a: any) => a.audio_chunk_id === data.audio.audio_chunk_id)
+						);
+						if (isDuplicate) continue;
+						// Mutate in-place — push audio onto each device's audio array
+						for (const d of (frame.devices || [])) {
+							(d as any).audio = [...((d as any).audio || []), data.audio];
+						}
+						updated = true;
+					}
+					// Trigger re-render with a new timestamp (no array clone needed)
+					if (updated) {
+						set({ lastFlushTimestamp: Date.now() });
+					}
 					return;
 				}
 
@@ -622,34 +623,38 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					sentRequests: new Set(state.sentRequests).add(requestKey),
 				}));
 
-				// Start timeout - if no frames arrive, retry
+				// Start timeout - if no frames arrive, retry with exponential backoff
 				if (requestTimeoutTimer) {
 					clearTimeout(requestTimeoutTimer);
 				}
+				const timeoutMs = Math.min(
+					REQUEST_TIMEOUT_BASE_MS * Math.pow(2, requestRetryCount),
+					REQUEST_TIMEOUT_MAX_MS
+				);
 				requestTimeoutTimer = setTimeout(() => {
 					requestTimeoutTimer = null;
 					const { frames: currentFrames, pendingDateSwap: stillSwapping } = get();
 
-					// Retry if no frames arrived (or still waiting for date swap to complete)
-					if ((currentFrames.length === 0 || stillSwapping) && requestRetryCount < MAX_REQUEST_RETRIES) {
+					// Retry forever with backoff if no frames arrived
+					if (currentFrames.length === 0 || stillSwapping) {
 						requestRetryCount++;
 
 						// Clear this date from sentRequests to allow retry
 						set((state) => {
 							const newSentRequests = new Set(state.sentRequests);
 							newSentRequests.delete(requestKey);
-							return { sentRequests: newSentRequests };
+							return {
+								sentRequests: newSentRequests,
+								message: requestRetryCount > 2
+									? "Loading history... server is warming up"
+									: null,
+							};
 						});
 
 						// Retry the request
 						get().fetchTimeRange(startTime, endTime);
-					} else if ((currentFrames.length === 0 || stillSwapping) && requestRetryCount >= MAX_REQUEST_RETRIES) {
-						set({
-							isLoading: false,
-							message: "No data available for this time range"
-						});
 					}
-				}, REQUEST_TIMEOUT_MS);
+				}, timeoutMs);
 			} else if (attempt < 5) {
 				// WebSocket not open — retry after a short delay instead of silently dropping.
 				// This happens during cross-date navigation when the WS may be reconnecting.

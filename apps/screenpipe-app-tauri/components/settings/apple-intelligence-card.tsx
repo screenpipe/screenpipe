@@ -32,6 +32,7 @@ export function AppleIntelligenceCard() {
     } catch {}
     return "unknown";
   });
+  const [aiStatusReason, setAiStatusReason] = useState<string>("");
   const [enabled, setEnabled] = useState(true);
 
   // Wrap setAiStatus to persist to localStorage
@@ -78,7 +79,7 @@ export function AppleIntelligenceCard() {
       if (platform() === "macos") {
         import("@/lib/utils/tauri").then(({ commands }) => {
           commands.getHardwareCapability().then((hw) => {
-            const meetsRequirements = hw.totalMemoryGb >= 32;
+            const meetsRequirements = hw.totalMemoryGb >= 16;
             setEnabled(meetsRequirements);
           }).catch(() => {});
         });
@@ -102,46 +103,58 @@ export function AppleIntelligenceCard() {
 
   // Check AI availability (with retry on failure)
   const checkStatus = useCallback(async () => {
-    const attempt = async () => {
+    const attempt = async (): Promise<{ available: boolean; status: string } | null> => {
       const resp = await fetch(`${API}/ai/status`, {
         signal: AbortSignal.timeout(10000),
       });
       if (resp.ok) {
-        const data = await resp.json();
-        return data.available ? "available" : "unavailable";
+        return await resp.json();
       }
+      console.warn("[apple-intelligence] /ai/status returned", resp.status, resp.statusText);
       return null;
     };
 
     try {
-      let result = await attempt();
+      let data = await attempt();
       // Retry once after 2s if the first attempt failed
-      if (result === null) {
+      if (data === null) {
         await new Promise((r) => setTimeout(r, 2000));
-        result = await attempt();
+        data = await attempt();
       }
-      if (result) {
-        setAiStatus(result as "available" | "unavailable");
+      if (data) {
+        const result = data.available ? "available" : "unavailable";
+        console.log("[apple-intelligence] status:", data.status, "available:", data.available);
+        setAiStatus(result);
+        setAiStatusReason(data.status || "");
         if (!statusCapturedRef.current) {
           statusCapturedRef.current = true;
           posthog.capture("apple_intelligence_status", {
-            available: result === "available",
+            available: data.available,
+            status: data.status,
             enabled,
           });
         }
       } else {
+        console.warn("[apple-intelligence] /ai/status unreachable — endpoint may not be compiled in");
         setAiStatus("unavailable");
+        setAiStatusReason("endpoint unreachable — build may not include apple-intelligence feature");
       }
-    } catch {
+    } catch (e) {
       // On network error, retry once
       try {
         await new Promise((r) => setTimeout(r, 2000));
-        const result = await attempt();
-        setAiStatus(
-          result ? (result as "available" | "unavailable") : "unavailable"
-        );
+        const data = await attempt();
+        if (data) {
+          setAiStatus(data.available ? "available" : "unavailable");
+          setAiStatusReason(data.status || "");
+        } else {
+          setAiStatus("unavailable");
+          setAiStatusReason("endpoint unreachable");
+        }
       } catch {
+        console.error("[apple-intelligence] /ai/status failed after retry:", e);
         setAiStatus("unavailable");
+        setAiStatusReason("network error");
       }
     }
   }, [enabled, setAiStatus]);
@@ -337,7 +350,9 @@ export function AppleIntelligenceCard() {
             {aiStatus === "unavailable" && (
               <p className="text-xs text-muted-foreground mb-3">
                 <AlertCircle className="h-3 w-3 inline mr-1" />
-                Requires macOS 26+ with Apple Intelligence enabled.
+                {aiStatusReason
+                  ? `Not available: ${aiStatusReason}`
+                  : "Requires macOS 26+ with Apple Intelligence enabled."}
               </p>
             )}
 

@@ -384,8 +384,7 @@ pub async fn process_ocr_task(
 
     for captured_window in &raw.window_images {
         // Calculate hash for this window's image
-        let window_image_hash =
-            WindowOcrCache::calculate_image_hash(&captured_window.image);
+        let window_image_hash = WindowOcrCache::calculate_image_hash(&captured_window.image);
         let window_id =
             WindowOcrCache::make_window_id(&captured_window.app_name, &captured_window.window_name);
         let cache_key = WindowCacheKey {

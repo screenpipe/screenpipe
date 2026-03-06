@@ -14,6 +14,12 @@ import {
 } from "react";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
+import {
+  saveConversationFile,
+  deleteConversationFile,
+  loadAllConversations,
+  migrateFromStoreBin,
+} from "@/lib/chat-storage";
 
 const PI_CHAT_SESSION = "chat";
 
@@ -88,31 +94,45 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   const [showHistory, setShowHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
+  const [fileConversations, setFileConversations] = useState<ChatConversation[]>([]);
+
+  // Run migration from store.bin on mount, then load conversations from files
+  const migrationDoneRef = useRef(false);
+  useEffect(() => {
+    if (migrationDoneRef.current) return;
+    migrationDoneRef.current = true;
+    (async () => {
+      await migrateFromStoreBin();
+      const convs = await loadAllConversations();
+      setFileConversations(convs);
+    })();
+  }, []);
+
+  const refreshFileConversations = async () => {
+    const convs = await loadAllConversations();
+    setFileConversations(convs);
+  };
 
   // ---- saveConversation ----
   const saveConversation = async (msgs: Message[]) => {
     if (msgs.length === 0) return;
 
-    // Read fresh settings from store to get latest conversations
-    const { getStore } = await import("@/lib/hooks/use-settings");
-    const store = await getStore();
-    const freshSettings = await store.get<any>("settings");
-    const history = freshSettings?.chatHistory || { conversations: [], activeConversationId: null, historyEnabled: true };
-
-    if (!history.historyEnabled) return;
+    const historyEnabled = settings?.chatHistory?.historyEnabled ?? true;
+    if (!historyEnabled) return;
 
     const convId = conversationId || crypto.randomUUID();
-
-    const existingIndex = history.conversations.findIndex((c: any) => c.id === convId);
     const firstUserMsg = msgs.find(m => m.role === "user");
     const title = firstUserMsg?.content.slice(0, 50) || "New Chat";
+
+    // Try to load existing conversation to preserve createdAt
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const existing = await loadConversationFile(convId);
 
     const conversation: ChatConversation = {
       id: convId,
       title,
       messages: msgs.slice(-100).map(m => {
         // For tool-only responses, content may be empty but contentBlocks has the data.
-        // Generate a text fallback so the message isn't lost when reloaded.
         let content = m.content;
         if (!content && m.contentBlocks?.length) {
           content = m.contentBlocks
@@ -121,7 +141,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             .join("\n") || "(tool result)";
         }
         // Persist contentBlocks so tool calls/results survive reload.
-        // Strip isRunning (stale) and cap result length to keep store small.
+        // Strip isRunning (stale) and cap result length to keep file small.
         const blocks = m.contentBlocks?.map((b: any) => {
           if (b.type === "tool") {
             const { isRunning, ...rest } = b.toolCall;
@@ -148,28 +168,31 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.images?.length ? { images: m.images } : {}),
         };
       }),
-      createdAt: existingIndex >= 0 ? history.conversations[existingIndex].createdAt : Date.now(),
+      createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
 
-    let newConversations = [...history.conversations];
-    if (existingIndex >= 0) {
-      newConversations[existingIndex] = conversation;
-    } else {
-      newConversations = [conversation, ...newConversations].slice(0, 50);
-    }
+    await saveConversationFile(conversation);
+    await refreshFileConversations();
 
-    // Write only chatHistory — read-modify-write with fresh data
-    const currentFull = freshSettings || {};
-    await store.set("settings", {
-      ...currentFull,
-      chatHistory: {
-        ...history,
-        conversations: newConversations,
-        activeConversationId: convId,
-      }
-    });
-    await store.save();
+    // Update activeConversationId in store (lightweight — no conversation data)
+    try {
+      const { getStore } = await import("@/lib/hooks/use-settings");
+      const store = await getStore();
+      const freshSettings = await store.get<any>("settings");
+      await store.set("settings", {
+        ...freshSettings,
+        chatHistory: {
+          ...(freshSettings?.chatHistory || {}),
+          activeConversationId: convId,
+          historyEnabled: true,
+          conversations: [], // keep empty — data lives in files now
+        },
+      });
+      await store.save();
+    } catch (e) {
+      console.warn("[chat] failed to update activeConversationId:", e);
+    }
 
     if (!conversationId) {
       setConversationId(convId);
@@ -192,29 +215,29 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   // ---- deleteConversation ----
   const deleteConversation = async (convId: string) => {
-    // Read fresh from store (same pattern as saveConversation)
-    const { getStore } = await import("@/lib/hooks/use-settings");
-    const store = await getStore();
-    const freshSettings = await store.get<any>("settings");
-    const history = freshSettings?.chatHistory;
-    if (!history) return;
+    await deleteConversationFile(convId);
+    await refreshFileConversations();
 
-    const newConversations = history.conversations.filter((c: any) => c.id !== convId);
-    const newActiveId = history.activeConversationId === convId ? null : history.activeConversationId;
-
-    await store.set("settings", {
-      ...freshSettings,
-      chatHistory: {
-        ...history,
-        conversations: newConversations,
-        activeConversationId: newActiveId,
-      }
-    });
-    await store.save();
-
+    // Clear activeConversationId if it was the deleted one
     if (conversationId === convId) {
       setMessages([]);
       setConversationId(null);
+    }
+
+    try {
+      const { getStore } = await import("@/lib/hooks/use-settings");
+      const store = await getStore();
+      const freshSettings = await store.get<any>("settings");
+      const history = freshSettings?.chatHistory;
+      if (history?.activeConversationId === convId) {
+        await store.set("settings", {
+          ...freshSettings,
+          chatHistory: { ...history, activeConversationId: null },
+        });
+        await store.save();
+      }
+    } catch (e) {
+      console.warn("[chat] failed to clear activeConversationId:", e);
     }
   };
 
@@ -233,7 +256,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       setIsLoading(false);
       setIsStreaming(false);
     }
-    setMessages(conv.messages.map(m => ({
+
+    // Load full conversation from file (conv from list may be metadata-only)
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const full = await loadConversationFile(conv.id) || conv;
+
+    setMessages(full.messages.map(m => ({
       id: m.id,
       role: m.role,
       content: m.content,
@@ -241,12 +269,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
       ...((m as any).images?.length ? { images: (m as any).images } : (m as any).image ? { images: [(m as any).image] } : {}),
     })));
-    setConversationId(conv.id);
+    setConversationId(full.id);
     setShowHistory(false);
     piSessionSyncedRef.current = false;
 
-    // Update activeConversationId directly in the store (read fresh to avoid
-    // overwriting conversations with stale React state)
+    // Update activeConversationId in store
     try {
       const { getStore } = await import("@/lib/hooks/use-settings");
       const store = await getStore();
@@ -256,7 +283,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...freshSettings,
           chatHistory: {
             ...freshSettings.chatHistory,
-            activeConversationId: conv.id,
+            activeConversationId: full.id,
           }
         });
         await store.save();
@@ -295,15 +322,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   // ---- filteredConversations ----
   const filteredConversations = useMemo(() => {
-    const convs = settings.chatHistory?.conversations || [];
-    if (!historySearch.trim()) return convs;
+    if (!historySearch.trim()) return fileConversations;
 
     const search = historySearch.toLowerCase();
-    return convs.filter((c: ChatConversation) =>
+    return fileConversations.filter((c: ChatConversation) =>
       c.title.toLowerCase().includes(search) ||
       c.messages.some(m => m.content.toLowerCase().includes(search))
     );
-  }, [settings.chatHistory?.conversations, historySearch]);
+  }, [fileConversations, historySearch]);
 
   // ---- groupedConversations ----
   const groupedConversations = useMemo(() => {

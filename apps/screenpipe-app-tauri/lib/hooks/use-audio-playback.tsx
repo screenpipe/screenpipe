@@ -10,6 +10,7 @@ type PlaybackSpeed = 1 | 1.5 | 2;
 const SPEED_CYCLE: PlaybackSpeed[] = [1, 1.5, 2];
 const PRELOAD_AHEAD_MS = 60_000; // preload audio 60s ahead
 const PRELOAD_BEHIND_MS = 5_000; // also preload 5s behind to cover current position
+const MAX_CACHED_SEGMENTS = 20; // evict oldest segments beyond this limit
 
 interface AudioSegment {
   filePath: string;
@@ -155,6 +156,29 @@ export function useAudioPlayback({
     return false;
   })();
 
+  /** Evict oldest non-playing segments when cache exceeds limit. */
+  const evictOldSegments = useCallback(() => {
+    const segments = segmentsRef.current;
+    if (segments.size <= MAX_CACHED_SEGMENTS) return;
+    // Evict non-playing segments furthest from current playback position
+    const toEvict: string[] = [];
+    for (const [path, seg] of segments) {
+      if (seg.playing) continue;
+      toEvict.push(path);
+    }
+    // Keep the most recent MAX_CACHED_SEGMENTS entries (Map preserves insertion order)
+    const evictCount = segments.size - MAX_CACHED_SEGMENTS;
+    for (let i = 0; i < Math.min(evictCount, toEvict.length); i++) {
+      const seg = segments.get(toEvict[i]);
+      if (seg) {
+        try { seg.audioElement.pause(); } catch { /* ignore */ }
+        seg.audioElement.src = "";
+        URL.revokeObjectURL(seg.blobUrl);
+        segments.delete(toEvict[i]);
+      }
+    }
+  }, []);
+
   /** Load an audio file into an HTMLAudioElement with blob URL. */
   const loadAudioSegment = useCallback(
     async (filePath: string, chunkId: number, isInput: boolean, durationSecs: number, fallbackTsMs: number, deviceName: string) => {
@@ -213,13 +237,16 @@ export function useAudioPlayback({
           "recordingStart:", new Date(recordingStartMs).toISOString(),
           "duration:", actualDuration.toFixed(1) + "s",
         );
+
+        // Evict old segments to cap memory usage
+        evictOldSegments();
       } catch (err) {
         console.warn("[audio-playback] Failed to load audio segment:", filePath, err);
       } finally {
         loadingPathsRef.current.delete(filePath);
       }
     },
-    [],
+    [evictOldSegments],
   );
 
   /** Preload audio segments near the current playback position. */

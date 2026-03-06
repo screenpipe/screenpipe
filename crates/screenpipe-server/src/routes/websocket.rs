@@ -131,10 +131,10 @@ async fn handle_socket(socket: WebSocket, query: Query<EventsQuery>, _guard: WsC
                                 data.remove("image");
                             }
                         }
+                        let json = serde_json::to_string(&event).unwrap_or_default();
+                        let json = super::timezone::localize_json_string(&json);
                         if let Err(e) = sender
-                            .send(Message::Text(
-                                serde_json::to_string(&event).unwrap_or_default(),
-                            ))
+                            .send(Message::Text(json))
                             .await
                         {
                             tracing::error!("Failed to send websocket message: {}", e);
@@ -185,6 +185,7 @@ async fn handle_health_socket(
         _ = interval.tick() => {
             let health_response = health_check(State(state.clone())).await;
             let health_status = serde_json::to_string(&health_response.0).unwrap_or_default();
+            let health_status = super::timezone::localize_json_string(&health_status);
             if let Err(e) = socket.send(Message::Text(health_status)).await {
                 error!("Failed to send health status: {}", e);
                 break;

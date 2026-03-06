@@ -1,18 +1,3 @@
-[target.x86_64-pc-windows-msvc]
-rustflags = [
-  "-C",
-  "target-feature=+crt-static",
-  "-C",
-  "link-args=/DEFAULTLIB:ucrt.lib /DEFAULTLIB:libvcruntime.lib libcmt.lib",
-  "-C",
-  "link-args=/NODEFAULTLIB:libvcruntimed.lib /NODEFAULTLIB:vcruntime.lib /NODEFAULTLIB:vcruntimed.lib",
-  "-C",
-  "link-args=/NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrt.lib /NODEFAULTLIB:msvcrtd.lib",
-  "-C",
-  "link-args=/NODEFAULTLIB:libucrt.lib /NODEFAULTLIB:libucrtd.lib /NODEFAULTLIB:ucrtd.lib",
-
-]
-
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
 
@@ -30,6 +15,8 @@ rustflags = [
 rustflags = "-lc++ -l framework=Accelerate"
 
 [env]
+# Use prebuilt NASM objects on Windows (no NASM install needed in CI): https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
+AWS_LC_SYS_PREBUILT_NASM = "1"
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 
 # Faster builds - use more threads for codegen

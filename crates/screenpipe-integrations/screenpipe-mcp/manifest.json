@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "screenpipe",
   "display_name": "Screenpipe",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Search your screen recordings and audio transcriptions with AI",
   "long_description": "Screenpipe is a 24/7 screen and audio recorder that lets you search everything you've seen or heard. This extension connects Claude to your local screenpipe instance, enabling AI-powered search through your digital memory.",
   "author": {

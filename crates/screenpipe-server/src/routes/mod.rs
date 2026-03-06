@@ -16,4 +16,5 @@ pub mod search;
 pub mod speakers;
 pub mod streaming;
 pub mod time;
+pub mod timezone;
 pub mod websocket;

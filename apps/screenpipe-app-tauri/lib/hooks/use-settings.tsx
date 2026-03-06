@@ -125,8 +125,6 @@ export type Settings = SettingsStore & {
 	openaiCompatibleModel?: string;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
-	/** When true, chat window stays above all other windows */
-	chatAlwaysOnTop?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {

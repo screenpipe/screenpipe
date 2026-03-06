@@ -226,6 +226,7 @@ pub struct FrameData {
     pub timestamp: DateTime<Utc>,
     pub offset_index: i64,
     pub fps: f64,
+    pub machine_id: Option<String>,
     pub ocr_entries: Vec<OCREntry>,
     pub audio_entries: Vec<AudioEntry>,
 }

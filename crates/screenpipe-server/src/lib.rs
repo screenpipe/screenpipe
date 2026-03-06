@@ -15,6 +15,7 @@ pub mod cli_status;
 pub mod cloud_search;
 pub mod core;
 pub mod logging;
+pub mod pipe_permissions_middleware;
 pub mod pipe_store;
 pub mod pipes_api;
 pub mod recording_config;
