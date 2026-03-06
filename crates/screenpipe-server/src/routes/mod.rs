@@ -6,6 +6,7 @@ pub mod activity_summary;
 pub mod audio;
 pub mod content;
 pub mod data;
+pub mod dictation;
 pub mod elements;
 pub mod frames;
 pub mod health;

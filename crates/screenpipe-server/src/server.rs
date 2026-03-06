@@ -523,6 +523,10 @@ impl SCServer {
             .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
+            )
+            .route(
+                "/dictation/transcribe",
+                axum::routing::post(crate::routes::dictation::dictation_transcribe_handler),
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
