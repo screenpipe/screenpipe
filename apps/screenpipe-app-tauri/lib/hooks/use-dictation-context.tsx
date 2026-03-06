@@ -92,9 +92,18 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     setState("recording");
     notifySubscribers({ type: "stateChange", state: "recording" });
 
-    // Show the dictation window
+    // Show the dictation window (create if needed)
     try {
-      await commands.showWindow("Dictation");
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const existingWindow = await WebviewWindow.getByLabel("dictation");
+      if (existingWindow) {
+        const isVisible = await existingWindow.isVisible();
+        if (!isVisible) {
+          await commands.showWindow("Dictation");
+        }
+      } else {
+        await commands.showWindow("Dictation");
+      }
     } catch (e) {
       console.warn("[dictation-context] Failed to show dictation window:", e);
     }
@@ -245,6 +254,30 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       }
     };
   }, [toggleDictation]);
+
+  // Listen for dictation window close to stop dictation
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+
+    const setupListener = async () => {
+      unlisten = await listen("dictation-window-closed", () => {
+        console.log("[dictation-context] Dictation window closed, stopping dictation");
+        if (state !== "idle") {
+          cleanup();
+          setState("idle");
+          notifySubscribers({ type: "stateChange", state: "idle" });
+        }
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [state, cleanup, notifySubscribers]);
 
   // Cleanup on unmount
   useEffect(() => {

@@ -1377,12 +1377,14 @@ async fn main() {
         .plugin(tauri_plugin_http::init())
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "dictation" {
+                    let _ = window.app_handle().emit("dictation-window-closed", ());
+                    return;
+                }
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
                 #[cfg(target_os = "macos")]
                 crate::window_api::reset_to_regular_and_refresh_tray(window.app_handle());
-                // On Windows, minimize the main windowed window so it stays
-                // visible in the taskbar instead of vanishing to the tray.
                 #[cfg(target_os = "windows")]
                 {
                     if window.label() == "main-window" {
