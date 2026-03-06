@@ -3213,11 +3213,13 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               </AnimatePresence>
             </div>
             {/* Dictation button - between textarea and paperclip */}
-            <DictationButton
-              state={dictationState}
-              onToggle={toggleDictation}
-              disabled={isLoading || !canChat}
-            />
+            {!settings.disabledShortcuts?.includes("dictation" as any) && (
+              <DictationButton
+                state={dictationState}
+                onToggle={toggleDictation}
+                disabled={isLoading || !canChat}
+              />
+            )}
             <Button
               type="button"
               size="icon"

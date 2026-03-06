@@ -16,6 +16,7 @@ import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { useDictation } from "@/lib/hooks/use-dictation";
 import { DictationButton } from "@/components/dictation-indicator";
 import { toast } from "@/components/ui/use-toast";
+import { useSettings } from "@/lib/hooks/use-settings";
 
 interface SpeakerResult {
   id: number;
@@ -279,6 +280,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
 
   // Speaker search state
   const [speakerResults, setSpeakerResults] = useState<SpeakerResult[]>([]);
@@ -1630,11 +1632,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             spellCheck={false}
             autoFocus
           />
-          <DictationButton
-            state={dictationState}
-            onToggle={toggleDictation}
-            className="flex-shrink-0"
-          />
+          {!settings.disabledShortcuts?.includes("dictation" as any) && (
+            <DictationButton
+              state={dictationState}
+              onToggle={toggleDictation}
+              className="flex-shrink-0"
+            />
+          )}
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
             <button
@@ -1731,6 +1735,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             spellCheck={false}
             autoFocus
           />
+          {!settings.disabledShortcuts?.includes("dictation" as any) && (
+            <DictationButton
+              state={dictationState}
+              onToggle={toggleDictation}
+              className="flex-shrink-0"
+            />
+          )}
           {(isSearching || isSearchingTags) && <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />}
           {query && (
             <button
