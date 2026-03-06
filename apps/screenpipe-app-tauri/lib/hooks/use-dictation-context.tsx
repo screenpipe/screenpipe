@@ -7,6 +7,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { commands } from "@/lib/utils/tauri";
 
 export type DictationState = "idle" | "recording" | "processing";
 
@@ -83,8 +84,17 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     if (state !== "idle") return;
 
     console.log("[dictation-context] Starting server-side dictation...");
+
+    // Set state first to prevent race condition with window auto-start
     setState("recording");
     notifySubscribers({ type: "stateChange", state: "recording" });
+
+    // Show the dictation window
+    try {
+      await commands.showWindow("Dictation");
+    } catch (e) {
+      console.warn("[dictation-context] Failed to show dictation window:", e);
+    }
 
     try {
       const ws = new WebSocket(DICTATION_WS_URL);

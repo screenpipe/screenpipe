@@ -605,15 +605,8 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             let app = &app_for_closure;
             info!("dictation shortcut triggered");
             
-            // Check if window already exists
-            if let Some(window) = app.get_webview_window("dictation") {
-                // Window exists - emit toggle event to stop
-                let _ = window.set_focus();
-                let _ = app.emit("shortcut-dictation", ());
-            } else {
-                // Window doesn't exist - show it (will auto-start dictation)
-                let _ = window_api::ShowRewindWindow::Dictation.show(app);
-            }
+            // Emit event to frontend to toggle dictation (handles showing window and starting/stopping)
+            let _ = app.emit("shortcut-dictation", ());
         });
     })
     .await?;

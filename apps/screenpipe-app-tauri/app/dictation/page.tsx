@@ -14,7 +14,7 @@ export default function DictationPage() {
   const [copied, setCopied] = useState(false);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { state, stopDictation, startDictation } = useDictation({
+  const { state, stopDictation } = useDictation({
     onTranscription: (text) => {
       setFullText((prev) => (prev ? prev + " " : "") + text);
     },
@@ -29,16 +29,6 @@ export default function DictationPage() {
       }
     },
   });
-
-  // Auto-start dictation when window opens
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (state === "idle") {
-        startDictation();
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, []);
 
   // Cancel auto-close timer on new activity
   const cancelAutoClose = useCallback(() => {

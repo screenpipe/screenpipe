@@ -1058,7 +1058,7 @@ videoQuality?: string;
  * When true, the chat window stays above all other windows (default: true).
  */
 chatAlwaysOnTop?: boolean }
-export type ShowRewindWindow = "Main" | { Settings: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
+export type ShowRewindWindow = "Main" | { Settings: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery" | "Dictation"
 export type Suggestion = { text: string }
 /**
  * Sync configuration.
