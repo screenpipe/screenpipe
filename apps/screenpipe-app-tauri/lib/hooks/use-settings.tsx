@@ -93,6 +93,7 @@ export type Settings = SettingsStore & {
 	ignoredUrls?: string[];
 	searchShortcut?: string;
 	dictationShortcut?: string;
+	dictationDevice?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
 	adaptiveFps?: boolean;
@@ -258,6 +259,7 @@ let DEFAULT_SETTINGS: Settings = {
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
 			dictationShortcut: "Control+Super+D",
+			dictationDevice: "",
 			realtimeAudioTranscriptionEngine: "deepgram",
 			disableVision: false,
 			disableOcr: false,

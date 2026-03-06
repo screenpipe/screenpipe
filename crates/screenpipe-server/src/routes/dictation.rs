@@ -12,7 +12,10 @@ use axum::{
     response::{IntoResponse, Json as JsonResponse, Response},
 };
 use futures::{SinkExt, StreamExt};
+use screenpipe_audio::core::device::{default_input_device, parse_audio_device};
+use screenpipe_audio::core::stream::AudioStream;
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info, warn};
@@ -39,7 +42,6 @@ pub async fn dictation_transcribe_handler(
 
     info!("dictation: received {} bytes of audio", body.len());
 
-    // 1. Decode audio bytes to f32 PCM via ffmpeg (blocking — runs ffmpeg subprocess)
     let audio_data = body.to_vec();
     let decode_result = tokio::task::spawn_blocking(move || {
         screenpipe_audio::utils::ffmpeg::read_audio_from_bytes(&audio_data)
@@ -74,34 +76,23 @@ pub async fn dictation_transcribe_handler(
             .into_response();
     }
 
-    info!(
-        "dictation: decoded {} samples at {} Hz ({:.1}s)",
-        samples.len(),
-        sample_rate,
-        samples.len() as f64 / sample_rate as f64
-    );
-
-    // 2. Get transcription engine from audio manager
     let engine = match state.audio_manager.transcription_engine_instance().await {
         Some(e) => e,
         None => {
-            error!("dictation: transcription engine not initialized");
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                JsonResponse(json!({ "error": "transcription engine not ready — is screenpipe running?" })),
+                JsonResponse(json!({ "error": "transcription engine not ready" })),
             )
                 .into_response();
         }
     };
 
-    // 3. Create session and transcribe
     let mut session = match engine.create_session() {
         Ok(s) => s,
         Err(e) => {
-            error!("dictation: failed to create transcription session: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({ "error": format!("failed to create transcription session: {}", e) })),
+                JsonResponse(json!({ "error": format!("failed to create session: {}", e) })),
             )
                 .into_response();
         }
@@ -113,7 +104,6 @@ pub async fn dictation_transcribe_handler(
     {
         Ok(text) => text,
         Err(e) => {
-            error!("dictation: transcription failed: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 JsonResponse(json!({ "error": format!("transcription failed: {}", e) })),
@@ -122,26 +112,20 @@ pub async fn dictation_transcribe_handler(
         }
     };
 
-    info!(
-        "dictation: transcribed {} chars: {:?}",
-        transcription.len(),
-        &transcription[..transcription.len().min(100)]
-    );
-
     JsonResponse(json!({ "text": transcription })).into_response()
 }
 
-/// GET /ws/dictation — WebSocket streaming dictation
-///
-/// Client sends binary audio frames (MediaRecorder chunks, e.g. WebM/Opus).
-/// Server accumulates frames, transcribes when enough audio is buffered (~2s),
-/// and sends back JSON `{ "text": "...", "is_final": true }` messages.
+/// GET /ws/dictation — WebSocket streaming dictation with server-side audio capture.
 ///
 /// Protocol:
-/// - Client → Server: Binary messages (audio data)
-/// - Client → Server: Text `{"type":"stop"}` — flush remaining audio and close
-/// - Server → Client: Text `{"text":"...","is_final":true}` — transcription result
-/// - Server → Client: Text `{"error":"..."}` — error message
+/// - Client → Server: `{"type":"start","device":"optional_device_name"}`
+///   Opens audio capture on the server from the specified device (or default input).
+/// - Client → Server: `{"type":"stop"}`
+///   Stops audio capture, flushes remaining audio, closes.
+/// - Server → Client: `{"text":"...","is_final":true}` — transcription result
+/// - Server → Client: `{"type":"started"}` — capture started confirmation
+/// - Server → Client: `{"type":"stopped"}` — capture stopped confirmation
+/// - Server → Client: `{"error":"..."}` — error message
 pub async fn ws_dictation_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -165,136 +149,254 @@ async fn handle_dictation_ws(socket: WebSocket, state: Arc<AppState>) {
 
     info!("dictation ws: client connected");
 
-    // Audio buffer — accumulates binary frames from the client
-    let mut audio_buffer: Vec<u8> = Vec::new();
-    let mut last_transcribe = Instant::now();
-    // Minimum interval between transcription batches (ms)
-    const TRANSCRIBE_INTERVAL_MS: u128 = 1500;
-    // Minimum audio buffer size before attempting transcription (bytes)
-    const MIN_BUFFER_SIZE: usize = 8000;
+    // Transcription interval: accumulate at least this many ms of audio before transcribing
+    const TRANSCRIBE_INTERVAL_MS: u64 = 2000;
 
     loop {
-        // Use a timeout so we can flush buffered audio even when no new messages arrive
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_millis(TRANSCRIBE_INTERVAL_MS as u64),
-            receiver.next(),
-        )
-        .await;
+        let msg = receiver.next().await;
 
         match msg {
-            // Received a message from client
-            Ok(Some(Ok(message))) => {
-                match message {
-                    Message::Binary(data) => {
-                        audio_buffer.extend_from_slice(&data);
+            Some(Ok(Message::Text(text))) => {
+                let parsed: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
 
-                        // Transcribe if enough audio has accumulated
-                        if audio_buffer.len() >= MIN_BUFFER_SIZE
-                            && last_transcribe.elapsed().as_millis() >= TRANSCRIBE_INTERVAL_MS
-                        {
-                            let text = transcribe_buffer(&state, &audio_buffer).await;
-                            audio_buffer.clear();
-                            last_transcribe = Instant::now();
+                let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-                            if let Some(text) = text {
-                                let msg = json!({ "text": text, "is_final": true });
-                                if sender
-                                    .send(Message::Text(msg.to_string()))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Message::Text(text) => {
-                        // Handle control messages
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if parsed.get("type").and_then(|t| t.as_str()) == Some("stop") {
-                                // Flush remaining audio
-                                if !audio_buffer.is_empty() {
-                                    let text = transcribe_buffer(&state, &audio_buffer).await;
-                                    audio_buffer.clear();
-                                    if let Some(text) = text {
-                                        let msg = json!({ "text": text, "is_final": true });
-                                        let _ = sender.send(Message::Text(msg.to_string())).await;
-                                    }
-                                }
+                if msg_type == "start" {
+                    let device_name = parsed
+                        .get("device")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    // Resolve audio device
+                    let device = if device_name.is_empty() {
+                        match default_input_device() {
+                            Ok(d) => d,
+                            Err(e) => {
                                 let _ = sender
                                     .send(Message::Text(
-                                        json!({ "type": "stopped" }).to_string(),
+                                        json!({ "error": format!("no default input device: {}", e) })
+                                            .to_string(),
                                     ))
                                     .await;
-                                break;
+                                continue;
+                            }
+                        }
+                    } else {
+                        match parse_audio_device(&device_name) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                let _ = sender
+                                    .send(Message::Text(
+                                        json!({ "error": format!("invalid device '{}': {}", device_name, e) })
+                                            .to_string(),
+                                    ))
+                                    .await;
+                                continue;
+                            }
+                        }
+                    };
+
+                    info!("dictation ws: starting capture on device: {:?}", device.name);
+
+                    // Create audio stream from device
+                    let is_running = Arc::new(AtomicBool::new(true));
+                    let audio_stream = match AudioStream::from_device(
+                        Arc::new(device),
+                        is_running.clone(),
+                    )
+                    .await
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("dictation ws: failed to open audio stream: {}", e);
+                            let _ = sender
+                                .send(Message::Text(
+                                    json!({ "error": format!("failed to open audio device: {}", e) })
+                                        .to_string(),
+                                ))
+                                .await;
+                            continue;
+                        }
+                    };
+
+                    let stream_sample_rate = audio_stream.device_config.sample_rate().0;
+                    let mut audio_rx = audio_stream.subscribe().await;
+
+                    let _ = sender
+                        .send(Message::Text(json!({ "type": "started" }).to_string()))
+                        .await;
+
+                    // Audio accumulation buffer
+                    let mut sample_buffer: Vec<f32> = Vec::new();
+                    let mut last_transcribe = Instant::now();
+
+                    // Inner loop: capture audio and transcribe
+                    'capture: loop {
+                        tokio::select! {
+                            // Receive audio samples from the capture stream
+                            samples = audio_rx.recv() => {
+                                match samples {
+                                    Ok(data) => {
+                                        sample_buffer.extend_from_slice(&data);
+
+                                        // Transcribe every TRANSCRIBE_INTERVAL_MS
+                                        if last_transcribe.elapsed().as_millis() >= TRANSCRIBE_INTERVAL_MS as u128
+                                            && !sample_buffer.is_empty()
+                                        {
+                                            let text = transcribe_samples(
+                                                &state,
+                                                &sample_buffer,
+                                                stream_sample_rate,
+                                            )
+                                            .await;
+                                            sample_buffer.clear();
+                                            last_transcribe = Instant::now();
+
+                                            if let Some(text) = text {
+                                                if sender
+                                                    .send(Message::Text(
+                                                        json!({ "text": text, "is_final": true }).to_string(),
+                                                    ))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break 'capture;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                        warn!("dictation ws: audio receiver lagged {} samples", n);
+                                    }
+                                    Err(_) => {
+                                        // Stream closed
+                                        break 'capture;
+                                    }
+                                }
+                            }
+
+                            // Check for client messages (stop command)
+                            client_msg = receiver.next() => {
+                                match client_msg {
+                                    Some(Ok(Message::Text(text))) => {
+                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                                            if parsed.get("type").and_then(|t| t.as_str()) == Some("stop") {
+                                                // Flush remaining audio
+                                                if !sample_buffer.is_empty() {
+                                                    let text = transcribe_samples(
+                                                        &state,
+                                                        &sample_buffer,
+                                                        stream_sample_rate,
+                                                    )
+                                                    .await;
+                                                    sample_buffer.clear();
+
+                                                    if let Some(text) = text {
+                                                        let _ = sender
+                                                            .send(Message::Text(
+                                                                json!({ "text": text, "is_final": true }).to_string(),
+                                                            ))
+                                                            .await;
+                                                    }
+                                                }
+
+                                                let _ = sender
+                                                    .send(Message::Text(json!({ "type": "stopped" }).to_string()))
+                                                    .await;
+                                                break 'capture;
+                                            }
+                                        }
+                                    }
+                                    Some(Ok(Message::Close(_))) | None => {
+                                        break 'capture;
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // Periodic flush timeout
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(TRANSCRIBE_INTERVAL_MS)) => {
+                                if !sample_buffer.is_empty()
+                                    && last_transcribe.elapsed().as_millis() >= TRANSCRIBE_INTERVAL_MS as u128
+                                {
+                                    let text = transcribe_samples(
+                                        &state,
+                                        &sample_buffer,
+                                        stream_sample_rate,
+                                    )
+                                    .await;
+                                    sample_buffer.clear();
+                                    last_transcribe = Instant::now();
+
+                                    if let Some(text) = text {
+                                        if sender
+                                            .send(Message::Text(
+                                                json!({ "text": text, "is_final": true }).to_string(),
+                                            ))
+                                            .await
+                                            .is_err()
+                                        {
+                                            break 'capture;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                    Message::Close(_) => break,
-                    _ => {}
-                }
-            }
-            // Timeout — check if we should transcribe buffered audio
-            Err(_) => {
-                if !audio_buffer.is_empty()
-                    && last_transcribe.elapsed().as_millis() >= TRANSCRIBE_INTERVAL_MS
-                {
-                    let text = transcribe_buffer(&state, &audio_buffer).await;
-                    audio_buffer.clear();
-                    last_transcribe = Instant::now();
 
-                    if let Some(text) = text {
-                        let msg = json!({ "text": text, "is_final": true });
-                        if sender
-                            .send(Message::Text(msg.to_string()))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
+                    // Stop the audio stream
+                    is_running.store(false, Ordering::Relaxed);
+                    if let Err(e) = audio_stream.stop().await {
+                        warn!("dictation ws: error stopping audio stream: {}", e);
                     }
+                    info!("dictation ws: capture stopped");
+                } else if msg_type == "stop" {
+                    // No active capture — just acknowledge
+                    let _ = sender
+                        .send(Message::Text(json!({ "type": "stopped" }).to_string()))
+                        .await;
                 }
             }
-            // Client disconnected or error
-            Ok(Some(Err(e))) => {
+            Some(Ok(Message::Close(_))) | None => break,
+            Some(Err(e)) => {
                 warn!("dictation ws: receive error: {}", e);
                 break;
             }
-            Ok(None) => break,
+            _ => {}
         }
     }
 
     info!("dictation ws: client disconnected");
 }
 
-/// Decode and transcribe an audio buffer using the configured engine.
-/// Returns `Some(text)` on success, `None` on empty/error.
-async fn transcribe_buffer(state: &Arc<AppState>, audio_bytes: &[u8]) -> Option<String> {
-    if audio_bytes.is_empty() {
+/// Transcribe f32 audio samples using the configured engine.
+/// Handles resampling if the source sample rate differs from 16 kHz.
+async fn transcribe_samples(
+    state: &Arc<AppState>,
+    samples: &[f32],
+    source_sample_rate: u32,
+) -> Option<String> {
+    if samples.is_empty() {
         return None;
     }
 
-    // Decode audio
-    let bytes = audio_bytes.to_vec();
-    let decode_result = tokio::task::spawn_blocking(move || {
-        screenpipe_audio::utils::ffmpeg::read_audio_from_bytes(&bytes)
-    })
-    .await;
-
-    let (samples, sample_rate) = match decode_result {
-        Ok(Ok(r)) if !r.0.is_empty() => r,
-        Ok(Ok(_)) => return None,
-        Ok(Err(e)) => {
-            error!("dictation ws: audio decode failed: {}", e);
-            return None;
+    // Resample to 16 kHz if needed (transcription engines expect 16 kHz)
+    let (final_samples, final_rate) = if source_sample_rate != 16000 {
+        match screenpipe_audio::utils::audio::resample(samples, source_sample_rate, 16000) {
+            Ok(resampled) => (resampled, 16000u32),
+            Err(e) => {
+                error!("dictation ws: resampling failed: {}", e);
+                return None;
+            }
         }
-        Err(e) => {
-            error!("dictation ws: decode task panicked: {}", e);
-            return None;
-        }
+    } else {
+        (samples.to_vec(), source_sample_rate)
     };
 
-    // Get engine
     let engine = state
         .audio_manager
         .transcription_engine_instance()
@@ -308,11 +410,14 @@ async fn transcribe_buffer(state: &Arc<AppState>, audio_bytes: &[u8]) -> Option<
         }
     };
 
-    match session.transcribe(&samples, sample_rate, "dictation").await {
+    match session
+        .transcribe(&final_samples, final_rate, "dictation")
+        .await
+    {
         Ok(text) if !text.trim().is_empty() => {
             info!(
                 "dictation ws: transcribed {:.1}s → {} chars",
-                samples.len() as f64 / sample_rate as f64,
+                final_samples.len() as f64 / final_rate as f64,
                 text.len()
             );
             Some(text)

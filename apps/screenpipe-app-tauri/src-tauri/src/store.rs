@@ -189,6 +189,8 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "dictationShortcut")]
     pub dictation_shortcut: String,
+    #[serde(rename = "dictationDevice", default)]
+    pub dictation_device: String,
     #[serde(rename = "realtimeAudioTranscriptionEngine")]
     pub realtime_audio_transcription_engine: String,
     #[serde(rename = "disableVision")]
@@ -556,6 +558,7 @@ impl Default for SettingsStore {
             dictation_shortcut: "Alt+D".to_string(),
             #[cfg(not(target_os = "windows"))]
             dictation_shortcut: "Control+Super+D".to_string(),
+            dictation_device: String::new(), // empty = use default input device
             realtime_audio_transcription_engine: "deepgram".to_string(),
             disable_vision: false,
             disable_ocr: false,
