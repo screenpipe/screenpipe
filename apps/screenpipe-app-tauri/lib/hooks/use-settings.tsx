@@ -92,6 +92,7 @@ export type Settings = SettingsStore & {
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
 	searchShortcut?: string;
+	dictationShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
 	adaptiveFps?: boolean;
@@ -256,6 +257,7 @@ let DEFAULT_SETTINGS: Settings = {
 			stopAudioShortcut: "",
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
+			dictationShortcut: "Control+Super+D",
 			realtimeAudioTranscriptionEngine: "deepgram",
 			disableVision: false,
 			disableOcr: false,
@@ -289,6 +291,7 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.showScreenpipeShortcut = p === "windows" ? "Alt+S" : "Control+Super+S";
 		DEFAULT_SETTINGS.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
+		DEFAULT_SETTINGS.dictationShortcut = p === "windows" ? "Alt+D" : "Control+Super+D";
 
 		if (p === "windows") {
 			DEFAULT_SETTINGS.enableAccessibility = true;

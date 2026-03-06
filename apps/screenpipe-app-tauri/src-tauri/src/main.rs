@@ -271,6 +271,7 @@ struct ShortcutConfig {
     stop_audio: String,
     show_chat: String,
     search: String,
+    dictation: String,
     disabled: Vec<String>,
 }
 
@@ -288,6 +289,7 @@ impl ShortcutConfig {
             stop_audio: store.stop_audio_shortcut,
             show_chat: store.show_chat_shortcut,
             search: store.search_shortcut,
+            dictation: store.dictation_shortcut,
             disabled: store.disabled_shortcuts,
         })
     }
@@ -348,6 +350,7 @@ async fn update_global_shortcuts(
         stop_audio: stop_audio_shortcut,
         show_chat: store_config.show_chat,
         search: store_config.search,
+        dictation: store_config.dictation,
         disabled: store_config.disabled,
     };
     apply_shortcuts(&app, &config).await
@@ -577,6 +580,18 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             }
             // Emit event so the frontend opens the search modal
             let _ = app.emit("open-search", ());
+        });
+    })
+    .await?;
+
+    // Register dictation shortcut (global - starts voice dictation)
+    register_shortcut(app, &config.dictation, config.is_disabled("dictation"), |app| {
+        let app_for_closure = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let app = &app_for_closure;
+            info!("dictation shortcut triggered");
+            // Emit event so the frontend can handle dictation
+            let _ = app.emit("shortcut-dictation", ());
         });
     })
     .await?;

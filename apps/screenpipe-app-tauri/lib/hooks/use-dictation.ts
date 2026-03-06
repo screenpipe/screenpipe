@@ -32,14 +32,18 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
   const eventSourceRef = useRef<EventSource | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Stabilize options via ref to avoid excessive callback/listener teardown
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const isRecording = state === "recording";
 
   const startDictation = useCallback(() => {
     if (state !== "idle") return;
-    
+
     console.log("[dictation] Starting dictation...");
     setState("recording");
-    options.onStateChange?.("recording");
+    optionsRef.current.onStateChange?.("recording");
 
     // TODO: Connect to backend SSE endpoint for real transcription
     // For MVP, we'll simulate a recording session
@@ -55,14 +59,14 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
     //   }
     // };
     // eventSourceRef.current = eventSource;
-  }, [state, options]);
+  }, [state]);
 
   const stopDictation = useCallback(() => {
     if (state === "idle") return;
     
     console.log("[dictation] Stopping dictation...");
     setState("processing");
-    options.onStateChange?.("processing");
+    optionsRef.current.onStateChange?.("processing");
 
     // Close SSE connection if exists
     if (eventSourceRef.current) {
@@ -74,16 +78,18 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
     // In full implementation, this would wait for final transcription
     timeoutRef.current = setTimeout(() => {
       setState("idle");
-      options.onStateChange?.("idle");
+      optionsRef.current.onStateChange?.("idle");
     }, 500);
-  }, [state, options]);
+  }, [state]);
 
   const toggleDictation = useCallback(() => {
-    if (state === "idle" || state === "recording") {
+    console.log("[dictation] Toggle pressed, current state:", state);
+    if (state === "idle") {
       startDictation();
-    } else {
+    } else if (state === "recording") {
       stopDictation();
     }
+    // if processing, do nothing
   }, [state, startDictation, stopDictation]);
 
   // Cleanup on unmount
@@ -97,6 +103,18 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
       }
     };
   }, []);
+
+  // Listen for DOM event dispatched by deeplink-handler (single Tauri listener)
+  useEffect(() => {
+    const handler = () => {
+      console.log("[dictation] DOM toggle-dictation event received");
+      toggleDictation();
+    };
+    window.addEventListener("toggle-dictation", handler);
+    return () => {
+      window.removeEventListener("toggle-dictation", handler);
+    };
+  }, [toggleDictation]);
 
   return {
     state,

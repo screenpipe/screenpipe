@@ -24,6 +24,7 @@ const ShortcutSection = () => {
         <ShortcutRow type="global" shortcut="showScreenpipeShortcut" title="toggle screenpipe overlay" description="show/hide the main interface" value={settings.showScreenpipeShortcut} />
         <ShortcutRow type="global" shortcut="showChatShortcut" title="toggle ai chat" description="show/hide the ai chat window" value={settings.showChatShortcut} />
         <ShortcutRow type="global" shortcut="searchShortcut" title="open search" description="open search when overlay is visible" value={settings.searchShortcut} />
+        <ShortcutRow type="global" shortcut="dictationShortcut" title="start dictation" description="start voice dictation (works globally)" value={settings.dictationShortcut} />
         <ShortcutRow type="global" shortcut="startRecordingShortcut" title="start recording" description="start screen recording" value={settings.startRecordingShortcut} />
         <ShortcutRow type="global" shortcut="stopRecordingShortcut" title="stop recording" description="stop screen recording" value={settings.stopRecordingShortcut} />
         <ShortcutRow type="global" shortcut="startAudioShortcut" title="start audio recording" description="start audio recording" value={settings.startAudioShortcut} />

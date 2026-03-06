@@ -231,6 +231,11 @@ export function DeeplinkHandler() {
         });
       }),
 
+      listen("shortcut-dictation", () => {
+        console.log("[deeplink-handler] shortcut-dictation received, dispatching DOM event");
+        window.dispatchEvent(new CustomEvent("toggle-dictation"));
+      }),
+
       listen("cli-login", async (event) => {
         console.log("received cli-login event:", event);
         await reloadStore();

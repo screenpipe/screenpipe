@@ -184,6 +184,8 @@ pub struct SettingsStore {
     pub show_chat_shortcut: String,
     #[serde(rename = "searchShortcut")]
     pub search_shortcut: String,
+    #[serde(rename = "dictationShortcut")]
+    pub dictation_shortcut: String,
     #[serde(rename = "realtimeAudioTranscriptionEngine")]
     pub realtime_audio_transcription_engine: String,
     #[serde(rename = "disableVision")]
@@ -547,6 +549,10 @@ impl Default for SettingsStore {
             search_shortcut: "Alt+K".to_string(),
             #[cfg(not(target_os = "windows"))]
             search_shortcut: "Control+Super+K".to_string(),
+            #[cfg(target_os = "windows")]
+            dictation_shortcut: "Alt+D".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            dictation_shortcut: "Control+Super+D".to_string(),
             realtime_audio_transcription_engine: "deepgram".to_string(),
             disable_vision: false,
             disable_ocr: false,
