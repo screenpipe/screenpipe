@@ -162,7 +162,7 @@ export function useTeam() {
             method: "POST",
             headers: headers(),
             body: JSON.stringify({
-              email: "link-invite@placeholder",
+              email: "link-invite@placeholder.local",
               team_name: data.team.name,
             }),
           });
@@ -528,7 +528,7 @@ export function useTeam() {
         method: "POST",
         headers: headers(),
         body: JSON.stringify({
-          email: "manual-invite@placeholder",
+          email: "manual-invite@placeholder.local",
           team_name: state.team.name,
         }),
       });

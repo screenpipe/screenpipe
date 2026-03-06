@@ -29,7 +29,7 @@ export function DiskUsageSection() {
         </div>
         <Card>
           <CardContent className="pt-6">
-            <div className="text-center text-red-500">
+            <div className="text-center text-destructive">
               <p>Failed to load disk usage: {error}</p>
               <Button onClick={handleRefresh} variant="outline" className="mt-2">
                 <RefreshCw className="h-4 w-4 mr-2" />

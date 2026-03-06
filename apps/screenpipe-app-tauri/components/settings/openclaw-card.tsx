@@ -206,7 +206,7 @@ export function OpenClawCard() {
                 </span>
               )}
               {testResult?.ok && !config.enabled && (
-                <span className="px-2 py-0.5 text-xs font-medium bg-green-500/15 text-green-600 rounded-full">
+                <span className="px-2 py-0.5 text-xs font-medium bg-foreground/10 text-foreground rounded-full">
                   connected
                 </span>
               )}
@@ -358,7 +358,7 @@ export function OpenClawCard() {
                 )}
 
                 {testResult && (
-                  <p className={`text-xs ${testResult.ok ? "text-green-600" : "text-destructive"}`}>
+                  <p className={`text-xs ${testResult.ok ? "text-foreground" : "text-destructive"}`}>
                     {testResult.ok ? "connected" : testResult.error}
                   </p>
                 )}

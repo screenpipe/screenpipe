@@ -117,7 +117,9 @@ pub async fn pipe_permissions_layer(
                 req.extensions_mut().insert(perms);
             }
             None => {
-                return (StatusCode::UNAUTHORIZED, "invalid pipe token").into_response();
+                // Token not in registry — likely hallucinated by the model.
+                // Treat as a regular user request (no restrictions) instead of
+                // hard-rejecting, so pipes don't break from stale session history.
             }
         }
     }

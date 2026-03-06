@@ -1339,129 +1339,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_and_search_ui_monitoring() {
-        let db = setup_test_db().await;
-
-        // Insert accessibility data (replaces legacy ui_monitoring table)
-        sqlx::query(
-            r#"
-            INSERT INTO accessibility (
-                text_content,
-                timestamp,
-                app_name,
-                window_name
-            ) VALUES (?, ?, ?, ?)
-            "#,
-        )
-        .bind("Hello from UI monitoring")
-        .bind(Utc::now())
-        .bind("test_app")
-        .bind("test_window")
-        .execute(&db.pool)
-        .await
-        .unwrap();
-
-        // Test search with app name filter
-        let results = db
-            .search(
-                "Hello",
-                ContentType::Accessibility,
-                100,
-                0,
-                None,
-                None,
-                Some("test_app"),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        if let SearchResult::UI(ui_result) = &results[0] {
-            assert_eq!(ui_result.text, "Hello from UI monitoring");
-            assert_eq!(ui_result.app_name, "test_app");
-            assert_eq!(ui_result.window_name, "test_window");
-        } else {
-            panic!("Expected UI result");
-        }
-
-        // Test search with window name filter
-        let results = db
-            .search(
-                "Hello",
-                ContentType::Accessibility,
-                100,
-                0,
-                None,
-                None,
-                None,
-                Some("test_window"),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 1);
-
-        // Test search with no matches
-        let results = db
-            .search(
-                "nonexistent",
-                ContentType::Accessibility,
-                100,
-                0,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 0);
-
-        // Test search with empty query (should return all UI entries)
-        let results = db
-            .search(
-                "",
-                ContentType::Accessibility,
-                100,
-                0,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(results.len(), 1);
-    }
-
-    #[tokio::test]
     async fn test_count_search_results_all_content_types() {
         let db = setup_test_db().await;
 
@@ -1548,7 +1425,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(count, 3, "Should count OCR, Audio, and UI results");
+        assert_eq!(count, 3, "Should count OCR, Audio, and Accessibility results");
 
         // Test count with specific app filter
         let count = db
@@ -1569,7 +1446,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(count, 1, "Should only count UI result with app filter");
+        assert_eq!(count, 1, "Should count accessibility result with app filter");
 
         // Test count with non-matching query
         let count = db

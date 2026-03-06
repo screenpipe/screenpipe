@@ -399,16 +399,16 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
 function errorTypeBadge(errorType: string | null) {
   if (!errorType) return null;
   const colors: Record<string, string> = {
-    rate_limited: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    timeout: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-    timed_out: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-    auth_failed: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-    network: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    crash: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-    interrupted: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
-    cancelled: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
+    rate_limited: "bg-muted text-muted-foreground",
+    timeout: "bg-muted text-muted-foreground",
+    timed_out: "bg-muted text-muted-foreground",
+    auth_failed: "bg-foreground text-background",
+    network: "bg-muted text-muted-foreground",
+    crash: "bg-foreground text-background",
+    interrupted: "bg-muted text-muted-foreground",
+    cancelled: "bg-muted text-muted-foreground",
   };
-  const cls = colors[errorType] || "bg-gray-100 text-gray-800";
+  const cls = colors[errorType] || "bg-muted text-muted-foreground";
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>
       {errorType.replace("_", " ")}
@@ -1177,7 +1177,7 @@ export function PipesSection() {
                     </span>
                     <span className="text-muted-foreground/50">·</span>
                     {exec.status === "completed" ? (
-                      <span className="text-green-600 dark:text-green-400">ok</span>
+                      <span className="text-foreground">ok</span>
                     ) : exec.status === "running" ? (
                       <span className="flex items-center gap-1">
                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -1207,9 +1207,9 @@ export function PipesSection() {
                         </button>
                       </span>
                     ) : exec.status === "failed" ? (
-                      <span className="text-red-600 dark:text-red-400">failed</span>
+                      <span className="text-foreground font-medium">failed</span>
                     ) : exec.status === "timed_out" ? (
-                      <span className="text-orange-600 dark:text-orange-400">timeout</span>
+                      <span className="text-muted-foreground">timeout</span>
                     ) : (
                       <span>{exec.status}</span>
                     )}
@@ -1222,7 +1222,7 @@ export function PipesSection() {
                     {exec.error_type && (
                       <>
                         <span className="text-muted-foreground/50">·</span>
-                        <span className="text-red-600/70 dark:text-red-400/70">
+                        <span className="text-muted-foreground">
                           {exec.error_type.replace("_", " ")}
                         </span>
                       </>

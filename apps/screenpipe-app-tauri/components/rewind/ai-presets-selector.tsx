@@ -329,9 +329,9 @@ export function AIProviderConfig({
         } catch { /* ignore */ }
         // Fallback: Codex models available via ChatGPT subscription
         setOpenAIModels([
-          { id: "gpt-5.1-codex-mini" }, { id: "gpt-5.1" },
-          { id: "gpt-5.1-codex-max" }, { id: "gpt-5.2-codex" },
-          { id: "gpt-5.2" },
+          { id: "gpt-5.4" }, { id: "gpt-5.3-codex" },
+          { id: "gpt-5.2-codex" }, { id: "gpt-5.2" }, { id: "gpt-5.1-codex-max" },
+          { id: "gpt-5.1" }, { id: "gpt-5.1-codex-mini" },
         ]);
         setIsLoadingModels(false);
       })();

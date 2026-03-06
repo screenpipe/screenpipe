@@ -220,6 +220,7 @@
     /* cursor: default; */
     user-select: none;
     -webkit-user-drag: none; /* Prevent element dragging */
+    -webkit-tap-highlight-color: transparent; /* Remove blue/purple flash on click */
   }
   :not(input):not(textarea),
   :not(input):not(textarea)::after,

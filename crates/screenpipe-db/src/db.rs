@@ -2159,7 +2159,7 @@ impl DatabaseManager {
             ocr_fts_join = if query.trim().is_empty() {
                 ""
             } else {
-                "JOIN ocr_text_fts ON ocr_text.frame_id = ocr_text_fts.frame_id"
+                "JOIN ocr_text_fts ON ocr_text.rowid = ocr_text_fts.rowid"
             },
             frame_fts_condition = if frame_query.trim().is_empty() {
                 ""
@@ -2262,7 +2262,7 @@ impl DatabaseManager {
         // build where clause conditions in order
         let mut conditions = Vec::new();
         if !query.is_empty() {
-            conditions.push("audio_transcriptions.audio_chunk_id IN (SELECT audio_chunk_id FROM audio_transcriptions_fts WHERE audio_transcriptions_fts MATCH ? ORDER BY rank LIMIT 5000)");
+            conditions.push("audio_transcriptions.audio_chunk_id IN (SELECT at_inner.audio_chunk_id FROM audio_transcriptions_fts JOIN audio_transcriptions at_inner ON at_inner.id = audio_transcriptions_fts.rowid WHERE audio_transcriptions_fts MATCH ? ORDER BY audio_transcriptions_fts.rank LIMIT 5000)");
         }
         if start_time.is_some() {
             conditions.push("audio_transcriptions.timestamp >= ?");
@@ -2683,7 +2683,7 @@ impl DatabaseManager {
                      JOIN ocr_text ON frames.id = ocr_text.frame_id"
                 } else {
                     "ocr_text_fts
-                     JOIN ocr_text ON ocr_text_fts.frame_id = ocr_text.frame_id
+                     JOIN ocr_text ON ocr_text.rowid = ocr_text_fts.rowid
                      JOIN frames ON ocr_text.frame_id = frames.id"
                 },
                 where_clause = if ocr_query.is_empty() {
@@ -2726,7 +2726,7 @@ impl DatabaseManager {
                 table = if query.is_empty() {
                     "audio_transcriptions"
                 } else {
-                    "audio_transcriptions_fts JOIN audio_transcriptions ON audio_transcriptions_fts.audio_chunk_id = audio_transcriptions.audio_chunk_id"
+                    "audio_transcriptions_fts JOIN audio_transcriptions ON audio_transcriptions.id = audio_transcriptions_fts.rowid"
                 },
                 speaker_join = if speaker_name.is_some() {
                     "LEFT JOIN speakers ON audio_transcriptions.speaker_id = speakers.id"
@@ -2868,30 +2868,10 @@ impl DatabaseManager {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        // Check if ui_monitoring table exists first
-        let latest_ui: Option<(DateTime<Utc>,)> = match sqlx::query_scalar::<_, i32>(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_monitoring'",
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        {
-            Some(_) => {
-                sqlx::query_as(
-                    "SELECT timestamp FROM ui_monitoring WHERE timestamp IS NOT NULL AND timestamp != '' ORDER BY timestamp DESC LIMIT 1",
-                )
-                .fetch_optional(&self.pool)
-                .await?
-            }
-            None => {
-                debug!("ui_monitoring table does not exist");
-                None
-            }
-        };
-
         Ok((
             latest_frame.map(|f| f.0),
             latest_audio.map(|a| a.0),
-            latest_ui.map(|u| u.0),
+            None,
         ))
     }
 
@@ -3350,84 +3330,6 @@ impl DatabaseManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn search_ui_monitoring(
-        &self,
-        query: &str,
-        app_name: Option<&str>,
-        window_name: Option<&str>,
-        start_time: Option<DateTime<Utc>>,
-        end_time: Option<DateTime<Utc>>,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<UiContent>, sqlx::Error> {
-        // combine search aspects into single fts query
-        let mut fts_parts = Vec::new();
-        if !query.is_empty() {
-            fts_parts.push(crate::text_normalizer::sanitize_fts5_query(query));
-        }
-        if let Some(app) = app_name {
-            fts_parts.push(format!("app:\"{}\"", app.replace('"', "")));
-        }
-        if let Some(window) = window_name {
-            fts_parts.push(format!("window:\"{}\"", window.replace('"', "")));
-        }
-        let combined_query = fts_parts.join(" ");
-
-        let base_sql = if combined_query.is_empty() {
-            "ui_monitoring"
-        } else {
-            "ui_monitoring_fts JOIN ui_monitoring ON ui_monitoring_fts.ui_id = ui_monitoring.id"
-        };
-
-        let where_clause = if combined_query.is_empty() {
-            "WHERE 1=1"
-        } else {
-            "WHERE ui_monitoring_fts MATCH ?1"
-        };
-
-        let sql = format!(
-            r#"
-            SELECT
-                ui_monitoring.id,
-                ui_monitoring.text_output,
-                ui_monitoring.timestamp,
-                ui_monitoring.app as app_name,
-                ui_monitoring.window as window_name,
-                ui_monitoring.initial_traversal_at,
-                video_chunks.file_path,
-                frames.offset_index,
-                frames.name as frame_name,
-                frames.browser_url
-            FROM {}
-            LEFT JOIN frames ON
-                frames.timestamp BETWEEN
-                    datetime(ui_monitoring.timestamp, '-1 seconds')
-                    AND datetime(ui_monitoring.timestamp, '+1 seconds')
-            LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
-            {}
-                AND (?2 IS NULL OR ui_monitoring.timestamp >= ?2)
-                AND (?3 IS NULL OR ui_monitoring.timestamp <= ?3)
-            GROUP BY ui_monitoring.id
-            ORDER BY ui_monitoring.timestamp DESC
-            LIMIT ?4 OFFSET ?5
-            "#,
-            base_sql, where_clause
-        );
-
-        sqlx::query_as(&sql)
-            .bind(if combined_query.is_empty() {
-                "*".to_owned()
-            } else {
-                combined_query
-            })
-            .bind(start_time)
-            .bind(end_time)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-    }
-
     /// Search accessibility table for accessibility tree text.
     /// This reads from the `accessibility` table (written by the tree walker).
     #[allow(clippy::too_many_arguments)]
@@ -3619,41 +3521,6 @@ impl DatabaseManager {
             .await?;
 
         Ok(rows)
-    }
-
-    // Add tags to UI monitoring entry
-    pub async fn add_tags_to_ui_monitoring(
-        &self,
-        ui_monitoring_id: i64,
-        tag_ids: &[i64],
-    ) -> Result<(), anyhow::Error> {
-        for tag_id in tag_ids {
-            sqlx::query(
-                "INSERT OR IGNORE INTO ui_monitoring_tags (ui_monitoring_id, tag_id) VALUES (?, ?)",
-            )
-            .bind(ui_monitoring_id)
-            .bind(tag_id)
-            .execute(&self.pool)
-            .await?;
-        }
-        Ok(())
-    }
-
-    // Get tags for UI monitoring entry
-    pub async fn get_ui_monitoring_tags(
-        &self,
-        ui_monitoring_id: i64,
-    ) -> Result<Vec<String>, anyhow::Error> {
-        let tags = sqlx::query_as::<_, (String,)>(
-            "SELECT t.name FROM tags t
-             JOIN ui_monitoring_tags ut ON t.id = ut.tag_id
-             WHERE ut.ui_monitoring_id = ?",
-        )
-        .bind(ui_monitoring_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(tags.into_iter().map(|t| t.0).collect())
     }
 
     pub async fn get_audio_chunks_for_speaker(
@@ -4286,7 +4153,7 @@ impl DatabaseManager {
                 crate::text_normalizer::sanitize_fts5_query(query)
             };
             conditions.push(
-                "(f.id IN (SELECT frame_id FROM ocr_text_fts WHERE text MATCH ? ORDER BY rank LIMIT 5000) OR f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000))",
+                "(f.id IN (SELECT ot.frame_id FROM ocr_text_fts JOIN ocr_text ot ON ot.rowid = ocr_text_fts.rowid WHERE ocr_text_fts.text MATCH ? ORDER BY ocr_text_fts.rank LIMIT 5000) OR f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000))",
             );
             fts_match
         } else {
@@ -4616,7 +4483,7 @@ LIMIT ? OFFSET ?
                 crate::text_normalizer::sanitize_fts5_query(query)
             };
             conditions.push(
-                "(f.id IN (SELECT frame_id FROM ocr_text_fts WHERE text MATCH ? ORDER BY rank LIMIT 5000) OR f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000))",
+                "(f.id IN (SELECT ot.frame_id FROM ocr_text_fts JOIN ocr_text ot ON ot.rowid = ocr_text_fts.rowid WHERE ocr_text_fts.text MATCH ? ORDER BY ocr_text_fts.rank LIMIT 5000) OR f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000))",
             );
             fts_match
         } else {

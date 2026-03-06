@@ -49,9 +49,29 @@ pub struct DiscoveredHost {
     pub source: String,
 }
 
-/// Skip SQLite journal files (copying mid-write corrupts the DB).
+/// Skip files and directories that should never be synced.
 fn should_skip(name: &str) -> bool {
-    name.ends_with(".sqlite-wal") || name.ends_with(".sqlite-shm") || name.ends_with(".lock")
+    // SQLite journal files (copying mid-write corrupts the DB)
+    name.ends_with(".sqlite-wal")
+        || name.ends_with(".sqlite-shm")
+        || name.ends_with(".lock")
+        // Package manager / build artifacts
+        || name == "node_modules"
+        || name == ".git"
+        || name == ".svn"
+        || name == "target"
+        || name == "__pycache__"
+        || name == ".next"
+        || name == "dist"
+        || name == "build"
+        || name == ".cache"
+        || name == ".turbo"
+        // OS junk
+        || name == ".DS_Store"
+        || name == "Thumbs.db"
+        // Temp / log files
+        || name.ends_with(".tmp")
+        || name.ends_with(".log")
 }
 
 /// Screenpipe skill file dropped on the remote so AI agents know how to query the data.
@@ -712,6 +732,13 @@ mod tests {
         assert!(should_skip("db.sqlite-wal"));
         assert!(should_skip("db.sqlite-shm"));
         assert!(should_skip("some.lock"));
+        assert!(should_skip("node_modules"));
+        assert!(should_skip(".git"));
+        assert!(should_skip("__pycache__"));
+        assert!(should_skip(".DS_Store"));
+        assert!(should_skip("target"));
+        assert!(should_skip("something.tmp"));
+        assert!(should_skip("app.log"));
         assert!(!should_skip("db.sqlite"));
         assert!(!should_skip("data"));
         assert!(!should_skip("some_audio.mp4"));

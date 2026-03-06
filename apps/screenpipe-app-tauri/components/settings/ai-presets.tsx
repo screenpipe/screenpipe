@@ -393,7 +393,7 @@ const AISection = ({
         break;
       case "openai-chatgpt":
         newUrl = "https://api.openai.com/v1";
-        newModel = "gpt-5.1-codex-mini";
+        newModel = "gpt-5.4";
         break;
       case "pi":
         newUrl = ""; // Pi uses RPC mode, not HTTP
@@ -778,8 +778,9 @@ const AISection = ({
           if (!loaded) {
             // Codex models available via ChatGPT Plus/Pro subscription
             setModels([
-              "gpt-5.1-codex-mini", "gpt-5.1", "gpt-5.1-codex-max",
-              "gpt-5.2-codex", "gpt-5.2",
+              "gpt-5.4", "gpt-5.3-codex",
+              "gpt-5.2-codex", "gpt-5.2", "gpt-5.1-codex-max",
+              "gpt-5.1", "gpt-5.1-codex-mini",
             ].map((id) => ({ id, name: id, provider: "openai-chatgpt" })));
           }
           break;
