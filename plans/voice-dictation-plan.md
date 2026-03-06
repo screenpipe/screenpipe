@@ -57,11 +57,12 @@ flowchart TD
 4. **Global hotkey handling** - Registered `Ctrl+Super+D` in Rust/Tauri, emits event to frontend
 5. **Frontend audio capture** - `getUserMedia` + `MediaRecorder` sends 3-second chunks to backend
 
-### Phase 3: Floating Window UI (PENDING)
-1. **Create floating dictation component** - New overlay component
-2. **Display transcribed text** - Show text in real-time as it's transcribed
+### Phase 3: Floating Window UI (COMPLETED ✅)
+1. **Created floating dictation component** - `FloatingDictationWindow` overlay at app root
+2. **Display transcribed text** - Shows text in real-time as chunks are transcribed
 3. **Copy to clipboard button** - Copy transcribed text to system clipboard
-4. **Auto-dismiss** - Close after copying or after inactivity
+4. **Auto-dismiss** - Closes 1.5s after copying or 10s after idle
+5. **Text input detection** - Global shortcut routes to modal input if focused, floating window otherwise
 
 ### Phase 4: In-App UI Integration (COMPLETED ✅)
 1. **Add Mic button to standalone-chat.tsx** - Next to the textarea input
@@ -88,7 +89,9 @@ flowchart TD
 | `apps/screenpipe-app-tauri/components/dictation-indicator.tsx` | ✅ DictationIndicator and DictationButton components |
 | `apps/screenpipe-app-tauri/components/standalone-chat.tsx` | ✅ Mic button + onError toast |
 | `apps/screenpipe-app-tauri/components/rewind/search-modal.tsx` | ✅ Mic button + onError toast |
-| `apps/screenpipe-app-tauri/components/deeplink-handler.tsx` | ✅ Single `shortcut-dictation` Tauri listener → DOM event |
+| `apps/screenpipe-app-tauri/components/deeplink-handler.tsx` | ✅ Text input detection + event routing |
+| `apps/screenpipe-app-tauri/components/dictation-floating-window.tsx` | ✅ NEW - Floating dictation overlay |
+| `apps/screenpipe-app-tauri/app/layout.tsx` | ✅ Mounted FloatingDictationWindow |
 | `apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx` | ✅ Added dictationShortcut setting |
 | `apps/screenpipe-app-tauri/components/settings/shortcut-section.tsx` | ✅ Added dictation shortcut UI row |
 
@@ -152,10 +155,11 @@ flowchart TD
 11. Added `read_audio_from_bytes()` ffmpeg utility
 12. Connected frontend audio capture to backend STT pipeline
 13. Error handling with toast notifications
+14. Text input detection in deeplink-handler (routes to modal vs floating window)
+15. Created `FloatingDictationWindow` component with copy-to-clipboard
+16. Mounted floating window at app root (layout.tsx)
 
 ### ⏳ PENDING
-- Frontend: Create floating window for global hotkey mode (when no modal is open)
-- Frontend: Text input detection logic (auto-focus behavior)
 - Upgrade to SSE/WebSocket streaming for lower latency (currently 3s chunks)
 - Handle microphone permission checks gracefully across platforms
 - End-to-end testing across all STT engines
@@ -174,8 +178,8 @@ flowchart TD
 - [x] Add `read_audio_from_bytes()` ffmpeg utility
 - [x] Connect frontend mic capture to backend STT pipeline
 - [x] Error handling with toast notifications
-- [ ] Add text input detection logic
-- [ ] Create floating dictation window component
+- [x] Add text input detection logic
+- [x] Create floating dictation window component
 - [ ] Upgrade to SSE/WebSocket streaming for lower latency
 - [ ] Handle permission checks for microphone access
 - [ ] Test end-to-end flow with global hotkey

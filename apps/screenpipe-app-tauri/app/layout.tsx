@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
+import { FloatingDictationWindow } from "@/components/dictation-floating-window";
 import { usePathname } from "next/navigation";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -201,6 +202,7 @@ export default function RootLayout({
           {!isOverlay && <DeeplinkHandler />}
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
+          {!isOverlay && <FloatingDictationWindow />}
           {children}
           {!isOverlay && <Toaster />}
         </body>

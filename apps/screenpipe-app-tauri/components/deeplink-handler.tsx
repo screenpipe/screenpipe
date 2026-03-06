@@ -232,8 +232,20 @@ export function DeeplinkHandler() {
       }),
 
       listen("shortcut-dictation", () => {
-        console.log("[deeplink-handler] shortcut-dictation received, dispatching DOM event");
-        window.dispatchEvent(new CustomEvent("toggle-dictation"));
+        // Detect if a text input is currently focused (modal dictation target)
+        const active = document.activeElement;
+        const isTextInput =
+          active instanceof HTMLTextAreaElement ||
+          active instanceof HTMLInputElement ||
+          active?.getAttribute("contenteditable") === "true";
+
+        if (isTextInput) {
+          console.log("[deeplink-handler] shortcut-dictation → text input focused, dispatching toggle-dictation");
+          window.dispatchEvent(new CustomEvent("toggle-dictation"));
+        } else {
+          console.log("[deeplink-handler] shortcut-dictation → no text input, dispatching toggle-dictation-floating");
+          window.dispatchEvent(new CustomEvent("toggle-dictation-floating"));
+        }
       }),
 
       listen("cli-login", async (event) => {
