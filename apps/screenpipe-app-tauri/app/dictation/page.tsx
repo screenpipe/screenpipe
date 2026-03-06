@@ -14,7 +14,7 @@ export default function DictationPage() {
   const [copied, setCopied] = useState(false);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { state, stopDictation, toggleDictation } = useDictation({
+  const { state, stopDictation, startDictation } = useDictation({
     onTranscription: (text) => {
       setFullText((prev) => (prev ? prev + " " : "") + text);
     },
@@ -32,10 +32,9 @@ export default function DictationPage() {
 
   // Auto-start dictation when window opens
   useEffect(() => {
-    // Start dictation after a short delay to let window initialize
     const timer = setTimeout(() => {
       if (state === "idle") {
-        toggleDictation();
+        startDictation();
       }
     }, 100);
     return () => clearTimeout(timer);
@@ -49,7 +48,19 @@ export default function DictationPage() {
     }
   }, []);
 
-  // Start auto-close timer (10s after going idle)
+  // Auto-close when idle without text
+  useEffect(() => {
+    if (state === "idle" && !fullText) {
+      const timer = setTimeout(() => {
+        import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+          getCurrentWindow().close();
+        });
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [state, fullText]);
+
+  // Start auto-close timer (10s after going idle with text)
   useEffect(() => {
     if (state === "idle" && fullText) {
       cancelAutoClose();

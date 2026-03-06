@@ -598,15 +598,22 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
     })
     .await?;
 
-    // Register dictation shortcut (global - starts voice dictation)
+    // Register dictation shortcut (global - toggles voice dictation)
     register_shortcut(app, &config.dictation, config.is_disabled("dictation"), |app| {
         let app_for_closure = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
             info!("dictation shortcut triggered");
             
-            // Show the dictation window (independent of main window)
-            let _ = window_api::ShowRewindWindow::Dictation.show(app);
+            // Check if window already exists
+            if let Some(window) = app.get_webview_window("dictation") {
+                // Window exists - emit toggle event to stop
+                let _ = window.set_focus();
+                let _ = app.emit("shortcut-dictation", ());
+            } else {
+                // Window doesn't exist - show it (will auto-start dictation)
+                let _ = window_api::ShowRewindWindow::Dictation.show(app);
+            }
         });
     })
     .await?;

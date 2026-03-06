@@ -6,6 +6,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type DictationState = "idle" | "recording" | "processing";
 
@@ -211,6 +212,26 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       }
     };
   }, []);
+
+  // Listen for global shortcut to toggle dictation
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+
+    const setupListener = async () => {
+      unlisten = await listen("shortcut-dictation", () => {
+        console.log("[dictation-context] Received shortcut-dictation event, toggling");
+        toggleDictation();
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [toggleDictation]);
 
   // Cleanup on unmount
   useEffect(() => {
