@@ -21,6 +21,7 @@ export function FloatingDictationWindow() {
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { state, toggleDictation, stopDictation } = useDictation({
+    skipGlobalListener: true, // Only respond to toggle-dictation-floating, not toggle-dictation
     onTranscription: (text) => {
       setFullText((prev) => (prev ? prev + " " : "") + text);
     },

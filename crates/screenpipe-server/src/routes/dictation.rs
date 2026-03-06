@@ -200,7 +200,7 @@ async fn handle_dictation_ws(socket: WebSocket, state: Arc<AppState>) {
                         }
                     };
 
-                    info!("dictation ws: starting capture on device: {:?}", device.name);
+                    info!("dictation ws: starting capture on device: {:?} (type: {:?})", device.name, device.device_type);
 
                     // Create audio stream from device
                     let is_running = Arc::new(AtomicBool::new(true));
@@ -381,6 +381,21 @@ async fn transcribe_samples(
     source_sample_rate: u32,
 ) -> Option<String> {
     if samples.is_empty() {
+        return None;
+    }
+
+    // Log audio stats for debugging (RMS level to detect silence)
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    info!(
+        "dictation ws: audio buffer: {} samples @ {}Hz ({:.1}s), RMS={:.6}",
+        samples.len(),
+        source_sample_rate,
+        samples.len() as f64 / source_sample_rate as f64,
+        rms
+    );
+
+    if rms < 0.0001 {
+        warn!("dictation ws: audio appears to be silence (RMS={:.6}), skipping transcription", rms);
         return None;
     }
 

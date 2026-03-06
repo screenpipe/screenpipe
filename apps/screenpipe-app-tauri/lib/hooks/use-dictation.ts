@@ -11,6 +11,8 @@ interface UseDictationOptions {
   onTranscription?: (text: string) => void;
   onStateChange?: (state: DictationState) => void;
   onError?: (error: string) => void;
+  /** Skip the built-in toggle-dictation DOM event listener (for components with their own) */
+  skipGlobalListener?: boolean;
 }
 
 interface UseDictationReturn {
@@ -190,6 +192,8 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
 
   // Listen for DOM event dispatched by deeplink-handler (single Tauri listener)
   useEffect(() => {
+    if (optionsRef.current.skipGlobalListener) return;
+
     const handler = () => {
       console.log("[dictation] DOM toggle-dictation event received");
       toggleDictation();
