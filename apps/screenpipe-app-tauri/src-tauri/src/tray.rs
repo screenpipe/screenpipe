@@ -158,7 +158,7 @@ pub fn recreate_tray(app: &AppHandle) {
 
             let mut builder = TrayIconBuilder::<Wry>::with_id("screenpipe_main")
                 .icon_as_template(true)
-                .show_menu_on_left_click(true);
+                .show_menu_on_left_click(!cfg!(target_os = "windows"));
 
             if let Some(ref icon) = icon {
                 if icon.width() > 0 && icon.height() > 0 {
@@ -455,6 +455,25 @@ fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
             error!("panic in tray menu event handler: {:?}", e);
         }
     });
+
+    // Windows: left-click opens the app (like macOS dock click), right-click shows menu
+    #[cfg(target_os = "windows")]
+    {
+        main_tray.set_show_menu_on_left_click(false)?;
+        main_tray.on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle().clone();
+                let _ = tray.app_handle().run_on_main_thread(move || {
+                    let _ = ShowRewindWindow::Settings { page: None }.show(&app);
+                });
+            }
+        });
+    }
 
     Ok(())
 }

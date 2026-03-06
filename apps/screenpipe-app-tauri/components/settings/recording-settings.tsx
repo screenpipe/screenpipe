@@ -1623,6 +1623,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             const isSelected = settings.audioDevices.includes(device.name);
             const DeviceIcon = getAudioDeviceIcon(device.name);
             const displayName = getAudioDeviceDisplayName(device.name);
+            // Use per-device level if available, fall back to global speechRatio
+            const deviceLevel = overlayData.deviceLevels[device.name] ?? overlayData.speechRatio;
             return (
               <div
                 key={device.name}
@@ -1652,7 +1654,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                     <div
                       className="h-full rounded-full bg-foreground/60 transition-all duration-75"
-                      style={{ width: `${Math.min(100, Math.pow(overlayData.speechRatio, 3) * 100)}%` }}
+                      style={{ width: `${Math.min(100, Math.pow(deviceLevel, 3) * 100)}%` }}
                     />
                   </div>
                 </div>

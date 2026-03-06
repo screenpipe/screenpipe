@@ -115,6 +115,7 @@ async fn recv_audio_chunk(
     match recv_result {
         Ok(Ok(chunk)) => {
             metrics.update_audio_level(&chunk);
+            metrics.update_audio_level_for_device(device_name, &chunk);
             update_device_capture_time(device_name);
             Ok(Some(chunk))
         }

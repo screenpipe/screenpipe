@@ -10,6 +10,7 @@ interface OverlayData {
   screenActive: boolean;
   captureFps: number;
   ocrPulseTimestamp: number;
+  deviceLevels: Record<string, number>;
 }
 
 const INITIAL_STATE: OverlayData = {
@@ -18,6 +19,7 @@ const INITIAL_STATE: OverlayData = {
   screenActive: false,
   captureFps: 0,
   ocrPulseTimestamp: 0,
+  deviceLevels: {},
 };
 
 export function useOverlayData(): OverlayData {
@@ -66,6 +68,13 @@ export function useOverlayData(): OverlayData {
           const speechRatio = Math.min(1, audioLevel * 15);
           const audioActive = audioLevel > 0.001;
 
+          // Per-device audio levels
+          const rawDeviceLevels: Record<string, number> = m.audio?.device_levels ?? {};
+          const deviceLevels: Record<string, number> = {};
+          for (const [name, level] of Object.entries(rawDeviceLevels)) {
+            deviceLevels[name] = Math.min(1, (level as number) * 15);
+          }
+
           // Vision: delta-based FPS from frame counters (updates every 500ms)
           const curFrames = m.vision?.frames_captured ?? 0;
           let captureFps = 0;
@@ -91,6 +100,7 @@ export function useOverlayData(): OverlayData {
             screenActive,
             captureFps,
             ocrPulseTimestamp: ocrPulseTimestamp || prev.ocrPulseTimestamp,
+            deviceLevels,
           }));
         } catch {
           // ignore parse errors

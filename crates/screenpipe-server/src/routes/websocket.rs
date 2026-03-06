@@ -229,6 +229,7 @@ async fn handle_metrics_socket(
         tokio::select! {
             _ = interval.tick() => {
                 let audio = state.audio_metrics.snapshot();
+                let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
                 let vision = state.vision_metrics.snapshot();
                 let payload = serde_json::json!({
                     "audio": {
@@ -237,6 +238,7 @@ async fn handle_metrics_socket(
                         "chunks_sent": audio.chunks_sent,
                         "total_words": audio.total_words,
                         "audio_level_rms": audio.audio_level_rms,
+                        "device_levels": per_device_levels,
                     },
                     "vision": {
                         "frames_captured": vision.frames_captured,

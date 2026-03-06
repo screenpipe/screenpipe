@@ -843,6 +843,7 @@ impl DatabaseManager {
                FROM audio_chunks ac
                LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
                WHERE ac.timestamp >= ?1 AND ac.timestamp <= ?2
+                 AND ac.file_path NOT LIKE 'cloud://%'
                ORDER BY ac.timestamp ASC"#,
         )
         .bind(start)
@@ -869,6 +870,7 @@ impl DatabaseManager {
                FROM audio_chunks ac
                LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
                WHERE ac.id IN ({})
+                 AND ac.file_path NOT LIKE 'cloud://%'
                ORDER BY ac.timestamp ASC"#,
             placeholders.join(", ")
         );
@@ -2275,6 +2277,7 @@ impl DatabaseManager {
             conditions.push("COALESCE(audio_transcriptions.text_length, LENGTH(audio_transcriptions.transcription)) <= ?");
         }
         conditions.push("(speakers.id IS NULL OR speakers.hallucination = 0)");
+        conditions.push("audio_chunks.file_path NOT LIKE 'cloud://%'");
         if speaker_ids.is_some() {
             conditions.push("(json_array_length(?) = 0 OR audio_transcriptions.speaker_id IN (SELECT value FROM json_each(?)))");
         }
@@ -3205,6 +3208,7 @@ impl DatabaseManager {
         JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
         LEFT JOIN speakers s ON at.speaker_id = s.id
         WHERE at.timestamp >= ?1 AND at.timestamp <= ?2
+          AND ac.file_path NOT LIKE 'cloud://%'
         ORDER BY at.timestamp DESC
         LIMIT 10000
         "#;
@@ -3666,6 +3670,7 @@ impl DatabaseManager {
             FROM audio_chunks ac
             JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
             WHERE at.speaker_id = ?
+              AND ac.file_path NOT LIKE 'cloud://%'
             ORDER BY at.start_time
             "#,
         )
@@ -3694,6 +3699,7 @@ impl DatabaseManager {
                 JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
                 WHERE (s.name = '' OR s.name IS NULL)
                 AND s.hallucination = 0
+                AND ac.file_path NOT LIKE 'cloud://%'
                 "#;
 
         let speaker_filter = match &speaker_ids {
@@ -3876,7 +3882,8 @@ impl DatabaseManager {
         let audio_files: Vec<String> = sqlx::query_scalar(
             r#"SELECT file_path FROM audio_chunks
                WHERE id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
-               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)
+               AND file_path NOT LIKE 'cloud://%'"#,
         )
         .bind(&start_str)
         .bind(&end_str)
@@ -4010,6 +4017,7 @@ impl DatabaseManager {
                 JOIN audio_transcriptions at ON s.id = at.speaker_id
                 JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
                 AND s.hallucination = 0
+                AND ac.file_path NOT LIKE 'cloud://%'
                 AND at.timestamp IN (
                     SELECT timestamp
                     FROM audio_transcriptions at2

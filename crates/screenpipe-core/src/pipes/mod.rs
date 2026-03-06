@@ -1440,12 +1440,13 @@ impl PipeManager {
                 } else {
                     "failed"
                 };
+                let filtered_stdout = filter_ndjson_stdout(&output.stdout);
                 if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                     let _ = store
                         .finish_execution(
                             id,
                             status,
-                            &truncate_string(&output.stdout, 50_000),
+                            &truncate_string(&filtered_stdout, 50_000),
                             &truncate_string(&output.stderr, 10_000),
                             None,
                             error_type.as_deref(),
@@ -1462,7 +1463,7 @@ impl PipeManager {
                     started_at,
                     finished_at,
                     success: output.success,
-                    stdout: truncate_string(&output.stdout, 10_000),
+                    stdout: truncate_string(&filtered_stdout, 10_000),
                     stderr: truncate_string(&output.stderr, 5_000),
                 }
             }
@@ -2117,12 +2118,13 @@ impl PipeManager {
                                     "failed"
                                 };
 
+                                let filtered_stdout = filter_ndjson_stdout(&output.stdout);
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
                                         .finish_execution(
                                             id,
                                             status,
-                                            &truncate_string(&output.stdout, 50_000),
+                                            &truncate_string(&filtered_stdout, 50_000),
                                             &truncate_string(&output.stderr, 10_000),
                                             None,
                                             error_type.as_deref(),
@@ -2146,7 +2148,7 @@ impl PipeManager {
                                     started_at,
                                     finished_at,
                                     success: output.success,
-                                    stdout: truncate_string(&output.stdout, 10_000),
+                                    stdout: truncate_string(&filtered_stdout, 10_000),
                                     stderr: truncate_string(&output.stderr, 5_000),
                                 }
                             }
