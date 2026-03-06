@@ -20,8 +20,7 @@ export function FloatingDictationWindow() {
   const [copied, setCopied] = useState(false);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { state, toggleDictation, stopDictation } = useDictation({
-    skipGlobalListener: true, // Only respond to toggle-dictation-floating, not toggle-dictation
+  const { state, stopDictation } = useDictation({
     onTranscription: (text) => {
       setFullText((prev) => (prev ? prev + " " : "") + text);
     },
@@ -37,18 +36,6 @@ export function FloatingDictationWindow() {
       }
     },
   });
-
-  // Listen for the floating-specific dictation event
-  useEffect(() => {
-    const handler = () => {
-      console.log("[floating-dictation] toggle-dictation-floating event received");
-      toggleDictation();
-    };
-    window.addEventListener("toggle-dictation-floating", handler);
-    return () => {
-      window.removeEventListener("toggle-dictation-floating", handler);
-    };
-  }, [toggleDictation]);
 
   // Cancel auto-close timer on new activity
   const cancelAutoClose = useCallback(() => {

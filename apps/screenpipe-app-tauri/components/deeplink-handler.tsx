@@ -232,12 +232,9 @@ export function DeeplinkHandler() {
       }),
 
       listen("shortcut-dictation", () => {
-        // Dispatch both events — the modal hooks listen for toggle-dictation,
-        // the floating window listens for toggle-dictation-floating.
-        // Only one should be active at a time based on UI state.
-        console.log("[deeplink-handler] shortcut-dictation received, dispatching both events");
+        // Dispatch single event - the shared DictationContext handles it
+        console.log("[deeplink-handler] shortcut-dictation received, dispatching toggle-dictation");
         window.dispatchEvent(new CustomEvent("toggle-dictation"));
-        window.dispatchEvent(new CustomEvent("toggle-dictation-floating"));
       }),
 
       listen("cli-login", async (event) => {
