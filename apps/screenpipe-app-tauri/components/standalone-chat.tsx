@@ -3117,14 +3117,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 style={{ maxHeight: "150px" }}
               />
 
-              {/* Dictation button */}
-              <DictationButton
-                state={dictationState}
-                onToggle={toggleDictation}
-                disabled={isLoading || !canChat}
-                className="absolute right-3 bottom-2"
-              />
-
               {/* Attached image previews below textarea */}
               {pastedImages.length > 0 && (
                 <div className="absolute bottom-1 left-2 right-2 flex items-center gap-1.5 overflow-x-auto py-1">
@@ -3198,6 +3190,12 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 )}
               </AnimatePresence>
             </div>
+            {/* Dictation button - between textarea and paperclip */}
+            <DictationButton
+              state={dictationState}
+              onToggle={toggleDictation}
+              disabled={isLoading || !canChat}
+            />
             <Button
               type="button"
               size="icon"

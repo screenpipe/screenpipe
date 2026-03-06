@@ -5,6 +5,7 @@
 import React from "react";
 import { Headset, Loader2 } from "lucide-react";
 import { DictationState } from "@/lib/hooks/use-dictation";
+import { cn } from "@/lib/utils";
 
 interface DictationIndicatorProps {
   state: DictationState;
@@ -65,22 +66,21 @@ export function DictationButton({
       type="button"
       onClick={onToggle}
       disabled={disabled || isProcessing}
-      className={`
-        p-2 rounded-md transition-colors
-        ${isRecording 
-          ? "bg-red-100 text-red-600 hover:bg-red-200" 
-          : "bg-muted hover:bg-muted/80 text-muted-foreground"
-        }
-        ${disabled || isProcessing ? "opacity-50 cursor-not-allowed" : ""}
-        ${className}
-      `}
+      className={cn(
+        "shrink-0 p-2 rounded-md transition-colors",
+        isRecording 
+          ? "text-red-500 hover:text-red-600" 
+          : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+        (disabled || isProcessing) && "opacity-50 cursor-not-allowed",
+        className
+      )}
       aria-label={isRecording ? "Stop recording" : "Start recording"}
       title={isRecording ? "Stop recording" : "Start dictation"}
     >
       {isProcessing ? (
         <Loader2 className="h-4 w-4 animate-spin" />
       ) : (
-        <Headset className={`h-4 w-4 ${isRecording ? "animate-pulse" : ""}`} />
+        <Headset className={cn("h-4 w-4", isRecording && "animate-pulse")} />
       )}
     </button>
   );
