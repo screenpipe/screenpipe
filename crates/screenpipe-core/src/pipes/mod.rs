@@ -99,8 +99,12 @@ pub struct PipeConfig {
     /// Allowed days, e.g. "Mon,Tue,Wed,Thu,Fri".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub days: Option<String>,
-    /// Whether this pipe can use /raw_sql. Default: false.
-    #[serde(default, alias = "allow-raw-sql", skip_serializing_if = "is_false")]
+    /// Whether this pipe can use /raw_sql. Default: true (allow all by default).
+    #[serde(
+        default = "default_true",
+        alias = "allow-raw-sql",
+        skip_serializing_if = "is_true"
+    )]
     pub allow_raw_sql: bool,
     /// Whether this pipe can access /frames/* (screenshots). Default: true.
     #[serde(
@@ -132,9 +136,6 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
-}
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 fn is_true(b: &bool) -> bool {
     *b
@@ -435,7 +436,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
 /// Returns the generated token (if any) so the caller can clean it up later.
-fn setup_pipe_permissions(
+async fn setup_pipe_permissions(
     pipe_dir: &Path,
     config: &PipeConfig,
     token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
@@ -456,14 +457,10 @@ fn setup_pipe_permissions(
         let t = format!("sp_pipe_{:016x}", suffix);
         perms.pipe_token = Some(t.clone());
 
-        // Register with server middleware
+        // Register with server middleware — must complete before Pi starts
+        // to avoid race where Pi's first API call arrives before token is registered
         if let Some(registry) = token_registry {
-            let registry = registry.clone();
-            let perms_clone = perms.clone();
-            let t_clone = t.clone();
-            tokio::spawn(async move {
-                registry.register_token(t_clone, perms_clone).await;
-            });
+            registry.register_token(t.clone(), perms.clone()).await;
         }
 
         // Write permissions JSON for the extension to read
@@ -1014,7 +1011,7 @@ impl PipeManager {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
 
-            pipe_token = setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref());
+            pipe_token = setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref()).await;
         }
         let token_registry_ref = self.token_registry.clone();
 
@@ -1375,7 +1372,7 @@ impl PipeManager {
                 &self.pipes_dir.join(name),
                 &config,
                 self.token_registry.as_ref(),
-            );
+            ).await;
         }
 
         // Run with timeout + streaming
@@ -1974,7 +1971,7 @@ impl PipeManager {
                             &pipes_dir.join(name),
                             config,
                             token_registry.as_ref(),
-                        );
+                        ).await;
                     }
 
                     // Check if history/session continuation is enabled
@@ -2801,7 +2798,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
         };
@@ -2895,7 +2892,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
         };
@@ -2923,7 +2920,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
         };
@@ -2949,7 +2946,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
         };
@@ -2982,7 +2979,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
         };
@@ -3055,7 +3052,7 @@ mod tests {
                 deny_content_types: vec![],
                 time_range: None,
                 days: None,
-                allow_raw_sql: false,
+                allow_raw_sql: true,
                 allow_frames: true,
                 config: HashMap::new(),
             },

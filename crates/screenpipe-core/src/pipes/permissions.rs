@@ -301,7 +301,7 @@ mod tests {
             deny_content_types: HashSet::new(),
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
             pipe_token: None,
         }
@@ -309,8 +309,7 @@ mod tests {
 
     #[test]
     fn empty_permissions_allow_everything() {
-        let mut p = make_perms();
-        p.allow_raw_sql = true; // override for this test
+        let p = make_perms();
         assert!(p.is_app_allowed("Slack"));
         assert!(p.is_window_allowed("anything"));
         assert!(p.is_content_type_allowed("ocr"));
@@ -448,7 +447,7 @@ mod tests {
             deny_content_types: vec![],
             time_range: Some("09:00-17:00".to_string()),
             days: Some("Mon,Tue,Wed,Thu,Fri".to_string()),
-            allow_raw_sql: false,
+            allow_raw_sql: false, // explicit deny
             allow_frames: true,
         };
         let perms = PipePermissions::from_config(&config);
@@ -458,12 +457,13 @@ mod tests {
         assert!(perms.allow_content_types.contains("audio"));
         assert_eq!(perms.time_range, Some((9, 0, 17, 0)));
         assert!(perms.days.as_ref().unwrap().contains(&0)); // Mon
-        assert!(!perms.allow_raw_sql);
+        assert!(!perms.allow_raw_sql); // explicitly set to false
         assert!(perms.allow_frames);
+        assert!(perms.has_any_restrictions()); // has restrictions due to allow_apps, deny_apps, etc.
     }
 
     #[test]
-    fn has_restrictions_empty_config() {
+    fn no_restrictions_empty_config() {
         let config = PipeConfig {
             name: "test".to_string(),
             schedule: "manual".to_string(),
@@ -481,19 +481,17 @@ mod tests {
             deny_content_types: vec![],
             time_range: None,
             days: None,
-            allow_raw_sql: false,
+            allow_raw_sql: true,
             allow_frames: true,
         };
         let perms = PipePermissions::from_config(&config);
-        // allow_raw_sql defaults to false, which IS a restriction
-        assert!(perms.has_any_restrictions());
+        // all permissions default to allow — no restrictions
+        assert!(!perms.has_any_restrictions());
     }
 
     #[test]
     fn no_restrictions_when_fully_open() {
-        let mut p = make_perms();
-        p.allow_raw_sql = true;
-        p.allow_frames = true;
+        let p = make_perms();
         assert!(!p.has_any_restrictions());
     }
 
