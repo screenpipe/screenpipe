@@ -76,6 +76,15 @@ pub async fn dictation_transcribe_handler(
             .into_response();
     }
 
+    // Check audio energy to prevent hallucination on silence
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    info!("dictation: audio RMS={:.6} ({} samples @ {}Hz)", rms, samples.len(), sample_rate);
+    
+    if rms < MIN_RMS_ENERGY {
+        info!("dictation: audio RMS {:.6} below threshold {:.6}, returning empty transcription", rms, MIN_RMS_ENERGY);
+        return JsonResponse(json!({ "text": "" })).into_response();
+    }
+
     let engine = match state.audio_manager.transcription_engine_instance().await {
         Some(e) => e,
         None => {
@@ -373,6 +382,13 @@ async fn handle_dictation_ws(socket: WebSocket, state: Arc<AppState>) {
     info!("dictation ws: client disconnected");
 }
 
+/// Minimum RMS energy threshold for audio to be worth transcribing.
+/// Below this, the audio is near-silent and Whisper tends to hallucinate
+/// phantom text like "Thank you." or "So, let's go."
+/// Value calibrated against: silence (RMS=0.0), ambient noise at 0.01 amplitude (RMS~0.007),
+/// white noise at 0.1 amplitude (RMS~0.071), normal speech (RMS~0.05-0.3).
+const MIN_RMS_ENERGY: f32 = 0.015;
+
 /// Transcribe f32 audio samples using the configured engine.
 /// Handles resampling if the source sample rate differs from 16 kHz.
 async fn transcribe_samples(
@@ -394,8 +410,11 @@ async fn transcribe_samples(
         rms
     );
 
-    if rms < 0.0001 {
-        warn!("dictation ws: audio appears to be silence (RMS={:.6}), skipping transcription", rms);
+    // Pre-check: if audio energy is too low, skip transcription entirely.
+    // Whisper hallucinates on silence/near-silence (e.g. "Thank you.", "So, let's go.")
+    // and its internal no_speech_prob is unreliable (reports 0.0 on pure silence).
+    if rms < MIN_RMS_ENERGY {
+        warn!("dictation ws: audio RMS {:.6} below threshold {:.6}, skipping transcription", rms, MIN_RMS_ENERGY);
         return None;
     }
 

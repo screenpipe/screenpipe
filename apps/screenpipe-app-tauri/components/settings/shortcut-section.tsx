@@ -31,6 +31,7 @@ const ShortcutSection = () => {
         <ShortcutRow type="global" shortcut="stopRecordingShortcut" title="stop recording" description="stop screen recording" value={settings.stopRecordingShortcut} />
         <ShortcutRow type="global" shortcut="startAudioShortcut" title="start audio recording" description="start audio recording" value={settings.startAudioShortcut} />
         <ShortcutRow type="global" shortcut="stopAudioShortcut" title="stop audio recording" description="stop audio recording" value={settings.stopAudioShortcut} />
+        <ShortcutRow type="global" shortcut="dictationShortcut" title="toggle dictation" description="start/stop voice dictation" value={settings.dictationShortcut} />
 
         <div className="flex items-center justify-between px-3 py-2.5 bg-card rounded-lg border border-border">
           <div className="flex items-center space-x-2.5">

@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Copy, Check, X, Mic, Loader2 } from "lucide-react";
+import { Copy, Check, X, Headset, Loader2 } from "lucide-react";
 import { useDictation, DictationState } from "@/lib/hooks/use-dictation";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
@@ -108,19 +108,10 @@ export function FloatingDictationWindow() {
             <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/50">
               <div className="flex items-center gap-2">
                 {state === "recording" && (
-                  <>
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-                    </span>
-                    <span className="text-xs font-medium text-red-500">Recording...</span>
-                  </>
+                  <Headset className="h-4 w-4 text-red-500 animate-pulse" />
                 )}
                 {state === "processing" && (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">Processing...</span>
-                  </>
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 )}
                 {state === "idle" && fullText && (
                   <span className="text-xs text-muted-foreground">Dictation complete</span>
@@ -136,7 +127,7 @@ export function FloatingDictationWindow() {
                     className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                     title="Stop recording"
                   >
-                    <Mic className="h-3.5 w-3.5 text-red-500" />
+                    <Headset className="h-3.5 w-3.5 text-red-500" />
                   </button>
                 )}
                 <button

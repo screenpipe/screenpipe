@@ -33,10 +33,11 @@ flowchart TD
 ## Target Features
 
 ### 1. Global Hotkey Dictation (`Ctrl+Super+D`)
-- Works when the app is running and a modal is open
+- Works when the app is running (window can be minimized/hidden)
+- Shows the main window if not visible, then starts dictation
 - Two behaviors based on context:
   - **When text input is focused in modal**: Append transcribed text to the input
-  - **When no text input is focused**: Show floating window with transcribed text (future)
+  - **When no text input is focused**: Show floating window with transcribed text
 
 ### 2. In-App Mic Buttons
 - **"Ask about your screen"** - [`apps/screenpipe-app-tauri/components/standalone-chat.tsx`](apps/screenpipe-app-tauri/components/standalone-chat.tsx)
@@ -123,14 +124,14 @@ flowchart TD
    - Single listener in `deeplink-handler.tsx` dispatches DOM `toggle-dictation` event
    - `useDictation` hook listens for DOM event to toggle recording
 
-4. **DictationIndicator Component** (`components/dictation-indicator.tsx`):
-   - Shows "Recording..." with animated red dot when recording
-   - Shows "Processing..." with spinner when processing
+  4. **DictationIndicator Component** (`components/dictation-indicator.tsx`):
+    - Shows blinking headset icon when recording
+    - Shows spinner when processing
 
-5. **DictationButton Component** (`components/dictation-indicator.tsx`):
-   - Mic icon button that toggles dictation
-   - Red background when recording
-   - Includes DictationIndicator
+  5. **DictationButton Component** (`components/dictation-indicator.tsx`):
+    - Headset icon button that toggles dictation (matches settings icon)
+    - Red background when recording
+    - Blinking headset animation when active
 
 ### Key Design Decisions
 
