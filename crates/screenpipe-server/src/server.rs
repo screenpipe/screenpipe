@@ -603,6 +603,10 @@ impl SCServer {
             .route("/ws/health", get(ws_health_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
             .route(
+                "/ws/dictation",
+                get(crate::routes::dictation::ws_dictation_handler),
+            )
+            .route(
                 "/frames/export",
                 get(handle_video_export_ws).post(handle_video_export_post),
             )

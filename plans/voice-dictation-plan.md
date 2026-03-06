@@ -180,7 +180,7 @@ flowchart TD
 - [x] Error handling with toast notifications
 - [x] Add text input detection logic
 - [x] Create floating dictation window component
-- [ ] Upgrade to SSE/WebSocket streaming for lower latency
+- [x] Upgrade to WebSocket streaming for lower latency (~1.5s vs ~3s)
 - [ ] Handle permission checks for microphone access
 - [ ] Test end-to-end flow with global hotkey
 - [ ] Test end-to-end flow with in-app buttons

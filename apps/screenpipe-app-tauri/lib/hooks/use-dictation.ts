@@ -21,17 +21,15 @@ interface UseDictationReturn {
   toggleDictation: () => void;
 }
 
-const DICTATION_API = "http://localhost:3030/dictation/transcribe";
-
-// Interval between sending audio chunks (ms)
-const CHUNK_INTERVAL_MS = 3000;
+const DICTATION_WS_URL = "ws://localhost:3030/ws/dictation";
 
 /**
- * Hook for voice dictation functionality.
+ * Hook for voice dictation functionality using WebSocket streaming.
  *
- * Captures mic audio via getUserMedia + MediaRecorder, sends audio chunks to
- * the screenpipe backend (POST /dictation/transcribe) which routes to the
+ * Captures mic audio via getUserMedia + MediaRecorder, streams audio chunks
+ * over a WebSocket to the screenpipe backend which transcribes using the
  * user's configured STT engine (Deepgram, Whisper, OpenAI-compatible, etc.).
+ * Results stream back in near-real-time (~1.5s latency).
  */
 export function useDictation(options: UseDictationOptions = {}): UseDictationReturn {
   const [state, setState] = useState<DictationState>("idle");
@@ -42,11 +40,9 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
   optionsRef.current = options;
 
   // Refs for cleanup
+  const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const sendIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isStoppingRef = useRef(false);
 
   const isRecording = state === "recording";
 
@@ -67,52 +63,7 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
     return "";
   }, []);
 
-  /** Send accumulated audio chunks to the backend for transcription */
-  const sendChunksForTranscription = useCallback(async () => {
-    if (chunksRef.current.length === 0) return;
-
-    // Collect and clear accumulated chunks
-    const chunks = chunksRef.current.splice(0);
-    const blob = new Blob(chunks, { type: chunks[0]?.type || "audio/webm" });
-
-    if (blob.size === 0) return;
-
-    try {
-      const response = await fetch(DICTATION_API, {
-        method: "POST",
-        body: blob,
-        headers: {
-          "Content-Type": blob.type || "application/octet-stream",
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMsg = errorData.error || `Server error: ${response.status}`;
-        console.error("[dictation] Transcription request failed:", errorMsg);
-        optionsRef.current.onError?.(errorMsg);
-        return;
-      }
-
-      const data = await response.json();
-      const transcript = data.text?.trim();
-      if (transcript) {
-        console.log("[dictation] Transcribed:", transcript);
-        setTranscribedText((prev) => (prev ? prev + " " : "") + transcript);
-        optionsRef.current.onTranscription?.(transcript);
-      }
-    } catch (err: any) {
-      console.error("[dictation] Failed to send audio for transcription:", err);
-      optionsRef.current.onError?.(`Transcription request failed: ${err?.message || err}`);
-    }
-  }, []);
-
   const cleanup = useCallback(() => {
-    if (sendIntervalRef.current) {
-      clearInterval(sendIntervalRef.current);
-      sendIntervalRef.current = null;
-    }
-
     if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state !== "inactive") {
@@ -124,53 +75,97 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
       mediaRecorderRef.current = null;
     }
 
+    if (wsRef.current) {
+      try {
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.close();
+        }
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
+    }
+
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
     }
-
-    chunksRef.current = [];
   }, []);
 
   const startDictation = useCallback(async () => {
     if (state !== "idle") return;
 
-    console.log("[dictation] Starting dictation...");
+    console.log("[dictation] Starting dictation via WebSocket...");
     setState("recording");
     optionsRef.current.onStateChange?.("recording");
-    isStoppingRef.current = false;
 
     try {
       // 1. Get mic stream
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      // 2. Start MediaRecorder
-      const mimeType = getSupportedMimeType();
-      const recorderOptions: MediaRecorderOptions = {};
-      if (mimeType) {
-        recorderOptions.mimeType = mimeType;
-      }
+      // 2. Open WebSocket to backend
+      const ws = new WebSocket(DICTATION_WS_URL);
+      wsRef.current = ws;
 
-      const mediaRecorder = new MediaRecorder(stream, recorderOptions);
-      mediaRecorderRef.current = mediaRecorder;
+      ws.onopen = () => {
+        console.log("[dictation] WebSocket connected");
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
+        // 3. Start MediaRecorder and pipe chunks to WebSocket
+        const mimeType = getSupportedMimeType();
+        const recorderOptions: MediaRecorderOptions = {};
+        if (mimeType) {
+          recorderOptions.mimeType = mimeType;
+        }
+
+        const mediaRecorder = new MediaRecorder(stream, recorderOptions);
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+            ws.send(event.data);
+          }
+        };
+
+        // Send chunks every 500ms for low latency streaming
+        mediaRecorder.start(500);
+        console.log("[dictation] MediaRecorder started, MIME:", mediaRecorder.mimeType);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.text) {
+            console.log("[dictation] Received transcription:", data.text);
+            setTranscribedText((prev) => (prev ? prev + " " : "") + data.text);
+            optionsRef.current.onTranscription?.(data.text);
+          }
+
+          if (data.error) {
+            console.error("[dictation] Server error:", data.error);
+            optionsRef.current.onError?.(data.error);
+          }
+
+          if (data.type === "stopped") {
+            console.log("[dictation] Server confirmed stop");
+          }
+        } catch (err) {
+          console.warn("[dictation] Failed to parse WS message:", err);
         }
       };
 
-      // Send chunks every CHUNK_INTERVAL_MS for near-realtime transcription
-      mediaRecorder.start(CHUNK_INTERVAL_MS);
-      console.log("[dictation] MediaRecorder started, MIME:", mediaRecorder.mimeType);
+      ws.onerror = () => {
+        console.error("[dictation] WebSocket error");
+        optionsRef.current.onError?.("Dictation connection error");
+        cleanup();
+        setState("idle");
+        optionsRef.current.onStateChange?.("idle");
+      };
 
-      // Periodically send accumulated chunks to server
-      sendIntervalRef.current = setInterval(() => {
-        if (!isStoppingRef.current) {
-          sendChunksForTranscription();
-        }
-      }, CHUNK_INTERVAL_MS + 100); // Slight offset to let data accumulate
+      ws.onclose = () => {
+        console.log("[dictation] WebSocket closed");
+      };
     } catch (err: any) {
       console.error("[dictation] Failed to start:", err);
       const message =
@@ -182,41 +177,66 @@ export function useDictation(options: UseDictationOptions = {}): UseDictationRet
       setState("idle");
       optionsRef.current.onStateChange?.("idle");
     }
-  }, [state, getSupportedMimeType, sendChunksForTranscription, cleanup]);
+  }, [state, getSupportedMimeType, cleanup]);
 
   const stopDictation = useCallback(async () => {
     if (state === "idle") return;
 
     console.log("[dictation] Stopping dictation...");
-    isStoppingRef.current = true;
     setState("processing");
     optionsRef.current.onStateChange?.("processing");
 
-    // Stop the periodic sender
-    if (sendIntervalRef.current) {
-      clearInterval(sendIntervalRef.current);
-      sendIntervalRef.current = null;
-    }
-
-    // Stop MediaRecorder — this triggers a final ondataavailable
+    // Stop MediaRecorder first so final data chunk is sent
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
+    mediaRecorderRef.current = null;
 
-    // Wait briefly for the final data event to fire, then send remaining chunks
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await sendChunksForTranscription();
+    // Tell server to flush remaining audio
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "stop" }));
 
-    // Cleanup media resources
+      // Wait for server to confirm stop (with timeout)
+      await new Promise<void>((resolve) => {
+        const ws = wsRef.current;
+        if (!ws) return resolve();
+
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 3000);
+
+        const originalOnMessage = ws.onmessage;
+        ws.onmessage = (event) => {
+          // Call original handler first to process any final transcription
+          if (originalOnMessage) {
+            (originalOnMessage as (ev: MessageEvent) => void)(event);
+          }
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "stopped") {
+              clearTimeout(timeout);
+              resolve();
+            }
+          } catch {
+            // ignore parse errors
+          }
+        };
+      });
+    }
+
+    // Cleanup
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
     }
-    mediaRecorderRef.current = null;
 
     setState("idle");
     optionsRef.current.onStateChange?.("idle");
-  }, [state, sendChunksForTranscription]);
+  }, [state]);
 
   const toggleDictation = useCallback(() => {
     console.log("[dictation] Toggle pressed, current state:", state);
