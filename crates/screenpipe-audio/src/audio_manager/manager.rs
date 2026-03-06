@@ -19,7 +19,6 @@ use tokio::{
     task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
-use whisper_rs::WhisperContext;
 
 use screenpipe_db::DatabaseManager;
 
@@ -44,7 +43,7 @@ use crate::{
         audio::resample,
         ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
     },
-    vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
+    vad::{create_vad_engine, VadEngine},
     AudioInput, TranscriptionResult,
 };
 
@@ -97,10 +96,8 @@ impl AudioManager {
         let device_manager = DeviceManager::new().await?;
         let segmentation_manager = Arc::new(SegmentationManager::new().await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
-        let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = match options.vad_engine {
-            VadEngineEnum::Silero => Arc::new(Mutex::new(Box::new(SileroVad::new().await?))),
-            VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
-        };
+        let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> =
+            Arc::new(Mutex::new(create_vad_engine(options.vad_engine.clone()).await?));
 
         let (recording_sender, recording_receiver) = crossbeam::channel::bounded(1000);
         let (transcription_sender, transcription_receiver) = crossbeam::channel::bounded(1000);
@@ -179,15 +176,11 @@ impl AudioManager {
                         let vocab = opts.vocabulary.clone();
                         drop(opts);
 
-                        // Get whisper context from transcription engine
-                        let whisper_ctx = transcription_engine.whisper_context();
-
                         let data_dir = output_path_bg.as_deref();
                         let count = super::reconciliation::reconcile_untranscribed(
                             &db,
                             transcription_engine,
                             on_insert_bg.as_ref(),
-                            whisper_ctx,
                             audio_engine,
                             key,
                             openai_config,
@@ -571,13 +564,11 @@ impl AudioManager {
                                     "batch mode: audio session ended, transcribing accumulated audio"
                                 );
                             }
-                            let whisper_ctx = engine.whisper_context();
                             let data_dir = output_path.as_deref();
                             let count = super::reconciliation::reconcile_untranscribed(
                                 &db,
                                 &engine,
                                 on_insert_session.as_ref(),
-                                whisper_ctx,
                                 audio_transcription_engine.clone(),
                                 deepgram_api_key.clone(),
                                 openai_compatible_config.clone(),
@@ -731,15 +722,6 @@ impl AudioManager {
     /// Returns a reference to the meeting detector, if batch mode is active.
     pub fn meeting_detector(&self) -> Option<&Arc<MeetingDetector>> {
         self.meeting_detector.as_ref()
-    }
-
-    /// Returns the shared WhisperContext for backward compatibility, if loaded.
-    pub async fn whisper_context(&self) -> Option<Arc<WhisperContext>> {
-        self.engine
-            .read()
-            .await
-            .as_ref()
-            .and_then(|e| e.whisper_context())
     }
 
     /// Returns the current transcription engine instance (for retranscribe endpoint).

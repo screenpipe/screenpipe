@@ -92,6 +92,10 @@ fn get_target_arch() -> &'static str {
     {
         "windows-x86_64"
     }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        "windows-aarch64"
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         "linux-x86_64"
@@ -100,6 +104,7 @@ fn get_target_arch() -> &'static str {
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64"),
         all(target_os = "linux", target_arch = "x86_64"),
     )))]
     {

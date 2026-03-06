@@ -9,10 +9,14 @@ use crate::speaker::embedding::EmbeddingExtractor;
 use crate::speaker::embedding_manager::EmbeddingManager;
 use crate::speaker::prepare_segments;
 use crate::speaker::segment::SpeechSegment;
+#[cfg(feature = "local-stt")]
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
 use crate::transcription::engine::TranscriptionSession;
+#[cfg(feature = "local-stt")]
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
+#[cfg(feature = "local-stt")]
 use crate::transcription::whisper::batch::process_with_whisper;
+#[cfg(feature = "local-stt")]
 use crate::transcription::VocabularyEntry;
 use crate::utils::audio::resample;
 use crate::utils::ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file};
@@ -24,6 +28,7 @@ use std::path::PathBuf;
 use std::{sync::Arc, sync::Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tracing::error;
+#[cfg(feature = "local-stt")]
 use whisper_rs::WhisperState;
 
 use crate::{AudioInput, TranscriptionResult};
@@ -100,6 +105,7 @@ impl OpenAICompatibleConfig {
     }
 }
 
+#[cfg(feature = "local-stt")]
 #[allow(clippy::too_many_arguments)]
 pub async fn stt_sync(
     audio: &[f32],
@@ -132,6 +138,7 @@ pub async fn stt_sync(
     .await
 }
 
+#[cfg(feature = "local-stt")]
 #[allow(clippy::too_many_arguments)]
 pub async fn stt(
     audio: &[f32],

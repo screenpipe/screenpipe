@@ -5,7 +5,9 @@
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
+#[cfg(feature = "local-stt")]
 use crate::transcription::whisper::batch::process_with_whisper;
+#[cfg(feature = "local-stt")]
 use crate::transcription::whisper::model::{
     create_whisper_context_parameters, download_whisper_model,
 };
@@ -16,13 +18,17 @@ use screenpipe_core::Language;
 use std::sync::Arc;
 #[cfg(feature = "qwen3-asr")]
 use std::sync::Mutex as StdMutex;
-use tracing::{error, info};
+use tracing::error;
+#[cfg(any(feature = "local-stt", feature = "qwen3-asr"))]
+use tracing::info;
+#[cfg(feature = "local-stt")]
 use whisper_rs::{WhisperContext, WhisperState};
 
 /// Unified transcription engine that owns the runtime state for whatever backend is configured.
 /// Only the selected model is loaded — no dummy Whisper downloads for non-Whisper engines.
 #[derive(Clone)]
 pub enum TranscriptionEngine {
+    #[cfg(feature = "local-stt")]
     Whisper {
         context: Arc<WhisperContext>,
         config: Arc<AudioTranscriptionEngine>,
@@ -109,39 +115,48 @@ impl TranscriptionEngine {
 
             // All Whisper variants
             _ => {
-                let engine_for_download = config.clone();
-                let quantized_path = tokio::task::spawn_blocking(move || {
-                    download_whisper_model(engine_for_download)
-                })
-                .await
-                .map_err(|e| anyhow!("whisper model download task panicked: {}", e))?
-                .map_err(|e| anyhow!("failed to download whisper model: {}", e))?;
+                #[cfg(feature = "local-stt")]
+                {
+                    let engine_for_download = config.clone();
+                    let quantized_path = tokio::task::spawn_blocking(move || {
+                        download_whisper_model(engine_for_download)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("whisper model download task panicked: {}", e))?
+                    .map_err(|e| anyhow!("failed to download whisper model: {}", e))?;
 
-                info!("whisper model available: {:?}", quantized_path);
+                    info!("whisper model available: {:?}", quantized_path);
 
-                let context_param = create_whisper_context_parameters(config.clone())?;
+                    let context_param = create_whisper_context_parameters(config.clone())?;
 
-                info!("loading whisper model with GPU acceleration...");
-                let context = tokio::task::spawn_blocking(move || {
-                    WhisperContext::new_with_params(
-                        &quantized_path.to_string_lossy(),
-                        context_param,
-                    )
-                    .map(Arc::new)
-                })
-                .await
-                .map_err(|e| anyhow!("whisper model loading task panicked: {}", e))?
-                .map_err(|e| anyhow!("failed to load whisper model: {}", e))?;
+                    info!("loading whisper model with GPU acceleration...");
+                    let context = tokio::task::spawn_blocking(move || {
+                        WhisperContext::new_with_params(
+                            &quantized_path.to_string_lossy(),
+                            context_param,
+                        )
+                        .map(Arc::new)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("whisper model loading task panicked: {}", e))?
+                    .map_err(|e| anyhow!("failed to load whisper model: {}", e))?;
 
-                info!("whisper model loaded successfully");
-                whisper_rs::install_logging_hooks();
+                    info!("whisper model loaded successfully");
+                    whisper_rs::install_logging_hooks();
 
-                Ok(Self::Whisper {
-                    context,
-                    config,
-                    languages,
-                    vocabulary,
-                })
+                    Ok(Self::Whisper {
+                        context,
+                        config,
+                        languages,
+                        vocabulary,
+                    })
+                }
+                #[cfg(not(feature = "local-stt"))]
+                {
+                    Err(anyhow!(
+                        "local whisper transcription not available — local-stt feature is disabled. use deepgram or openai-compatible instead."
+                    ))
+                }
             }
         }
     }
@@ -151,6 +166,7 @@ impl TranscriptionEngine {
     /// stay on the thread that created it.
     pub fn create_session(&self) -> Result<TranscriptionSession> {
         match self {
+            #[cfg(feature = "local-stt")]
             Self::Whisper {
                 context,
                 config,
@@ -201,17 +217,10 @@ impl TranscriptionEngine {
         }
     }
 
-    /// Returns the `WhisperContext` if this is a Whisper engine (for backward compat).
-    pub fn whisper_context(&self) -> Option<Arc<WhisperContext>> {
-        match self {
-            Self::Whisper { context, .. } => Some(context.clone()),
-            _ => None,
-        }
-    }
-
     /// Returns the engine config variant.
     pub fn config(&self) -> AudioTranscriptionEngine {
         match self {
+            #[cfg(feature = "local-stt")]
             Self::Whisper { config, .. } => (**config).clone(),
             #[cfg(feature = "qwen3-asr")]
             Self::Qwen3Asr { .. } => AudioTranscriptionEngine::Qwen3Asr,
@@ -225,6 +234,7 @@ impl TranscriptionEngine {
 /// Per-thread transcription session. Holds `WhisperState` (which is `!Send`)
 /// for Whisper variants, or shared model handles for other engines.
 pub enum TranscriptionSession {
+    #[cfg(feature = "local-stt")]
     Whisper {
         state: WhisperState,
         #[allow(dead_code)]
@@ -312,6 +322,7 @@ impl TranscriptionSession {
                 }
             }
 
+            #[cfg(feature = "local-stt")]
             Self::Whisper {
                 state,
                 languages,
@@ -358,6 +369,7 @@ impl TranscriptionSession {
         match transcription {
             Ok(mut text) => {
                 let vocab = match self {
+                    #[cfg(feature = "local-stt")]
                     Self::Whisper { vocabulary, .. } => vocabulary,
                     #[cfg(feature = "qwen3-asr")]
                     Self::Qwen3Asr { vocabulary, .. } => vocabulary,

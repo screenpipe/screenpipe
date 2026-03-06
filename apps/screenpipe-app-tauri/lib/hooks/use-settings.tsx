@@ -425,7 +425,14 @@ function createSettingsStore() {
 			try {
 				const { commands: tauriCommands } = await import("../utils/tauri");
 				const hw = await tauriCommands.getHardwareCapability();
-				if (hw.isWeakForLargeModel) {
+				if (!hw.localSttAvailable) {
+					// ARM64 or no local-stt: force cloud engine
+					const currentEngine = settings.audioTranscriptionEngine;
+					if (currentEngine.includes("whisper") || currentEngine === "qwen3-asr") {
+						settings.audioTranscriptionEngine = hw.recommendedEngine;
+						needsUpdate = true;
+					}
+				} else if (hw.isWeakForLargeModel) {
 					const currentEngine = settings.audioTranscriptionEngine;
 					if (settings.user?.cloud_subscribed) {
 						// Pro subscribers: prefer cloud on weak hardware

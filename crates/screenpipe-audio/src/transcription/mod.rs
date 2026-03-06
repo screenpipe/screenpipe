@@ -10,6 +10,7 @@ pub mod deepgram;
 pub mod engine;
 pub mod openai_compatible;
 pub mod stt;
+#[cfg(feature = "local-stt")]
 pub mod whisper;
 
 #[derive(Debug, Clone)]

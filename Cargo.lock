@@ -2183,15 +2183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "esaxx-rs"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "etcetera"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3782,15 +3773,6 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.3",
-]
-
-[[package]]
-name = "libsamplerate-sys"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28853b399f78f8281cd88d333b54a63170c4275f6faea66726a2bea5cca72e0d"
-dependencies = [
- "cmake",
 ]
 
 [[package]]
@@ -6296,15 +6278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "samplerate"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e032b2b24715c4f982f483ea3abdb3c9ba444d9f63e87b2843d6f998f5ba2698"
-dependencies = [
- "libsamplerate-sys",
-]
-
-[[package]]
 name = "scc"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6402,7 +6375,6 @@ dependencies = [
  "deepgram",
  "dirs 5.0.1",
  "env_logger",
- "esaxx-rs",
  "futures",
  "hf-hub 0.3.2",
  "hound",
@@ -6411,7 +6383,6 @@ dependencies = [
  "lazy_static",
  "libpulse-binding",
  "libpulse-simple-binding",
- "libsamplerate-sys",
  "log",
  "ndarray",
  "oasgen",
@@ -6423,7 +6394,6 @@ dependencies = [
  "realfft",
  "reqwest",
  "rubato",
- "samplerate",
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",

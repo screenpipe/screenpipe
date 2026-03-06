@@ -119,7 +119,8 @@ tower = { version = "0.4", features = ["util"] }
 criterion = { workspace = true }
 
 [features]
-default = ["qwen3-asr"]
+default = ["qwen3-asr", "local-stt"]
+local-stt = ["screenpipe-audio/local-stt"]
 metal = ["screenpipe-audio/metal"]
 cuda = ["screenpipe-audio/cuda"]
 vulkan = ["screenpipe-audio/vulkan"]

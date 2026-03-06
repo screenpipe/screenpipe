@@ -192,6 +192,7 @@ enterprise-build = []
 # On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
 apple-intelligence = ["screenpipe-server/apple-intelligence"]
 
+local-stt = ["screenpipe-server/local-stt"]
 qwen3-asr = ["screenpipe-server/qwen3-asr"]
 
 

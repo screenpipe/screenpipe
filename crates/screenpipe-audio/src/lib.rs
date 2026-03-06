@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod utils;
 pub mod vad;
 pub use transcription::engine::TranscriptionEngine;
+#[cfg(feature = "local-stt")]
 pub use transcription::stt::stt;
 pub use transcription::{AudioInput, TranscriptionResult};
 pub mod speaker;

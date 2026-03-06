@@ -68,7 +68,7 @@ export default function GeneralSettings() {
       const { arch, type: osType } = await import("@tauri-apps/plugin-os").then(m => ({ arch: m.arch(), type: m.type() }));
       let targetArch = "darwin-aarch64";
       if (osType === "macos") targetArch = arch === "x86_64" ? "darwin-x86_64" : "darwin-aarch64";
-      else if (osType === "windows") targetArch = "windows-x86_64";
+      else if (osType === "windows") targetArch = arch === "aarch64" ? "windows-aarch64" : "windows-x86_64";
 
       const resp = await fetch(`https://screenpi.pe/api/app-update/versions/${targetArch}`);
       if (!resp.ok) throw new Error("failed to fetch versions");

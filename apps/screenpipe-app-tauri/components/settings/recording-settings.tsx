@@ -1287,6 +1287,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     </SelectItem>
                     <SelectItem value="deepgram">Deepgram</SelectItem>
                   </SelectGroup>
+                  {hwCapability?.localSttAvailable !== false && (
                   <SelectGroup>
                     <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">offline</SelectLabel>
                     <SelectItem value="whisper-large-v3-turbo">Whisper Turbo</SelectItem>
@@ -1295,6 +1296,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <SelectItem value="whisper-tiny-quantized">Whisper Tiny (fast)</SelectItem>
                     <SelectItem value="qwen3-asr">Qwen3-ASR</SelectItem>
                   </SelectGroup>
+                  )}
                   <SelectGroup>
                     <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>
                     <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>

@@ -18,7 +18,9 @@ static RECONCILIATION_RUNNING: AtomicBool = AtomicBool::new(false);
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::segmentation::segmentation_manager::SegmentationManager;
 use crate::speaker::segment::get_segments;
-use crate::transcription::engine::{TranscriptionEngine, TranscriptionSession};
+use crate::transcription::engine::TranscriptionEngine;
+#[cfg(feature = "local-stt")]
+use crate::transcription::engine::TranscriptionSession;
 use crate::transcription::get_or_create_speaker_from_embedding;
 use crate::transcription::{AudioInsertCallback, AudioInsertInfo};
 
@@ -26,7 +28,6 @@ use crate::transcription::VocabularyEntry;
 use crate::utils::ffmpeg::read_audio_from_file;
 use crate::OpenAICompatibleConfig;
 use screenpipe_core::Language;
-use whisper_rs::WhisperContext;
 
 /// A completed transcription result persisted to disk as a JSON file.
 /// If the DB write fails (e.g. pool timeout), this file survives and is
@@ -60,7 +61,6 @@ pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
     on_insert: Option<&AudioInsertCallback>,
-    _whisper_context: Option<Arc<WhisperContext>>,
     _audio_engine: Arc<AudioTranscriptionEngine>,
     _deepgram_api_key: Option<String>,
     _openai_compatible_config: Option<OpenAICompatibleConfig>,
@@ -198,10 +198,13 @@ pub async fn reconcile_untranscribed(
         };
 
         // Get whisper state from session for stt function
+        #[cfg(feature = "local-stt")]
         let _whisper_state = match &mut session {
             TranscriptionSession::Whisper { state, .. } => Some(state),
             _ => None,
         };
+        #[cfg(not(feature = "local-stt"))]
+        let _whisper_state: Option<()> = None;
 
         // Transcribe the concatenated audio in one shot using session
         let full_text = match session

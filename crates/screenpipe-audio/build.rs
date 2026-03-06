@@ -1,5 +1,7 @@
 #[cfg(target_os = "windows")]
-use std::{env, fs};
+use std::env;
+#[cfg(target_os = "windows")]
+use std::fs;
 use std::{
     io::Result,
     process::{Command, Output},
@@ -85,26 +87,40 @@ fn install_onnxruntime() {
     use std::time::Duration;
     use std::{path::Path, process::Command};
 
+    // Detect target architecture for correct ONNX Runtime variant
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+    let (arch_suffix, dir_name) = match target_arch.as_str() {
+        "aarch64" => ("arm64", "onnxruntime-win-arm64-1.19.2"),
+        _ => ("x64", "onnxruntime-win-x64-1.19.2"),
+    };
+
     // Use CPU-only onnxruntime — GPU (DirectML) causes issues on Intel integrated GPUs
-    let target_dir =
-        Path::new("../../apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2");
+    let target_dir_str = format!(
+        "../../apps/screenpipe-app-tauri/src-tauri/{}",
+        dir_name
+    );
+    let target_dir = Path::new(&target_dir_str);
 
     // Skip download if already present (CI pre-downloads via workflow step)
     if !target_dir.join("lib").join("onnxruntime.lib").exists() {
-        let url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip";
+        let url = format!(
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-{}-1.19.2.zip",
+            arch_suffix
+        );
+        let zip_name = format!("onnxruntime-win-{}-1.19.2.zip", arch_suffix);
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
             .expect("failed to build client");
-        let resp = client.get(url).send().expect("request failed");
+        let resp = client.get(&url).send().expect("request failed");
         let body = resp.bytes().expect("body invalid");
-        fs::write("./onnxruntime-win-x64-1.19.2.zip", &body).expect("failed to write");
+        fs::write(&zip_name, &body).expect("failed to write");
         let unzip_path = find_unzip().expect(
             "could not find unzip executable - please install it via GnuWin32 or add it to PATH",
         );
 
         let status = Command::new(unzip_path)
-            .args(["-o", "onnxruntime-win-x64-1.19.2.zip"])
+            .args(["-o", &zip_name])
             .status()
             .expect("failed to execute unzip");
 
@@ -114,7 +130,10 @@ fn install_onnxruntime() {
         if target_dir.exists() {
             fs::remove_dir_all(target_dir).expect("failed to remove existing directory");
         }
-        fs::rename("onnxruntime-win-x64-1.19.2", target_dir).expect("failed to rename");
+        fs::rename(dir_name, target_dir).expect("failed to rename");
     }
-    println!("cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib");
+    println!(
+        "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
+        dir_name
+    );
 }

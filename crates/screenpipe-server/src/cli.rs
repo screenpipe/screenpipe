@@ -76,7 +76,13 @@ pub enum CliVadEngine {
 impl From<CliVadEngine> for VadEngineEnum {
     fn from(cli_engine: CliVadEngine) -> Self {
         match cli_engine {
+            #[cfg(feature = "local-stt")]
             CliVadEngine::WebRtc => VadEngineEnum::WebRtc,
+            #[cfg(not(feature = "local-stt"))]
+            CliVadEngine::WebRtc => {
+                tracing::warn!("webrtc vad not available without local-stt, using silero");
+                VadEngineEnum::Silero
+            }
             CliVadEngine::Silero => VadEngineEnum::Silero,
         }
     }

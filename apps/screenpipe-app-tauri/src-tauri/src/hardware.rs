@@ -13,6 +13,7 @@ pub struct HardwareCapability {
     pub cpu_cores: usize,
     pub total_memory_gb: f64,
     pub is_weak_for_large_model: bool,
+    pub local_stt_available: bool,
     pub recommended_engine: String,
     pub reason: String,
 }
@@ -28,9 +29,19 @@ pub fn detect_hardware_capability() -> HardwareCapability {
     let cpu_cores = sys.cpus().len();
     let total_memory_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
 
+    let local_stt_available = cfg!(feature = "local-stt");
     let is_weak = !has_gpu && (cpu_cores < 8 || total_memory_gb < 8.0);
 
-    let (recommended_engine, reason) = if has_gpu {
+    let (recommended_engine, reason) = if !local_stt_available {
+        // ARM64 or builds without local-stt: recommend cloud
+        (
+            "deepgram".to_string(),
+            format!(
+                "Local whisper not available on this platform ({} cores, {:.1} GB RAM) — use a cloud engine",
+                cpu_cores, total_memory_gb
+            ),
+        )
+    } else if has_gpu {
         (
             "whisper-large-v3-turbo".to_string(),
             format!(
@@ -61,6 +72,7 @@ pub fn detect_hardware_capability() -> HardwareCapability {
         cpu_cores,
         total_memory_gb,
         is_weak_for_large_model: is_weak,
+        local_stt_available,
         recommended_engine,
         reason,
     }
