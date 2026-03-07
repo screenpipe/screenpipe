@@ -20,6 +20,8 @@ tracing = { workspace = true }
 russh = { version = "0.57", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.1"
 dirs = "6"
+async-trait = "0.1"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 eventkit-rs = { version = "0.1", features = ["reminders"] }

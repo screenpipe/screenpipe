@@ -526,6 +526,8 @@ pub struct PipeManager {
     last_reload: Arc<Mutex<Instant>>,
     /// Optional token registry for server-side permission enforcement.
     token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
+    /// Extra context appended to every pipe prompt (e.g. connected integrations).
+    extra_context: Option<String>,
 }
 
 impl PipeManager {
@@ -552,6 +554,17 @@ impl PipeManager {
                 Instant::now() - std::time::Duration::from_secs(10),
             )),
             token_registry: None,
+            extra_context: None,
+        }
+    }
+
+    /// Set extra context that gets appended to every pipe prompt.
+    /// Used by the server to inject connected integrations info.
+    pub fn set_extra_context(&mut self, ctx: String) {
+        if ctx.is_empty() {
+            self.extra_context = None;
+        } else {
+            self.extra_context = Some(ctx);
         }
     }
 
@@ -1841,6 +1854,7 @@ impl PipeManager {
         let store = self.store.clone();
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
+        let extra_context = self.extra_context.clone();
 
         tokio::spawn(async move {
             info!("pipe scheduler started");
@@ -1987,7 +2001,7 @@ impl PipeManager {
                     let pipe_dir = pipes_dir.join(name);
 
                     let prompt =
-                        render_prompt_with_port(config, body, api_port, preset_prompt.as_deref());
+                        render_prompt_with_port(config, body, api_port, preset_prompt.as_deref(), extra_context.as_deref());
                     let pipe_name = name.clone();
                     let logs_ref = logs.clone();
                     let running_ref = running.clone();
@@ -2372,7 +2386,13 @@ impl PipeManager {
         body: &str,
         system_prompt: Option<&str>,
     ) -> String {
-        render_prompt_with_port(config, body, self.api_port, system_prompt)
+        render_prompt_with_port(
+            config,
+            body,
+            self.api_port,
+            system_prompt,
+            self.extra_context.as_deref(),
+        )
     }
 
     async fn append_log(&self, name: &str, log: &PipeRunLog) {
@@ -2439,6 +2459,7 @@ fn render_prompt_with_port(
     body: &str,
     api_port: u16,
     system_prompt: Option<&str>,
+    extra_context: Option<&str>,
 ) -> String {
     let now = Local::now();
     let date = now.format("%Y-%m-%d").to_string();
@@ -2478,6 +2499,11 @@ Screenpipe API: http://localhost:{api_port}
     );
 
     prompt.push_str(&header);
+
+    if let Some(ctx) = extra_context {
+        prompt.push_str(ctx);
+    }
+
     prompt.push('\n');
     prompt.push_str(body);
     prompt
@@ -2899,7 +2925,7 @@ mod tests {
             allow_frames: true,
             config: HashMap::new(),
         };
-        let prompt = render_prompt_with_port(&config, "body text", 3031, None);
+        let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
         assert!(prompt.contains("http://localhost:3031"));
         assert!(!prompt.contains("http://localhost:3030"));
         assert!(prompt.contains("body text"));
@@ -2927,7 +2953,7 @@ mod tests {
             allow_frames: true,
             config: HashMap::new(),
         };
-        let prompt = render_prompt_with_port(&config, "hello", 3030, None);
+        let prompt = render_prompt_with_port(&config, "hello", 3030, None, None);
         assert!(prompt.contains("http://localhost:3030"));
     }
 
@@ -2958,6 +2984,7 @@ mod tests {
             "body text",
             3030,
             Some("You are a helpful assistant"),
+            None,
         );
         assert!(prompt.starts_with("System prompt:\nYou are a helpful assistant\n\n"));
         assert!(prompt.contains("body text"));
@@ -2986,7 +3013,7 @@ mod tests {
             allow_frames: true,
             config: HashMap::new(),
         };
-        let prompt = render_prompt_with_port(&config, "body text", 3030, None);
+        let prompt = render_prompt_with_port(&config, "body text", 3030, None, None);
         assert!(!prompt.contains("System prompt:"));
         assert!(prompt.contains("body text"));
     }

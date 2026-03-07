@@ -22,6 +22,7 @@ screenpipe-core = { path = "../screenpipe-core", features = ["security", "cloud-
 screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-accessibility = { path = "../screenpipe-accessibility", features = ["db"] }
 screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", optional = true }
+screenpipe-integrations = { path = "../screenpipe-integrations" }
 
 
 # Image processing

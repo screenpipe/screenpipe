@@ -578,6 +578,14 @@ impl SCServer {
             router
         };
 
+        // Connections routes (pipe-facing integrations: Telegram, Slack, etc.)
+        let cm: crate::connections_api::SharedConnectionManager = Arc::new(Mutex::new(
+            screenpipe_integrations::connections::ConnectionManager::new(
+                self.screenpipe_dir.clone(),
+            ),
+        ));
+        let router = router.nest("/connections", crate::connections_api::router(cm));
+
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {
             let power_routes = Router::new()

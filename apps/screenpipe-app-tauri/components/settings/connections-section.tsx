@@ -6,7 +6,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, Send, X, HelpCircle } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -496,6 +498,250 @@ function ChatGptConnectionCard() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Pipe Integrations (Telegram, Slack, Discord, Email)
+// ---------------------------------------------------------------------------
+
+interface IntegrationField {
+  key: string;
+  label: string;
+  secret: boolean;
+  placeholder: string;
+  help_url: string;
+}
+
+interface IntegrationAction {
+  id: string;
+  description: string;
+}
+
+interface IntegrationInfo {
+  id: string;
+  name: string;
+  icon: string;
+  category: string;
+  fields: IntegrationField[];
+  actions: IntegrationAction[];
+  connected: boolean;
+}
+
+const INTEGRATION_ICONS: Record<string, string> = {
+  telegram: "https://upload.wikimedia.org/wikipedia/commons/8/82/Telegram_logo.svg",
+  slack: "https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg",
+  discord: "https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0a69f118df70ad7828d4_icon_clyde_blurple_RGB.svg",
+  email: "",
+};
+
+function IntegrationIcon({ icon }: { icon: string }) {
+  const url = INTEGRATION_ICONS[icon];
+  if (url) {
+    return <img src={url} alt={icon} className="w-10 h-10 rounded-2xl" />;
+  }
+  // Email fallback
+  return (
+    <div className="w-10 h-10 bg-muted rounded-2xl flex items-center justify-center">
+      <Send className="h-5 w-5 text-muted-foreground" />
+    </div>
+  );
+}
+
+function PipeIntegrationCard({ integration, onRefresh }: {
+  integration: IntegrationInfo;
+  onRefresh: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<"idle" | "testing" | "saving" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const handleTest = async () => {
+    setStatus("testing");
+    setError(null);
+    try {
+      const res = await fetch(`http://localhost:3030/connections/${integration.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: creds }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "test failed");
+      // Test passed — save
+      setStatus("saving");
+      const saveRes = await fetch(`http://localhost:3030/connections/${integration.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: creds }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+      setStatus("idle");
+      setEditing(false);
+      onRefresh();
+    } catch (e: any) {
+      setError(e?.message || "unknown error");
+      setStatus("error");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      await fetch(`http://localhost:3030/connections/${integration.id}`, { method: "DELETE" });
+      onRefresh();
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <Card className="border-border bg-card overflow-hidden">
+      <CardContent className="p-0">
+        <div className="flex items-start p-4 gap-4">
+          <div className="flex-shrink-0">
+            <IntegrationIcon icon={integration.icon} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="text-sm font-semibold text-foreground">{integration.name}</h3>
+              <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full">
+                {integration.category}
+              </span>
+              {integration.connected && (
+                <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
+                  connected
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              {integration.actions.map(a => a.description).join(". ")}
+            </p>
+
+            {!editing ? (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() => {
+                    setCreds({});
+                    setError(null);
+                    setStatus("idle");
+                    setEditing(true);
+                  }}
+                  size="sm"
+                  variant={integration.connected ? "outline" : "default"}
+                  className="gap-1.5 h-7 text-xs"
+                >
+                  {integration.connected ? "Reconfigure" : "Connect"}
+                </Button>
+                {integration.connected && (
+                  <Button
+                    onClick={handleDisconnect}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 h-7 text-xs text-destructive"
+                  >
+                    <X className="h-3 w-3" />
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {integration.fields.map((field) => (
+                  <div key={field.key} className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <Label className="text-xs">{field.label}</Label>
+                      {field.help_url && (
+                        <button
+                          onClick={() => openUrl(field.help_url)}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <HelpCircle className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                    <Input
+                      type={field.secret ? "password" : "text"}
+                      placeholder={field.placeholder}
+                      value={creds[field.key] || ""}
+                      onChange={(e) => setCreds(prev => ({ ...prev, [field.key]: e.target.value }))}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                ))}
+                {error && (
+                  <p className="text-xs text-destructive">{error}</p>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleTest}
+                    disabled={status === "testing" || status === "saving"}
+                    size="sm"
+                    className="gap-1.5 h-7 text-xs"
+                  >
+                    {status === "testing" ? (
+                      <><Loader2 className="h-3 w-3 animate-spin" /> Testing...</>
+                    ) : status === "saving" ? (
+                      <><Loader2 className="h-3 w-3 animate-spin" /> Saving...</>
+                    ) : (
+                      <><Check className="h-3 w-3" /> Test &amp; Save</>
+                    )}
+                  </Button>
+                  <Button
+                    onClick={() => setEditing(false)}
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PipeIntegrationsSection() {
+  const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
+
+  const fetchIntegrations = useCallback(async () => {
+    try {
+      const res = await fetch("http://localhost:3030/connections");
+      const data = await res.json();
+      if (data.data) setIntegrations(data.data);
+    } catch {
+      // server may not be running yet
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchIntegrations();
+  }, [fetchIntegrations]);
+
+  if (integrations.length === 0) return null;
+
+  return (
+    <>
+      <div className="space-y-1 mt-6">
+        <h2 className="text-sm font-semibold text-foreground">
+          Pipe Integrations
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Connect notification channels so your pipes can send you messages
+        </p>
+      </div>
+      {integrations.map((integration) => (
+        <PipeIntegrationCard
+          key={integration.id}
+          integration={integration}
+          onRefresh={fetchIntegrations}
+        />
+      ))}
+    </>
+  );
+}
+
 export function ConnectionsSection() {
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "downloaded">("idle");
   const [versionInfo, setVersionInfo] = useState<McpVersionInfo>({ available: null, installed: null });
@@ -692,6 +938,9 @@ export function ConnectionsSection() {
 
         {/* Apple Intelligence */}
         <AppleIntelligenceCard />
+
+        {/* Pipe Integrations (Telegram, Slack, Discord, Email) */}
+        <PipeIntegrationsSection />
 
         {/* Calendar */}
         <CalendarCard />
