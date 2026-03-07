@@ -81,7 +81,7 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
     info!("show_main_window called, attempting to show Settings window");
 
-    match ShowRewindWindow::Settings { page: None }.show(app_handle) {
+    match (ShowRewindWindow::Settings { page: None }).show(app_handle) {
         Ok(window) => {
             info!(
                 "ShowRewindWindow::Main.show succeeded, window label: {}",
@@ -118,7 +118,7 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
     // handler in window_api.rs. Do NOT also unregister them here — doing
     // so races with the focus handler and causes duplicate unregister calls.
 
-    if let Err(e) = ShowRewindWindow::Settings { page: None }.close(app_handle) {
+    if let Err(e) = (ShowRewindWindow::Settings { page: None }).close(app_handle) {
         error!("failed to close settings window: {}", e);
     }
 }
