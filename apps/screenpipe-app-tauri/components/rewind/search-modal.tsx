@@ -347,8 +347,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // Append transcribed text to search query
       setQuery((prev) => prev + (prev ? " " : "") + text);
     },
-      toast({ title: "dictation error", description: error, variant: "destructive" });
     onError: (error) => {
+      toast({ title: "dictation error", description: error, variant: "destructive" });
     },
   });
 
