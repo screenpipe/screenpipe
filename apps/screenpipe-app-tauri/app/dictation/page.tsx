@@ -13,6 +13,7 @@ export default function DictationPage() {
   const [fullText, setFullText] = useState("");
   const [copied, setCopied] = useState(false);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasReceivedRecordingRef = useRef(false);
 
   const { state, stopDictation } = useDictation({
     onTranscription: (text) => {
@@ -22,8 +23,8 @@ export default function DictationPage() {
       toast({ title: "dictation error", description: error, variant: "destructive" });
     },
     onStateChange: (newState) => {
-      // Clear text when recording starts
       if (newState === "recording") {
+        hasReceivedRecordingRef.current = true;
         setFullText("");
         setCopied(false);
       }
@@ -38,9 +39,9 @@ export default function DictationPage() {
     }
   }, []);
 
-  // Auto-close when idle without text
+  // Auto-close when idle without text (only after recording started)
   useEffect(() => {
-    if (state === "idle" && !fullText) {
+    if (state === "idle" && !fullText && hasReceivedRecordingRef.current) {
       const timer = setTimeout(() => {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
           getCurrentWindow().close();
