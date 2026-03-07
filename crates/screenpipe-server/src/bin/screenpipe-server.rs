@@ -8,39 +8,32 @@ use colored::Colorize;
 use dirs::home_dir;
 use futures::pin_mut;
 use port_check::is_local_ipv4_port_free;
-use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
-use reqwest::Client;
 use screenpipe_audio::{
     core::device::{
-        default_input_device, default_output_device, list_audio_devices, parse_audio_device,
+        default_input_device, default_output_device, parse_audio_device,
     },
     meeting_detector::MeetingDetector,
 };
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::find_ffmpeg_path;
-use screenpipe_core::sync::{
-    BlobType, SyncClientConfig, SyncEvent, SyncManager, SyncService, SyncServiceConfig,
-};
 use screenpipe_db::DatabaseManager;
+use screenpipe_vision::monitor::list_monitors;
 use screenpipe_server::{
     analytics,
-    cli::{
-        get_or_create_machine_id, AudioCommand, Cli, CliAudioTranscriptionEngine, Command,
-        McpCommand, OutputFormat, SyncCommand, VisionCommand,
-    },
+    cli::{Cli, CliAudioTranscriptionEngine, Command},
+    cli_audio::handle_audio_command,
+    cli_mcp::handle_mcp_command,
     cli_pipe::handle_pipe_command,
     cli_status::handle_status_command,
+    cli_sync::{handle_sync_command, start_sync_service},
+    cli_vision::handle_vision_command,
     hot_frame_cache::HotFrameCache,
     start_meeting_persister, start_meeting_watcher, start_power_manager, start_sleep_monitor,
     start_speaker_identification, start_ui_recording,
-    sync_provider::ScreenpipeSyncProvider,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
     watch_pid, ResourceMonitor, SCServer,
 };
-use screenpipe_vision::monitor::list_monitors;
-use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
 use std::{
     env, fs,
     net::SocketAddr,
@@ -128,16 +121,6 @@ const DISPLAY: &str = r"
                                  /_/     /_/           
 
 ";
-
-// Add the struct definition with proper derive attributes
-#[derive(Deserialize, Debug)]
-struct GitHubContent {
-    name: String,
-    path: String,
-    download_url: Option<String>,
-    #[serde(rename = "type")]
-    content_type: String,
-}
 
 fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     let default_path = home_dir()
@@ -256,8 +239,8 @@ async fn main() -> anyhow::Result<()> {
     debug!("starting screenpipe server");
     let cli = Cli::parse();
 
-    // Dispatch non-recording subcommands early (they don't need Sentry, DB, etc.)
-    match cli.command {
+    // Dispatch subcommands — non-recording commands return early
+    let record_args = match cli.command {
         Command::Status {
             json,
             ref data_dir,
@@ -272,67 +255,15 @@ async fn main() -> anyhow::Result<()> {
             handle_pipe_command(subcommand).await?;
             return Ok(());
         }
-        Command::Audio { ref subcommand } => match subcommand {
-            AudioCommand::List { output } => {
-                let default_input = default_input_device().unwrap();
-                let default_output = default_output_device().await.unwrap();
-                let devices = list_audio_devices().await?;
-                match output {
-                    OutputFormat::Json => println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json!({
-                            "data": devices.iter().map(|d| {
-                                json!({
-                                    "name": d.to_string(),
-                                    "is_default": d.name == default_input.name || d.name == default_output.name
-                                })
-                            }).collect::<Vec<_>>(),
-                            "success": true
-                        }))?
-                    ),
-                    OutputFormat::Text => {
-                        println!("available audio devices:");
-                        for device in devices.iter() {
-                            println!("  {}", device);
-                        }
-                        #[cfg(target_os = "macos")]
-                        println!("note: on macos, output devices are your displays");
-                    }
-                }
-                return Ok(());
-            }
-        },
-        Command::Vision { ref subcommand } => match subcommand {
-            VisionCommand::List { output } => {
-                let monitors = list_monitors().await;
-                match output {
-                    OutputFormat::Json => println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json!({
-                            "data": monitors.iter().map(|m| {
-                                json!({
-                                    "id": m.id(),
-                                    "name": m.name(),
-                                    "width": m.width(),
-                                    "height": m.height(),
-                                    "is_default": m.is_primary(),
-                                })
-                            }).collect::<Vec<_>>(),
-                            "success": true
-                        }))?
-                    ),
-                    OutputFormat::Text => {
-                        println!("available monitors:");
-                        for monitor in monitors.iter() {
-                            println!("  {}. {:?}", monitor.id(), monitor.name());
-                        }
-                    }
-                }
-                return Ok(());
-            }
-        },
+        Command::Audio { ref subcommand } => {
+            handle_audio_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Vision { ref subcommand } => {
+            handle_vision_command(subcommand).await?;
+            return Ok(());
+        }
         Command::Mcp { ref subcommand } => {
-            // Need data_dir for MCP, use default
             let local_data_dir = get_base_dir(&None)?;
             handle_mcp_command(subcommand, &local_data_dir).await?;
             return Ok(());
@@ -341,15 +272,7 @@ async fn main() -> anyhow::Result<()> {
             handle_sync_command(subcommand).await?;
             return Ok(());
         }
-        Command::Record(_) => {
-            // Fall through to recording logic below
-        }
-    }
-
-    // Extract RecordArgs — we know it's Command::Record at this point
-    let record_args = match cli.command {
         Command::Record(args) => args,
-        _ => unreachable!(),
     };
 
     // Initialize Sentry only if telemetry is enabled
@@ -1122,470 +1045,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn handle_mcp_command(
-    command: &McpCommand,
-    local_data_dir: &std::path::Path,
-) -> Result<(), anyhow::Error> {
-    let client = Client::new();
-
-    // Check if Python is installed
-    if !is_command_available("python") || !is_command_available("python3") {
-        warn!("note: python is not installed. please install it from the official website: https://www.python.org/");
-    }
-
-    // Check if uv is installed
-    if !is_command_available("uv") {
-        warn!("note: uv is not installed. please install it using the instructions at: https://docs.astral.sh/uv/#installation");
-    }
-
-    match command {
-        McpCommand::Setup {
-            directory,
-            output,
-            port,
-            update,
-            purge,
-        } => {
-            let mcp_dir = directory
-                .as_ref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| local_data_dir.join("mcp"));
-
-            // If purge flag is set, just remove the directory and return
-            if *purge {
-                if mcp_dir.exists() {
-                    info!("Purging MCP directory: {}", mcp_dir.display());
-                    tokio::fs::remove_dir_all(&mcp_dir).await?;
-
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": {
-                                    "message": "MCP directory purged successfully",
-                                    "directory": mcp_dir.to_string_lossy(),
-                                },
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("MCP directory purged successfully");
-                            println!("Directory: {}", mcp_dir.display());
-                        }
-                    }
-                } else {
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": {
-                                    "message": "MCP directory does not exist",
-                                    "directory": mcp_dir.to_string_lossy(),
-                                },
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("MCP directory does not exist: {}", mcp_dir.display());
-                        }
-                    }
-                }
-                return Ok(());
-            }
-
-            let should_download = if mcp_dir.exists() {
-                if *update {
-                    tokio::fs::remove_dir_all(&mcp_dir).await?;
-                    true
-                } else {
-                    let mut entries = tokio::fs::read_dir(&mcp_dir).await?;
-                    entries.next_entry().await?.is_none()
-                }
-            } else {
-                true
-            };
-
-            // Create config regardless of download status
-            let config = json!({
-                "mcpServers": {
-                    "screenpipe": {
-                        "command": "uv",
-                        "args": [
-                            "--directory",
-                            mcp_dir.to_string_lossy().to_string(),
-                            "run",
-                            "screenpipe-mcp",
-                            "--port",
-                            port.to_string()
-                        ]
-                    }
-                }
-            });
-
-            let run_command = format!(
-                "uv --directory {} run screenpipe-mcp --port {}",
-                mcp_dir.to_string_lossy(),
-                port
-            );
-
-            let config_path = mcp_dir.join("config.json");
-
-            if should_download {
-                tokio::fs::create_dir_all(&mcp_dir).await?;
-
-                // Log the start of the download process
-                info!("starting download process for MCP directory");
-
-                let owner = "screenpipe";
-                let repo = "screenpipe";
-                let branch = "main";
-                let target_dir = "crates/screenpipe-integrations/screenpipe-mcp";
-
-                let api_url = format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    owner, repo, target_dir, branch
-                );
-
-                // Setup ctrl+c handler
-                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                let cancel_handle = tokio::spawn(async move {
-                    if signal::ctrl_c().await.is_ok() {
-                        let _ = tx.send(()).await;
-                    }
-                });
-
-                // Download with cancellation support
-                let download_result = tokio::select! {
-                    result = download_mcp_directory(&client, &api_url, &mcp_dir) => result,
-                    _ = rx.recv() => {
-                        info!("Received ctrl+c, canceling download...");
-                        Err(anyhow::anyhow!("Download cancelled by user"))
-                    }
-                };
-
-                // Clean up cancel handler
-                cancel_handle.abort();
-
-                // Handle download result
-                match download_result {
-                    Ok(_) => {
-                        tokio::fs::write(&config_path, serde_json::to_string_pretty(&config)?)
-                            .await?;
-                    }
-                    Err(e) => {
-                        // Clean up on failure
-                        if mcp_dir.exists() {
-                            let _ = tokio::fs::remove_dir_all(&mcp_dir).await;
-                        }
-                        return Err(e);
-                    }
-                }
-            }
-
-            // Always create/update config.json regardless of download
-            tokio::fs::write(&config_path, serde_json::to_string_pretty(&config)?).await?;
-
-            match output {
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "data": {
-                            "message": if should_download { "MCP setup completed successfully" } else { "MCP files already exist" },
-                            "config": config,
-                            "config_path": config_path.to_string_lossy(),
-                            "directory": mcp_dir.to_string_lossy(),
-                            "port": port
-                        },
-                        "success": true
-                    }))?
-                ),
-                OutputFormat::Text => {
-                    if should_download {
-                        println!("MCP setup completed successfully");
-                    } else {
-                        println!("MCP files already exist at: {}", mcp_dir.display());
-                        println!("Use --update flag to force update or --purge to start fresh");
-                    }
-                    println!("Directory: {}", mcp_dir.display());
-                    println!("Config file: {}", config_path.display());
-                    println!("\nTo run the MCP server, use this command:");
-                    println!("$ {}", run_command);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn download_mcp_directory(
-    client: &Client,
-    api_url: &str,
-    target_dir: &Path,
-) -> Result<(), anyhow::Error> {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("screenpipe-cli"));
-
-    let response = client
-        .get(api_url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!(
-            "GitHub API error (status {}): {}",
-            status,
-            error_text
-        ));
-    }
-
-    let contents: Vec<GitHubContent> = response
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse GitHub API response: {}", e))?;
-
-    for item in contents {
-        let target_path = target_dir.join(&item.name);
-
-        match item.content_type.as_str() {
-            "file" => {
-                if let Some(download_url) = item.download_url {
-                    let file_response = client.get(&download_url).send().await.map_err(|e| {
-                        anyhow::anyhow!("Failed to download file {}: {}", download_url, e)
-                    })?;
-
-                    let content = file_response
-                        .bytes()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to get file content: {}", e))?;
-
-                    tokio::fs::write(&target_path, content).await.map_err(|e| {
-                        anyhow::anyhow!("Failed to write file {}: {}", target_path.display(), e)
-                    })?;
-
-                    debug!("Downloaded file: {}", target_path.display());
-                }
-            }
-            "dir" => {
-                tokio::fs::create_dir_all(&target_path).await.map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to create directory {}: {}",
-                        target_path.display(),
-                        e
-                    )
-                })?;
-
-                let subdir_api_url = format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    "screenpipe", "screenpipe", item.path, "main"
-                );
-
-                // Fix recursion with Box::pin
-                let future = Box::pin(download_mcp_directory(
-                    client,
-                    &subdir_api_url,
-                    &target_path,
-                ));
-                future.await?;
-            }
-            _ => {
-                warn!("Skipping unsupported content type: {}", item.content_type);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// Helper function to check if a command is available
-fn is_command_available(command: &str) -> bool {
-    let mut cmd = std::process::Command::new(command);
-    cmd.arg("--version");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-/// Start the cloud sync service
-async fn start_sync_service(
-    args: &screenpipe_server::cli::RecordArgs,
-    db: Arc<DatabaseManager>,
-) -> anyhow::Result<Arc<screenpipe_core::sync::SyncServiceHandle>> {
-    // Validate required credentials
-    let token = args.sync_token.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("--sync-token or SCREENPIPE_SYNC_TOKEN required for sync")
-    })?;
-
-    let password = args.sync_password.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("--sync-password or SCREENPIPE_SYNC_PASSWORD required for sync")
-    })?;
-
-    // Get machine ID
-    let machine_id = get_or_create_machine_id(args.sync_machine_id.clone());
-    info!("sync machine ID: {}", machine_id);
-
-    // Get device info
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let device_os = std::env::consts::OS.to_string();
-
-    // Create sync manager
-    let config = SyncClientConfig::new(token.clone(), machine_id.clone(), device_name, device_os);
-    let manager = SyncManager::new(config)?;
-
-    // Initialize with password
-    let is_new_user = manager.initialize(password).await?;
-    info!(
-        "sync initialized for {} user",
-        if is_new_user { "new" } else { "existing" }
-    );
-
-    let manager = Arc::new(manager);
-
-    // Create sync data provider
-    let provider = Arc::new(ScreenpipeSyncProvider::new(db, machine_id));
-
-    // Create sync service config
-    let service_config = SyncServiceConfig {
-        enabled: true,
-        sync_interval_secs: args.sync_interval_secs,
-        sync_types: vec![BlobType::Ocr, BlobType::Transcripts],
-        max_blobs_per_cycle: 10,
-        sync_on_startup: true,
-    };
-
-    // Create and start service
-    let service = SyncService::new(manager, service_config, provider);
-    let (handle, mut event_rx) = service.start();
-
-    // Spawn event handler
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                SyncEvent::Started => {
-                    info!("sync cycle started");
-                }
-                SyncEvent::Completed(report) => {
-                    info!(
-                        "sync cycle completed: {} blobs uploaded ({} bytes) in {:.2}s",
-                        report.blobs_uploaded, report.bytes_uploaded, report.duration_secs
-                    );
-                }
-                SyncEvent::Failed(err) => {
-                    error!("sync cycle failed: {}", err);
-                }
-                SyncEvent::Progress {
-                    uploaded,
-                    total,
-                    bytes_transferred,
-                } => {
-                    debug!(
-                        "sync progress: {}/{} blobs, {} bytes",
-                        uploaded, total, bytes_transferred
-                    );
-                }
-                SyncEvent::Stopped => {
-                    info!("sync service stopped");
-                    break;
-                }
-            }
-        }
-    });
-
-    Ok(Arc::new(handle))
-}
-
-/// Handle sync subcommands
-async fn handle_sync_command(command: &SyncCommand) -> anyhow::Result<()> {
-    let client = reqwest::Client::new();
-    let server_url = "http://localhost";
-
-    match command {
-        SyncCommand::Status { output, port } => {
-            let url = format!("{}:{}/sync/status", server_url, port);
-            match client.get(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let data: serde_json::Value = response.json().await?;
-                    match output {
-                        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&data)?),
-                        OutputFormat::Text => {
-                            println!("sync status:");
-                            if let Some(enabled) = data.get("enabled") {
-                                println!("  enabled: {}", enabled);
-                            }
-                            if let Some(is_syncing) = data.get("is_syncing") {
-                                println!("  syncing: {}", is_syncing);
-                            }
-                            if let Some(last_sync) = data.get("last_sync") {
-                                println!("  last sync: {}", last_sync);
-                            }
-                            if let Some(storage_used) = data.get("storage_used") {
-                                println!("  storage used: {} bytes", storage_used);
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    println!("note: server not running or sync not enabled");
-                }
-            }
-        }
-        SyncCommand::Now { port } => {
-            let url = format!("{}:{}/sync/trigger", server_url, port);
-            match client.post(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    println!("sync triggered successfully");
-                }
-                Ok(response) => {
-                    let error: serde_json::Value = response.json().await.unwrap_or_default();
-                    println!(
-                        "failed to trigger sync: {}",
-                        error
-                            .get("error")
-                            .unwrap_or(&serde_json::json!("unknown error"))
-                    );
-                }
-                Err(e) => {
-                    println!("failed to connect to server: {}", e);
-                }
-            }
-        }
-        SyncCommand::Download { hours, port } => {
-            let url = format!("{}:{}/sync/download?hours={}", server_url, port, hours);
-            match client.post(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let data: serde_json::Value = response.json().await?;
-                    println!(
-                        "download complete: {} records imported",
-                        data.get("imported").unwrap_or(&serde_json::json!(0))
-                    );
-                }
-                Ok(response) => {
-                    let error: serde_json::Value = response.json().await.unwrap_or_default();
-                    println!(
-                        "failed to download: {}",
-                        error
-                            .get("error")
-                            .unwrap_or(&serde_json::json!("unknown error"))
-                    );
-                }
-                Err(e) => {
-                    println!("failed to connect to server: {}", e);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
