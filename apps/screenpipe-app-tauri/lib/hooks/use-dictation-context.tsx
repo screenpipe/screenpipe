@@ -87,14 +87,7 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 
     setTranscribedText("");
 
-    setState("recording");
-    notifySubscribers({ type: "stateChange", state: "recording" });
-    
-    // Emit state change for other windows (like dictation window)
-    import("@tauri-apps/api/event").then(({ emit }) => {
-      emit("dictation-state-changed", { state: "recording" });
-    });
-
+    // Show the dictation window first (so it's ready to receive state updates)
     try {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const existingWindow = await WebviewWindow.getByLabel("dictation");
@@ -109,6 +102,15 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.warn("[dictation-context] Failed to show dictation window:", e);
     }
+
+    // Now set state and emit - window is ready to receive
+    setState("recording");
+    notifySubscribers({ type: "stateChange", state: "recording" });
+    
+    // Emit state change for other windows (like dictation window)
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit("dictation-state-changed", { state: "recording" });
+    });
 
     try {
       const ws = new WebSocket(DICTATION_WS_URL);
