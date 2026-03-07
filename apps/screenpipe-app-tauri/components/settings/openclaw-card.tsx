@@ -232,8 +232,10 @@ export function OpenClawCard() {
                 {discoveredHosts.length > 0 && (
                   <>
                     <p className="text-xs text-muted-foreground">pick a server:</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {discoveredHosts.map((h, i) => (
+                    <div className="flex flex-wrap gap-1.5 max-h-[120px] overflow-y-auto">
+                      {discoveredHosts
+                        .sort((a, b) => (a.source === "ssh_config" ? -1 : 1) - (b.source === "ssh_config" ? -1 : 1))
+                        .map((h, i) => (
                         <button
                           key={i}
                           onClick={() => selectHost(h)}

@@ -499,6 +499,10 @@ fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
             "screenpipe-elements",
             include_str!("../assets/skills/screenpipe-elements/SKILL.md"),
         ),
+        (
+            "screenpipe-pipes",
+            include_str!("../assets/skills/screenpipe-pipes/SKILL.md"),
+        ),
     ];
 
     for (name, content) in skills {
@@ -638,7 +642,7 @@ fn ensure_pi_config(
             let base_url = if config.provider == "native-ollama" && config.url.is_empty() {
                 "http://localhost:11434/v1".to_string()
             } else if config.provider == "openai-chatgpt" {
-                "https://api.openai.com/v1".to_string()
+                "https://chatgpt.com/backend-api".to_string()
             } else {
                 config.url.clone()
             };
@@ -1743,7 +1747,7 @@ fn download_portable_git() -> Result<String, String> {
 
     {
         let mut cmd = std::process::Command::new(&temp_file);
-        cmd.args([&format!("-o{}", extract_temp.to_string_lossy()), "-y"]);
+        cmd.args([&format!("-o{}", extract_temp.to_string_lossy()), "-y", "-gm2"]);
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;

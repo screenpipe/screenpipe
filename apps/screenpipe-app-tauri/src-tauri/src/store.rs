@@ -843,6 +843,7 @@ pub struct CloudSyncSettingsStore {
 }
 
 impl CloudSyncSettingsStore {
+    #[allow(dead_code)]
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         if store.is_empty() {

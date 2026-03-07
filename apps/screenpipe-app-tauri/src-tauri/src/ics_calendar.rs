@@ -14,11 +14,107 @@ use crate::store::IcsCalendarSettingsStore;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use chrono_tz::Tz;
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
+use std::collections::HashSet;
 use std::str::FromStr;
+use std::sync::Mutex;
 use tauri::AppHandle;
 use tracing::{debug, info, warn};
 
+// Windows timezone names → IANA. Outlook/Exchange ICS feeds use these.
+fn windows_tz_to_iana(win_tz: &str) -> Option<&'static str> {
+    Some(match win_tz {
+        "AUS Eastern Standard Time" => "Australia/Sydney",
+        "E. Australia Standard Time" => "Australia/Brisbane",
+        "Cen. Australia Standard Time" => "Australia/Adelaide",
+        "AUS Central Standard Time" => "Australia/Darwin",
+        "W. Australia Standard Time" => "Australia/Perth",
+        "Tasmania Standard Time" => "Australia/Hobart",
+        "Pacific Standard Time" => "America/Los_Angeles",
+        "Mountain Standard Time" => "America/Denver",
+        "Central Standard Time" => "America/Chicago",
+        "Eastern Standard Time" => "America/New_York",
+        "Atlantic Standard Time" => "America/Halifax",
+        "US Mountain Standard Time" => "America/Phoenix",
+        "Alaskan Standard Time" => "America/Anchorage",
+        "Hawaiian Standard Time" => "Pacific/Honolulu",
+        "GMT Standard Time" => "Europe/London",
+        "Greenwich Standard Time" => "Atlantic/Reykjavik",
+        "W. Europe Standard Time" => "Europe/Berlin",
+        "Central Europe Standard Time" => "Europe/Budapest",
+        "Central European Standard Time" => "Europe/Warsaw",
+        "Romance Standard Time" => "Europe/Paris",
+        "E. Europe Standard Time" => "Europe/Chisinau",
+        "FLE Standard Time" => "Europe/Kiev",
+        "GTB Standard Time" => "Europe/Bucharest",
+        "Russian Standard Time" => "Europe/Moscow",
+        "Turkey Standard Time" => "Europe/Istanbul",
+        "Israel Standard Time" => "Asia/Jerusalem",
+        "South Africa Standard Time" => "Africa/Johannesburg",
+        "Egypt Standard Time" => "Africa/Cairo",
+        "Arabian Standard Time" => "Asia/Dubai",
+        "India Standard Time" => "Asia/Kolkata",
+        "Sri Lanka Standard Time" => "Asia/Colombo",
+        "China Standard Time" => "Asia/Shanghai",
+        "Taipei Standard Time" => "Asia/Taipei",
+        "Singapore Standard Time" => "Asia/Singapore",
+        "Tokyo Standard Time" => "Asia/Tokyo",
+        "Korea Standard Time" => "Asia/Seoul",
+        "SE Asia Standard Time" => "Asia/Bangkok",
+        "New Zealand Standard Time" => "Pacific/Auckland",
+        "Fiji Standard Time" => "Pacific/Fiji",
+        "Samoa Standard Time" => "Pacific/Apia",
+        "SA Pacific Standard Time" => "America/Bogota",
+        "SA Eastern Standard Time" => "America/Cayenne",
+        "SA Western Standard Time" => "America/La_Paz",
+        "E. South America Standard Time" => "America/Sao_Paulo",
+        "Argentina Standard Time" => "America/Buenos_Aires",
+        "Venezuela Standard Time" => "America/Caracas",
+        "Canada Central Standard Time" => "America/Regina",
+        "Newfoundland Standard Time" => "America/St_Johns",
+        "West Asia Standard Time" => "Asia/Tashkent",
+        "Nepal Standard Time" => "Asia/Kathmandu",
+        "Central Asia Standard Time" => "Asia/Almaty",
+        "N. Central Asia Standard Time" => "Asia/Novosibirsk",
+        "Myanmar Standard Time" => "Asia/Rangoon",
+        "North Asia Standard Time" => "Asia/Krasnoyarsk",
+        "North Asia East Standard Time" => "Asia/Irkutsk",
+        "Yakutsk Standard Time" => "Asia/Yakutsk",
+        "Vladivostok Standard Time" => "Asia/Vladivostok",
+        "Iran Standard Time" => "Asia/Tehran",
+        "Arabic Standard Time" => "Asia/Baghdad",
+        "Pakistan Standard Time" => "Asia/Karachi",
+        "Bangladesh Standard Time" => "Asia/Dhaka",
+        "Ekaterinburg Standard Time" => "Asia/Yekaterinburg",
+        "Caucasus Standard Time" => "Asia/Yerevan",
+        "Georgian Standard Time" => "Asia/Tbilisi",
+        "Azerbaijan Standard Time" => "Asia/Baku",
+        "Afghanistan Standard Time" => "Asia/Kabul",
+        "West Pacific Standard Time" => "Pacific/Port_Moresby",
+        "Tonga Standard Time" => "Pacific/Tongatapu",
+        "Magadan Standard Time" => "Asia/Magadan",
+        "UTC" => "Etc/UTC",
+        _ => return None,
+    })
+}
+
 // ─── Parsing ─────────────────────────────────────────────────────────────────
+
+/// Tracks timezone IDs we've already warned about to avoid log spam.
+static WARNED_TIMEZONES: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Try to resolve a TZID string to a chrono_tz::Tz.
+/// Handles both IANA names and Windows timezone names (from Outlook/Exchange).
+fn resolve_timezone(tzid: &str) -> Option<Tz> {
+    // Try IANA first
+    if let Ok(tz) = tzid.parse::<Tz>() {
+        return Some(tz);
+    }
+    // Try Windows → IANA mapping
+    if let Some(iana) = windows_tz_to_iana(tzid) {
+        return iana.parse::<Tz>().ok();
+    }
+    None
+}
 
 fn date_perhaps_time_to_utc(dpt: &DatePerhapsTime) -> Option<DateTime<Utc>> {
     match dpt {
@@ -33,14 +129,18 @@ fn date_perhaps_time_to_utc(dpt: &DatePerhapsTime) -> Option<DateTime<Utc>> {
                     .map(|dt| dt.with_timezone(&Utc))
             }
             CalendarDateTime::WithTimezone { date_time, tzid } => {
-                // Parse TZID (e.g. "Australia/Brisbane", "America/New_York") and convert to UTC
-                match tzid.parse::<Tz>() {
-                    Ok(tz) => tz
+                match resolve_timezone(tzid) {
+                    Some(tz) => tz
                         .from_local_datetime(date_time)
                         .earliest()
                         .map(|dt| dt.with_timezone(&Utc)),
-                    Err(_) => {
-                        warn!("ics_calendar: unknown timezone '{}', falling back to local", tzid);
+                    None => {
+                        // Warn only once per unknown timezone to avoid log spam
+                        let mut guard = WARNED_TIMEZONES.lock().unwrap();
+                        let set = guard.get_or_insert_with(HashSet::new);
+                        if set.insert(tzid.to_string()) {
+                            warn!("ics_calendar: unknown timezone '{}', falling back to local", tzid);
+                        }
                         let local = Local::now().timezone();
                         local
                             .from_local_datetime(date_time)

@@ -31,17 +31,12 @@ export function useLiveText(opts: {
 	const [nativeLiveTextActive, setNativeLiveTextActive] = useState(false);
 	const liveTextInitRef = useRef(false);
 
-	// Track whether we have image info via a boolean to avoid object-reference churn.
+	// Track whether we have image info via a ref for the analyze effect,
+	// and a boolean for dependency tracking.
 	const renderedInfoRef = useRef(renderedImageInfo);
 	renderedInfoRef.current = renderedImageInfo;
-	const hasRenderedInfo = !!renderedImageInfo;
 
 	const analyzeFailCountRef = useRef(0);
-
-	// NOTE: The original component also hides the overlay on raw (pre-debounce)
-	// frameId changes so stale text selection doesn't linger while scrolling.
-	// That effect depends on raw frameId which is not in opts — the caller should
-	// replicate it externally or pass rawFrameId if needed.
 
 	// Initialize Live Text overlay once on mount (macOS only)
 	useEffect(() => {
@@ -66,13 +61,12 @@ export function useLiveText(opts: {
 		return () => { cancelled = true; };
 	}, [isMac]);
 
-	// Analyze frame when frameId changes OR when renderedImageInfo first becomes available.
-	// Position is handled separately by the update_position effect below.
+	// Analyze frame when frameId changes. Decoupled from renderedImageInfo —
+	// we start analysis immediately and update position separately when layout is ready.
+	// Previous analysis stays visible while new one loads (no hide between frames).
 	useEffect(() => {
 		if (!nativeLiveTextActive) return;
 		if (!debouncedFrame?.frameId) return;
-		const info = renderedInfoRef.current;
-		if (!info) return;
 
 		// For snapshot frames, use the local file path directly (instant).
 		// For video-chunk frames, fall back to HTTP endpoint (requires ffmpeg extraction).
@@ -80,23 +74,28 @@ export function useLiveText(opts: {
 			? debouncedFrame.filePath
 			: `http://localhost:3030/frames/${debouncedFrame.frameId}`;
 
-		// Debounce: wait 300ms after last frame change before analyzing.
-		// This prevents hammering VisionKit during fast scroll.
+		// Use last known position for analyze call, or a default.
+		// Position will be corrected by the update_position effect once layout is ready.
+		const info = renderedInfoRef.current;
+		const x = info?.offsetX ?? 0;
+		const y = info?.offsetY ?? 0;
+		const w = info?.width ?? 800;
+		const h = info?.height ?? 600;
+
+		// Debounce: 150ms — short enough to feel responsive, long enough to skip
+		// intermediate frames during fast scroll. Generation counter in Swift
+		// handles cancellation of stale in-flight requests.
 		let cancelled = false;
 		const timer = setTimeout(() => {
 			if (cancelled) return;
 			invoke("livetext_analyze", {
 				imagePath,
-				x: info.offsetX,
-				y: info.offsetY,
-				w: info.width,
-				h: info.height,
+				x, y, w, h,
 			}).then(() => {
 				analyzeFailCountRef.current = 0;
 			}).catch((e: unknown) => {
 				if (cancelled) return;
 				const msg = String(e);
-				// If VisionKit XPC fails (e.g. ad-hoc signed binary), disable native mode
 				if (msg.includes("helper application") || msg.includes("XPC")) {
 					console.warn("[livetext] VisionKit unavailable (code signing?), falling back to web mode");
 					setNativeLiveTextActive(false);
@@ -111,11 +110,11 @@ export function useLiveText(opts: {
 				}
 				console.warn("live text analyze failed:", e);
 			});
-		}, 300);
+		}, 150);
 		return () => { cancelled = true; clearTimeout(timer); };
-	}, [nativeLiveTextActive, debouncedFrame?.frameId, isSnapshotFrame, hasRenderedInfo]);
+	}, [nativeLiveTextActive, debouncedFrame?.frameId, isSnapshotFrame]);
 
-	// Update overlay position on resize (native Live Text)
+	// Update overlay position on resize or when renderedImageInfo first becomes available
 	useEffect(() => {
 		if (!nativeLiveTextActive || !renderedImageInfo) return;
 		invoke("livetext_update_position", {
@@ -141,7 +140,7 @@ export function useLiveText(opts: {
 		if (!nativeLiveTextActive) return;
 		if (isSearchModalOpen) {
 			invoke("livetext_hide").catch(() => {});
-		} else if (debouncedFrame?.frameId && renderedInfoRef.current) {
+		} else if (debouncedFrame?.frameId) {
 			// Re-analyze to show overlay again
 			const info = renderedInfoRef.current;
 			const imagePath = isSnapshotFrame && debouncedFrame.filePath
@@ -149,10 +148,10 @@ export function useLiveText(opts: {
 				: `http://localhost:3030/frames/${debouncedFrame.frameId}`;
 			invoke("livetext_analyze", {
 				imagePath,
-				x: info.offsetX,
-				y: info.offsetY,
-				w: info.width,
-				h: info.height,
+				x: info?.offsetX ?? 0,
+				y: info?.offsetY ?? 0,
+				w: info?.width ?? 800,
+				h: info?.height ?? 600,
 			}).catch(() => {});
 		}
 	}, [nativeLiveTextActive, isSearchModalOpen]);

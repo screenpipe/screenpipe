@@ -8,39 +8,32 @@ use colored::Colorize;
 use dirs::home_dir;
 use futures::pin_mut;
 use port_check::is_local_ipv4_port_free;
-use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
-use reqwest::Client;
 use screenpipe_audio::{
-    core::device::{
-        default_input_device, default_output_device, list_audio_devices, parse_audio_device,
-    },
+    core::device::{default_input_device, default_output_device, parse_audio_device},
     meeting_detector::MeetingDetector,
 };
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::find_ffmpeg_path;
-use screenpipe_core::sync::{
-    BlobType, SyncClientConfig, SyncEvent, SyncManager, SyncService, SyncServiceConfig,
-};
 use screenpipe_db::DatabaseManager;
 use screenpipe_server::{
     analytics,
     cli::{
-        get_or_create_machine_id, AudioCommand, Cli, CliAudioTranscriptionEngine, Command,
-        McpCommand, OutputFormat, RecordArgs, SyncCommand, VisionCommand,
+        audio::handle_audio_command,
+        mcp::handle_mcp_command,
+        pipe::handle_pipe_command,
+        status::handle_status_command,
+        sync::{handle_sync_command, start_sync_service},
+        vision::handle_vision_command,
+        Cli, CliAudioTranscriptionEngine, Command,
     },
-    cli_pipe::handle_pipe_command,
-    cli_status::handle_status_command,
     hot_frame_cache::HotFrameCache,
     start_meeting_persister, start_meeting_watcher, start_power_manager, start_sleep_monitor,
     start_speaker_identification, start_ui_recording,
-    sync_provider::ScreenpipeSyncProvider,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
     watch_pid, ResourceMonitor, SCServer,
 };
 use screenpipe_vision::monitor::list_monitors;
-use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
 use std::{
     env, fs,
     net::SocketAddr,
@@ -129,16 +122,6 @@ const DISPLAY: &str = r"
 
 ";
 
-// Add the struct definition with proper derive attributes
-#[derive(Deserialize, Debug)]
-struct GitHubContent {
-    name: String,
-    path: String,
-    download_url: Option<String>,
-    #[serde(rename = "type")]
-    content_type: String,
-}
-
 fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     let default_path = home_dir()
         .ok_or_else(|| anyhow::anyhow!("failed to get home directory"))?
@@ -154,7 +137,11 @@ fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     Ok(base_dir)
 }
 
-fn setup_logging(local_data_dir: &PathBuf, cli: &Cli) -> anyhow::Result<WorkerGuard> {
+fn setup_logging(
+    local_data_dir: &PathBuf,
+    debug: bool,
+    disable_telemetry: bool,
+) -> anyhow::Result<WorkerGuard> {
     let file_appender = screenpipe_server::logging::SizedRollingWriter::builder()
         .directory(local_data_dir)
         .prefix("screenpipe")
@@ -199,7 +186,7 @@ fn setup_logging(local_data_dir: &PathBuf, cli: &Cli) -> anyhow::Result<WorkerGu
                 }
             });
 
-        if cli.debug {
+        if debug {
             filter.add_directive("screenpipe=debug".parse().unwrap())
         } else {
             filter
@@ -236,7 +223,7 @@ fn setup_logging(local_data_dir: &PathBuf, cli: &Cli) -> anyhow::Result<WorkerGu
     );
 
     // Build the final registry with conditional Sentry layer
-    if !cli.disable_telemetry {
+    if !disable_telemetry {
         tracing_registry
             .with(sentry::integrations::tracing::layer())
             .init();
@@ -254,10 +241,46 @@ async fn main() -> anyhow::Result<()> {
     set_fd_limit();
 
     debug!("starting screenpipe server");
-    let mut cli = Cli::parse();
+    let cli = Cli::parse();
+
+    // Dispatch subcommands — non-recording commands return early
+    let record_args = match cli.command {
+        Command::Status {
+            json,
+            ref data_dir,
+            port,
+        } => {
+            let local_data_dir = get_base_dir(data_dir)?;
+            let _log_guard = Some(setup_logging(&local_data_dir, false, true)?);
+            handle_status_command(json, data_dir, port).await?;
+            return Ok(());
+        }
+        Command::Pipe { ref subcommand } => {
+            handle_pipe_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Audio { ref subcommand } => {
+            handle_audio_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Vision { ref subcommand } => {
+            handle_vision_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Mcp { ref subcommand } => {
+            let local_data_dir = get_base_dir(&None)?;
+            handle_mcp_command(subcommand, &local_data_dir).await?;
+            return Ok(());
+        }
+        Command::Sync { ref subcommand } => {
+            handle_sync_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Record(args) => args,
+    };
 
     // Initialize Sentry only if telemetry is enabled
-    let _sentry_guard = if !cli.disable_telemetry {
+    let _sentry_guard = if !record_args.disable_telemetry {
         let sentry_release_name_append = env::var("SENTRY_RELEASE_NAME_APPEND").unwrap_or_default();
         let release_name = format!(
             "{}{}",
@@ -308,49 +331,64 @@ async fn main() -> anyhow::Result<()> {
                     let mut map = std::collections::BTreeMap::new();
                     map.insert(
                         "audio_chunk_duration".into(),
-                        json!(cli.audio_chunk_duration),
+                        json!(record_args.audio_chunk_duration),
                     );
-                    map.insert("port".into(), json!(cli.port));
-                    map.insert("disable_audio".into(), json!(cli.disable_audio));
+                    map.insert("port".into(), json!(record_args.port));
+                    map.insert("disable_audio".into(), json!(record_args.disable_audio));
                     map.insert(
                         "audio_transcription_engine".into(),
-                        json!(format!("{:?}", cli.audio_transcription_engine)),
+                        json!(format!("{:?}", record_args.audio_transcription_engine)),
                     );
-                    map.insert("monitor_ids".into(), json!(cli.monitor_id));
-                    map.insert("use_all_monitors".into(), json!(cli.use_all_monitors));
+                    map.insert("monitor_ids".into(), json!(record_args.monitor_id));
+                    map.insert(
+                        "use_all_monitors".into(),
+                        json!(record_args.use_all_monitors),
+                    );
                     map.insert(
                         "languages".into(),
-                        json!(cli
+                        json!(record_args
                             .language
                             .iter()
                             .map(|l| format!("{:?}", l))
                             .collect::<Vec<_>>()),
                     );
-                    map.insert("use_pii_removal".into(), json!(cli.use_pii_removal));
-                    map.insert("disable_vision".into(), json!(cli.disable_vision));
-                    map.insert("vad_engine".into(), json!(format!("{:?}", cli.vad_engine)));
+                    map.insert("use_pii_removal".into(), json!(record_args.use_pii_removal));
+                    map.insert("disable_vision".into(), json!(record_args.disable_vision));
+                    map.insert(
+                        "vad_engine".into(),
+                        json!(format!("{:?}", record_args.vad_engine)),
+                    );
                     map.insert(
                         "enable_input_capture".into(),
-                        json!(cli.enable_input_capture),
+                        json!(record_args.enable_input_capture),
                     );
                     map.insert(
                         "enable_accessibility".into(),
-                        json!(cli.enable_accessibility),
+                        json!(record_args.enable_accessibility),
                     );
-                    map.insert("enable_sync".into(), json!(cli.enable_sync));
-                    map.insert("sync_interval_secs".into(), json!(cli.sync_interval_secs));
-                    map.insert("debug".into(), json!(cli.debug));
+                    map.insert("enable_sync".into(), json!(record_args.enable_sync));
+                    map.insert(
+                        "sync_interval_secs".into(),
+                        json!(record_args.sync_interval_secs),
+                    );
+                    map.insert("debug".into(), json!(record_args.debug));
                     // Only send counts for privacy-sensitive lists (not actual values)
-                    map.insert("audio_device_count".into(), json!(cli.audio_device.len()));
+                    map.insert(
+                        "audio_device_count".into(),
+                        json!(record_args.audio_device.len()),
+                    );
                     map.insert(
                         "ignored_windows_count".into(),
-                        json!(cli.ignored_windows.len()),
+                        json!(record_args.ignored_windows.len()),
                     );
                     map.insert(
                         "included_windows_count".into(),
-                        json!(cli.included_windows.len()),
+                        json!(record_args.included_windows.len()),
                     );
-                    map.insert("ignored_urls_count".into(), json!(cli.ignored_urls.len()));
+                    map.insert(
+                        "ignored_urls_count".into(),
+                        json!(record_args.ignored_urls.len()),
+                    );
                     map
                 }),
             );
@@ -361,155 +399,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let local_data_dir = get_base_dir(&cli.data_dir)?;
+    let local_data_dir = get_base_dir(&record_args.data_dir)?;
     let local_data_dir_clone = local_data_dir.clone();
 
-    // Only set up logging if we're not running a command with JSON output
     // Store the guard in a variable that lives for the entire main function
-    let _log_guard = Some(setup_logging(&local_data_dir, &cli)?);
-
-    // Handle subcommands that return early
-    if let Some(ref command) = cli.command {
-        match command {
-            Command::Record(_) => {
-                // Fall through to recording logic below
-            }
-            Command::Status {
-                json,
-                data_dir,
-                port,
-            } => {
-                handle_status_command(*json, data_dir, *port).await?;
-                return Ok(());
-            }
-            Command::Pipe { subcommand } => {
-                handle_pipe_command(subcommand).await?;
-                return Ok(());
-            }
-            Command::Audio { subcommand } => match subcommand {
-                AudioCommand::List { output } => {
-                    let default_input = default_input_device().unwrap();
-                    let default_output = default_output_device().await.unwrap();
-                    let devices = list_audio_devices().await?;
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": devices.iter().map(|d| {
-                                    json!({
-                                        "name": d.to_string(),
-                                        "is_default": d.name == default_input.name || d.name == default_output.name
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("available audio devices:");
-                            for device in devices.iter() {
-                                println!("  {}", device);
-                            }
-                            #[cfg(target_os = "macos")]
-                            println!("note: on macos, output devices are your displays");
-                        }
-                    }
-                    return Ok(());
-                }
-            },
-            Command::Vision { subcommand } => match subcommand {
-                VisionCommand::List { output } => {
-                    let monitors = list_monitors().await;
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": monitors.iter().map(|m| {
-                                    json!({
-                                        "id": m.id(),
-                                        "name": m.name(),
-                                        "width": m.width(),
-                                        "height": m.height(),
-                                        "is_default": m.is_primary(),
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("available monitors:");
-                            for monitor in monitors.iter() {
-                                println!("  {}. {:?}", monitor.id(), monitor.name());
-                            }
-                        }
-                    }
-                    return Ok(());
-                }
-            },
-            Command::Mcp { subcommand } => {
-                handle_mcp_command(subcommand, &local_data_dir_clone).await?;
-                return Ok(());
-            }
-            Command::Sync { subcommand } => {
-                handle_sync_command(subcommand).await?;
-                return Ok(());
-            }
-        }
-    }
-
-    // If we get here, we're either `screenpipe` (no command) or `screenpipe record`
-    // For bare `screenpipe`, show deprecation hint
-    if cli.command.is_none() {
-        eprintln!(
-            "{}",
-            "hint: use 'screenpipe record' explicitly. bare 'screenpipe' will be removed in a future version."
-                .bright_yellow()
-        );
-    }
-
-    // Build RecordArgs from either the Record subcommand or legacy top-level flags.
-    // Then override cli fields so all downstream code (which uses cli.*) gets the right values.
-    let record_args = match &cli.command {
-        Some(Command::Record(args)) => args.clone(),
-        _ => RecordArgs::from_cli(&cli),
-    };
-
-    // Sync cli fields from record_args (needed when `screenpipe record` is used,
-    // because clap puts those flags on RecordArgs, not on Cli's top-level fields)
-    cli.audio_chunk_duration = record_args.audio_chunk_duration;
-    cli.port = record_args.port;
-    cli.disable_audio = record_args.disable_audio;
-    cli.audio_device = record_args.audio_device.clone();
-    cli.use_system_default_audio = record_args.use_system_default_audio;
-    cli.data_dir = record_args.data_dir.clone();
-    cli.debug = record_args.debug;
-    cli.audio_transcription_engine = record_args.audio_transcription_engine.clone();
-    cli.monitor_id = record_args.monitor_id.clone();
-    cli.use_all_monitors = record_args.use_all_monitors;
-    cli.language = record_args.language.clone();
-    cli.use_pii_removal = record_args.use_pii_removal;
-    cli.disable_vision = record_args.disable_vision;
-    cli.vad_engine = record_args.vad_engine.clone();
-    cli.ignored_windows = record_args.ignored_windows.clone();
-    cli.included_windows = record_args.included_windows.clone();
-    cli.ignored_urls = record_args.ignored_urls.clone();
-    cli.deepgram_api_key = record_args.deepgram_api_key.clone();
-    cli.auto_destruct_pid = record_args.auto_destruct_pid;
-    cli.disable_telemetry = record_args.disable_telemetry;
-    cli.video_quality = record_args.video_quality.clone();
-    cli.enable_input_capture = record_args.enable_input_capture;
-    cli.enable_accessibility = record_args.enable_accessibility;
-    cli.enable_sync = record_args.enable_sync;
-    cli.sync_token = record_args.sync_token.clone();
-    cli.sync_password = record_args.sync_password.clone();
-    cli.sync_interval_secs = record_args.sync_interval_secs;
-    cli.sync_machine_id = record_args.sync_machine_id.clone();
-
-    // Recompute data dir in case record_args overrode it
-    let local_data_dir = get_base_dir(&cli.data_dir)?;
-    let local_data_dir_clone = local_data_dir.clone();
+    let _log_guard = Some(setup_logging(
+        &local_data_dir,
+        record_args.debug,
+        record_args.disable_telemetry,
+    )?);
 
     // Build unified RecordingConfig from CLI args
-    let config = record_args.into_recording_config(local_data_dir.clone());
+    let config = record_args
+        .clone()
+        .into_recording_config(local_data_dir.clone());
 
     // Replace the current conditional check with:
     let ffmpeg_path = find_ffmpeg_path();
@@ -564,11 +467,11 @@ async fn main() -> anyhow::Result<()> {
 
     let audio_devices_clone = audio_devices.clone();
 
-    let resource_monitor = ResourceMonitor::new(!cli.disable_telemetry);
+    let resource_monitor = ResourceMonitor::new(!record_args.disable_telemetry);
     resource_monitor.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
 
     // Initialize analytics for API tracking
-    analytics::init(!cli.disable_telemetry);
+    analytics::init(!record_args.disable_telemetry);
 
     // Check macOS version and send telemetry if below supported versions
     // This helps track users who may have screen capture issues due to old macOS
@@ -591,8 +494,8 @@ async fn main() -> anyhow::Result<()> {
     start_sleep_monitor();
 
     // Start cloud sync service if enabled
-    let sync_service_handle = if cli.enable_sync {
-        match start_sync_service(&cli, db.clone()).await {
+    let sync_service_handle = if record_args.enable_sync {
+        match start_sync_service(&record_args, db.clone()).await {
             Ok(handle) => {
                 info!("cloud sync service started");
                 Some(handle)
@@ -608,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
 
     let db_server = db.clone();
 
-    let warning_audio_transcription_engine_clone = cli.audio_transcription_engine.clone();
+    let warning_audio_transcription_engine_clone = record_args.audio_transcription_engine.clone();
     let monitor_ids: Vec<u32> = if config.monitor_ids.is_empty() {
         all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
     } else {
@@ -621,7 +524,7 @@ async fn main() -> anyhow::Result<()> {
 
     let languages = config.languages.clone();
 
-    let vad_engine = cli.vad_engine.clone();
+    let vad_engine = record_args.vad_engine.clone();
     let vad_engine_clone = vad_engine.clone();
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
@@ -631,8 +534,8 @@ async fn main() -> anyhow::Result<()> {
     let output_path_clone = Arc::new(local_data_dir.join("data").to_string_lossy().into_owned());
     let shutdown_tx_clone = shutdown_tx.clone();
 
-    let ignored_windows_clone = cli.ignored_windows.clone();
-    let included_windows_clone = cli.included_windows.clone();
+    let ignored_windows_clone = record_args.ignored_windows.clone();
+    let included_windows_clone = record_args.included_windows.clone();
     // Create UI recorder config early before cli is moved
     let ui_recorder_config = config.to_ui_recorder_config();
 
@@ -866,11 +769,17 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!(
         "│ audio chunk duration   │ {:<34} │",
-        format!("{} seconds", cli.audio_chunk_duration)
+        format!("{} seconds", record_args.audio_chunk_duration)
     );
-    println!("│ port                   │ {:<34} │", cli.port);
-    println!("│ audio disabled         │ {:<34} │", cli.disable_audio);
-    println!("│ vision disabled        │ {:<34} │", cli.disable_vision);
+    println!("│ port                   │ {:<34} │", record_args.port);
+    println!(
+        "│ audio disabled         │ {:<34} │",
+        record_args.disable_audio
+    );
+    println!(
+        "│ vision disabled        │ {:<34} │",
+        record_args.disable_vision
+    );
     println!(
         "│ audio engine           │ {:<34} │",
         format!("{:?}", warning_audio_transcription_engine_clone)
@@ -883,13 +792,19 @@ async fn main() -> anyhow::Result<()> {
         "│ data directory         │ {:<34} │",
         local_data_dir_clone.display()
     );
-    println!("│ debug mode             │ {:<34} │", cli.debug);
+    println!("│ debug mode             │ {:<34} │", record_args.debug);
     println!(
         "│ telemetry              │ {:<34} │",
-        !cli.disable_telemetry
+        !record_args.disable_telemetry
     );
-    println!("│ use pii removal        │ {:<34} │", cli.use_pii_removal);
-    println!("│ use all monitors       │ {:<34} │", cli.use_all_monitors);
+    println!(
+        "│ use pii removal        │ {:<34} │",
+        record_args.use_pii_removal
+    );
+    println!(
+        "│ use all monitors       │ {:<34} │",
+        record_args.use_all_monitors
+    );
     println!(
         "│ ignored windows        │ {:<34} │",
         format_cell(&format!("{:?}", &ignored_windows_clone), VALUE_WIDTH)
@@ -900,26 +815,26 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "│ cloud sync             │ {:<34} │",
-        if cli.enable_sync {
+        if record_args.enable_sync {
             "enabled"
         } else {
             "disabled"
         }
     );
-    if cli.enable_sync {
+    if record_args.enable_sync {
         println!(
             "│ sync interval          │ {:<34} │",
-            format!("{} seconds", cli.sync_interval_secs)
+            format!("{} seconds", record_args.sync_interval_secs)
         );
     }
     println!(
         "│ auto-destruct pid      │ {:<34} │",
-        cli.auto_destruct_pid.unwrap_or(0)
+        record_args.auto_destruct_pid.unwrap_or(0)
     );
     // For security reasons, you might want to mask the API key if displayed
     println!(
         "│ deepgram key           │ {:<34} │",
-        if cli.deepgram_api_key.is_some() {
+        if record_args.deepgram_api_key.is_some() {
             "set (masked)"
         } else {
             "not set"
@@ -950,10 +865,10 @@ async fn main() -> anyhow::Result<()> {
     println!("│ languages              │                                    │");
     const MAX_ITEMS_TO_DISPLAY: usize = 5;
 
-    if cli.language.is_empty() {
+    if record_args.language.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "all languages");
     } else {
-        let total_languages = cli.language.len();
+        let total_languages = record_args.language.len();
         for (_, language) in languages.iter().enumerate().take(MAX_ITEMS_TO_DISPLAY) {
             let language_str = format!("id: {}", language);
             let formatted_language = format_cell(&language_str, VALUE_WIDTH);
@@ -972,7 +887,7 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!("│ monitors               │                                    │");
 
-    if cli.disable_vision {
+    if record_args.disable_vision {
         println!("│ {:<22} │ {:<34} │", "", "vision disabled");
     } else if monitor_ids.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "no monitors available");
@@ -996,7 +911,7 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!("│ audio devices          │                                    │");
 
-    if cli.disable_audio {
+    if record_args.disable_audio {
         println!("│ {:<22} │ {:<34} │", "", "disabled");
     } else if audio_devices_clone.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "no devices available");
@@ -1038,7 +953,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Add warning for telemetry
-    if !cli.disable_telemetry {
+    if !record_args.disable_telemetry {
         println!(
             "{}",
             "warning: telemetry is enabled. only error-level data will be sent.\n\
@@ -1112,7 +1027,7 @@ async fn main() -> anyhow::Result<()> {
     pin_mut!(server_future);
 
     // Add auto-destruct watcher
-    if let Some(pid) = cli.auto_destruct_pid {
+    if let Some(pid) = record_args.auto_destruct_pid {
         info!("watching pid {} for auto-destruction", pid);
         let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
@@ -1163,474 +1078,6 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!("shutdown complete");
-
-    Ok(())
-}
-
-pub async fn handle_mcp_command(
-    command: &McpCommand,
-    local_data_dir: &std::path::Path,
-) -> Result<(), anyhow::Error> {
-    let client = Client::new();
-
-    // Check if Python is installed
-    if !is_command_available("python") || !is_command_available("python3") {
-        warn!("note: python is not installed. please install it from the official website: https://www.python.org/");
-    }
-
-    // Check if uv is installed
-    if !is_command_available("uv") {
-        warn!("note: uv is not installed. please install it using the instructions at: https://docs.astral.sh/uv/#installation");
-    }
-
-    match command {
-        McpCommand::Setup {
-            directory,
-            output,
-            port,
-            update,
-            purge,
-        } => {
-            let mcp_dir = directory
-                .as_ref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| local_data_dir.join("mcp"));
-
-            // If purge flag is set, just remove the directory and return
-            if *purge {
-                if mcp_dir.exists() {
-                    info!("Purging MCP directory: {}", mcp_dir.display());
-                    tokio::fs::remove_dir_all(&mcp_dir).await?;
-
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": {
-                                    "message": "MCP directory purged successfully",
-                                    "directory": mcp_dir.to_string_lossy(),
-                                },
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("MCP directory purged successfully");
-                            println!("Directory: {}", mcp_dir.display());
-                        }
-                    }
-                } else {
-                    match output {
-                        OutputFormat::Json => println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "data": {
-                                    "message": "MCP directory does not exist",
-                                    "directory": mcp_dir.to_string_lossy(),
-                                },
-                                "success": true
-                            }))?
-                        ),
-                        OutputFormat::Text => {
-                            println!("MCP directory does not exist: {}", mcp_dir.display());
-                        }
-                    }
-                }
-                return Ok(());
-            }
-
-            let should_download = if mcp_dir.exists() {
-                if *update {
-                    tokio::fs::remove_dir_all(&mcp_dir).await?;
-                    true
-                } else {
-                    let mut entries = tokio::fs::read_dir(&mcp_dir).await?;
-                    entries.next_entry().await?.is_none()
-                }
-            } else {
-                true
-            };
-
-            // Create config regardless of download status
-            let config = json!({
-                "mcpServers": {
-                    "screenpipe": {
-                        "command": "uv",
-                        "args": [
-                            "--directory",
-                            mcp_dir.to_string_lossy().to_string(),
-                            "run",
-                            "screenpipe-mcp",
-                            "--port",
-                            port.to_string()
-                        ]
-                    }
-                }
-            });
-
-            let run_command = format!(
-                "uv --directory {} run screenpipe-mcp --port {}",
-                mcp_dir.to_string_lossy(),
-                port
-            );
-
-            let config_path = mcp_dir.join("config.json");
-
-            if should_download {
-                tokio::fs::create_dir_all(&mcp_dir).await?;
-
-                // Log the start of the download process
-                info!("starting download process for MCP directory");
-
-                let owner = "screenpipe";
-                let repo = "screenpipe";
-                let branch = "main";
-                let target_dir = "crates/screenpipe-integrations/screenpipe-mcp";
-
-                let api_url = format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    owner, repo, target_dir, branch
-                );
-
-                // Setup ctrl+c handler
-                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                let cancel_handle = tokio::spawn(async move {
-                    if signal::ctrl_c().await.is_ok() {
-                        let _ = tx.send(()).await;
-                    }
-                });
-
-                // Download with cancellation support
-                let download_result = tokio::select! {
-                    result = download_mcp_directory(&client, &api_url, &mcp_dir) => result,
-                    _ = rx.recv() => {
-                        info!("Received ctrl+c, canceling download...");
-                        Err(anyhow::anyhow!("Download cancelled by user"))
-                    }
-                };
-
-                // Clean up cancel handler
-                cancel_handle.abort();
-
-                // Handle download result
-                match download_result {
-                    Ok(_) => {
-                        tokio::fs::write(&config_path, serde_json::to_string_pretty(&config)?)
-                            .await?;
-                    }
-                    Err(e) => {
-                        // Clean up on failure
-                        if mcp_dir.exists() {
-                            let _ = tokio::fs::remove_dir_all(&mcp_dir).await;
-                        }
-                        return Err(e);
-                    }
-                }
-            }
-
-            // Always create/update config.json regardless of download
-            tokio::fs::write(&config_path, serde_json::to_string_pretty(&config)?).await?;
-
-            match output {
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "data": {
-                            "message": if should_download { "MCP setup completed successfully" } else { "MCP files already exist" },
-                            "config": config,
-                            "config_path": config_path.to_string_lossy(),
-                            "directory": mcp_dir.to_string_lossy(),
-                            "port": port
-                        },
-                        "success": true
-                    }))?
-                ),
-                OutputFormat::Text => {
-                    if should_download {
-                        println!("MCP setup completed successfully");
-                    } else {
-                        println!("MCP files already exist at: {}", mcp_dir.display());
-                        println!("Use --update flag to force update or --purge to start fresh");
-                    }
-                    println!("Directory: {}", mcp_dir.display());
-                    println!("Config file: {}", config_path.display());
-                    println!("\nTo run the MCP server, use this command:");
-                    println!("$ {}", run_command);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn download_mcp_directory(
-    client: &Client,
-    api_url: &str,
-    target_dir: &Path,
-) -> Result<(), anyhow::Error> {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("screenpipe-cli"));
-
-    let response = client
-        .get(api_url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to send request: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!(
-            "GitHub API error (status {}): {}",
-            status,
-            error_text
-        ));
-    }
-
-    let contents: Vec<GitHubContent> = response
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse GitHub API response: {}", e))?;
-
-    for item in contents {
-        let target_path = target_dir.join(&item.name);
-
-        match item.content_type.as_str() {
-            "file" => {
-                if let Some(download_url) = item.download_url {
-                    let file_response = client.get(&download_url).send().await.map_err(|e| {
-                        anyhow::anyhow!("Failed to download file {}: {}", download_url, e)
-                    })?;
-
-                    let content = file_response
-                        .bytes()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to get file content: {}", e))?;
-
-                    tokio::fs::write(&target_path, content).await.map_err(|e| {
-                        anyhow::anyhow!("Failed to write file {}: {}", target_path.display(), e)
-                    })?;
-
-                    debug!("Downloaded file: {}", target_path.display());
-                }
-            }
-            "dir" => {
-                tokio::fs::create_dir_all(&target_path).await.map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to create directory {}: {}",
-                        target_path.display(),
-                        e
-                    )
-                })?;
-
-                let subdir_api_url = format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    "screenpipe", "screenpipe", item.path, "main"
-                );
-
-                // Fix recursion with Box::pin
-                let future = Box::pin(download_mcp_directory(
-                    client,
-                    &subdir_api_url,
-                    &target_path,
-                ));
-                future.await?;
-            }
-            _ => {
-                warn!("Skipping unsupported content type: {}", item.content_type);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// Helper function to check if a command is available
-fn is_command_available(command: &str) -> bool {
-    let mut cmd = std::process::Command::new(command);
-    cmd.arg("--version");
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-/// Start the cloud sync service
-async fn start_sync_service(
-    cli: &Cli,
-    db: Arc<DatabaseManager>,
-) -> anyhow::Result<Arc<screenpipe_core::sync::SyncServiceHandle>> {
-    // Validate required credentials
-    let token = cli.sync_token.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("--sync-token or SCREENPIPE_SYNC_TOKEN required for sync")
-    })?;
-
-    let password = cli.sync_password.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("--sync-password or SCREENPIPE_SYNC_PASSWORD required for sync")
-    })?;
-
-    // Get machine ID
-    let machine_id = get_or_create_machine_id(cli.sync_machine_id.clone());
-    info!("sync machine ID: {}", machine_id);
-
-    // Get device info
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let device_os = std::env::consts::OS.to_string();
-
-    // Create sync manager
-    let config = SyncClientConfig::new(token.clone(), machine_id.clone(), device_name, device_os);
-    let manager = SyncManager::new(config)?;
-
-    // Initialize with password
-    let is_new_user = manager.initialize(password).await?;
-    info!(
-        "sync initialized for {} user",
-        if is_new_user { "new" } else { "existing" }
-    );
-
-    let manager = Arc::new(manager);
-
-    // Create sync data provider
-    let provider = Arc::new(ScreenpipeSyncProvider::new(db, machine_id));
-
-    // Create sync service config
-    let service_config = SyncServiceConfig {
-        enabled: true,
-        sync_interval_secs: cli.sync_interval_secs,
-        sync_types: vec![BlobType::Ocr, BlobType::Transcripts],
-        max_blobs_per_cycle: 10,
-        sync_on_startup: true,
-    };
-
-    // Create and start service
-    let service = SyncService::new(manager, service_config, provider);
-    let (handle, mut event_rx) = service.start();
-
-    // Spawn event handler
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                SyncEvent::Started => {
-                    info!("sync cycle started");
-                }
-                SyncEvent::Completed(report) => {
-                    info!(
-                        "sync cycle completed: {} blobs uploaded ({} bytes) in {:.2}s",
-                        report.blobs_uploaded, report.bytes_uploaded, report.duration_secs
-                    );
-                }
-                SyncEvent::Failed(err) => {
-                    error!("sync cycle failed: {}", err);
-                }
-                SyncEvent::Progress {
-                    uploaded,
-                    total,
-                    bytes_transferred,
-                } => {
-                    debug!(
-                        "sync progress: {}/{} blobs, {} bytes",
-                        uploaded, total, bytes_transferred
-                    );
-                }
-                SyncEvent::Stopped => {
-                    info!("sync service stopped");
-                    break;
-                }
-            }
-        }
-    });
-
-    Ok(Arc::new(handle))
-}
-
-/// Handle sync subcommands
-async fn handle_sync_command(command: &SyncCommand) -> anyhow::Result<()> {
-    let client = reqwest::Client::new();
-    let server_url = "http://localhost";
-
-    match command {
-        SyncCommand::Status { output, port } => {
-            let url = format!("{}:{}/sync/status", server_url, port);
-            match client.get(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let data: serde_json::Value = response.json().await?;
-                    match output {
-                        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&data)?),
-                        OutputFormat::Text => {
-                            println!("sync status:");
-                            if let Some(enabled) = data.get("enabled") {
-                                println!("  enabled: {}", enabled);
-                            }
-                            if let Some(is_syncing) = data.get("is_syncing") {
-                                println!("  syncing: {}", is_syncing);
-                            }
-                            if let Some(last_sync) = data.get("last_sync") {
-                                println!("  last sync: {}", last_sync);
-                            }
-                            if let Some(storage_used) = data.get("storage_used") {
-                                println!("  storage used: {} bytes", storage_used);
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    println!("note: server not running or sync not enabled");
-                }
-            }
-        }
-        SyncCommand::Now { port } => {
-            let url = format!("{}:{}/sync/trigger", server_url, port);
-            match client.post(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    println!("sync triggered successfully");
-                }
-                Ok(response) => {
-                    let error: serde_json::Value = response.json().await.unwrap_or_default();
-                    println!(
-                        "failed to trigger sync: {}",
-                        error
-                            .get("error")
-                            .unwrap_or(&serde_json::json!("unknown error"))
-                    );
-                }
-                Err(e) => {
-                    println!("failed to connect to server: {}", e);
-                }
-            }
-        }
-        SyncCommand::Download { hours, port } => {
-            let url = format!("{}:{}/sync/download?hours={}", server_url, port, hours);
-            match client.post(&url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let data: serde_json::Value = response.json().await?;
-                    println!(
-                        "download complete: {} records imported",
-                        data.get("imported").unwrap_or(&serde_json::json!(0))
-                    );
-                }
-                Ok(response) => {
-                    let error: serde_json::Value = response.json().await.unwrap_or_default();
-                    println!(
-                        "failed to download: {}",
-                        error
-                            .get("error")
-                            .unwrap_or(&serde_json::json!("unknown error"))
-                    );
-                }
-                Err(e) => {
-                    println!("failed to connect to server: {}", e);
-                }
-            }
-        }
-    }
 
     Ok(())
 }

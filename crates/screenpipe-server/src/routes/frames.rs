@@ -62,14 +62,29 @@ pub async fn get_frame_data(
                             // Frames are immutable once captured, so longer caching is safe
                             // and significantly improves timeline scrolling performance.
                             if timestamp.elapsed() < Duration::from_secs(1800) {
-                                debug!(
-                                    "Cache hit for frame_id: {}. Retrieved in {:?}",
-                                    frame_id,
-                                    start_time.elapsed()
-                                );
-                                return serve_file(file_path).await;
+                                let path_owned = file_path.clone();
+                                drop(cache);
+                                match serve_file(&path_owned).await {
+                                    Ok(resp) => {
+                                        debug!(
+                                            "Cache hit for frame_id: {}. Retrieved in {:?}",
+                                            frame_id,
+                                            start_time.elapsed()
+                                        );
+                                        return Ok(resp);
+                                    }
+                                    Err(_) => {
+                                        // File was deleted (e.g. by compaction) — evict stale entry
+                                        // and fall through to DB lookup for updated path
+                                        debug!("Cache stale for frame_id: {} (file gone), evicting", frame_id);
+                                        if let Ok(mut cache) = state.frame_image_cache.as_ref().unwrap().try_lock() {
+                                            cache.pop(&frame_id);
+                                        }
+                                    }
+                                }
+                            } else {
+                                cache.pop(&frame_id);
                             }
-                            cache.pop(&frame_id);
                         }
                     }
                     Err(_) => {

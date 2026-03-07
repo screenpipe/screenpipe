@@ -10,8 +10,6 @@ mod auto_destruct;
 pub mod calendar_bridge;
 pub mod calendar_speaker_id;
 pub mod cli;
-pub mod cli_pipe;
-pub mod cli_status;
 pub mod cloud_search;
 pub mod core;
 pub mod logging;

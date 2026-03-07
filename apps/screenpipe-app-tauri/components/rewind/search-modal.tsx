@@ -7,6 +7,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2, Hash, Tag, Monitor, Keyboard, ClipboardCopy, AppWindow } from "lucide-react";
 import { useKeywordSearchStore, SearchMatch, UiEventResult } from "@/lib/hooks/use-keyword-search-store";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
+import { useSearchFocus } from "./hooks/use-search-focus";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -228,10 +229,19 @@ function useSuggestions(isOpen: boolean) {
   return { suggestions, isLoading };
 }
 
-// Frame thumbnail component with loading state
+// Frame thumbnail component with loading state and retry logic
 const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [src, setSrc] = useState(`http://localhost:3030/frames/${frameId}`);
+  const retryCount = useRef(0);
+
+  useEffect(() => {
+    setSrc(`http://localhost:3030/frames/${frameId}`);
+    setIsLoading(true);
+    setHasError(false);
+    retryCount.current = 0;
+  }, [frameId]);
 
   return (
     <div className="aspect-video bg-muted relative overflow-hidden">
@@ -247,7 +257,7 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`http://localhost:3030/frames/${frameId}`}
+          src={src}
           alt={alt}
           className={cn(
             "w-full h-full object-cover transition-opacity",
@@ -256,8 +266,15 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
           loading="lazy"
           onLoad={() => setIsLoading(false)}
           onError={() => {
-            setIsLoading(false);
-            setHasError(true);
+            if (retryCount.current < 3) {
+              retryCount.current += 1;
+              setTimeout(() => {
+                setSrc(`http://localhost:3030/frames/${frameId}?retry=${retryCount.current}`);
+              }, 1000 * retryCount.current);
+            } else {
+              setIsLoading(false);
+              setHasError(true);
+            }
           }}
         />
       )}
@@ -278,9 +295,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
+  // Bump to force search effect re-run (fixes stale debouncedQuery after modal reopen)
+  const [searchEpoch, setSearchEpoch] = useState(0);
 
   // Speaker search state
   const [speakerResults, setSpeakerResults] = useState<SpeakerResult[]>([]);
@@ -328,12 +347,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // Append transcribed text to search query
       setQuery((prev) => prev + (prev ? " " : "") + text);
     },
-    onError: (error) => {
       toast({ title: "dictation error", description: error, variant: "destructive" });
+    onError: (error) => {
     },
   });
 
-  const debouncedQuery = useDebounce(query, 200);
+  const debouncedQuery = useDebounce(query, 400);
   const { suggestions, isLoading: suggestionsLoading } = useSuggestions(isOpen);
 
   const {
@@ -351,12 +370,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [facetApps, setFacetApps] = useState<[string, number][]>([]);
   const [facetDomains, setFacetDomains] = useState<[string, number][]>([]);
   const [facetTimeRanges, setFacetTimeRanges] = useState<{ label: string; dateKey: string; timestamp: string; count: number }[]>([]);
+  const [facetsLoading, setFacetsLoading] = useState(false);
 
   // Build time range labels from raw rows
-  const buildTimeRanges = useCallback((rows: { timestamp: string; count: number }[]) => {
+  const buildTimeRanges = useCallback((rows: { dateKey: string; timestamp: string; count: number }[]) => {
     return rows.map(r => {
       const d = new Date(r.timestamp);
-      const dateKey = format(d, "yyyy-MM-dd");
       let label: string;
       if (isToday(d)) {
         label = format(d, "h a");
@@ -365,21 +384,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       } else {
         label = format(d, "MMM d");
       }
-      return { label, dateKey, timestamp: r.timestamp, count: r.count };
+      return { label, dateKey: r.dateKey, timestamp: r.timestamp, count: r.count };
     }).slice(0, 10);
   }, []);
 
   // Async facet loading — fires a lightweight SQL aggregation query
   useEffect(() => {
     const q = debouncedQuery.trim();
-    if (!q || q.startsWith("#") || q.startsWith("@")) {
+    if (!q || q.length < 3 || q.startsWith("#") || q.startsWith("@")) {
       setFacetApps([]);
       setFacetDomains([]);
       setFacetTimeRanges([]);
+      setFacetsLoading(false);
       return;
     }
 
     let cancelled = false;
+    setFacetsLoading(true);
+    let pending = 3;
+    const onFacetDone = () => { pending--; if (pending === 0 && !cancelled) setFacetsLoading(false); };
     const escaped = q.replace(/"/g, '""');
     const ftsQuery = q.split(/\s+/).map(w => `"${w.replace(/"/g, '""')}"`).join(" OR ");
 
@@ -412,7 +435,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
        ) GROUP BY app ORDER BY cnt DESC LIMIT 15`
     ).then((rows: { app: string; cnt: number }[]) => {
       if (!cancelled) setFacetApps(rows.map(r => [r.app, r.cnt]));
-    }).catch(() => {});
+    }).catch(() => {}).finally(onFacetDone);
 
     // Domain facet (accessibility + OCR)
     fetchFacet(
@@ -441,7 +464,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         } catch { /* skip */ }
       }
       setFacetDomains([...domainMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8));
-    }).catch(() => {});
+    }).catch(() => {}).finally(onFacetDone);
 
     // Time facet — bucket by date (accessibility + OCR)
     fetchFacet(
@@ -459,11 +482,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
        ) GROUP BY d ORDER BY d DESC LIMIT 30`
     ).then((rows: { d: string; ts: string; cnt: number }[]) => {
       if (cancelled) return;
-      setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ timestamp: r.ts, count: r.cnt }))));
-    }).catch(() => {});
+      setFacetTimeRanges(buildTimeRanges(rows.map(r => ({ dateKey: r.d, timestamp: r.ts, count: r.cnt }))));
+    }).catch(() => {}).finally(onFacetDone);
 
-    return () => { cancelled = true; };
-  }, [debouncedQuery, buildTimeRanges]);
+    return () => { cancelled = true; setFacetsLoading(false); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, buildTimeRanges, searchEpoch]);
 
   // Speaker time ranges (from loaded transcriptions — these are small enough)
   const speakerTimeRanges = useMemo(() => {
@@ -539,6 +563,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     return results;
   }, [searchResults, appFilter, domainFilter, timeFilter, matchesTimeFilter]);
 
+  // Keep a ref so keyboard handler reads current value without re-mounting the effect
+  const filteredResultsRef = useRef(filteredResults);
+  filteredResultsRef.current = filteredResults;
+  const filteredSpeakerTranscriptionsRef = useRef(filteredSpeakerTranscriptions);
+  filteredSpeakerTranscriptionsRef.current = filteredSpeakerTranscriptions;
+
   const filteredGroups = useMemo(() => {
     let groups = searchGroups;
     if (appFilter) groups = groups.filter(g => g.representative.app_name === appFilter);
@@ -557,12 +587,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   const { setHighlight, clear: clearHighlight } = useSearchHighlight();
 
-  // Focus input when modal opens
+  // Reset state when modal opens (focus is handled by useSearchFocus)
   useEffect(() => {
     if (isOpen) {
       setSelectedIndex(0);
       setQuery("");
       resetSearch();
+      setSearchEpoch(e => e + 1);
       clearHighlight();
       setAppFilter(null);
       setDomainFilter(null);
@@ -578,28 +609,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setHasMoreOcr(true);
       setTranscriptionOffset(0);
       setHasMoreTranscriptions(true);
-
-      // Focus after next frame. The panel is made key window on show,
-      // but the global shortcut path also calls show_main_window first.
-      // A small delay handles the case where make_key_window is still
-      // propagating through the window server.
-      const rafId = requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
-      const timer = setTimeout(() => {
-        inputRef.current?.focus();
-      }, 80);
-
-      return () => {
-        cancelAnimationFrame(rafId);
-        clearTimeout(timer);
-      };
     }
   }, [isOpen, resetSearch]);
 
   // Perform search when query changes
   useEffect(() => {
-    if (!debouncedQuery.trim()) {
+    const q = debouncedQuery.trim();
+    if (!q || q.startsWith("#") || q.startsWith("@")) {
       resetSearch();
       setSpeakerResults([]);
       setTagResults([]);
@@ -609,12 +625,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       return;
     }
 
-    // Skip keyword search for # and @ queries (handled by dedicated effects)
-    if (debouncedQuery.startsWith("#") || debouncedQuery.startsWith("@")) {
-      resetSearch();
-      setSpeakerResults([]);
-      return;
-    }
+    // Require at least 3 chars to avoid wasteful FTS queries while typing
+    if (q.length < 3) return;
 
     setAppFilter(null);
     setDomainFilter(null);
@@ -627,7 +639,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       limit: OCR_PAGE_SIZE,
       offset: 0,
     });
-  }, [debouncedQuery, searchKeywords, resetSearch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, searchKeywords, resetSearch, searchEpoch]);
 
   // Search tags when query starts with #
   useEffect(() => {
@@ -852,9 +865,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setSelectedTranscriptionIndex(0);
     setTranscriptionOffset(0);
     setHasMoreTranscriptions(true);
-    // Re-focus the input
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }, []);
+    requestAnimationFrame(() => focusInput());
+  }, [focusInput]);
 
   // Load more OCR results
   const loadMoreOcr = useCallback(() => {
@@ -939,15 +951,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     onClose();
   }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, setCurrentResultIndex]);
 
-  // Keyboard navigation — skip arrow key capture when input is focused (let cursor move)
+  // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const inputFocused = document.activeElement === inputRef.current;
+      const inputFocused = document.activeElement === inputElRef.current;
 
       // Speaker drill-down mode
       if (selectedSpeaker) {
+        const transcriptions = filteredSpeakerTranscriptionsRef.current;
         switch (e.key) {
           case "Escape":
             e.preventDefault();
@@ -955,7 +968,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             break;
           case "ArrowDown":
             e.preventDefault();
-            setSelectedTranscriptionIndex(i => Math.min(i + 1, filteredSpeakerTranscriptions.length - 1));
+            setSelectedTranscriptionIndex(i => Math.min(i + 1, transcriptions.length - 1));
             break;
           case "ArrowUp":
             e.preventDefault();
@@ -963,10 +976,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             break;
           case "Enter":
             e.preventDefault();
-            if (filteredSpeakerTranscriptions[selectedTranscriptionIndex]?.timestamp) {
-              onNavigateToTimestamp(filteredSpeakerTranscriptions[selectedTranscriptionIndex].timestamp);
-              onClose();
-            }
+            setSelectedTranscriptionIndex(i => {
+              if (transcriptions[i]?.timestamp) {
+                onNavigateToTimestamp(transcriptions[i].timestamp);
+                onClose();
+              }
+              return i;
+            });
             break;
         }
         return;
@@ -974,10 +990,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
       // When input is focused, let left/right arrows move the cursor
       if (inputFocused && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        return; // Don't capture — let the input handle it
+        return;
       }
 
-      const cols = 3; // Grid columns
+      const cols = 3;
+      const results = filteredResultsRef.current;
 
       switch (e.key) {
         case "Escape":
@@ -985,7 +1002,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           break;
         case "ArrowRight":
           e.preventDefault();
-          setSelectedIndex(i => Math.min(i + 1, filteredResults.length - 1));
+          setSelectedIndex(i => Math.min(i + 1, results.length - 1));
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -993,7 +1010,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           break;
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex(i => Math.min(i + cols, filteredResults.length - 1));
+          setSelectedIndex(i => Math.min(i + cols, results.length - 1));
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -1002,31 +1019,28 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         case "Enter":
           e.preventDefault();
           if (e.metaKey || e.ctrlKey) {
-            // Cmd+Enter = send to AI
             handleSendToAI();
-          } else if (filteredResults[selectedIndex]) {
-            // Enter = navigate to timestamp
-            handleSelectResult(filteredResults[selectedIndex]);
+          } else {
+            setSelectedIndex(i => {
+              const r = filteredResultsRef.current[i];
+              if (r) handleSelectResult(r);
+              return i;
+            });
           }
           break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    // Also listen on document capture phase as safety net —
-    // if a focus trap or overlay swallows the window-level event,
-    // this still fires and prevents the modal from getting stuck
     const captureEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
+      if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", captureEscape, true);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, filteredResults, selectedIndex, selectedSpeaker, speakerTranscriptions, filteredSpeakerTranscriptions, selectedTranscriptionIndex, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
+  }, [isOpen, selectedSpeaker, onClose, onNavigateToTimestamp, handleSelectResult, handleSendToAI, handleBackFromSpeaker]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -1039,7 +1053,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   if (!isOpen) return null;
 
   const hasResults = searchResults.length > 0 || speakerResults.length > 0 || tagResults.length > 0 || uiEventResults.length > 0;
-  const showEmpty = !isSearching && !isSearchingSpeakers && !isSearchingTags && !isSearchingUiEvents && debouncedQuery && !hasResults && !selectedSpeaker && !isTagSearch && !isPeopleSearch;
+  const showEmpty = !isSearching && !isSearchingSpeakers && !isSearchingTags && !isSearchingUiEvents && debouncedQuery && debouncedQuery.trim().length >= 3 && !hasResults && !selectedSpeaker && !isTagSearch && !isPeopleSearch;
   const activeIndex = hoveredIndex ?? selectedIndex;
 
   const renderResults = () => (
@@ -1323,19 +1337,33 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {/* Loading skeleton */}
-          {!isTagSearch && !isPeopleSearch && (isSearching || isSearchingUiEvents) && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
-            <div className="grid grid-cols-3 gap-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
-                  <div className="aspect-video" />
-                  <div className="p-2 space-y-1">
-                    <div className="h-3 bg-muted-foreground/20 rounded w-16" />
-                    <div className="h-2 bg-muted-foreground/20 rounded w-24" />
+          {/* Loading skeleton — filter chips + thumbnail grid */}
+          {!isTagSearch && !isPeopleSearch && (isSearching || facetsLoading) && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
+            <>
+              {/* Skeleton filter chips */}
+              <div className="flex gap-1.5 mb-2 overflow-hidden">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="h-6 bg-muted animate-pulse rounded-full shrink-0" style={{ width: `${60 + i * 12}px` }} />
+                ))}
+              </div>
+              <div className="flex gap-1.5 mb-3 overflow-hidden">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-6 bg-muted animate-pulse rounded-full shrink-0" style={{ width: `${50 + i * 15}px` }} />
+                ))}
+              </div>
+              {/* Skeleton thumbnail grid */}
+              <div className="grid grid-cols-3 gap-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
+                    <div className="aspect-video" />
+                    <div className="p-2 space-y-1">
+                      <div className="h-3 bg-muted-foreground/20 rounded w-16" />
+                      <div className="h-2 bg-muted-foreground/20 rounded w-24" />
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </>
           )}
 
           {/* People section */}
@@ -1699,7 +1727,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            autoFocus
           />
           {!settings.disabledShortcuts?.includes("dictation" as any) && (
             <DictationButton
@@ -1802,7 +1829,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            autoFocus
           />
           {!settings.disabledShortcuts?.includes("dictation" as any) && (
             <DictationButton

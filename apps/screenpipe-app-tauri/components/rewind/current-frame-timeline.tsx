@@ -15,7 +15,6 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { ImageOff, ChevronLeft, ChevronRight, Copy, ImageIcon, Link2, MessageCircle, Type } from "lucide-react";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { toast } from "@/components/ui/use-toast";
-import { invoke } from "@tauri-apps/api/core";
 import { useFrameLoading } from "@/components/rewind/hooks/use-frame-loading";
 import { useLiveText } from "@/components/rewind/hooks/use-live-text";
 import { useFrameActions } from "@/components/rewind/hooks/use-frame-actions";
@@ -258,22 +257,6 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		useVideoMode,
 		videoRef,
 	});
-
-	// Hide overlay when raw frameId changes (before debounce settles),
-	// so stale text selection doesn't linger while scrolling.
-	// Throttled: only one IPC call per 150ms to avoid blocking JS during fast scroll.
-	const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const lastHideFrameRef = useRef<string | null>(null);
-	useEffect(() => {
-		if (!nativeLiveTextActive) return;
-		if (lastHideFrameRef.current === frameId) return;
-		lastHideFrameRef.current = frameId;
-		if (hideTimerRef.current) return; // already scheduled
-		hideTimerRef.current = setTimeout(() => {
-			hideTimerRef.current = null;
-			invoke("livetext_hide").catch(() => {});
-		}, 150);
-	}, [nativeLiveTextActive, frameId]);
 
 	if (!frameId) {
 		return (

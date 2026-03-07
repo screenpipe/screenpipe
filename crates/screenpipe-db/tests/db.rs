@@ -1425,7 +1425,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(count, 3, "Should count OCR, Audio, and Accessibility results");
+        assert_eq!(
+            count, 3,
+            "Should count OCR, Audio, and Accessibility results"
+        );
 
         // Test count with specific app filter
         let count = db
@@ -1446,7 +1449,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(count, 1, "Should count accessibility result with app filter");
+        assert_eq!(
+            count, 1,
+            "Should count accessibility result with app filter"
+        );
 
         // Test count with non-matching query
         let count = db

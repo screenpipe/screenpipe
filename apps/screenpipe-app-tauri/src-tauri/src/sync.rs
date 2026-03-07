@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 /// Sync state managed by Tauri.
@@ -444,120 +444,9 @@ pub async fn lock_sync(app: AppHandle, state: State<'_, SyncState>) -> Result<()
 
 /// Auto-start cloud sync on app launch if previously enabled.
 /// Called from main.rs during startup.
-pub async fn auto_start_sync(app: &AppHandle, state: &SyncState) {
+pub async fn auto_start_sync(_app: &AppHandle, _state: &SyncState) {
     // Cloud sync is experimental and disabled for all users until ready
     info!("cloud sync: disabled (experimental feature)");
-    return;
-    // Get user settings first — needed for both stored-password and auto-derive paths
-    let fresh_settings = match SettingsStore::get(app) {
-        Ok(Some(s)) => s,
-        _ => {
-            warn!("cloud sync: no settings found, skipping auto-start");
-            return;
-        }
-    };
-
-    let token = match fresh_settings.user.token {
-        Some(ref t) if !t.is_empty() => t.clone(),
-        _ => {
-            info!("cloud sync: no auth token, skipping auto-start");
-            return;
-        }
-    };
-
-    let password = match CloudSyncSettingsStore::get(app) {
-        Ok(Some(s)) if s.enabled && !s.encrypted_password.is_empty() => {
-            // Use stored password
-            match BASE64.decode(&s.encrypted_password) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        warn!("cloud sync: saved password is not valid UTF-8");
-                        return;
-                    }
-                },
-                Err(_) => {
-                    warn!("cloud sync: saved password is not valid base64");
-                    return;
-                }
-            }
-        }
-        _ => {
-            // Cloud sync requires explicit opt-in — user must enable it and set a password
-            info!("cloud sync: not explicitly enabled, skipping auto-start");
-            return;
-        }
-    };
-
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "Unknown".to_string());
-    let device_os = std::env::consts::OS.to_string();
-
-    let config = SyncClientConfig::new(
-        token.clone(),
-        state.machine_id.clone(),
-        device_name,
-        device_os,
-    );
-
-    let manager = match SyncManager::new(config) {
-        Ok(m) => m,
-        Err(e) => {
-            error!("cloud sync auto-start: failed to create manager: {}", e);
-            return;
-        }
-    };
-
-    match manager.initialize(&password).await {
-        Ok(is_new) => {
-            info!(
-                "cloud sync auto-started for {} user",
-                if is_new { "new" } else { "existing" }
-            );
-        }
-        Err(e) => {
-            error!("cloud sync auto-start: failed to initialize: {}", e);
-            return;
-        }
-    }
-
-    *state.manager.write().await = Some(Arc::new(manager));
-    *state.enabled.write().await = true;
-
-    // Initialize the server's sync service
-    let client = reqwest::Client::new();
-    let init_request = serde_json::json!({
-        "token": token,
-        "password": password,
-        "machine_id": state.machine_id.clone(),
-        "sync_interval_secs": 300
-    });
-
-    match client
-        .post("http://localhost:3030/sync/init")
-        .json(&init_request)
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
-            info!("cloud sync auto-start: server sync service initialized");
-        }
-        Ok(response) if response.status().as_u16() == 409 => {
-            info!("cloud sync auto-start: server sync already running");
-        }
-        Ok(response) => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            warn!(
-                "cloud sync auto-start: server init failed ({}): {}",
-                status, body
-            );
-        }
-        Err(e) => {
-            warn!("cloud sync auto-start: server not reachable: {}", e);
-        }
-    }
 }
 
 /// Auto-start cloud archive on app launch if previously enabled.

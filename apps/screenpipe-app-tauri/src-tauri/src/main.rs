@@ -1385,9 +1385,14 @@ async fn main() {
                 let _ = window.set_visible_on_all_workspaces(false);
                 #[cfg(target_os = "macos")]
                 crate::window_api::reset_to_regular_and_refresh_tray(window.app_handle());
+                // On Windows, let the settings window close normally when user
+                // clicks X. For other windows, minimize or hide.
                 #[cfg(target_os = "windows")]
                 {
-                    if window.label() == "main-window" {
+                    if window.label() == "settings" {
+                        // Let the close proceed (don't prevent it)
+                        return;
+                    } else if window.label() == "main-window" {
                         let _ = window.minimize();
                     } else {
                         let _ = window.hide();
@@ -1898,7 +1903,7 @@ async fn main() {
             if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
             } else {
-                let _ = ShowRewindWindow::Main.show(&app.handle());
+                let _ = ShowRewindWindow::Settings { page: None }.show(&app.handle());
             }
 
             // Pre-create chat panel (hidden) so the shortcut can show an

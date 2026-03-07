@@ -332,7 +332,10 @@ async fn auto_name_input_speaker(db: Arc<screenpipe_db::DatabaseManager>, user_n
     loop {
         interval.tick().await;
 
-        match db.get_dominant_unnamed_input_speaker(min_transcriptions).await {
+        match db
+            .get_dominant_unnamed_input_speaker(min_transcriptions)
+            .await
+        {
             Ok(Some(speaker_id)) => {
                 match db.update_speaker_name(speaker_id, user_name).await {
                     Ok(_) => {

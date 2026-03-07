@@ -1011,7 +1011,8 @@ impl PipeManager {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
 
-            pipe_token = setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref()).await;
+            pipe_token =
+                setup_pipe_permissions(&pipe_dir, &config, self.token_registry.as_ref()).await;
         }
         let token_registry_ref = self.token_registry.clone();
 
@@ -1372,7 +1373,8 @@ impl PipeManager {
                 &self.pipes_dir.join(name),
                 &config,
                 self.token_registry.as_ref(),
-            ).await;
+            )
+            .await;
         }
 
         // Run with timeout + streaming
@@ -1971,7 +1973,8 @@ impl PipeManager {
                             &pipes_dir.join(name),
                             config,
                             token_registry.as_ref(),
-                        ).await;
+                        )
+                        .await;
                     }
 
                     // Check if history/session continuation is enabled

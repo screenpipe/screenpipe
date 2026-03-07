@@ -2902,11 +2902,7 @@ impl DatabaseManager {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        Ok((
-            latest_frame.map(|f| f.0),
-            latest_audio.map(|a| a.0),
-            None,
-        ))
+        Ok((latest_frame.map(|f| f.0), latest_audio.map(|a| a.0), None))
     }
 
     pub async fn add_tags(

@@ -1,6 +1,6 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",
   "bin": {

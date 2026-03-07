@@ -399,7 +399,11 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
             .canonicalize(".")
             .await
             .unwrap_or_else(|_| "/home/".to_string() + &config.user);
-        format!("{}/{}", home.trim_end_matches('/'), &config.remote_path[2..])
+        format!(
+            "{}/{}",
+            home.trim_end_matches('/'),
+            &config.remote_path[2..]
+        )
     } else {
         config.remote_path.clone()
     };
