@@ -537,8 +537,14 @@ impl Default for SettingsStore {
             stop_recording_shortcut: "Alt+Shift+X".to_string(),
             #[cfg(not(target_os = "windows"))]
             stop_recording_shortcut: "Super+Ctrl+X".to_string(),
-            start_audio_shortcut: "".to_string(),
-            stop_audio_shortcut: "".to_string(),
+            #[cfg(target_os = "windows")]
+            start_audio_shortcut: "Alt+Shift+A".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            start_audio_shortcut: "Super+Ctrl+A".to_string(),
+            #[cfg(target_os = "windows")]
+            stop_audio_shortcut: "Alt+Shift+Z".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            stop_audio_shortcut: "Super+Ctrl+Z".to_string(),
             #[cfg(target_os = "windows")]
             show_chat_shortcut: "Alt+L".to_string(),
             #[cfg(not(target_os = "windows"))]

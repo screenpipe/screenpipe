@@ -252,8 +252,8 @@ let DEFAULT_SETTINGS: Settings = {
 			showScreenpipeShortcut: "Control+Super+S",
 			startRecordingShortcut: "Super+Alt+U",
 			stopRecordingShortcut: "Super+Alt+X",
-			startAudioShortcut: "",
-			stopAudioShortcut: "",
+			startAudioShortcut: "Control+Super+A",
+			stopAudioShortcut: "Control+Super+Z",
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
 			realtimeAudioTranscriptionEngine: "deepgram",
@@ -289,6 +289,8 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.showScreenpipeShortcut = p === "windows" ? "Alt+S" : "Control+Super+S";
 		DEFAULT_SETTINGS.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
+		DEFAULT_SETTINGS.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
+		DEFAULT_SETTINGS.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
 
 		if (p === "windows") {
 			DEFAULT_SETTINGS.enableAccessibility = true;
@@ -391,6 +393,18 @@ function createSettingsStore() {
 		if (!settings.showChatShortcut || settings.showChatShortcut.trim() === "") {
 			const p = platform();
 			settings.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
+			needsUpdate = true;
+		}
+
+		// Migration: Fill empty audio shortcuts with platform defaults
+		if (!settings.startAudioShortcut || settings.startAudioShortcut.trim() === "") {
+			const p = platform();
+			settings.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
+			needsUpdate = true;
+		}
+		if (!settings.stopAudioShortcut || settings.stopAudioShortcut.trim() === "") {
+			const p = platform();
+			settings.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
 			needsUpdate = true;
 		}
 
