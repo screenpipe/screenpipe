@@ -146,6 +146,8 @@ pub struct AppState {
     pub hot_frame_cache: Arc<HotFrameCache>,
     /// Cloud archive state (initialized via /archive/init endpoint)
     pub archive_state: crate::archive::ArchiveState,
+    /// Vault lock manager — encrypts data at rest when locked
+    pub vault: screenpipe_vault::VaultManager,
 }
 
 pub struct SCServer {
@@ -425,6 +427,7 @@ impl SCServer {
             hot_frame_cache,
             archive_state: crate::archive::ArchiveState::new(),
             pipe_permissions: self.pipe_permissions.clone(),
+            vault: screenpipe_vault::VaultManager::new(self.screenpipe_dir.clone()),
         });
 
         let cors = CorsLayer::new()
@@ -479,6 +482,11 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .merge(server.into_router())
+            // Vault lock/unlock routes
+            .route("/vault/status", get(crate::routes::vault::vault_status))
+            .route("/vault/lock", axum::routing::post(crate::routes::vault::vault_lock))
+            .route("/vault/unlock", axum::routing::post(crate::routes::vault::vault_unlock))
+            .route("/vault/setup", axum::routing::post(crate::routes::vault::vault_setup))
             // Cloud Sync API routes
             .route("/sync/init", axum::routing::post(sync_api::sync_init))
             .route("/sync/status", get(sync_api::sync_status))
@@ -627,6 +635,10 @@ impl SCServer {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::pipe_permissions_middleware::pipe_permissions_layer,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::routes::vault::vault_lock_middleware,
             ))
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {

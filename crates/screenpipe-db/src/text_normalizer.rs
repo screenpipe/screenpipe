@@ -118,6 +118,19 @@ pub fn expand_search_query(query: &str) -> String {
     }
 }
 
+/// Convert a column name and value into a safe FTS5 query string.
+///
+/// Example:
+/// column="app_name", value="zoom.us" -> "app_name:\"zoom.us\""
+/// column="app_name", value="foo bar" -> "app_name:\"foo\" app_name:\"bar\""
+pub fn value_to_fts5_column_query(column: &str, value: &str) -> String {
+    sanitize_fts5_query(value)
+        .split_whitespace()
+        .map(|token| format!("{}:{}", column, token))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

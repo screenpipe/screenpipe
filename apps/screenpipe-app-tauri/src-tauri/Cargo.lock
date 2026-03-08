@@ -8657,6 +8657,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "rpassword"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffc936cf8a7ea60c58f030fd36a612a48f440610214dc54bc36431f9ea0c3efb"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9162,7 +9172,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.2.79"
+version = "2.2.81"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9208,6 +9218,7 @@ dependencies = [
  "screenpipe-engine",
  "screenpipe-events",
  "screenpipe-screen",
+ "screenpipe-vault",
  "sentry 0.42.0",
  "serde",
  "serde_json",
@@ -9262,7 +9273,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -9314,7 +9325,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9340,7 +9351,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9382,7 +9393,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9407,7 +9418,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9437,6 +9448,7 @@ dependencies = [
  "port_check",
  "regex",
  "reqwest 0.12.12",
+ "rpassword",
  "screenpipe-a11y",
  "screenpipe-apple-intelligence",
  "screenpipe-audio",
@@ -9445,6 +9457,7 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-events",
  "screenpipe-screen",
+ "screenpipe-vault",
  "sentry 0.36.0",
  "serde",
  "serde_json",
@@ -9467,7 +9480,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9483,7 +9496,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.178"
+version = "0.3.179"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -9515,6 +9528,23 @@ dependencies = [
  "windows 0.58.0",
  "xcap",
  "zbus",
+]
+
+[[package]]
+name = "screenpipe-vault"
+version = "0.3.179"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "chacha20poly1305",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "walkdir",
+ "zeroize",
 ]
 
 [[package]]

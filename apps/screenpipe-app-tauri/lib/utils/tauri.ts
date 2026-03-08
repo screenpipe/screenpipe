@@ -74,6 +74,29 @@ async requestArcAutomationPermission() : Promise<boolean> {
 async getEnv(name: string) : Promise<string> {
     return await TAURI_INVOKE("get_env", { name });
 },
+/**
+ * Check vault lock state from filesystem (no server needed).
+ */
+async vaultStatus() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fast unlock: verify password, decrypt DB only, remove sentinel.
+ * Data files are decrypted in background — server can start immediately.
+ */
+async vaultUnlock(password: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_unlock", { password }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getLogFiles() : Promise<Result<LogFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_log_files") };
@@ -1013,7 +1036,7 @@ useSystemDefaultAudio?: boolean; usePiiRemoval: boolean;
 /**
  * Filter music-dominant audio before transcription using spectral analysis
  */
-filterMusic?: boolean; port: number; dataDir: string; disableAudio: boolean; ignoredWindows: string[]; includedWindows: string[]; ignoredUrls?: string[]; fps: number; vadSensitivity: string; analyticsEnabled: boolean; audioChunkDuration: number; useChineseMirror: boolean; languages: string[]; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; realtimeAudioTranscriptionEngine: string; disableVision: boolean; 
+filterMusic?: boolean; port: number; dataDir: string; disableAudio: boolean; ignoredWindows: string[]; includedWindows: string[]; ignoredUrls?: string[]; fps: number; vadSensitivity: string; analyticsEnabled: boolean; audioChunkDuration: number; useChineseMirror: boolean; languages: string[]; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; realtimeAudioTranscriptionEngine: string; disableVision: boolean; 
 /**
  * When true, screen capture continues but OCR text extraction is skipped.
  * Reduces CPU usage significantly while still recording video.

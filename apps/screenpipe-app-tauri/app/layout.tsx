@@ -11,6 +11,8 @@ import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { DictationProvider } from "@/lib/hooks/use-dictation";
+// TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
+// import { VaultLockDialog } from "@/components/vault-lock-dialog";
 import { usePathname } from "next/navigation";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -202,6 +204,13 @@ export default function RootLayout({
       </head>
       <Providers>
         <body className={`${inter.className} scrollbar-hide`}>
+          {!isOverlay && <DeeplinkHandler />}
+          {!isOverlay && <ShortcutTracker />}
+          {!isOverlay && <PipeInstallDialog />}
+          {/* TODO: vault lock UI disabled — CLI-only for now */}
+          {/* {!isOverlay && <VaultLockDialog />} */}
+          {children}
+          {!isOverlay && <Toaster />}
           <DictationProvider>
             {!isOverlay && <DeeplinkHandler />}
             {!isOverlay && <ShortcutTracker />}

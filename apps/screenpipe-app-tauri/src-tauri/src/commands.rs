@@ -79,15 +79,10 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 #[tauri::command]
 #[specta::specta]
 pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
-    // macOS: show the overlay panel (NSPanel) on top of fullscreen apps
-    // Windows: show the settings/home window (no overlay support)
-    #[cfg(target_os = "macos")]
-    let window_to_show = ShowRewindWindow::Main;
-    #[cfg(not(target_os = "macos"))]
-    let window_to_show = ShowRewindWindow::Settings { page: None };
-
     info!("show_main_window called");
-    match (ShowRewindWindow::Settings { page: None }).show(app_handle) {
+    let window_to_show = ShowRewindWindow::Main;
+
+    match window_to_show.show(app_handle) {
         Ok(window) => {
             info!(
                 "show_main_window succeeded, window label: {}",
@@ -124,11 +119,7 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
     // handler in window_api.rs. Do NOT also unregister them here — doing
     // so races with the focus handler and causes duplicate unregister calls.
 
-    // macOS: close the overlay panel; Windows: close the settings window
-    #[cfg(target_os = "macos")]
-    #[cfg(not(target_os = "macos"))]
     let window_to_close = ShowRewindWindow::Main;
-    let window_to_close = ShowRewindWindow::Settings { page: None };
 
     if let Err(e) = (ShowRewindWindow::Settings { page: None }).close(app_handle) {
         error!("failed to close settings window: {}", e);

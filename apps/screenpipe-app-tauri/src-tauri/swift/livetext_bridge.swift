@@ -46,6 +46,10 @@ private class LiveTextManager {
     var analyzer: ImageAnalyzer?
     var overlayView: ImageAnalysisOverlayView?
     var currentAnalysis: ImageAnalysis?
+    /// Analysis waiting to be applied — only set on the overlay when
+    /// lt_update_position provides correct geometry. This prevents
+    /// VisionKit from computing hit regions against a zero/stale frame.
+    var pendingAnalysis: ImageAnalysis?
     var hostContentView: NSView?
 
     /// Reusable URLSession for fetching frame images (avoid per-call session alloc).
@@ -116,7 +120,7 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
             // native overlay (Look Up, Translate, copy, data detectors).
             // Focus stealing is managed by mainThreadPreservingFocus() and by
             // hiding the overlay when the search modal is open.
-            overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
+            overlay.preferredInteractionTypes = [.textSelection]
             overlay.isHidden = true
             overlay.frame = NSRect.zero
             overlay.autoresizingMask = [] // we manage position manually
@@ -234,18 +238,10 @@ public func ltAnalyzeImage(
         }
 
         mgr.currentAnalysis = analysis
-
-        // Show the overlay with the new analysis.
-        // Position is managed exclusively by lt_update_position — we don't set
-        // overlay.frame here to avoid a race where stale coordinates from the
-        // analyze call overwrite a correct position set by update_position.
-        mainThreadPreservingFocus(contentView) {
-            MainActor.assumeIsolated {
-                overlay.analysis = analysis
-                overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
-                overlay.isHidden = false
-            }
-        }
+        // Don't apply to overlay yet — store as pending. The analysis will be
+        // applied in lt_update_position once the correct frame geometry is set.
+        // This ensures VisionKit computes hit regions against the right rect.
+        mgr.pendingAnalysis = analysis
 
         // Return recognized text from the analysis transcript (macOS 13+)
         outText.pointee = makeCString(analysis.transcript)
@@ -269,8 +265,20 @@ public func ltUpdatePosition(_ x: Double, _ y: Double, _ w: Double, _ h: Double)
         let contentHeight = contentView.frame.height
         let appKitY = contentHeight - (y + h)
 
+        // Apply pending analysis AFTER setting the frame so VisionKit
+        // computes hit regions against the correct geometry.
+        let pending = mgr.pendingAnalysis
+        mgr.pendingAnalysis = nil
+
         mainThreadPreservingFocus(contentView) {
-            overlay.frame = NSRect(x: x, y: appKitY, width: w, height: h)
+            MainActor.assumeIsolated {
+                overlay.frame = NSRect(x: x, y: appKitY, width: w, height: h)
+                if let analysis = pending {
+                    overlay.analysis = analysis
+                    overlay.preferredInteractionTypes = [.textSelection]
+                    overlay.isHidden = false
+                }
+            }
         }
         return 0
     }
@@ -358,6 +366,7 @@ public func ltHide() -> Int32 {
             }
         }
         mgr.currentAnalysis = nil
+        mgr.pendingAnalysis = nil
         return 0
     }
     #endif
@@ -377,6 +386,7 @@ public func ltDestroy() -> Int32 {
         mgr.overlayView = nil
         mgr.analyzer = nil
         mgr.currentAnalysis = nil
+        mgr.pendingAnalysis = nil
         mgr.hostContentView = nil
         mgr.urlSession.invalidateAndCancel()
         return 0

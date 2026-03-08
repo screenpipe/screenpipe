@@ -281,7 +281,7 @@ export function AudioTranscript({
 
 		// Compute participants and first chunk by speaker (for header assign popovers)
 		const participantMap = new Map<number, { name: string; duration: number }>();
-		const firstChunkBySpeaker = new Map<number, { audioChunkId: number; audioFilePath: string }>();
+		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const id = speakerId ?? -1;
@@ -386,7 +386,7 @@ export function AudioTranscript({
 		const totalDuration = participants.reduce((sum, p) => sum + p.duration, 0);
 
 		// Build first chunk by speaker for header assign popovers
-		const firstChunkBySpeaker = new Map<number, { audioChunkId: number; audioFilePath: string }>();
+		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId } = getSpeakerInfo(audio);
 			const id = speakerId ?? -1;

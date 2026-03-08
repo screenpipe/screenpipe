@@ -169,8 +169,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			setCurrentFrame(frame);
 		});
 
-	// Meeting detection from existing frame data
 	const { meetings } = useMeetings(frames);
+
 
 	// --- Extracted hooks ---
 
@@ -1047,17 +1047,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						mutedDevices={mutedDevices}
 						onToggleDeviceMute={toggleDeviceMute}
 					/>
-					{/* Top right buttons */}
-					<div className={`absolute ${embedded ? "top-2" : "top-[calc(env(safe-area-inset-top)+16px)]"} right-4 flex items-center gap-2`}>
-						{/* Refresh button */}
-						<button
-							onClick={handleRefresh}
-							className="p-2 bg-background/80 hover:bg-background border border-border rounded-md transition-colors"
-							title="Refresh timeline"
-						>
-							<RotateCcw className="w-4 h-4 text-muted-foreground" />
-						</button>
-					</div>
 				</div>
 
 				{/* Daily Summary — top right, below controls */}
@@ -1241,8 +1230,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					</div>
 				)}
 
-				{/* Meeting bar removed — meeting detection handled inside transcript panel */}
-
 				{/* Bottom Timeline - Overlay that doesn't cut off image */}
 				<div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
 					{frames.length > 0 ? (
@@ -1282,6 +1269,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							onSpeakerChange={handleSpeakerChange}
 							selectedTag={selectedTag}
 							onTagChange={handleTagChange}
+							onRefresh={handleRefresh}
 						/>
 					) : (
 						<div className="bg-card/80 backdrop-blur-sm p-4 border-t border-border">

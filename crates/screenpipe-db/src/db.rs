@@ -2140,17 +2140,25 @@ impl DatabaseManager {
 
         if let Some(app) = app_name {
             if !app.is_empty() {
-                frame_fts_parts.push(format!("app_name:\"{}\"", app.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "app_name", app,
+                ));
             }
         }
         if let Some(window) = window_name {
             if !window.is_empty() {
-                frame_fts_parts.push(format!("window_name:\"{}\"", window.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "window_name",
+                    window,
+                ));
             }
         }
         if let Some(browser) = browser_url {
             if !browser.is_empty() {
-                frame_fts_parts.push(format!("browser_url:\"{}\"", browser.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "browser_url",
+                    browser,
+                ));
             }
         }
         if let Some(is_focused) = focused {
@@ -2158,7 +2166,9 @@ impl DatabaseManager {
         }
         if let Some(frame_name) = frame_name {
             if !frame_name.is_empty() {
-                frame_fts_parts.push(format!("name:\"{}\"", frame_name.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "name", frame_name,
+                ));
             }
         }
 
@@ -2711,19 +2721,32 @@ impl DatabaseManager {
         }
         if let Some(app) = app_name {
             if !app.is_empty() {
-                frame_fts_parts.push(format!("app_name:\"{}\"", app.replace('"', "")));
-                ui_fts_parts.push(format!("app_name:\"{}\"", app.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "app_name", app,
+                ));
+                ui_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "app_name", app,
+                ));
             }
         }
         if let Some(window) = window_name {
             if !window.is_empty() {
-                frame_fts_parts.push(format!("window_name:\"{}\"", window.replace('"', "")));
-                ui_fts_parts.push(format!("window_name:\"{}\"", window.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "window_name",
+                    window,
+                ));
+                ui_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "window_name",
+                    window,
+                ));
             }
         }
         if let Some(browser) = browser_url {
             if !browser.is_empty() {
-                frame_fts_parts.push(format!("browser_url:\"{}\"", browser.replace('"', "")));
+                frame_fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                    "browser_url",
+                    browser,
+                ));
             }
         }
         if let Some(is_focused) = focused {
@@ -3410,10 +3433,15 @@ impl DatabaseManager {
             fts_parts.push(crate::text_normalizer::sanitize_fts5_query(query));
         }
         if let Some(app) = app_name {
-            fts_parts.push(format!("app_name:\"{}\"", app.replace('"', "")));
+            fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                "app_name", app,
+            ));
         }
         if let Some(window) = window_name {
-            fts_parts.push(format!("window_name:\"{}\"", window.replace('"', "")));
+            fts_parts.push(crate::text_normalizer::value_to_fts5_column_query(
+                "window_name",
+                window,
+            ));
         }
         let combined_query = fts_parts.join(" ");
 

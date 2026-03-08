@@ -98,6 +98,7 @@ const ShortcutRow = ({
     startAudioShortcut: string;
     stopAudioShortcut: string;
     showChatShortcut: string;
+    lockVaultShortcut?: string;
     dictationShortcut: string;
   }) => {
     console.log("syncing shortcuts:", {
@@ -136,6 +137,7 @@ const ShortcutRow = ({
         stopAudioShortcut: settings.stopAudioShortcut,
         showChatShortcut: settings.showChatShortcut,
         searchShortcut: settings.searchShortcut,
+        lockVaultShortcut: settings.lockVaultShortcut || "",
         dictationShortcut: settings.dictationShortcut || "",
       };
       const conflict = Object.entries(allShortcuts).find(
@@ -159,23 +161,17 @@ const ShortcutRow = ({
         description: `${shortcut.replace(/_/g, " ")} enabled`,
       });
 
-      // Remove from disabled shortcuts if it exists and update the shortcut value
-      // Use await to ensure settings are updated before we read them
-      await updateSettings({
-        disabledShortcuts: settings.disabledShortcuts.filter(
-          (s) => s !== shortcut
-        ),
-        [shortcut]: keys,
-      });
-
-      // Small delay to ensure settings are persisted
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
+      // Remove from disabled shortcuts and set the key value in a single update
+      // to avoid race condition (both updates do read-modify-write)
       switch (type) {
         case "global":
-          // Build updated shortcuts - use keys for the changed shortcut, 
-          // and read from settings for others (but settings may still have old values,
-          // so we handle that in the sync call)
+          await updateSettings({
+            disabledShortcuts: settings.disabledShortcuts.filter(
+              (s) => s !== shortcut
+            ),
+            [shortcut]: keys,
+          });
+          // Build updated shortcuts with the NEW value for the changed shortcut
           const updatedShortcuts = {
             showScreenpipeShortcut: shortcut === "showScreenpipeShortcut" ? keys : (settings.showScreenpipeShortcut || ""),
             startRecordingShortcut: shortcut === "startRecordingShortcut" ? keys : (settings.startRecordingShortcut || ""),
@@ -184,6 +180,7 @@ const ShortcutRow = ({
             stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : (settings.stopAudioShortcut || ""),
             showChatShortcut: shortcut === "showChatShortcut" ? keys : (settings.showChatShortcut || ""),
             dictationShortcut: shortcut === "dictationShortcut" ? keys : (settings.dictationShortcut || ""),
+            lockVaultShortcut: shortcut === "lockVaultShortcut" ? keys : (settings.lockVaultShortcut || ""),
           };
           await syncShortcuts(updatedShortcuts);
 
@@ -228,6 +225,7 @@ const ShortcutRow = ({
       startAudioShortcut: settings.startAudioShortcut,
       stopAudioShortcut: settings.stopAudioShortcut,
       showChatShortcut: settings.showChatShortcut,
+      lockVaultShortcut: settings.lockVaultShortcut || "",
       dictationShortcut: settings.dictationShortcut || "",
     });
   };

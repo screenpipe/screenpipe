@@ -1750,6 +1750,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         <div
           ref={gridRef}
           className="flex-1 min-h-0 overflow-y-auto p-4 overscroll-contain touch-pan-y"
+          onWheel={(e) => {
+            e.stopPropagation();
+            const target = e.currentTarget;
+            const isAtTop = target.scrollTop === 0 && e.deltaY < 0;
+            const isAtBottom = target.scrollTop + target.clientHeight >= target.scrollHeight && e.deltaY > 0;
+            if (isAtTop || isAtBottom) e.preventDefault();
+          }}
+          onTouchMove={(e) => e.stopPropagation()}
           onScroll={handleScroll}
         >
           {renderResults()}

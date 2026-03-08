@@ -1599,6 +1599,26 @@ impl ShowRewindWindow {
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                                 );
+
+                                // Make the panel visible on first creation.
+                                // Without this, the panel is created hidden and requires
+                                // a second shortcut press to trigger show_existing_main().
+                                save_frontmost_app();
+                                unsafe {
+                                    let _: () = objc::msg_send![&*panel, setAlphaValue: 1.0f64];
+                                }
+                                panel.order_front_regardless();
+                                panel.make_key_window();
+                                unsafe {
+                                    make_webview_first_responder(&panel);
+                                }
+
+                                // Remove MoveToActiveSpace so the panel stays pinned to
+                                // this Space (same as show_existing_main).
+                                panel.set_collection_behaviour(
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                );
                             }
                         });
                     } else {

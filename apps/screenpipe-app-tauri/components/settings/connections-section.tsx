@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -802,9 +803,21 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
           <div className="flex items-center gap-1">
             <Label className="text-xs">{field.label}</Label>
             {field.help_url && (
-              <button onClick={() => openUrl(field.help_url)} className="text-muted-foreground hover:text-foreground">
-                <HelpCircle className="h-3 w-3" />
-              </button>
+              <TooltipProvider delayDuration={0}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button className="text-muted-foreground hover:text-foreground">
+                      <HelpCircle className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start" sideOffset={4} collisionPadding={0} className="text-xs max-w-[220px] space-y-1">
+                    <p>Learn how to find your {field.label.toLowerCase()} for this integration.</p>
+                    <button onClick={() => openUrl(field.help_url)} className="underline hover:text-primary cursor-pointer">
+                      Open guide →
+                    </button>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
           <div className="relative">

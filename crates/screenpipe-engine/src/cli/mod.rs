@@ -8,6 +8,7 @@ pub mod mcp;
 pub mod pipe;
 pub mod status;
 pub mod sync;
+pub mod vault;
 pub mod vision;
 
 use clap::ValueEnum;
@@ -172,6 +173,12 @@ pub enum Command {
     Connection {
         #[command(subcommand)]
         subcommand: ConnectionCommand,
+    },
+
+    /// Vault: encrypt/lock all screenpipe data at rest
+    Vault {
+        #[command(subcommand)]
+        subcommand: VaultCommand,
     },
 }
 
@@ -456,6 +463,22 @@ pub enum ConnectionCommand {
         /// Integration ID (e.g. telegram, slack, discord)
         id: String,
     },
+}
+
+// =============================================================================
+// Vault subcommands
+// =============================================================================
+
+#[derive(Subcommand)]
+pub enum VaultCommand {
+    /// Check vault status
+    Status {},
+    /// Set up vault encryption (first-time password setup)
+    Setup {},
+    /// Lock the vault (encrypt all data, stop recording)
+    Lock {},
+    /// Unlock the vault (decrypt data, resume recording)
+    Unlock {},
 }
 
 // =============================================================================

@@ -106,6 +106,12 @@ export function useLiveText(opts: {
 				x: 0, y: 0, w: 0, h: 0,
 			}).then(() => {
 				analyzeFailCountRef.current = 0;
+				// Analysis is stored as pending in Swift — send position update
+				// to apply it with correct geometry for hit-region computation.
+				if (!cancelled && renderedImageInfo) {
+					const pos = getAbsolutePosition(renderedImageInfo);
+					invoke("livetext_update_position", pos).catch(() => {});
+				}
 			}).catch((e: unknown) => {
 				if (cancelled) return;
 				const msg = String(e);
@@ -150,13 +156,19 @@ export function useLiveText(opts: {
 		if (isSearchModalOpen) {
 			invoke("livetext_hide").catch(() => {});
 		} else if (debouncedFrame?.frameId) {
-			// Re-analyze to show overlay again (position managed by update_position)
+			// Re-analyze to show overlay again, then send position update
+			// to apply the pending analysis with correct geometry.
 			const imagePath = isSnapshotFrame && debouncedFrame.filePath
 				? debouncedFrame.filePath
 				: `http://localhost:3030/frames/${debouncedFrame.frameId}`;
 			invoke("livetext_analyze", {
 				imagePath,
 				x: 0, y: 0, w: 0, h: 0,
+			}).then(() => {
+				if (renderedImageInfo) {
+					const pos = getAbsolutePosition(renderedImageInfo);
+					invoke("livetext_update_position", pos).catch(() => {});
+				}
 			}).catch(() => {});
 		}
 	}, [nativeLiveTextActive, isSearchModalOpen]);

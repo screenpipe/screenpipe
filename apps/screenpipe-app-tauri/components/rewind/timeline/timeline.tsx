@@ -6,7 +6,7 @@ import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { getStore, type ChatConversation } from "@/lib/hooks/use-settings";
 import { isAfter, subDays, format } from "date-fns";
 import { motion } from "framer-motion";
-import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash } from "lucide-react";
+import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import posthog from "posthog-js";
@@ -132,6 +132,7 @@ interface TimelineSliderProps {
 	onSpeakerChange?: (speaker: string) => void;
 	selectedTag?: string; // "all" or a tag name
 	onTagChange?: (tag: string) => void;
+	onRefresh?: () => void;
 }
 
 interface AppGroup {
@@ -282,6 +283,7 @@ export const TimelineSlider = ({
 	onSpeakerChange,
 	selectedTag = "all",
 	onTagChange,
+	onRefresh,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
@@ -454,6 +456,7 @@ export const TimelineSlider = ({
 		});
 		return map;
 	}, [frames]);
+
 
 	// Whether the user is actively interacting (popover open, dragging, or has selection).
 	// When true we freeze the visible frames to prevent server pushes from
@@ -900,6 +903,19 @@ export const TimelineSlider = ({
 				dir="ltr"
 				onMouseLeave={() => setExpandedFilterSection(null)}
 			>
+				{/* Refresh row */}
+				{onRefresh && (
+					<button
+						className={cn(
+							"p-1.5 rounded-md transition-colors shrink-0",
+							"bg-background/80 backdrop-blur-sm border border-border",
+						)}
+						onClick={onRefresh}
+						title="Refresh timeline"
+					>
+						<RotateCcw className="w-3.5 h-3.5 text-foreground/70" />
+					</button>
+				)}
 				{/* Monitor row */}
 				{allDeviceIds.length > 1 && onDeviceChange && (
 					<div
@@ -1455,6 +1471,7 @@ export const TimelineSlider = ({
 													{timeMarker.time}
 												</div>
 											)}
+
 
 											{/* Tooltip on hover — rendered via portal to escape overflow clipping */}
 											{shouldShowTooltip && hoveredRect && createPortal(

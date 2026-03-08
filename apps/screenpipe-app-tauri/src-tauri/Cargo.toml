@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.2.80"
+version = "2.2.82"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -116,6 +116,7 @@ screenpipe-screen = { path = "../../../crates/screenpipe-screen" }
 screenpipe-a11y = { path = "../../../crates/screenpipe-a11y" }
 screenpipe-audio = { path = "../../../crates/screenpipe-audio" }
 screenpipe-db = { path = "../../../crates/screenpipe-db" }
+screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
 image = "0.25.5"

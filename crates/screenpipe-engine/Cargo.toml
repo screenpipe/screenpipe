@@ -23,6 +23,7 @@ screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-a11y = { path = "../screenpipe-a11y", features = ["db"] }
 screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", optional = true }
 screenpipe-connect = { path = "../screenpipe-connect" }
+screenpipe-vault = { path = "../screenpipe-vault" }
 
 
 # Image processing
@@ -73,6 +74,9 @@ futures = { version = "0.3.31", features = ["std"] }
 
 # Directory management
 dirs = "5.0"
+
+# Password input (no-echo for vault CLI)
+rpassword = "5"
 
 # Client http
 reqwest = { workspace = true }

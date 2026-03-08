@@ -88,6 +88,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await;
 
@@ -146,6 +148,8 @@ mod tests {
                 Some("https://www.example.com/page"),
                 None,
                 None,
+                None,
+                None,
             )
             .await;
 
@@ -197,6 +201,8 @@ mod tests {
                 None,
                 None,
                 Some("main.rs — screenpipe"),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -442,6 +448,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await;
 
@@ -495,6 +503,8 @@ mod tests {
                 ContentType::OCR,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -572,6 +582,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .await;
 
@@ -598,6 +610,24 @@ mod tests {
             r#""com.apple.Safari""#
         );
         assert_eq!(sanitize_fts5_query("192.168.1.1"), r#""192.168.1.1""#);
+    }
+
+    #[test]
+    fn test_value_to_fts5_column_query() {
+        use screenpipe_db::text_normalizer::value_to_fts5_column_query;
+
+        assert_eq!(
+            value_to_fts5_column_query("app_name", "zoom.us"),
+            r#"app_name:"zoom.us""#
+        );
+        assert_eq!(
+            value_to_fts5_column_query("app_name", "foo bar"),
+            r#"app_name:"foo" app_name:"bar""#
+        );
+        assert_eq!(
+            value_to_fts5_column_query("window_name", "My App (v2.0)"),
+            r#"window_name:"My" window_name:"App" window_name:"(v2.0)""#
+        );
     }
 
     #[test]

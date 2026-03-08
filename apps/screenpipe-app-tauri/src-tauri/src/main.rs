@@ -271,6 +271,7 @@ struct ShortcutConfig {
     stop_audio: String,
     show_chat: String,
     search: String,
+    lock_vault: String,
     dictation: String,
     disabled: Vec<String>,
 }
@@ -308,6 +309,7 @@ impl ShortcutConfig {
             },
             show_chat: store.show_chat_shortcut,
             search: store.search_shortcut,
+            lock_vault: store.lock_vault_shortcut,
             dictation: store.dictation_shortcut,
             disabled: store.disabled_shortcuts,
         })
@@ -325,6 +327,7 @@ impl ShortcutConfig {
             "stop_audio" => "stopAudioShortcut",
             "show_chat" => "showChatShortcut",
             "search" => "searchShortcut",
+            "lock_vault" => "lockVaultShortcut",
             "dictation" => "dictationShortcut",
             _ => shortcut_type,
         };
@@ -384,6 +387,7 @@ async fn update_global_shortcuts(
         stop_audio: stop_audio_shortcut,
         show_chat: store_config.show_chat,
         search: store_config.search,
+        lock_vault: store_config.lock_vault,
         dictation: profile_shortcuts.get("dictationShortcut").cloned().unwrap_or(store_config.dictation),
         disabled: store_config.disabled,
     };
@@ -618,6 +622,16 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
     })
     .await?;
 
+    // TODO: vault lock shortcut disabled — CLI-only for now
+    // register_shortcut(app, &config.lock_vault, config.is_disabled("lock_vault"), |app| {
+    //     let app_for_closure = app.clone();
+    //     let _ = app.run_on_main_thread(move || {
+    //         info!("vault lock shortcut triggered");
+    //         let _ = app_for_closure.emit("vault-lock-requested", ());
+    //     });
+    // })
+    // .await?;
+
     // Register dictation shortcut (global - toggles voice dictation)
     register_shortcut(app, &config.dictation, config.is_disabled("dictation"), |app| {
         let app_for_closure = app.clone();
@@ -650,6 +664,102 @@ async fn suspend_global_shortcuts(app: AppHandle) -> Result<(), String> {
 async fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
     initialize_global_shortcuts(&app).await?;
     info!("global shortcuts resumed after recording");
+    Ok(())
+}
+
+/// Check vault lock state from filesystem (no server needed).
+#[tauri::command]
+#[specta::specta]
+async fn vault_status(app: AppHandle) -> Result<String, String> {
+    let data_dir = app.path().home_dir().map_err(|e| e.to_string())?.join(".screenpipe");
+    if !data_dir.join("vault.meta").exists() {
+        return Ok("none".to_string());
+    }
+    if data_dir.join(".vault_locked").exists() {
+        return Ok("locked".to_string());
+    }
+    // Fallback: if vault.meta exists but no sentinel, check if DB is actually encrypted
+    // (handles crash during lock where sentinel wasn't written yet)
+    let db_path = data_dir.join("db.sqlite");
+    if db_path.exists() {
+        if let Ok(true) = screenpipe_vault::crypto::is_encrypted_file(&db_path) {
+            return Ok("locked".to_string());
+        }
+    }
+    Ok("unlocked".to_string())
+}
+
+/// Fast unlock: verify password, decrypt DB only, remove sentinel.
+/// Data files are decrypted in background — server can start immediately.
+#[tauri::command]
+#[specta::specta]
+async fn vault_unlock(app: AppHandle, password: String) -> Result<(), String> {
+    use screenpipe_vault::crypto;
+
+    let screenpipe_dir = app.path().home_dir().map_err(|e| e.to_string())?.join(".screenpipe");
+
+    // Read vault metadata and verify password
+    let meta_path = screenpipe_dir.join("vault.meta");
+    let meta_json = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+    let meta: serde_json::Value = serde_json::from_str(&meta_json)
+        .map_err(|e| format!("corrupt vault.meta: {}", e))?;
+
+    let salt_arr: Vec<u8> = meta["salt"].as_array()
+        .ok_or("missing salt")?.iter()
+        .map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+    let mut salt = [0u8; 32];
+    if salt_arr.len() != 32 { return Err("invalid salt length".into()); }
+    salt.copy_from_slice(&salt_arr);
+
+    let encrypted_master_key: Vec<u8> = meta["encrypted_master_key"].as_array()
+        .ok_or("missing encrypted_master_key")?.iter()
+        .map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+
+    // Derive key from password
+    let password_key = crypto::derive_key(&password, &salt)
+        .map_err(|e| e.to_string())?;
+
+    // Decrypt master key — fails if wrong password
+    let master_key_bytes = crypto::decrypt_small(&encrypted_master_key, &password_key)
+        .map_err(|_| "wrong password".to_string())?;
+
+    if master_key_bytes.len() != 32 {
+        return Err("invalid master key".into());
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&master_key_bytes);
+
+    // Decrypt DB file (fast — typically <10s even for 7GB)
+    let db_path = screenpipe_dir.join("db.sqlite");
+    if db_path.exists() {
+        crypto::decrypt_file(&db_path, &key).map_err(|e| format!("decrypt db: {}", e))?;
+        for ext in &["sqlite-wal", "sqlite-shm"] {
+            let p = db_path.with_extension(ext);
+            if p.exists() { let _ = crypto::decrypt_file(&p, &key); }
+        }
+    }
+
+    // Remove sentinel so server can start
+    let _ = std::fs::remove_file(screenpipe_dir.join(".vault_locked"));
+
+    // Spawn background task to decrypt data files (screenshots/audio)
+    let data_dir = screenpipe_dir.join("data");
+    tokio::spawn(async move {
+        if data_dir.exists() {
+            let (tx, _rx) = tokio::sync::watch::channel(screenpipe_vault::migration::MigrationProgress {
+                total_files: 0, processed_files: 0, total_bytes: 0, processed_bytes: 0,
+            });
+            if let Err(e) = screenpipe_vault::migration::decrypt_data_dir(
+                &screenpipe_dir, &data_dir, key, tx,
+            ).await {
+                tracing::error!("background data decrypt failed: {}", e);
+            } else {
+                tracing::info!("background data decryption complete");
+            }
+        }
+        key.fill(0); // zeroize
+    });
+
     Ok(())
 }
 
@@ -1252,6 +1362,8 @@ async fn main() {
                 permissions::request_arc_automation_permission,
                 // Commands from main.rs
                 get_env,
+                vault_status,
+                vault_unlock,
                 get_log_files,
                 get_media_file,
                 upload_file_to_s3,
@@ -1542,6 +1654,8 @@ async fn main() {
             suspend_global_shortcuts,
             resume_global_shortcuts,
             get_env,
+            vault_status,
+            vault_unlock,
             // Sync commands
             sync::get_sync_status,
             sync::set_sync_enabled,
@@ -2004,6 +2118,16 @@ async fn main() {
                     let _ = ShowRewindWindow::PermissionRecovery.show(&app.handle());
                 }
             }
+
+            // TODO: vault lock app integration disabled — CLI-only for now
+            // let vault_is_locked = data_dir.join(".vault_locked").exists()
+            //     || (data_dir.join("vault.meta").exists()
+            //         && data_dir.join("db.sqlite").exists()
+            //         && screenpipe_vault::crypto::is_encrypted_file(&data_dir.join("db.sqlite")).unwrap_or(false));
+            // if vault_is_locked {
+            //     info!("Vault is locked — skipping server start, waiting for unlock");
+            //     let _ = app_handle.emit("vault-locked-on-startup", ());
+            // }
 
             // Start embedded server on a dedicated thread with its own tokio runtime
             // to avoid competing with Tauri's UI runtime

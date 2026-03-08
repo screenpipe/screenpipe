@@ -586,14 +586,14 @@ function ActiveSyncSettings({
                     <div className="flex items-center gap-3">
                       <Laptop className="h-4 w-4 text-muted-foreground" />
                       <div>
-                        <p className="text-sm font-medium">
+                        <div className="text-sm font-medium flex items-center">
                           {device.deviceName || device.deviceId}
                           {device.isCurrent && (
                             <Badge variant="outline" className="ml-2 text-xs">
                               This device
                             </Badge>
                           )}
-                        </p>
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {device.deviceOs}
                           {device.lastSyncAt &&

@@ -18,7 +18,7 @@ export interface Meeting {
 	startTime: Date;
 	endTime: Date;
 	durationSecs: number;
-	speakers: Map<number, { name: string; durationSecs: number }>;
+	speakers: Map<string, { name: string; durationSecs: number }>;
 	audioEntries: AudioEntryWithTimestamp[];
 	frameIndexRange: { first: number; last: number };
 }
@@ -30,8 +30,9 @@ const EXTENDED_GAP_THRESHOLD_MS = 6 * 60 * 1000;
 const EXTENDED_GAP_MIN_ENTRIES = 5;
 const EXTENDED_GAP_MIN_DURATION_SECS = 120;
 // Minimum entries and duration to qualify as a meeting
-const MIN_ENTRIES = 2;
-const MIN_DURATION_SECS = 10;
+const MIN_ENTRIES = 3;
+const MIN_DURATION_SECS = 30; // 30s of speech (not meeting time — speech chunks are short)
+const MIN_SPEAKERS = 2; // need 2+ distinct speakers — this is the key filter
 // Deduplication: max time diff (ms) and min text similarity to consider entries duplicates
 const DEDUP_TIME_THRESHOLD_MS = 10_000;
 const DEDUP_SIMILARITY_THRESHOLD = 0.7;
@@ -217,23 +218,29 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 			lastEntry.frameTimestamp.getTime() + lastEntry.duration_secs * 1000
 		);
 
-		// Build speaker map
+		// Build speaker map — use speaker_id when available, fall back to
+		// is_input (mic vs output) to distinguish "You" from remote speakers
 		const speakers = new Map<
-			number,
+			string,
 			{ name: string; durationSecs: number }
 		>();
 		for (const entry of entries) {
-			const id = entry.speaker_id ?? -1;
+			const id = entry.speaker_id != null
+				? `spk_${entry.speaker_id}`
+				: entry.is_input ? "input" : "output";
 			const existing = speakers.get(id);
 			if (existing) {
 				existing.durationSecs += entry.duration_secs;
 			} else {
 				speakers.set(id, {
-					name: entry.speaker_name || "",
+					name: entry.speaker_name || (entry.is_input ? "You" : "Speaker"),
 					durationSecs: entry.duration_secs,
 				});
 			}
 		}
+
+		// Require multiple speakers — single-speaker audio is not a meeting
+		if (speakers.size < MIN_SPEAKERS) continue;
 
 		// Frame index range
 		const frameIndices = entries.map((e) => e.frameIndex);
@@ -242,6 +249,7 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 
 		// Deterministic ID from start time + first chunk id
 		const id = `meeting-${startTime.getTime()}-${entries[0].audio_chunk_id}`;
+
 
 		meetings.push({
 			id,

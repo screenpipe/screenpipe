@@ -22,7 +22,7 @@ function formatDuration(seconds: number): string {
 	return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
-function getSpeakerColorClass(_speakerId?: number): string {
+function getSpeakerColorClass(_speakerId?: number | string): string {
 	return "border-l-border";
 }
 
@@ -246,10 +246,10 @@ export function ParticipantsSummary({
 	onSpeakerAssigned,
 	onBulkSpeakerAssigned,
 }: {
-	participants: Array<{ id: number; name: string; duration: number }>;
+	participants: Array<{ id: number | string; name: string; duration: number }>;
 	totalDuration: number;
 	timeRange: { start: Date; end: Date };
-	firstChunkBySpeaker?: Map<number, { audioChunkId: number; audioFilePath: string }>;
+	firstChunkBySpeaker?: Map<number | string, { audioChunkId: number; audioFilePath: string }>;
 	onSpeakerAssigned?: (audioChunkId: number, newId: number, newName: string) => void;
 	onBulkSpeakerAssigned?: (originalSpeakerId: number, newId: number, newName: string) => void;
 }) {
@@ -281,16 +281,17 @@ export function ParticipantsSummary({
 						const colorClass = getSpeakerColorClass(p.id);
 
 						if (isUnnamed && chunk && (onBulkSpeakerAssigned || onSpeakerAssigned)) {
+							const numericId = typeof p.id === "number" ? p.id : -1;
 							return (
 								<SpeakerAssignPopover
 									key={p.id}
 									audioChunkId={chunk.audioChunkId}
-									speakerId={p.id}
+									speakerId={numericId}
 									speakerName=""
 									audioFilePath={chunk.audioFilePath}
 									onAssigned={(newId, newName) => {
 										// Bulk: update all bubbles for this speaker
-										onBulkSpeakerAssigned?.(p.id, newId, newName);
+										onBulkSpeakerAssigned?.(numericId, newId, newName);
 										// Also update the specific chunk
 										onSpeakerAssigned?.(chunk.audioChunkId, newId, newName);
 									}}

@@ -95,6 +95,7 @@ export type Settings = SettingsStore & {
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
 	searchShortcut?: string;
+	lockVaultShortcut?: string;
 	dictationShortcut?: string;
 	dictationDevice?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
@@ -265,6 +266,7 @@ let DEFAULT_SETTINGS: Settings = {
 			stopAudioShortcut: "Control+Super+Z",
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
+			lockVaultShortcut: "Super+Shift+L",
 			dictationShortcut: "Control+Super+D",
 			dictationDevice: "",
 			realtimeAudioTranscriptionEngine: "deepgram",
@@ -293,8 +295,8 @@ export function createDefaultSettingsObject(): Settings {
 	try {
 		const p = platform();
 		DEFAULT_SETTINGS.platform = p;
-		DEFAULT_SETTINGS.disabledShortcuts = DEFAULT_IGNORED_WINDOWS_IN_ALL_OS;
-		DEFAULT_SETTINGS.disabledShortcuts.push(...(DEFAULT_IGNORED_WINDOWS_PER_OS[p] ?? []));
+		DEFAULT_SETTINGS.ignoredWindows = [...DEFAULT_IGNORED_WINDOWS_IN_ALL_OS];
+		DEFAULT_SETTINGS.ignoredWindows.push(...(DEFAULT_IGNORED_WINDOWS_PER_OS[p] ?? []));
 		DEFAULT_SETTINGS.ocrEngine = p === "macos" ? "apple-native" : p === "windows" ? "windows-native" : "tesseract";
 		DEFAULT_SETTINGS.fps = p === "macos" ? 0.5 : 1;
 		DEFAULT_SETTINGS.showScreenpipeShortcut = p === "windows" ? "Alt+S" : "Control+Super+S";
@@ -302,6 +304,7 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
 		DEFAULT_SETTINGS.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
 		DEFAULT_SETTINGS.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
+		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 		DEFAULT_SETTINGS.dictationShortcut = p === "windows" ? "Alt+D" : "Control+Super+D";
 
 		if (p === "windows") {
