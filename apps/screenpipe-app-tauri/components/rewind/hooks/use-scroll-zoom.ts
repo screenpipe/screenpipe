@@ -259,13 +259,13 @@ export function useScrollZoom(opts: {
 				const direction = Math.sign(deltaY);
 				if (inSearchReviewMode) {
 					if (direction > 0 && searchResultIndex < searchResultsCount - 1) {
-						navigateToSearchResultRef.current(searchResultIndex + 1);
+						navigateToSearchResultRef.current?.(searchResultIndex + 1);
 					} else if (direction < 0 && searchResultIndex > 0) {
-						navigateToSearchResultRef.current(searchResultIndex - 1);
+						navigateToSearchResultRef.current?.(searchResultIndex - 1);
 					}
 				} else {
 					// Enter review mode: scroll down → first result, scroll up → last result
-					navigateToSearchResultRef.current(direction > 0 ? 0 : searchResultsCount - 1);
+					navigateToSearchResultRef.current?.(direction > 0 ? 0 : searchResultsCount - 1);
 				}
 				return;
 			}
