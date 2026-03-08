@@ -544,8 +544,14 @@ impl Default for SettingsStore {
             stop_recording_shortcut: "Alt+Shift+X".to_string(),
             #[cfg(not(target_os = "windows"))]
             stop_recording_shortcut: "Super+Ctrl+X".to_string(),
-            start_audio_shortcut: "".to_string(),
-            stop_audio_shortcut: "".to_string(),
+            #[cfg(target_os = "windows")]
+            start_audio_shortcut: "Alt+Shift+A".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            start_audio_shortcut: "Super+Ctrl+A".to_string(),
+            #[cfg(target_os = "windows")]
+            stop_audio_shortcut: "Alt+Shift+Z".to_string(),
+            #[cfg(not(target_os = "windows"))]
+            stop_audio_shortcut: "Super+Ctrl+Z".to_string(),
             #[cfg(target_os = "windows")]
             show_chat_shortcut: "Alt+L".to_string(),
             #[cfg(not(target_os = "windows"))]
@@ -651,12 +657,12 @@ impl SettingsStore {
     pub fn to_recording_config(
         &self,
         data_dir: std::path::PathBuf,
-    ) -> screenpipe_server::RecordingConfig {
+    ) -> screenpipe_engine::RecordingConfig {
         use screenpipe_audio::audio_manager::builder::TranscriptionMode;
         use screenpipe_audio::core::engine::AudioTranscriptionEngine;
         let audio_engine_str = self.resolve_audio_engine();
 
-        screenpipe_server::RecordingConfig {
+        screenpipe_engine::RecordingConfig {
             audio_chunk_duration: self.audio_chunk_duration as u64,
             port: self.port,
             data_dir,

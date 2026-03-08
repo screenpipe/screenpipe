@@ -1,0 +1,105 @@
+[package]
+name = "screenpipe-screen"
+version = { workspace = true }
+authors = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = []
+
+[dependencies]
+screenpipe-a11y = { path = "../screenpipe-a11y" }
+serde_json = "1.0"
+chrono = { version = "0.4.31", features = ["serde"] }
+
+# async
+tokio = { workspace = true }
+
+# Image processing
+image = { workspace = true }
+
+# OCR
+rusty-tesseract = { git = "https://github.com/screenpipe/rusty-tesseract.git", branch = "main" }
+
+anyhow = "1.0.86"
+
+image-compare = "0.4.1"
+
+# Integrations
+screenpipe-connect = { path = "../screenpipe-connect" }
+
+# Lanuage specification
+screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-db = { path = "../screenpipe-db" }
+
+tracing = { workspace = true }
+serde = "1.0.200"
+
+once_cell = { workspace = true }
+base64 = "0.22.1"
+reqwest = { workspace = true }
+url = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.3.0"
+criterion = { workspace = true }
+strsim = "0.10.0"
+memory-stats = "1.2.0"
+
+serde = "1.0.200"
+
+[package.metadata.osx]
+framework = ["Vision", "AppKit"]
+
+[[bench]]
+name = "ocr_benchmark"
+harness = false
+
+[[bench]]
+name = "apple_leak_bench"
+harness = false
+
+[[bench]]
+name = "frame_comparison_bench"
+harness = false
+
+[[bench]]
+name = "multi_monitor_bench"
+harness = false
+
+# Platform-specific dependencies
+
+# macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
+[target.'cfg(target_os = "macos")'.dependencies]
+sck-rs = { git = "https://github.com/screenpipe/sck-rs" }
+xcap = "0.8.1"
+libc = "0.2.168"
+cidre = { git = "https://github.com/yury/cidre.git", features = ["vn", "cv", "cg", "app"] }
+accessibility-sys = { git = "https://github.com/eiz/accessibility.git", branch = "master" }
+core-foundation = "0.10"
+core-graphics = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+xcap = "0.8.1"
+uiautomation = { version = "0.16.1" }
+windows = { version = "0.58", features = [
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage",
+  "Storage_Streams",
+  "Foundation_Collections",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+xcap = "0.8.1"
+libc = "0.2.168"
+atspi = { version = "0.25.0", features = ["tokio","proxies-tokio","zbus"] }
+zbus       = { version = "5.5", default-features = false }
+atspi-common     = { version = "0.9.0", default-features = false }
+atspi-proxies    = { version = "0.9.0", default-features = false }

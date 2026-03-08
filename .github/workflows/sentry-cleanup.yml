@@ -72,7 +72,7 @@ jobs:
                   return None
 
           def parse_version(release_str):
-              """Extract the patch version number from release strings like 'screenpipe-app@2.0.259' or 'screenpipe-server@0.3.51'"""
+              """Extract the patch version number from release strings like 'screenpipe-app@2.0.259' or 'screenpipe-engine@0.3.51'"""
               m = re.search(r"@(\d+\.\d+\.(\d+))", release_str)
               if m:
                   return int(m.group(2)), m.group(1)
@@ -92,7 +92,7 @@ jobs:
               if project_slug == "screenpipe-app":
                   return "screenpipe-app@"
               elif project_slug == "screenpipe-cli":
-                  return "screenpipe-server@"
+                  return "screenpipe-engine@"
               return None
 
           print(f"=== Sentry Cleanup ===")

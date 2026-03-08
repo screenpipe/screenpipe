@@ -59,7 +59,7 @@ jobs:
       - name: Copy test image
         run: |
           mkdir -p target/debug/deps
-          cp crates/screenpipe-vision/tests/testing_OCR.png target/debug/deps/
+          cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
 
       - name: Run cargo tests
         run: cargo test
@@ -136,7 +136,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/debug/deps || true
-          cp crates/screenpipe-vision/tests/testing_OCR.png target/debug/deps/
+          cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
 
       - name: Run specific Windows OCR cargo test
         env:
@@ -163,7 +163,7 @@ jobs:
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
-        run: cargo test -p screenpipe-server --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc
+        run: cargo test -p screenpipe-engine --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc
 
       # pipes_test removed — pipe manager system deleted in #2212
 
@@ -202,18 +202,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/debug/deps || true
-          cp crates/screenpipe-vision/tests/testing_OCR.png target/debug/deps/
+          cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
 
       - name: Run specific Apple OCR cargo test
         shell: bash
         env:
-          DYLD_LIBRARY_PATH: /Users/runner/work/screenpipe/screenpipe/crates/screenpipe-vision/lib
+          DYLD_LIBRARY_PATH: /Users/runner/work/screenpipe/screenpipe/crates/screenpipe-screen/lib
         # Only test vision package to avoid whisper-rs build issues on macOS CI
-        run: cargo test -p screenpipe-vision test_apple_native_ocr
+        run: cargo test -p screenpipe-screen test_apple_native_ocr
 
       - name: Run PII removal tests
         run: cargo test -p screenpipe-core pii_removal
 
       # PII redaction tests skipped on macOS due to whisper-rs build issues
       # - name: Run PII redaction tests
-      #   run: cargo test -p screenpipe-server --lib pii_redaction_tests
+      #   run: cargo test -p screenpipe-engine --lib pii_redaction_tests

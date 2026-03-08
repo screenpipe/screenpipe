@@ -15,7 +15,7 @@ use screenpipe_audio::core::device::{
 };
 use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_db::DatabaseManager;
-use screenpipe_server::{
+use screenpipe_engine::{
     analytics,
     hot_frame_cache::HotFrameCache,
     server::bind_listener,
@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 #[allow(dead_code)]
 pub struct EmbeddedServerHandle {
     shutdown_tx: broadcast::Sender<()>,
-    ui_recorder_handle: Option<screenpipe_server::UiRecorderHandle>,
+    ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
 }
 
 #[allow(dead_code)]
@@ -221,7 +221,7 @@ pub async fn start_embedded_server(
                 .unwrap_or_else(chrono::Utc::now);
             rt.spawn(async move {
                 cache
-                    .push_audio(screenpipe_server::hot_frame_cache::HotAudio {
+                    .push_audio(screenpipe_engine::hot_frame_cache::HotAudio {
                         audio_chunk_id: info.audio_chunk_id,
                         timestamp: ts,
                         transcription: info.transcription,
@@ -249,14 +249,14 @@ pub async fn start_embedded_server(
     let vision_handle = tokio::runtime::Handle::current();
 
     // Create shared pipeline metrics (used by recording + health endpoint + PostHog)
-    let vision_metrics = Arc::new(screenpipe_vision::PipelineMetrics::new());
+    let vision_metrics = Arc::new(screenpipe_screen::PipelineMetrics::new());
 
     // Start power manager — polls battery/thermal state and broadcasts profile changes
     let power_manager = start_power_manager();
 
     // Capture trigger sender — set by VisionManager when vision is enabled.
     // Passed to start_ui_recording so UI events (clicks, app switches) trigger captures.
-    let mut capture_trigger_tx: Option<screenpipe_server::event_driven_capture::TriggerSender> =
+    let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
         None;
 
     // Start vision recording (event-driven capture via VisionManager)
@@ -351,17 +351,17 @@ pub async fn start_embedded_server(
 
         // Persist meeting state transitions to DB (was missing — meetings were never saved in desktop app)
         let _meeting_persister =
-            screenpipe_server::start_meeting_persister(detector.clone(), db.clone());
+            screenpipe_engine::start_meeting_persister(detector.clone(), db.clone());
         info!("meeting persister started");
 
         // Bridge calendar events from event bus into meeting detector
-        let _calendar_bridge = screenpipe_server::start_calendar_bridge(detector.clone());
+        let _calendar_bridge = screenpipe_engine::start_calendar_bridge(detector.clone());
         info!("calendar bridge started for meeting detection");
     }
 
     // Start calendar-assisted speaker identification
     let _speaker_id_handle =
-        screenpipe_server::start_speaker_identification(db.clone(), config.user_name.clone());
+        screenpipe_engine::start_speaker_identification(db.clone(), config.user_name.clone());
 
     // Start resource monitor
     let resource_monitor = ResourceMonitor::new(config.analytics_enabled);
@@ -372,7 +372,7 @@ pub async fn start_embedded_server(
     start_sleep_monitor();
 
     // Start background snapshot compaction (JPEG → MP4)
-    screenpipe_server::start_snapshot_compaction(
+    screenpipe_engine::start_snapshot_compaction(
         db.clone(),
         config.video_quality.clone(),
         shutdown_tx_clone.subscribe(),
@@ -384,7 +384,7 @@ pub async fn start_embedded_server(
     let mut server = SCServer::new(
         db.clone(),
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
-        local_data_dir,
+        local_data_dir.clone(),
         config.disable_vision,
         config.disable_audio,
         audio_manager.clone(),
@@ -411,7 +411,7 @@ pub async fn start_embedded_server(
     // Create pipe store backed by the main SQLite DB
     let pipe_store: Option<std::sync::Arc<dyn screenpipe_core::pipes::PipeStore>> =
         Some(std::sync::Arc::new(
-            screenpipe_server::pipe_store::SqlitePipeStore::new(db.pool.clone()),
+            screenpipe_engine::pipe_store::SqlitePipeStore::new(db.pool.clone()),
         ));
 
     let mut pipe_manager = screenpipe_core::pipes::PipeManager::new(
@@ -420,16 +420,19 @@ pub async fn start_embedded_server(
         pipe_store,
         config.port,
     );
-    pipe_manager.set_on_run_complete(std::sync::Arc::new(|pipe_name, success, duration_secs| {
-        analytics::capture_event_nonblocking(
-            "pipe_scheduled_run",
-            serde_json::json!({
+    pipe_manager.set_on_run_complete(std::sync::Arc::new(
+        |pipe_name, success, duration_secs, error_type| {
+            let mut props = serde_json::json!({
                 "pipe": pipe_name,
                 "success": success,
                 "duration_secs": duration_secs,
-            }),
-        );
-    }));
+            });
+            if let Some(et) = error_type {
+                props["error_type"] = serde_json::Value::String(et.to_string());
+            }
+            analytics::capture_event_nonblocking("pipe_scheduled_run", props);
+        },
+    ));
     if let Some(cb) = on_pipe_output {
         pipe_manager.set_on_output_line(cb);
     }
@@ -494,7 +497,7 @@ mod tests {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         let handle = EmbeddedServerHandle {
             shutdown_tx,
-            ui_recorder_handle: Some(screenpipe_server::UiRecorderHandle::new_for_test(flag)),
+            ui_recorder_handle: Some(screenpipe_engine::UiRecorderHandle::new_for_test(flag)),
         };
 
         assert!(!flag_clone.load(Ordering::Relaxed));

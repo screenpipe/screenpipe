@@ -182,8 +182,13 @@ export function useDateNavigation(opts: {
 	navigateToSearchResultRef.current = navigateToSearchResult;
 
 	const handleDateChange = useCallback(async (newDate: Date) => {
-		// Guard against double-click / re-entry while navigation is in progress
-		if (isNavigatingRef.current) return;
+		// If a previous navigation is stuck (e.g. frames never arrived),
+		// force-clear so the user isn't locked out of date picking.
+		if (isNavigatingRef.current) {
+			console.warn("[handleDateChange] Clearing stale navigation lock");
+			isNavigatingRef.current = false;
+			pendingNavigationRef.current = null;
+		}
 
 		// Pause playback and reset filters on date change
 		pausePlayback();

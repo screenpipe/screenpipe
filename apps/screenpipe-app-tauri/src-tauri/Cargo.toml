@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.2.67"
+version = "2.2.80"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -111,12 +111,12 @@ md5 = "0.7"
 screenpipe-core = { path = "../../../crates/screenpipe-core", features = ["cloud-sync"] }
 
 # Embedded screenpipe server
-screenpipe-server = { path = "../../../crates/screenpipe-server", default-features = false }
-screenpipe-vision = { path = "../../../crates/screenpipe-vision" }
-screenpipe-accessibility = { path = "../../../crates/screenpipe-accessibility" }
+screenpipe-engine = { path = "../../../crates/screenpipe-engine", default-features = false }
+screenpipe-screen = { path = "../../../crates/screenpipe-screen" }
+screenpipe-a11y = { path = "../../../crates/screenpipe-a11y" }
 screenpipe-audio = { path = "../../../crates/screenpipe-audio" }
 screenpipe-db = { path = "../../../crates/screenpipe-db" }
-screenpipe-integrations = { path = "../../../crates/screenpipe-integrations" }
+screenpipe-connect = { path = "../../../crates/screenpipe-connect" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
 image = "0.25.5"
 icalendar = "0.17"
@@ -191,13 +191,13 @@ official-build = []
 enterprise-build = []
 
 # On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
-apple-intelligence = ["screenpipe-server/apple-intelligence"]
+apple-intelligence = ["screenpipe-engine/apple-intelligence"]
 
-qwen3-asr = ["screenpipe-server/qwen3-asr"]
+qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 
 
 [package.metadata.cargo-machete]
-ignored = ["tauri-utils", "screenpipe-accessibility"]
+ignored = ["tauri-utils", "screenpipe-a11y"]
 
 [profile.release]
 codegen-units = 1

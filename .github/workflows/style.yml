@@ -33,7 +33,7 @@ jobs:
         run: |
           # Skip packages with macOS-specific Objective-C code that won't compile on Linux
           cargo clippy --workspace \
-            --exclude screenpipe-vision \
+            --exclude screenpipe-screen \
             --exclude screenpipe-audio \
             --all-targets -- -W clippy::all
 

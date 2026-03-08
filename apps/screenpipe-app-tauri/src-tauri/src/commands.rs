@@ -79,12 +79,18 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 #[tauri::command]
 #[specta::specta]
 pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
-    info!("show_main_window called, attempting to show Settings window");
+    // macOS: show the overlay panel (NSPanel) on top of fullscreen apps
+    // Windows: show the settings/home window (no overlay support)
+    #[cfg(target_os = "macos")]
+    let window_to_show = ShowRewindWindow::Main;
+    #[cfg(not(target_os = "macos"))]
+    let window_to_show = ShowRewindWindow::Settings { page: None };
 
+    info!("show_main_window called");
     match (ShowRewindWindow::Settings { page: None }).show(app_handle) {
         Ok(window) => {
             info!(
-                "ShowRewindWindow::Main.show succeeded, window label: {}",
+                "show_main_window succeeded, window label: {}",
                 window.label()
             );
             // Don't call set_focus() on macOS — both overlay and window modes use
@@ -117,6 +123,12 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
     // NOTE: Window shortcuts (Escape) are unregistered by the focus-loss
     // handler in window_api.rs. Do NOT also unregister them here — doing
     // so races with the focus handler and causes duplicate unregister calls.
+
+    // macOS: close the overlay panel; Windows: close the settings window
+    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "macos"))]
+    let window_to_close = ShowRewindWindow::Main;
+    let window_to_close = ShowRewindWindow::Settings { page: None };
 
     if let Err(e) = (ShowRewindWindow::Settings { page: None }).close(app_handle) {
         error!("failed to close settings window: {}", e);
@@ -340,12 +352,14 @@ pub async fn open_pipe_window(
 pub async fn get_disk_usage(
     _app_handle: tauri::AppHandle,
     force_refresh: Option<bool>,
+    data_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    // Always use ~/.screenpipe as the primary data directory
-    // This is where the sidecar/CLI stores data, which is the main data source
-    let screenpipe_dir_path = dirs::home_dir()
-        .ok_or_else(|| "Could not get home directory".to_string())?
-        .join(".screenpipe");
+    let screenpipe_dir_path = match data_dir {
+        Some(d) if !d.is_empty() && d != "default" => std::path::PathBuf::from(d),
+        _ => dirs::home_dir()
+            .ok_or_else(|| "Could not get home directory".to_string())?
+            .join(".screenpipe"),
+    };
 
     match crate::disk_usage::disk_usage(&screenpipe_dir_path, force_refresh.unwrap_or(false)).await
     {
@@ -700,9 +714,9 @@ pub async fn show_shortcut_reminder(
 
     info!("show_shortcut_reminder called");
 
-    // Window dimensions: 2-row layout (shortcuts + activity visualization)
-    // Keep tight — content is ~150px wide; extra space causes visible gap on some displays.
-    let window_width = 170.0;
+    // Window dimensions: 2-row grid (3 shortcuts + activity viz)
+    // 3 columns: timeline, chat, search. Auto-sized columns shrink to content.
+    let window_width = 160.0;
     let window_height = 40.0;
 
     // Position at top center of the screen where the cursor is
@@ -1183,7 +1197,7 @@ pub async fn perform_ocr_on_image(
     image_base64: String,
 ) -> Result<String, String> {
     use crate::store::SettingsStore;
-    use screenpipe_vision::OcrEngine;
+    use screenpipe_screen::OcrEngine;
 
     use base64::Engine;
     let image_data = base64::engine::general_purpose::STANDARD
@@ -1229,10 +1243,10 @@ pub async fn perform_ocr_on_image(
 
     let (text, _text_json, _confidence) = match ocr_engine {
         #[cfg(target_os = "macos")]
-        OcrEngine::AppleNative => screenpipe_vision::perform_ocr_apple(&img, &languages),
-        OcrEngine::Tesseract => screenpipe_vision::perform_ocr_tesseract(&img, languages),
+        OcrEngine::AppleNative => screenpipe_screen::perform_ocr_apple(&img, &languages),
+        OcrEngine::Tesseract => screenpipe_screen::perform_ocr_tesseract(&img, languages),
         #[cfg(target_os = "windows")]
-        OcrEngine::WindowsNative => screenpipe_vision::perform_ocr_windows(&img)
+        OcrEngine::WindowsNative => screenpipe_screen::perform_ocr_windows(&img)
             .await
             .map_err(|e| format!("windows ocr failed: {}", e))?,
         _ => return Err("unsupported ocr engine".to_string()),

@@ -1,6 +1,6 @@
 # screenpipe regression testing checklist
 
-> **purpose**: prevent regressions. every PR touching window management, activation policy, tray, dock, monitors, or audio MUST be tested against the relevant sections below before merge.
+> **purpose**: prevent regressions. test core features rigorously every time
 
 ## critical edge cases (sorted by regression frequency)
 

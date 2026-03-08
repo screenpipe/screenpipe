@@ -21,6 +21,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
+import { useSettings } from "@/lib/hooks/use-settings";
 
 interface SyncConfig {
   host: string;
@@ -38,6 +39,7 @@ interface DiscoveredHost {
   user: string | null;
   key_path: string | null;
   source: string;
+  alias?: string | null;
 }
 
 interface SyncResult {
@@ -86,6 +88,7 @@ function toRustConfig(config: SyncConfig) {
 }
 
 export function OpenClawCard() {
+  const { getDataDir } = useSettings();
   const [config, setConfig] = useState<SyncConfig>(DEFAULT_CONFIG);
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -143,8 +146,10 @@ export function OpenClawCard() {
     setIsSyncing(true);
     setSyncError(null);
     try {
+      const dataDir = await getDataDir();
       const result = await invoke<SyncResult>("remote_sync_now", {
         config: toRustConfig(config),
+        dataDir,
       });
       if (syncCancelledRef.current) return;
       if (result.ok) {
@@ -241,9 +246,18 @@ export function OpenClawCard() {
                           onClick={() => selectHost(h)}
                           className="px-2.5 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
                         >
-                          {h.user ? `${h.user}@` : ""}{h.host}
-                          {h.port !== 22 ? `:${h.port}` : ""}
-                          <span className="text-muted-foreground ml-1.5">({h.source})</span>
+                          {h.alias ? (
+                            <>
+                              {h.user ? `${h.user}@` : ""}{h.alias}
+                              <span className="text-muted-foreground ml-1.5">({h.host})</span>
+                            </>
+                          ) : (
+                            <>
+                              {h.user ? `${h.user}@` : ""}{h.host}
+                              {h.port !== 22 ? `:${h.port}` : ""}
+                              <span className="text-muted-foreground ml-1.5">({h.source})</span>
+                            </>
+                          )}
                         </button>
                       ))}
                     </div>

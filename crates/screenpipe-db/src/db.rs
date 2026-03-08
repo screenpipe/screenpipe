@@ -1908,6 +1908,8 @@ impl DatabaseManager {
         browser_url: Option<&str>,
         focused: Option<bool>,
         speaker_name: Option<&str>,
+        device_name: Option<&str>,
+        machine_id: Option<&str>,
     ) -> Result<Vec<SearchResult>, sqlx::Error> {
         let mut results = Vec::new();
 
@@ -1940,6 +1942,8 @@ impl DatabaseManager {
                                 frame_name,
                                 browser_url,
                                 focused,
+                                device_name,
+                                machine_id,
                             ),
                             self.search_audio(
                                 query,
@@ -1951,6 +1955,8 @@ impl DatabaseManager {
                                 max_length,
                                 speaker_ids,
                                 speaker_name,
+                                device_name,
+                                machine_id,
                             ),
                             self.search_accessibility(
                                 query,
@@ -1979,6 +1985,8 @@ impl DatabaseManager {
                                 frame_name,
                                 browser_url,
                                 focused,
+                                device_name,
+                                machine_id,
                             ),
                             self.search_accessibility(
                                 query,
@@ -2014,6 +2022,8 @@ impl DatabaseManager {
                         frame_name,
                         browser_url,
                         focused,
+                        device_name,
+                        machine_id,
                     )
                     .await?;
                 results.extend(ocr_results.into_iter().map(SearchResult::OCR));
@@ -2031,6 +2041,8 @@ impl DatabaseManager {
                             max_length,
                             speaker_ids,
                             speaker_name,
+                            device_name,
+                            machine_id,
                         )
                         .await?;
                     results.extend(audio_results.into_iter().map(SearchResult::Audio));
@@ -2112,6 +2124,8 @@ impl DatabaseManager {
         frame_name: Option<&str>,
         browser_url: Option<&str>,
         focused: Option<bool>,
+        device_name: Option<&str>,
+        machine_id: Option<&str>,
     ) -> Result<Vec<OCRResult>, sqlx::Error> {
         // Acquire a heavy-read permit (max 2 concurrent). OCR searches can
         // return massive text blobs and hold connections for seconds, starving
@@ -2181,6 +2195,8 @@ impl DatabaseManager {
             AND (?3 IS NULL OR frames.timestamp <= ?3)
             AND (?4 IS NULL OR COALESCE(ocr_text.text_length, LENGTH(ocr_text.text)) >= ?4)
             AND (?5 IS NULL OR COALESCE(ocr_text.text_length, LENGTH(ocr_text.text)) <= ?5)
+            AND (?9 IS NULL OR COALESCE(video_chunks.device_name, frames.device_name) LIKE '%' || ?9 || '%')
+            AND (?10 IS NULL OR frames.machine_id = ?10)
         GROUP BY frames.id
         ORDER BY {order_clause}
         LIMIT ?7 OFFSET ?8
@@ -2232,6 +2248,8 @@ impl DatabaseManager {
             })
             .bind(limit)
             .bind(offset)
+            .bind(device_name)
+            .bind(machine_id)
             .fetch_all(&self.pool)
             .await?;
 
@@ -2271,6 +2289,8 @@ impl DatabaseManager {
         max_length: Option<usize>,
         speaker_ids: Option<Vec<i64>>,
         speaker_name: Option<&str>,
+        device_name: Option<&str>,
+        machine_id: Option<&str>,
     ) -> Result<Vec<AudioResult>, sqlx::Error> {
         // base query for audio search
         let base_sql = String::from(
@@ -2318,6 +2338,12 @@ impl DatabaseManager {
         if speaker_name.is_some() {
             conditions.push("speakers.name LIKE '%' || ? || '%' COLLATE NOCASE");
         }
+        if device_name.is_some() {
+            conditions.push("audio_transcriptions.device LIKE '%' || ? || '%'");
+        }
+        if machine_id.is_some() {
+            conditions.push("audio_chunks.machine_id = ?");
+        }
 
         let where_clause = if conditions.is_empty() {
             "WHERE 1=1".to_owned()
@@ -2362,6 +2388,12 @@ impl DatabaseManager {
         }
         if let Some(name) = speaker_name {
             query_builder = query_builder.bind(name);
+        }
+        if let Some(dev) = device_name {
+            query_builder = query_builder.bind(dev);
+        }
+        if let Some(mid) = machine_id {
+            query_builder = query_builder.bind(mid);
         }
         query_builder = query_builder.bind(limit as i64).bind(offset as i64);
 

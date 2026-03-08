@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useSettings } from "@/lib/hooks/use-settings";
 
 export interface MonitorUsage {
   name: string;
@@ -33,6 +34,7 @@ export interface DiskUsage {
 }
 
 export function useDiskUsage() {
+  const { getDataDir } = useSettings();
   const [diskUsage, setDiskUsage] = useState<DiskUsage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,9 +44,10 @@ export function useDiskUsage() {
       setIsLoading(true);
       setError(null);
 
+      const dataDir = await getDataDir();
       // Add a small delay to show loading state for very fast calculations
       const [result] = await Promise.all([
-        invoke<DiskUsage>("get_disk_usage", { forceRefresh }),
+        invoke<DiskUsage>("get_disk_usage", { forceRefresh, dataDir }),
         new Promise(resolve => setTimeout(resolve, forceRefresh ? 300 : 500)) // Shorter delay on force refresh
       ]);
       

@@ -20,7 +20,7 @@ We build the layer that gives AI full context of human work so it can act autono
 
 1. **Now: Memory.** Make desktop memory work so well people can't live without it. Record, Rewind, Ask — three verbs, nothing else.
 2. **Next: Context layer for AI agents.** Open API so any AI agent can query your screen history. Every AI agent needs to know what the user is doing, act on that context, and trigger without prompts.
-3. **Later: Every sensor.** Screen is sensor #1. Then cameras, rooms, spatial memory. Local-first makes it viable — "no internet required" level clear.
+3. **Later: Everything.** We are going to record everything you do, 24/7, safely, encrypted locally and connected to AI.
 
 ## Product principles
 
@@ -31,7 +31,7 @@ We build the layer that gives AI full context of human work so it can act autono
 ## Engineering principles
 
 - **Ship daily.** Small, focused changes. Every commit should be deployable.
-- **Fix the funnel before adding features.** Permission loss, onboarding drops, version fragmentation — these kill growth silently.
+- **Simple yet powerful abstractions.** Use your own brain to write the spec, then use AI to execute.
 - **Local-first always.** Data never leaves the device unless the user explicitly opts in (cloud sync, cloud archive). Encryption is zero-knowledge.
 - **Cross-platform.** If it doesn't work on macOS, Windows, and Linux, it's not done.
 - **Open source by default.** Trust is earned through transparency.
@@ -46,15 +46,16 @@ We build the layer that gives AI full context of human work so it can act autono
 
 ## North star metrics
 
-- **Daily active users** (intentional retrieval: shortcut, search, timeline scrub) — not app launches.
+- **Daily active users** intentional retrieval, pipe retention.
 - **Activation rate** — % of app openers who perform an intentional action.
 - **D7 retention** — do they come back?
 
 ## What we believe
 
+- Sending prompts is obsolete, AI should just watch and work.
 - Humans spend 8+ hours/day on screens. Digital work is bottlenecked by human attention. AI needs full context to truly automate.
 - Vision is the universal interface — it's the most powerful sense of most animals.
-- We believe humans should be augmented by AI to focus on more profound exploration instead of repetitive digital labor.
+- We believe humans should be augmented by AI, and buy ourselves time to expand our consciousness and explore the universe.
 - Positive sum games. Give first. Optimize for the long term.
 - Radical transparency. No ego. Idea meritocracy. Constructive disagreement.
 - Truth over comfort. Bold over safe. Ship over plan.

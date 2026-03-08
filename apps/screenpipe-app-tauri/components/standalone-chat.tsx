@@ -1656,6 +1656,11 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 prev.map((m) => m.id === msgId ? { ...m, content: `Error: ${errMsg}` } : m)
               );
             }
+            piStreamingTextRef.current = "";
+            piMessageIdRef.current = null;
+            piContentBlocksRef.current = [];
+            setIsLoading(false);
+            setIsStreaming(false);
           }
         } else if (data.type === "agent_end") {
           // When watching a pipe, agent_end fires before pipe_done — don't
@@ -1745,6 +1750,15 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               }
               return prev.map((m) => m.id === msgId ? { ...m, content, contentBlocks } : m);
             });
+
+            if (!isPipeWatch) {
+              posthog.capture("chat_response_received", {
+                provider: activePreset?.provider,
+                model: activePreset?.model,
+                has_tool_use: blocksSnapshot.some((b) => b.type === "tool"),
+                response_length: streamedText?.length ?? 0,
+              });
+            }
           }
           if (!isPipeWatch) {
             piStreamingTextRef.current = "";
@@ -1794,6 +1808,15 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               );
             }
           }
+          const errorCategory = errorStr.includes("daily_limit") ? "daily_limit"
+            : errorStr.includes("rate limit") || errorStr.includes("429") ? "rate_limit"
+            : errorStr.includes("model_not_allowed") ? "model_not_allowed"
+            : "other";
+          posthog.capture("chat_response_error", {
+            provider: activePreset?.provider,
+            model: activePreset?.model,
+            error_type: errorCategory,
+          });
           piStreamingTextRef.current = "";
           if (piMessageIdRef.current?.startsWith("pipe-")) setActivePipeExecution(null);
           piMessageIdRef.current = null;
@@ -2272,6 +2295,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     setIsLoading(true);
     setIsStreaming(true);
 
+    posthog.capture("chat_message_sent", {
+      provider: activePreset?.provider,
+      model: activePreset?.model,
+      has_images: pastedImages.length > 0 || !!prefillFrameId,
+      has_context: !!prefillContext,
+      message_index: messages.filter((m) => m.role === "user").length,
+    });
+
     const timeoutId = setTimeout(() => {
       if (piMessageIdRef.current === assistantMessageId) {
         piMessageIdRef.current = null;
@@ -2603,8 +2634,31 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         <Button
           variant="default"
           size="sm"
-          onClick={(e) => {
+          onClick={async (e) => {
             e.stopPropagation();
+            // Kill Pi process if busy, then restart fresh
+            if (piInfo?.running && (isLoading || isStreaming)) {
+              piStoppedIntentionallyRef.current = true;
+              try { await commands.piStop(PI_CHAT_SESSION); } catch {}
+              piStreamingTextRef.current = "";
+              piMessageIdRef.current = null;
+              piContentBlocksRef.current = [];
+              setIsLoading(false);
+              setIsStreaming(false);
+              // Restart Pi fresh
+              try {
+                const providerConfig = buildProviderConfig();
+                const home = await homeDir();
+                const dir = await join(home, ".screenpipe", "pi-chat");
+                const result = await commands.piStart(PI_CHAT_SESSION, dir, settings.user?.token ?? null, providerConfig);
+                if (result.status === "ok") {
+                  setPiInfo(result.data);
+                  piSessionSyncedRef.current = true;
+                }
+              } catch (err) {
+                console.warn("[Pi] Failed to restart after new chat:", err);
+              }
+            }
             startNewConversation();
           }}
           className="h-7 px-3 gap-1.5 text-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"

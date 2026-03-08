@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use super::PipeConfig;
 
-/// Registry for active pipe tokens. Implemented by screenpipe-server
+/// Registry for active pipe tokens. Implemented by screenpipe-engine
 /// (DashMap on AppState) to bridge the gap between screenpipe-core
 /// (where PipeManager lives) and the server (where the middleware runs).
 #[async_trait::async_trait]

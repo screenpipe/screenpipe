@@ -295,22 +295,20 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   // ---- startNewConversation ----
   const startNewConversation = async () => {
-    // Abort any ongoing Pi processing and start a fresh session
-    if (piInfo?.running) {
+    // If Pi is running and idle (not busy), just reset the session
+    if (piInfo?.running && !isLoading && !isStreaming) {
       try {
-        if (isLoading || isStreaming) {
-          await commands.piAbort(PI_CHAT_SESSION);
-        }
         await commands.piNewSession(PI_CHAT_SESSION);
       } catch (e) {
         console.warn("[Pi] Failed to reset session:", e);
       }
-      piStreamingTextRef.current = "";
-      piMessageIdRef.current = null;
-      piContentBlocksRef.current = [];
-      setIsLoading(false);
-      setIsStreaming(false);
     }
+    // Clear frontend state (Pi kill+restart is handled by the caller when busy)
+    piStreamingTextRef.current = "";
+    piMessageIdRef.current = null;
+    piContentBlocksRef.current = [];
+    setIsLoading(false);
+    setIsStreaming(false);
     setMessages([]);
     setConversationId(null);
     setInput("");

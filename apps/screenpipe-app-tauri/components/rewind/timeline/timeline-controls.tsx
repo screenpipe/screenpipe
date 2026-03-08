@@ -214,27 +214,21 @@ export function TimelineControls({
 						align="center"
 						sideOffset={8}
 					>
-						<div
-							onClick={(e) => e.stopPropagation()}
-							onMouseDown={(e) => e.stopPropagation()}
-							onPointerDown={(e) => e.stopPropagation()}
-						>
-							<Calendar
-								mode="single"
-								selected={currentDate}
-								onSelect={(date) => {
-									console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
-									if (date) {
-										onDateChange(date);
-										setCalendarOpen(false);
-									}
-								}}
-								disabled={(date) =>
-									isAfter(startOfDay(date), startOfDay(new Date())) ||
-									isAfter(startOfDay(startAndEndDates.start), startOfDay(date))
+						<Calendar
+							mode="single"
+							selected={currentDate}
+							onSelect={(date) => {
+								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
+								if (date) {
+									onDateChange(date);
+									setCalendarOpen(false);
 								}
-							/>
-						</div>
+							}}
+							disabled={(date) =>
+								isAfter(startOfDay(date), startOfDay(new Date())) ||
+								isAfter(startOfDay(startAndEndDates.start), startOfDay(date))
+							}
+						/>
 					</PopoverContent>
 					</Popover>
 

@@ -1,6 +1,6 @@
 # contributing to screen pipe
 
-first off, thank you for considering contributing to screen pipe! it's people like you that make screen pipe such a great tool. we're looking for developers who want to create paid pipes, with the potential to easily make $1000/m. let's [schedule a call](https://cal.com/team/screenpipe/chat) to get you onboarded.
+first off, thank you for considering contributing to screen pipe!
 
 btw, we prefer that you don't contribute if you are not using or will use the product and is just there for bounties, thank you.
 
@@ -38,7 +38,7 @@ before you begin:
 
 4. **build the project**:
    ```bash
-   cargo build --release --features metal
+   cargo build --release --features metal,apple-intelligence
    ```
 
 5. **run screenpipe**:
@@ -50,7 +50,7 @@ before you begin:
    ```bash
    cd apps/screenpipe-app-tauri
    bun install
-   bun tauri build
+   bun tauri build --features metal,apple-intelligence
    ```
 
 ### windows
@@ -194,10 +194,6 @@ this section guides you through submitting an enhancement suggestion for screen 
 
 ## styleguides
 
-### use cursor rules
-
-check [.cursorrules](.cursorrules) for more details, see any instructions we could add / remove? send a PR to update this file.
-
 ### git commit messages
 
 - use the present tense ("add feature" not "added feature")
@@ -214,22 +210,15 @@ we follow [this](https://doc.rust-lang.org/cargo/guide/project-layout.html) fold
 
 ## additional notes
 
-### try to keep files small (under 600 lines of code)
-
-AI is quite bad when files are big, we should try to keep small so we move faster (also it's nice for humans too 🤓)
-
-**expand & distill**: iterate fast on long files, then split them up
-
 ### principles 
 
 - **user fanatic: focus on building what people want and bring maximum value.**
 - concurrency: channels > mutexes/locks
 - simplicity: avoid premature optimization. write code that is easy for humans to read, fast for machines to execute. less is more. optimise for less code, less files, less dependencies, less complexity.
-- production: we're building real products, not python toy that grow to 150k stars and die prematurely and never leave localhost, thank you.
+- production: we're building real products
 - focus: avoid feature creep. focus on the core functionality and build upon it. focus on the user and their needs.
 - use numbers: if you can't measure it, you can't improve it.
-- avoid oop: prefer functional programming.
-- positive-sum: we're all going to win, it is a multiplayer, positive sum game. (that escalated quickly)
+- positive-sum
 
 ### issue and pull request labels
 
@@ -239,12 +228,6 @@ this section lists the labels we use to help us track and manage issues and pull
 * `enhancement` - issues that are feature requests.
 * `documentation` - issues or pull requests related to documentation.
 * `good first issue` - good for newcomers.
-
-## building
-
-```bash
-cargo build --release --features metal # or cuda, or vulkan, depending on your GPU
-```
 
 ## running tests
 
@@ -451,31 +434,8 @@ say 👋 in our [public discord channel](https://discord.gg/screenpipe). we disc
 
 thank you for contributing to screen pipe! 🎉
 
-## paid testing
+## testing
 
-screenpipe has an automated release testing program to ensure quality across different platforms:
-
-### how it works
-
-- regular `release-app` commits automatically setup testing bounties
-- `release-app-publish` commits skip testing by default and ship to prod immediately
-- you can explicitly control testing with these flags:
-  - `release-app-skip-test`: skip testing even for regular builds
-
-### when testing is needed
-
-consider requesting testing when:
-
-- making significant ui changes
-- changing core recording functionality
-- updating dependencies that affect major features
-- fixing critical bugs that need verification
-
-### testing workflow
-
-1. make your changes and commit with the appropriate flag
-2. github actions will automatically setup testing if needed
-3. community testers will receive bounties for testing
-4. review test reports for issues before final release
+testing is one of the toughtest challenge, we love any help improving the testing pipeline before going into production
 
 see [TESTING.md](TESTING.md) for more details on the testing process.

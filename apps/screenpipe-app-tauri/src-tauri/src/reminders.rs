@@ -69,7 +69,7 @@ pub async fn reminders_status(
 ) -> Result<RemindersStatus, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::reminders::ScreenpipeReminders;
+        use screenpipe_connect::reminders::ScreenpipeReminders;
 
         let auth_status = ScreenpipeReminders::authorization_status();
         let status_str = format!("{}", auth_status);
@@ -120,7 +120,7 @@ pub async fn reminders_status(
 pub async fn reminders_authorize() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::reminders::ScreenpipeReminders;
+        use screenpipe_connect::reminders::ScreenpipeReminders;
         let result = tokio::task::spawn_blocking(|| {
             let r = ScreenpipeReminders::new();
             r.request_access()
@@ -153,7 +153,7 @@ pub async fn reminders_authorize() -> Result<String, String> {
 pub async fn reminders_list() -> Result<Vec<ReminderItem>, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::reminders::ScreenpipeReminders;
+        use screenpipe_connect::reminders::ScreenpipeReminders;
         tokio::task::spawn_blocking(|| {
             let r = ScreenpipeReminders::new();
             let _ = r.ensure_list("Screenpipe");
@@ -190,7 +190,7 @@ pub async fn reminders_create(
 ) -> Result<ReminderItem, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::reminders::ScreenpipeReminders;
+        use screenpipe_connect::reminders::ScreenpipeReminders;
         tokio::task::spawn_blocking(move || {
             let r = ScreenpipeReminders::new();
             let _ = r.ensure_list("Screenpipe");
@@ -369,7 +369,7 @@ pub async fn auto_start_scheduler(app: AppHandle, state: &RemindersState) {
             // Verify still authorized
             #[cfg(target_os = "macos")]
             {
-                use screenpipe_integrations::reminders::ScreenpipeReminders;
+                use screenpipe_connect::reminders::ScreenpipeReminders;
                 let status = ScreenpipeReminders::authorization_status();
                 if format!("{}", status) != "Full Access" {
                     warn!(
@@ -430,7 +430,7 @@ pub async fn auto_start_scheduler(app: AppHandle, state: &RemindersState) {
 
 #[cfg(target_os = "macos")]
 async fn do_scan(custom_prompt: Option<&str>, audio_only: bool) -> Result<ScanResult, String> {
-    use screenpipe_integrations::reminders::ScreenpipeReminders;
+    use screenpipe_connect::reminders::ScreenpipeReminders;
 
     // 1. Check authorization
     let status = ScreenpipeReminders::authorization_status();

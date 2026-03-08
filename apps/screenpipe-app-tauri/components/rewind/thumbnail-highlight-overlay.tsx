@@ -37,24 +37,21 @@ export const ThumbnailHighlightOverlay = memo(function ThumbnailHighlightOverlay
 			return terms.some((term) => textLower.includes(term));
 		});
 
-		// Skip blocks that cover huge areas (full-window level).
-		// Keep anything under 80% width — accessibility tree nodes often have
-		// wider bounds than OCR blocks, so a tight filter hides all highlights.
-		const tight = matches.filter(
-			(m) => m.bounds.width < 0.80
-		);
-
-		// If all matches are wide (e.g. full-line accessibility nodes),
-		// still show highlights — better to have wide boxes than none at all.
-		const candidates = tight.length > 0 ? tight : matches;
-
-		// Take the 5 smallest to keep thumbnails readable
-		candidates.sort(
+		// Sort by area (smallest first) and take the 3 smallest matches.
+		// This naturally prefers tight word-level OCR boxes over wide
+		// accessibility paragraph nodes, keeping thumbnails readable.
+		matches.sort(
 			(a, b) =>
 				a.bounds.width * a.bounds.height -
 				b.bounds.width * b.bounds.height
 		);
-		return candidates.slice(0, 5);
+
+		// Skip if the smallest match already covers >40% of the frame area —
+		// that means we only have paragraph-level blocks, not useful highlights.
+		const smallest = matches[0];
+		if (smallest.bounds.width * smallest.bounds.height > 0.15) return [];
+
+		return matches.slice(0, 3);
 	}, [textPositions, highlightTerms]);
 
 	if (highlights.length === 0) return null;

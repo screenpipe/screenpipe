@@ -281,12 +281,31 @@ impl ShortcutConfig {
             .unwrap_or_default()
             .unwrap_or_default();
 
+        let default_start_audio = if cfg!(target_os = "windows") {
+            "Alt+Shift+A"
+        } else {
+            "Super+Ctrl+A"
+        };
+        let default_stop_audio = if cfg!(target_os = "windows") {
+            "Alt+Shift+Z"
+        } else {
+            "Super+Ctrl+Z"
+        };
+
         Ok(Self {
             show: store.show_screenpipe_shortcut,
             start: store.start_recording_shortcut,
             stop: store.stop_recording_shortcut,
-            start_audio: store.start_audio_shortcut,
-            stop_audio: store.stop_audio_shortcut,
+            start_audio: if store.start_audio_shortcut.trim().is_empty() {
+                default_start_audio.to_string()
+            } else {
+                store.start_audio_shortcut
+            },
+            stop_audio: if store.stop_audio_shortcut.trim().is_empty() {
+                default_stop_audio.to_string()
+            } else {
+                store.stop_audio_shortcut
+            },
             show_chat: store.show_chat_shortcut,
             search: store.search_shortcut,
             dictation: store.dictation_shortcut,
@@ -1383,6 +1402,7 @@ async fn main() {
                 }
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
+
                 #[cfg(target_os = "macos")]
                 crate::window_api::reset_to_regular_and_refresh_tray(window.app_handle());
                 // On Windows, let the settings window close normally when user
@@ -2152,7 +2172,7 @@ async fn main() {
                     posthog_api_key,
                     interval_hours,
                     "http://localhost:3030".to_string(),
-                    base_dir.clone(),
+                    data_dir.clone(),
                     is_analytics_enabled,
                 ) {
                     Ok(analytics_manager) => {

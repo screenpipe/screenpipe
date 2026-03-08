@@ -69,7 +69,32 @@ export async function proxyToAnthropic(
 		if (!response.ok) {
 			const error = await response.text();
 			console.error('Anthropic API error:', response.status, error);
-			// Return the Anthropic error as-is — clients already expect this format
+
+			// Detect spending/rate limit errors and return 503 so clients know to retry
+			// instead of surfacing a confusing 400 "invalid_request_error"
+			const isSpendingLimit = error.includes('reached your specifi') || error.includes('spending limit');
+			const isRateLimit = error.includes('rate_limit') || response.status === 429;
+
+			if (isSpendingLimit) {
+				return new Response(JSON.stringify({
+					type: 'error',
+					error: {
+						type: 'overloaded_error',
+						message: 'AI service is temporarily at capacity. Please try again in a few minutes.',
+					},
+				}), {
+					status: 503,
+					headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+				});
+			}
+
+			if (isRateLimit) {
+				return new Response(error, {
+					status: 429,
+					headers: { 'Content-Type': 'application/json', 'Retry-After': '30' },
+				});
+			}
+
 			return new Response(error, {
 				status: response.status,
 				headers: { 'Content-Type': 'application/json' },

@@ -27,7 +27,7 @@ jobs:
 
       - name: Run OCR benchmarks
         env:
-          DYLD_LIBRARY_PATH: ${{ github.workspace }}/crates/screenpipe-vision/lib:${{ env.DYLD_LIBRARY_PATH }}
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/crates/screenpipe-screen/lib:${{ env.DYLD_LIBRARY_PATH }}
         run: |
           cargo bench --bench ocr_benchmark -- --output-format bencher | tee -a ocr_output.txt
 

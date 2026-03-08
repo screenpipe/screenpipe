@@ -98,33 +98,38 @@ impl PiExecutor {
     pub fn ensure_screenpipe_skill(project_dir: &Path) -> Result<()> {
         let skills: &[(&str, &str)] = &[
             (
-                "screenpipe-search",
-                include_str!("../../assets/skills/screenpipe-search/SKILL.md"),
+                "screenpipe-api",
+                include_str!("../../assets/skills/screenpipe-api/SKILL.md"),
             ),
             (
-                "screenpipe-media",
-                include_str!("../../assets/skills/screenpipe-media/SKILL.md"),
-            ),
-            (
-                "screenpipe-retranscribe",
-                include_str!("../../assets/skills/screenpipe-retranscribe/SKILL.md"),
-            ),
-            (
-                "screenpipe-analytics",
-                include_str!("../../assets/skills/screenpipe-analytics/SKILL.md"),
-            ),
-            (
-                "screenpipe-elements",
-                include_str!("../../assets/skills/screenpipe-elements/SKILL.md"),
-            ),
-            (
-                "screenpipe-pipes",
-                include_str!("../../assets/skills/screenpipe-pipes/SKILL.md"),
+                "screenpipe-cli",
+                include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
         ];
 
+        // Clean up deprecated skills from the 8→2 consolidation.
+        // Only removes known old names so user-created skills are preserved.
+        let deprecated = [
+            "screenpipe-analytics",
+            "screenpipe-connections",
+            "screenpipe-elements",
+            "screenpipe-media",
+            "screenpipe-pipe-creator",
+            "screenpipe-pipes",
+            "screenpipe-retranscribe",
+            "screenpipe-search",
+        ];
+        let skills_root = project_dir.join(".pi").join("skills");
+        for old in &deprecated {
+            let old_dir = skills_root.join(old);
+            if old_dir.exists() {
+                let _ = std::fs::remove_dir_all(&old_dir);
+                debug!("removed deprecated skill dir {:?}", old_dir);
+            }
+        }
+
         for (name, content) in skills {
-            let skill_dir = project_dir.join(".pi").join("skills").join(name);
+            let skill_dir = skills_root.join(name);
             let skill_path = skill_dir.join("SKILL.md");
 
             std::fs::create_dir_all(&skill_dir)?;
@@ -173,34 +178,14 @@ impl PiExecutor {
 
         let all_skills: &[(&str, &str, Box<dyn Fn(&PipePermissions) -> bool>)] = &[
             (
-                "screenpipe-search",
-                include_str!("../../assets/skills/screenpipe-search/SKILL.md"),
-                Box::new(|_| true), // always installed
+                "screenpipe-api",
+                include_str!("../../assets/skills/screenpipe-api/SKILL.md"),
+                Box::new(|_| true), // always installed — unified API skill
             ),
             (
-                "screenpipe-media",
-                include_str!("../../assets/skills/screenpipe-media/SKILL.md"),
-                Box::new(|p: &PipePermissions| p.allow_frames),
-            ),
-            (
-                "screenpipe-retranscribe",
-                include_str!("../../assets/skills/screenpipe-retranscribe/SKILL.md"),
-                Box::new(|p: &PipePermissions| p.is_content_type_allowed("audio")),
-            ),
-            (
-                "screenpipe-analytics",
-                include_str!("../../assets/skills/screenpipe-analytics/SKILL.md"),
-                Box::new(|p: &PipePermissions| p.allow_raw_sql),
-            ),
-            (
-                "screenpipe-elements",
-                include_str!("../../assets/skills/screenpipe-elements/SKILL.md"),
-                Box::new(|p: &PipePermissions| p.is_content_type_allowed("accessibility")),
-            ),
-            (
-                "screenpipe-pipes",
-                include_str!("../../assets/skills/screenpipe-pipes/SKILL.md"),
-                Box::new(|_| true), // always installed — pipe management is always available
+                "screenpipe-cli",
+                include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
+                Box::new(|_| true), // always installed — pipe & connection management
             ),
         ];
 

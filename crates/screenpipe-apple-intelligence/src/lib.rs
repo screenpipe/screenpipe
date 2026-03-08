@@ -19,4 +19,4 @@ mod engine;
 pub use engine::*;
 
 // On non-macOS/non-aarch64 this crate is a no-op.
-// The feature gate in screenpipe-server ensures this code is never actually used.
+// The feature gate in screenpipe-engine ensures this code is never actually used.

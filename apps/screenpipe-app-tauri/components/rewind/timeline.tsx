@@ -880,6 +880,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
 							allDeviceIds={allDeviceIds}
+							embedded={embedded}
 							searchNavFrame={searchNavFrame}
 							onSearchNavComplete={() => setSearchNavFrame(false)}
 							isArrowNav={isArrowNav}

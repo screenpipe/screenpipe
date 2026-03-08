@@ -359,8 +359,12 @@ export function useFrameLoading(opts: {
 		if (searchNavFrame) {
 			return `http://localhost:3030/frames/${debouncedFrame.frameId}`;
 		}
+		// Snapshot failed to load from disk — need HTTP fallback regardless of video mode
+		if (isSnapshotFrame && snapshotFailed) {
+			return `http://localhost:3030/frames/${debouncedFrame.frameId}`;
+		}
 		if (useVideoMode) return null;
-		if (isSnapshotFrame && !snapshotFailed) return null;
+		if (isSnapshotFrame) return null;
 		return `http://localhost:3030/frames/${debouncedFrame.frameId}`;
 	}, [useVideoMode, debouncedFrame, isSnapshotFrame, snapshotFailed, searchNavFrame]);
 
@@ -393,8 +397,12 @@ export function useFrameLoading(opts: {
 			}
 		};
 		img.onerror = () => {
-			// Preload failed — keep showing previous image
+			// Preload failed — keep showing previous image if available
 			setIsLoading(false);
+			// For snapshot frames where both direct + HTTP failed, signal unavailable
+			if (isSnapshotFrame && snapshotFailed) {
+				onFrameUnavailable?.();
+			}
 			// Still clear search nav mode on error to avoid getting stuck
 			if (searchNavFrame) {
 				onSearchNavComplete?.();

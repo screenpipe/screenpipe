@@ -4,7 +4,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import localforage from "localforage";
-import posthog from "posthog-js";
 
 const FIRST_RUN_SCHEDULED_KEY = "firstRunNotificationScheduled";
 const FIRST_RUN_SENT_KEY = "firstRunNotificationSent";
@@ -72,7 +71,6 @@ export async function checkFirstRunNotification(): Promise<void> {
 
 async function showFirstRunNotification(): Promise<void> {
   try {
-    posthog.capture("notification_scheduled", { type: "first_run" });
     await invoke("show_notification_panel", {
       payload: JSON.stringify({
         id: "first-run-2h",

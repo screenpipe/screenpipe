@@ -30,6 +30,8 @@ clap = { version = "4.5.20", features = ["derive"] }
 # random
 rand = "0.8.5"
 
+uuid = { version = "1.0", features = ["v4"] }
+
 # Cloud sync encryption
 argon2 = { version = "0.5", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }

@@ -118,7 +118,7 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
             // hiding the overlay when the search modal is open.
             overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
             overlay.isHidden = true
-            overlay.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+            overlay.frame = NSRect.zero
             overlay.autoresizingMask = [] // we manage position manually
             contentView.addSubview(overlay)
             mgr.overlayView = overlay
@@ -235,13 +235,12 @@ public func ltAnalyzeImage(
 
         mgr.currentAnalysis = analysis
 
-        // Position overlay (flip y for AppKit coordinates)
-        let contentHeight = contentView.frame.height
-        let appKitY = contentHeight - (y + h)
-
+        // Show the overlay with the new analysis.
+        // Position is managed exclusively by lt_update_position — we don't set
+        // overlay.frame here to avoid a race where stale coordinates from the
+        // analyze call overwrite a correct position set by update_position.
         mainThreadPreservingFocus(contentView) {
             MainActor.assumeIsolated {
-                overlay.frame = NSRect(x: x, y: appKitY, width: w, height: h)
                 overlay.analysis = analysis
                 overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
                 overlay.isHidden = false

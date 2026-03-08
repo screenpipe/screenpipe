@@ -230,16 +230,41 @@ fn is_own_app_still_active() -> bool {
 /// Conditionally restore or clear the saved frontmost app.
 /// If our own app is still active (focus moved to another screenpipe window
 /// like Settings), we just clear without restoring — otherwise Settings/Chat
-/// would lose keyboard focus. If the app is no longer active (focus went to
-/// an external app like Chrome), we restore as normal.
+/// would lose keyboard focus. Also skip restoring if any screenpipe window
+/// (like Settings) is still open — during workspace swipes the app
+/// deactivates briefly but we don't want to pull another app to the front.
+/// Conditionally restore or clear the saved frontmost app.
+/// If our own app is still active (focus moved to another screenpipe window
+/// like Settings), we just clear without restoring — otherwise Settings/Chat
+/// would lose keyboard focus. Also skip restoring if any screenpipe window
+/// (like Settings) is still open — during workspace swipes the app
+/// deactivates briefly but we don't want to pull another app to the front.
 #[cfg(target_os = "macos")]
-fn restore_frontmost_app_if_external() {
+fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>) {
     if is_own_app_still_active() {
         info!("Focus moved to another screenpipe window, clearing saved app without restoring");
         clear_frontmost_app();
-    } else {
-        restore_frontmost_app();
+        return;
     }
+
+    // Check if Settings, Chat, or Search windows exist in Tauri's registry.
+    // These are regular windows (not panels) that may be on another Space —
+    // we don't want to activate a previous app and bury them.
+    if let Some(app) = app {
+        let non_panel_labels = ["settings", "chat", "search"];
+        for label in &non_panel_labels {
+            if app.get_webview_window(label).is_some() {
+                info!(
+                    "Screenpipe '{}' window still open, clearing saved app without restoring",
+                    label
+                );
+                clear_frontmost_app();
+                return;
+            }
+        }
+    }
+
+    restore_frontmost_app();
 }
 
 /// Find the WKWebView inside a regular NSWindow and make it first responder.
@@ -1300,7 +1325,7 @@ impl ShowRewindWindow {
                                         // saved app. Only activate the previous external app
                                         // if our app is no longer active.
                                         #[cfg(target_os = "macos")]
-                                        restore_frontmost_app_if_external();
+                                        restore_frontmost_app_if_external_with_app(Some(&app));
                                         // order_out removes the invisible panel from
                                         // the screen so it can't receive stray clicks.
                                         #[cfg(target_os = "macos")]
@@ -1625,7 +1650,7 @@ impl ShowRewindWindow {
                                     // saved app. Only activate the previous external app
                                     // if our app is no longer active.
                                     #[cfg(target_os = "macos")]
-                                    restore_frontmost_app_if_external();
+                                    restore_frontmost_app_if_external_with_app(Some(&app));
                                     // order_out removes the invisible panel so it
                                     // can't receive stray clicks at alpha=0.
                                     #[cfg(target_os = "macos")]

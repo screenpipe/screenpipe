@@ -11,6 +11,9 @@ use std::ffi::{CStr, CString};
 #[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
 
+#[cfg(target_os = "macos")]
+use tauri::Manager;
+
 use tracing::info;
 
 // ---------- helpers (macOS only) ----------
@@ -58,11 +61,17 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
         info!("livetext_init called for window '{}'", window_label);
         crate::window_api::run_on_main_thread_safe(&app, move || {
             let result = (|| -> Result<(), String> {
-                let panel = app_clone
-                    .get_webview_panel(&window_label)
-                    .map_err(|e| format!("failed to get panel '{}': {:?}", window_label, e))?;
-                // &*panel dereferences to the NSPanel/NSWindow object
-                let ns_window_ptr = &*panel as *const _ as *mut std::ffi::c_void as u64;
+                // Try NSPanel first (overlay/window timeline), fall back to regular WebviewWindow (settings)
+                let ns_window_ptr: u64 = if let Ok(panel) = app_clone.get_webview_panel(&window_label) {
+                    &*panel as *const _ as *mut std::ffi::c_void as u64
+                } else if let Some(window) = app_clone.get_webview_window(&window_label) {
+                    let raw: *mut std::ffi::c_void = window.ns_window()
+                        .map_err(|e| format!("failed to get ns_window for '{}': {:?}", window_label, e))?;
+                    raw as u64
+                } else {
+                    return Err(format!("no panel or window found for '{}'", window_label));
+                };
+
                 let status = unsafe { livetext_ffi::lt_init(ns_window_ptr) };
                 if status != 0 {
                     return Err(format!("lt_init returned error code: {}", status));

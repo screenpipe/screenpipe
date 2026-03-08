@@ -286,3 +286,15 @@ jobs:
           name: enterprise-windows-x64
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+      - name: Notify enterprise build subscribers
+        shell: bash
+        env:
+          ENTERPRISE_NOTIFY_SECRET: ${{ secrets.ENTERPRISE_NOTIFY_SECRET }}
+        run: |
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          curl -sf -X POST "https://screenpi.pe/api/enterprise/builds/notify" \
+            -H "Authorization: Bearer $ENTERPRISE_NOTIFY_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"version\": \"$VERSION\"}"
+          echo "Notified subscribers for v$VERSION"

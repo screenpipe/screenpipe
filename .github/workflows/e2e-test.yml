@@ -115,7 +115,7 @@ jobs:
         ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
         # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
         AWS_LC_SYS_PREBUILT_NASM: "1"
-      run: cargo build --release -p screenpipe-server --target x86_64-pc-windows-msvc
+      run: cargo build --release -p screenpipe-engine --target x86_64-pc-windows-msvc
 
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri
@@ -288,7 +288,7 @@ jobs:
         rustflags: ""
 
     - name: Build CLI on Linux
-      run: cargo build --release -p screenpipe-server --target x86_64-unknown-linux-gnu
+      run: cargo build --release -p screenpipe-engine --target x86_64-unknown-linux-gnu
 
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri

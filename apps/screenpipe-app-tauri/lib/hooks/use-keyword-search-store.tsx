@@ -188,7 +188,7 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				offset: (options.offset ?? 0).toString(),
 				include_context: (options.include_context ?? false).toString(),
 				fuzzy_match: (options.fuzzy_match ?? fuzzy_default).toString(),
-				group: "true",
+				group: "false",
 			});
 
 			if (options.app_names) {
@@ -281,9 +281,16 @@ export const useKeywordSearchStore = create<KeywordSearchState>((set, get) => ({
 				throw new Error("Search request failed");
 			}
 
-			const rawResults: SearchMatchGroup[] = await response.json();
-			const groups = rawResults;
-			const results = groups.map((g: SearchMatchGroup) => g.representative);
+			const rawResults: SearchMatch[] = await response.json();
+			const results = rawResults;
+			// Wrap each flat result as a single-item group for UI compatibility
+			const groups: SearchMatchGroup[] = results.map((m) => ({
+				representative: m,
+				group_size: 1,
+				start_time: m.timestamp,
+				end_time: m.timestamp,
+				frame_ids: [m.frame_id],
+			}));
 
 			if (get().activeRequestId === requestId) {
 				if (!isInitialSearch) {

@@ -44,6 +44,8 @@ interface CurrentFrameTimelineProps {
 	adjacentFrames?: StreamTimeSeriesResponse[];
 	/** Whether the search modal is open — hides native Live Text overlay to avoid blocking input */
 	isSearchModalOpen?: boolean;
+	/** Whether the timeline is embedded in the settings window */
+	embedded?: boolean;
 }
 
 
@@ -77,6 +79,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	isArrowNav,
 	adjacentFrames,
 	isSearchModalOpen,
+	embedded,
 }) => {
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
@@ -143,13 +146,14 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	const textPositions = useMemo(() => {
 		if (ocrTextPositions.length > 0) return ocrTextPositions;
 		if (!frameContext || contextLoading) return [];
-		return frameContext.nodes
-			.filter((n) => n.text.trim().length > 0 && n.bounds && n.bounds.width > 0 && n.bounds.height > 0)
-			.map((n) => ({
-				text: n.text,
-				confidence: 1.0,
-				bounds: n.bounds!,
-			}));
+		const result: typeof ocrTextPositions = [];
+		for (const n of frameContext.nodes) {
+			if (!n.text?.trim() || !n.bounds) continue;
+			const b = n.bounds;
+			if (!b.width || !b.height) continue;
+			result.push({ text: n.text, confidence: 1.0, bounds: b });
+		}
+		return result;
 	}, [ocrTextPositions, frameContext, contextLoading]);
 
 	// URL detection: prefer context URLs, fall back to OCR-extracted URLs
@@ -245,6 +249,14 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	}, [frameContext?.text, textPositions]);
 
 	// --- Live Text hook (native macOS VisionKit overlay) ---
+	// Determine which window/panel to attach VisionKit overlay to.
+	// In embedded mode, use the "settings" window (regular WebviewWindow).
+	// The overlay is positioned precisely over the frame using absolute
+	// coordinates from containerRef + renderedImageInfo.
+	const liveTextWindowLabel = embedded
+		? "settings"
+		: settings?.overlayMode === "window" ? "main-window" : "main";
+
 	const { nativeLiveTextActive } = useLiveText({
 		debouncedFrame,
 		renderedImageInfo,
@@ -256,6 +268,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		containerRef,
 		useVideoMode,
 		videoRef,
+		windowLabel: liveTextWindowLabel,
 	});
 
 	if (!frameId) {
@@ -450,7 +463,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 			)}
 
 			{/* Fallback mode: preloaded <img> via HTTP server (also used for search nav) */}
-			{displayedFallbackUrl && (!useVideoMode || searchNavFrame) && !(snapshotAssetUrl && isSnapshotFrame && !snapshotFailed) && (
+			{displayedFallbackUrl && (!useVideoMode || searchNavFrame || snapshotFailed) && !(snapshotAssetUrl && isSnapshotFrame && !snapshotFailed) && (
 				// eslint-disable-next-line @next/next/no-img-element
 				<img
 					src={displayedFallbackUrl}

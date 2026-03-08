@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
 
@@ -65,6 +65,9 @@ export default function NotificationPanelPage() {
           await invoke("show_window", { window: "Main" });
         } else if (action === "open_chat") {
           await invoke("show_window", { window: "Chat" });
+        } else if (action === "open_pipe_suggestions") {
+          await invoke("show_window", { window: "Main" });
+          await emit("open-pipe-suggestions", {});
         }
       } catch {
         // ignore

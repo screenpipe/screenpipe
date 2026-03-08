@@ -130,6 +130,10 @@ export type Settings = SettingsStore & {
 	openaiCompatibleModel?: string;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
+	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
+	pipeSuggestionsEnabled?: boolean;
+	/** Hours between pipe suggestion notifications (default: 24) */
+	pipeSuggestionFrequencyHours?: number;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -257,8 +261,8 @@ let DEFAULT_SETTINGS: Settings = {
 			showScreenpipeShortcut: "Control+Super+S",
 			startRecordingShortcut: "Super+Alt+U",
 			stopRecordingShortcut: "Super+Alt+X",
-			startAudioShortcut: "",
-			stopAudioShortcut: "",
+			startAudioShortcut: "Control+Super+A",
+			stopAudioShortcut: "Control+Super+Z",
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
 			dictationShortcut: "Control+Super+D",
@@ -296,6 +300,8 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.showScreenpipeShortcut = p === "windows" ? "Alt+S" : "Control+Super+S";
 		DEFAULT_SETTINGS.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
+		DEFAULT_SETTINGS.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
+		DEFAULT_SETTINGS.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
 		DEFAULT_SETTINGS.dictationShortcut = p === "windows" ? "Alt+D" : "Control+Super+D";
 
 		if (p === "windows") {
@@ -399,6 +405,18 @@ function createSettingsStore() {
 		if (!settings.showChatShortcut || settings.showChatShortcut.trim() === "") {
 			const p = platform();
 			settings.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
+			needsUpdate = true;
+		}
+
+		// Migration: Fill empty audio shortcuts with platform defaults
+		if (!settings.startAudioShortcut || settings.startAudioShortcut.trim() === "") {
+			const p = platform();
+			settings.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
+			needsUpdate = true;
+		}
+		if (!settings.stopAudioShortcut || settings.stopAudioShortcut.trim() === "") {
+			const p = platform();
+			settings.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
 			needsUpdate = true;
 		}
 

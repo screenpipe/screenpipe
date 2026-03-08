@@ -1,0 +1,150 @@
+[package]
+name = "screenpipe-engine"
+version = { workspace = true }
+authors = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libc = "0.2"
+oasgen = { workspace = true }
+
+screenpipe-events = { path = "../screenpipe-events" }
+screenpipe-screen = { path = "../screenpipe-screen" }
+screenpipe-audio = { path = "../screenpipe-audio" }
+screenpipe-core = { path = "../screenpipe-core", features = ["security", "cloud-sync"] }
+screenpipe-db = { path = "../screenpipe-db" }
+screenpipe-a11y = { path = "../screenpipe-a11y", features = ["db"] }
+screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", optional = true }
+screenpipe-connect = { path = "../screenpipe-connect" }
+
+
+# Image processing
+image = { workspace = true }
+imageproc = "0.25"
+
+# Dates
+chrono = { version = "0.4.31", features = ["serde"] }
+
+# Database
+sqlx = { version = "0.7", features = [
+    "sqlite",
+    "runtime-tokio-native-tls",
+    "chrono",
+    "migrate",
+] }
+
+anyhow = "1.0.86"
+async-trait = "0.1"
+moka = { version = "0.12", features = ["future"] }
+
+#opentelemetry
+sentry = { workspace = true }
+
+# Server
+axum = { version = "0.7.5", features = ["ws"] }
+http-body-util = "0.1"
+tokio = { version = "1.15", features = ["full", "tracing"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.5.2", features = ["cors", "trace"] }
+
+# Log
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+console-subscriber = { version = "0.4.1", optional = true }
+# Cli ! shouldn't be required if using as lib
+clap = { version = "4.3", features = ["derive", "env"] }
+
+# Memory watchdog
+sysinfo = "0.29.0"
+
+# Color
+colored = "2.0"
+
+# Plugins
+futures = { version = "0.3.31", features = ["std"] }
+
+# Directory management
+dirs = "5.0"
+
+# Client http
+reqwest = { workspace = true }
+
+# Concurrency
+crossbeam = { workspace = true }
+
+# base64
+base64 = "0.22.1"
+
+uuid = { version = "1.5.0", features = ["v4"] }
+
+# Cloud sync utilities
+hostname = "0.4"
+md5 = "0.7"
+
+tempfile = "3.3.0"
+
+
+# Bincode for serializing hot cache
+bincode = "1.3.3"
+
+# SHA256 for hashing
+sha2 = "0.10.6"
+
+# Fast random number generator
+fastrand = "2.1.1"
+port_check = "0.2.1"
+
+regex = "1.10.0"
+
+lru = "0.16.3"
+tokio-util = { version = "0.7", features = ["io"] }
+
+once_cell = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+env_logger = "0.10"
+tempfile = "3.3.0"
+tokio-tungstenite = "0.24"
+tower = { version = "0.4", features = ["util"] }
+
+# Benches
+criterion = { workspace = true }
+
+[features]
+default = ["qwen3-asr"]
+metal = ["screenpipe-audio/metal"]
+cuda = ["screenpipe-audio/cuda"]
+vulkan = ["screenpipe-audio/vulkan"]
+debug-console = ["console-subscriber"]
+pulseaudio = ["screenpipe-audio/pulseaudio"]
+apple-intelligence = ["dep:screenpipe-apple-intelligence"]
+qwen3-asr = ["screenpipe-audio/qwen3-asr"]
+
+[[bin]]
+name = "screenpipe"
+path = "src/bin/screenpipe-engine.rs"
+
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_StationsAndDesktops",
+] }
+socket2 = "0.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { git = "https://github.com/yury/cidre.git", features = ["ns"] }
+tracing-oslog = { workspace = true }

@@ -506,14 +506,14 @@ mod tests {
 
         // After inserting both audio transcriptions, let's check all audio entries
         let all_audio = db
-            .search_audio("", 100, 0, None, None, None, None, None, None)
+            .search_audio("", 100, 0, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
         println!("All audio entries: {:?}", all_audio);
 
         // Then try specific search
         let audio_results = db
-            .search_audio("2", 100, 0, None, None, None, None, None, None)
+            .search_audio("2", 100, 0, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
         println!("Audio results for '2': {:?}", audio_results);

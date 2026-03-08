@@ -43,7 +43,7 @@ jobs:
 
       - name: Build CLI
         run: |
-          cargo build --release -p screenpipe-server
+          cargo build --release -p screenpipe-engine
           echo "CLI built successfully"
           ls -la target/release/screenpipe
 
@@ -313,7 +313,7 @@ jobs:
         run: |
           # Build the standalone CLI binary for running the server
           # (The Tauri build only produces the app binary, not the CLI)
-          cargo build --release -p screenpipe-server
+          cargo build --release -p screenpipe-engine
           ls -lh target/release/screenpipe
           echo "✓ CLI binary built"
 

@@ -185,6 +185,62 @@ describe('proxyToAnthropic', () => {
 		expect(data.error.type).toBe('invalid_request_error');
 	});
 
+	it('should return 503 for spending limit errors instead of raw 400', async () => {
+		globalThis.fetch = async () => {
+			return new Response(JSON.stringify({
+				type: 'error',
+				error: {
+					type: 'invalid_request_error',
+					message: 'You have reached your specified monthly spending limit for this API key.',
+				},
+			}), { status: 400, headers: { 'Content-Type': 'application/json' } });
+		};
+
+		const request = new Request('http://localhost/v1/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model: 'claude-opus-4-6',
+				max_tokens: 100,
+				messages: [{ role: 'user', content: 'test' }],
+			}),
+		});
+
+		const response = await proxyToAnthropic(request, 'sk-ant-test-key');
+		expect(response.status).toBe(503);
+		expect(response.headers.get('Retry-After')).toBe('60');
+
+		const data: any = await response.json();
+		expect(data.error.type).toBe('overloaded_error');
+		expect(data.error.message).toContain('temporarily at capacity');
+	});
+
+	it('should return 429 for rate limit errors', async () => {
+		globalThis.fetch = async () => {
+			return new Response(JSON.stringify({
+				type: 'error',
+				error: {
+					type: 'rate_limit_error',
+					message: 'Rate limited',
+				},
+			}), { status: 429, headers: { 'Content-Type': 'application/json' } });
+		};
+
+		const request = new Request('http://localhost/v1/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model: 'claude-opus-4-6',
+				max_tokens: 100,
+				messages: [{ role: 'user', content: 'test' }],
+			}),
+		});
+
+		const response = await proxyToAnthropic(request, 'sk-ant-test-key');
+		expect(response.status).toBe(429);
+		expect(response.headers.get('Retry-After')).toBe('30');
+	});
+
 	it('should handle network/fetch errors gracefully', async () => {
 		globalThis.fetch = async () => {
 			throw new Error('Network timeout');

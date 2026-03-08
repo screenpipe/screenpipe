@@ -78,7 +78,7 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 pub async fn get_available_monitors() -> Result<Vec<MonitorDevice>, String> {
     debug!("Getting available monitors");
 
-    let monitors = screenpipe_vision::monitor::list_monitors().await;
+    let monitors = screenpipe_screen::monitor::list_monitors().await;
 
     if monitors.is_empty() {
         return Err("No monitors found".to_string());

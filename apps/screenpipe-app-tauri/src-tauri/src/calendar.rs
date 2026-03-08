@@ -51,7 +51,7 @@ pub struct CalendarEventItem {
 pub async fn calendar_status() -> Result<CalendarStatus, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::calendar::ScreenpipeCalendar;
+        use screenpipe_connect::calendar::ScreenpipeCalendar;
 
         let auth_status = ScreenpipeCalendar::authorization_status();
         let status_str = format!("{}", auth_status);
@@ -80,7 +80,7 @@ pub async fn calendar_status() -> Result<CalendarStatus, String> {
 
     #[cfg(target_os = "windows")]
     {
-        use screenpipe_integrations::calendar_windows::ScreenpipeCalendar;
+        use screenpipe_connect::calendar_windows::ScreenpipeCalendar;
 
         let result = tokio::task::spawn_blocking(|| {
             match ScreenpipeCalendar::new() {
@@ -137,7 +137,7 @@ pub async fn calendar_status() -> Result<CalendarStatus, String> {
 pub async fn calendar_authorize() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::calendar::ScreenpipeCalendar;
+        use screenpipe_connect::calendar::ScreenpipeCalendar;
         let result = tokio::task::spawn_blocking(|| {
             let cal = ScreenpipeCalendar::new();
             cal.request_access()
@@ -179,7 +179,7 @@ pub async fn calendar_get_events(
 ) -> Result<Vec<CalendarEventItem>, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::calendar::ScreenpipeCalendar;
+        use screenpipe_connect::calendar::ScreenpipeCalendar;
 
         let hb = hours_back.unwrap_or(1);
         let ha = hours_ahead.unwrap_or(2);
@@ -195,7 +195,7 @@ pub async fn calendar_get_events(
 
     #[cfg(target_os = "windows")]
     {
-        use screenpipe_integrations::calendar_windows::ScreenpipeCalendar;
+        use screenpipe_connect::calendar_windows::ScreenpipeCalendar;
 
         let hb = hours_back.unwrap_or(1);
         let ha = hours_ahead.unwrap_or(2);
@@ -222,7 +222,7 @@ pub async fn calendar_get_events(
 pub async fn calendar_get_current_meeting() -> Result<Vec<CalendarEventItem>, String> {
     #[cfg(target_os = "macos")]
     {
-        use screenpipe_integrations::calendar::ScreenpipeCalendar;
+        use screenpipe_connect::calendar::ScreenpipeCalendar;
 
         tokio::task::spawn_blocking(|| {
             let cal = ScreenpipeCalendar::new();
@@ -235,7 +235,7 @@ pub async fn calendar_get_current_meeting() -> Result<Vec<CalendarEventItem>, St
 
     #[cfg(target_os = "windows")]
     {
-        use screenpipe_integrations::calendar_windows::ScreenpipeCalendar;
+        use screenpipe_connect::calendar_windows::ScreenpipeCalendar;
 
         tokio::task::spawn_blocking(|| {
             let cal = ScreenpipeCalendar::new()?;
@@ -261,7 +261,7 @@ pub async fn start_calendar_events_publisher() {
     loop {
         #[cfg(target_os = "macos")]
         {
-            use screenpipe_integrations::calendar::ScreenpipeCalendar;
+            use screenpipe_connect::calendar::ScreenpipeCalendar;
 
             let status = ScreenpipeCalendar::authorization_status();
             if format!("{}", status) == "Full Access" {
@@ -290,7 +290,7 @@ pub async fn start_calendar_events_publisher() {
 
         #[cfg(target_os = "windows")]
         {
-            use screenpipe_integrations::calendar_windows::ScreenpipeCalendar;
+            use screenpipe_connect::calendar_windows::ScreenpipeCalendar;
 
             match tokio::task::spawn_blocking(|| {
                 let cal = ScreenpipeCalendar::new()?;
@@ -329,7 +329,7 @@ pub async fn start_calendar_events_publisher() {
 
 #[cfg(target_os = "macos")]
 fn calendar_event_to_item(
-    event: screenpipe_integrations::calendar::CalendarEvent,
+    event: screenpipe_connect::calendar::CalendarEvent,
 ) -> CalendarEventItem {
     let start_display = event.start_local.format("%-I:%M %p").to_string();
     let end_display = event.end_local.format("%-I:%M %p").to_string();
@@ -350,7 +350,7 @@ fn calendar_event_to_item(
 
 #[cfg(target_os = "windows")]
 fn calendar_event_to_item_win(
-    event: screenpipe_integrations::calendar_windows::CalendarEvent,
+    event: screenpipe_connect::calendar_windows::CalendarEvent,
 ) -> CalendarEventItem {
     let start_display = event.start_local.format("%-I:%M %p").to_string();
     let end_display = event.end_local.format("%-I:%M %p").to_string();

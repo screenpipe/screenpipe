@@ -71,10 +71,10 @@ curl "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601
 
 ## after creating the file
 
-IMPORTANT: always use "bunx screenpipe@latest" (not "bunx screenpipe" or "screenpipe") to ensure the latest CLI version:
+IMPORTANT: always use "bun x screenpipe@latest" (not "bun x screenpipe" or "screenpipe") to ensure the latest CLI version:
 
-install: bunx screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
-enable:  bunx screenpipe@latest pipe enable my-pipe
+install: bun x screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
+enable:  bun x screenpipe@latest pipe enable my-pipe
 
 ## important formatting rules
 

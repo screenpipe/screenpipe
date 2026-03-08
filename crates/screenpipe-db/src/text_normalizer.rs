@@ -48,7 +48,7 @@ pub fn sanitize_fts5_query(query: &str) -> String {
     query
         .split_whitespace()
         .filter_map(|token| {
-            let cleaned = token.replace('"', "");
+            let cleaned = token.replace('\\', "").replace('"', "");
             if cleaned.is_empty() {
                 return None;
             }
@@ -90,7 +90,7 @@ pub fn expand_search_query(query: &str) -> String {
     let expanded_terms: Vec<String> = query
         .split_whitespace()
         .flat_map(|word| {
-            let cleaned = word.replace('"', "");
+            let cleaned = word.replace('\\', "").replace('"', "");
             let split = split_compound(&cleaned);
             let parts: Vec<&str> = split.split_whitespace().collect();
 
@@ -168,6 +168,15 @@ mod tests {
             sanitize_fts5_query(r#"he said "hello""#),
             r#""he" "said" "hello""#
         );
+    }
+
+    #[test]
+    fn test_sanitize_fts5_strips_backslashes() {
+        assert_eq!(sanitize_fts5_query(r#"test\query"#), r#""testquery""#);
+        assert_eq!(sanitize_fts5_query(r#"path\to\file"#), r#""pathtofile""#);
+        assert_eq!(sanitize_fts5_query(r#"\"#), "");
+        assert_eq!(sanitize_fts5_query(r#"hello\ world"#), r#""hello" "world""#);
+        assert_eq!(sanitize_fts5_query(r#"test\"quoted""#), r#""testquoted""#);
     }
 
     #[test]
