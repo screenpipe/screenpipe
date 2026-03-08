@@ -116,12 +116,42 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       const ws = new WebSocket(DICTATION_WS_URL);
       wsRef.current = ws;
 
+      let startedReceived = false;
+
       ws.onopen = () => {
         console.log("[dictation-context] WebSocket connected, sending start command");
 
         // Send start command with the configured dictation device
         const device = settingsRef.current.dictationDevice || "";
         ws.send(JSON.stringify({ type: "start", device }));
+
+        // Poll for start confirmation
+        const pollInterval = 100;
+        const maxAttempts = 10;
+        let attempts = 0;
+
+        const pollTimer = setInterval(() => {
+          attempts++;
+          if (startedReceived) {
+            clearInterval(pollTimer);
+            return;
+          }
+          if (attempts >= maxAttempts) {
+            clearInterval(pollTimer);
+            console.error("[dictation-context] Dictation failed to start within timeout");
+            notifySubscribers({ type: "error", error: "Dictation failed to start" });
+            // Send stop to ensure backend is not in a started state
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "stop" }));
+            }
+            cleanup();
+            setState("idle");
+            notifySubscribers({ type: "stateChange", state: "idle" });
+            import("@tauri-apps/api/event").then(({ emit }) => {
+              emit("dictation-state-changed", { state: "idle" });
+            });
+          }
+        }, pollInterval);
       };
 
       ws.onmessage = (event) => {
@@ -130,6 +160,7 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 
           if (data.type === "started") {
             console.log("[dictation-context] Server started audio capture");
+            startedReceived = true;
           }
 
           if (data.text) {
