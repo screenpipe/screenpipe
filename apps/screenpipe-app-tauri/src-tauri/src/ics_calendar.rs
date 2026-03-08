@@ -19,6 +19,7 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tracing::{debug, info, warn};
+use futures::stream::{self, StreamExt};
 
 // Windows timezone names → IANA. Outlook/Exchange ICS feeds use these.
 fn windows_tz_to_iana(win_tz: &str) -> Option<&'static str> {
@@ -269,8 +270,8 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
 // ─── Fetching ────────────────────────────────────────────────────────────────
 
 async fn fetch_and_parse_feed(
-    client: &reqwest::Client,
-    entry: &IcsCalendarEntry,
+    client: reqwest::Client,
+    entry: IcsCalendarEntry,
 ) -> Vec<CalendarEventItem> {
     let url = entry.url.replace("webcal://", "https://");
 
@@ -316,11 +317,16 @@ pub async fn start_ics_calendar_poller(app: AppHandle) {
                 .collect();
 
             if !enabled_entries.is_empty() {
-                let mut all_events = Vec::new();
-                for entry in &enabled_entries {
-                    let events = fetch_and_parse_feed(&client, entry).await;
-                    all_events.extend(events);
-                }
+                let events_stream = stream::iter(enabled_entries)
+                    .map(|entry| fetch_and_parse_feed(client.clone(), entry))
+                    .buffer_unordered(10); // parallel fetch up to 10
+
+                let all_events: Vec<CalendarEventItem> = events_stream
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
                 if !all_events.is_empty() {
                     if let Err(e) = screenpipe_events::send_event("calendar_events", all_events) {
@@ -383,12 +389,16 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     }
 
     let client = reqwest::Client::new();
-    let mut all_events = Vec::new();
+    let events_stream = stream::iter(enabled)
+        .map(|entry| fetch_and_parse_feed(client.clone(), entry))
+        .buffer_unordered(10); // parallel fetch up to 10
 
-    for entry in &enabled {
-        let events = fetch_and_parse_feed(&client, entry).await;
-        all_events.extend(events);
-    }
+    let mut all_events: Vec<CalendarEventItem> = events_stream
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
 
     // Filter to next 8 hours only
     let now = Utc::now();
