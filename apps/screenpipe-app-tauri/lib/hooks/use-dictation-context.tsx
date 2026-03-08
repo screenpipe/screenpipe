@@ -500,6 +500,7 @@ export function useDictation(options: {
   skipGlobalListener?: boolean;
 } = {}) {
   const context = useDictationContext();
+  
   const { subscribe, state, toggleDictation, stopDictation, transcribedText, isRecording, startDictation } = context;
 
   // Subscribe to callbacks on mount, unsubscribe on unmount
