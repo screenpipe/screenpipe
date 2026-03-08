@@ -98,6 +98,7 @@ const ShortcutRow = ({
     startAudioShortcut: string;
     stopAudioShortcut: string;
     showChatShortcut: string;
+    dictationShortcut: string;
   }) => {
     console.log("syncing shortcuts:", {
       showShortcut: updatedShortcuts.showScreenpipeShortcut,
@@ -106,6 +107,7 @@ const ShortcutRow = ({
       startAudioShortcut: updatedShortcuts.startAudioShortcut,
       stopAudioShortcut: updatedShortcuts.stopAudioShortcut,
       showChatShortcut: updatedShortcuts.showChatShortcut,
+      dictationShortcut: updatedShortcuts.dictationShortcut,
     });
     // wait 1 second for settings to persist
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -116,7 +118,7 @@ const ShortcutRow = ({
       updatedShortcuts.stopRecordingShortcut,
       updatedShortcuts.startAudioShortcut,
       updatedShortcuts.stopAudioShortcut,
-    {}
+      { dictationShortcut: updatedShortcuts.dictationShortcut }
     );
 
     return true;
@@ -134,6 +136,7 @@ const ShortcutRow = ({
         stopAudioShortcut: settings.stopAudioShortcut,
         showChatShortcut: settings.showChatShortcut,
         searchShortcut: settings.searchShortcut,
+        dictationShortcut: settings.dictationShortcut || "",
       };
       const conflict = Object.entries(allShortcuts).find(
         ([key, value]) =>
@@ -174,6 +177,7 @@ const ShortcutRow = ({
             startAudioShortcut: shortcut === "startAudioShortcut" ? keys : settings.startAudioShortcut,
             stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : settings.stopAudioShortcut,
             showChatShortcut: shortcut === "showChatShortcut" ? keys : settings.showChatShortcut,
+            dictationShortcut: shortcut === "dictationShortcut" ? keys : (settings.dictationShortcut || ""),
           };
           await syncShortcuts(updatedShortcuts);
 
@@ -218,6 +222,7 @@ const ShortcutRow = ({
       startAudioShortcut: settings.startAudioShortcut,
       stopAudioShortcut: settings.stopAudioShortcut,
       showChatShortcut: settings.showChatShortcut,
+      dictationShortcut: settings.dictationShortcut || "",
     });
   };
 
