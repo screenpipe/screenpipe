@@ -33,27 +33,23 @@ pub enum VaultState {
 struct VaultMeta {
     /// Salt for Argon2 key derivation.
     salt: [u8; SALT_SIZE],
-    /// Master key encrypted with the password-derived key.
+    /// Master key encrypted with the password-derived key (nonce + ciphertext).
     encrypted_master_key: Vec<u8>,
 }
 
 pub struct VaultManager {
     screenpipe_dir: PathBuf,
     state: Arc<RwLock<VaultState>>,
-    /// Master key — only present while unlocked.
+    /// Master key — only present while unlocked. Zeroized on lock/drop.
     master_key: Arc<RwLock<Option<Zeroizing<[u8; KEY_SIZE]>>>>,
 }
 
 impl VaultManager {
     pub fn new(screenpipe_dir: PathBuf) -> Self {
-        // Determine initial state from disk
         let initial_state = if !screenpipe_dir.join("vault.meta").exists() {
             VaultState::None
-        } else if screenpipe_dir.join(".vault_locked").exists() {
-            VaultState::Locked
         } else {
-            // Vault was set up but not locked (e.g. process restarted while unlocked).
-            // Treat as unlocked but key is not in memory — caller must unlock.
+            // Vault was set up. Key not in memory → effectively locked.
             VaultState::Locked
         };
 
@@ -77,6 +73,7 @@ impl VaultManager {
     }
 
     /// First-time setup: generate master key, encrypt it with password, save metadata.
+    /// Does NOT encrypt existing data — call `lock()` after to do that.
     pub async fn setup(&self, password: &str) -> VaultResult<()> {
         if self.is_set_up() {
             return Err(VaultError::Other("vault already set up".into()));
@@ -87,7 +84,7 @@ impl VaultManager {
         let master_key = crypto::generate_master_key();
 
         // Encrypt master key with password-derived key
-        let encrypted_master_key = crypto::encrypt(master_key.as_ref(), &password_key)?;
+        let encrypted_master_key = crypto::encrypt_small(master_key.as_ref(), &password_key)?;
 
         let meta = VaultMeta {
             salt,
@@ -107,10 +104,10 @@ impl VaultManager {
         Ok(())
     }
 
-    /// Lock the vault: encrypt all data, zeroize key.
+    /// Lock the vault: encrypt DB + data files, zeroize key.
     ///
-    /// The caller is responsible for stopping recording and closing the DB
-    /// BEFORE calling this method.
+    /// The caller MUST stop recording and close the DB pool BEFORE calling this.
+    /// Returns a progress receiver for UI display.
     pub async fn lock(&self) -> VaultResult<watch::Receiver<MigrationProgress>> {
         let state = self.state.read().await.clone();
         match state {
@@ -122,13 +119,16 @@ impl VaultManager {
             VaultState::Unlocked => {}
         }
 
+        // Take the key out of the lock — this zeroizes it from the shared state immediately
         let key = {
-            let guard = self.master_key.read().await;
+            let mut guard = self.master_key.write().await;
             guard
-                .as_ref()
+                .take()
                 .ok_or(VaultError::Other("master key not in memory".into()))?
-                .clone()
         };
+        // Copy key bytes for the encryption task. The Zeroizing wrapper on `key`
+        // will zeroize its copy when dropped at the end of this scope.
+        let key_bytes: [u8; KEY_SIZE] = *key;
 
         let (progress_tx, progress_rx) = watch::channel(MigrationProgress {
             total_files: 0,
@@ -137,56 +137,61 @@ impl VaultManager {
             processed_bytes: 0,
         });
 
+        let screenpipe_dir = self.screenpipe_dir.clone();
         let data_dir = self.screenpipe_dir.join("data");
         let db_path = self.screenpipe_dir.join("db.sqlite");
         let sentinel = self.screenpipe_dir.join(".vault_locked");
-        let state = self.state.clone();
-        let master_key = self.master_key.clone();
-        let key_copy: [u8; KEY_SIZE] = *key;
+        let vault_state = self.state.clone();
+
+        *self.state.write().await = VaultState::Migrating { progress: 0.0 };
 
         tokio::spawn(async move {
-            *state.write().await = VaultState::Migrating { progress: 0.0 };
-
-            // Encrypt DB file
+            // Encrypt DB file (must be closed by caller already)
             if db_path.exists() {
                 info!("encrypting db.sqlite...");
-                if let Err(e) = crypto::encrypt_file(&db_path, &key_copy) {
+                if let Err(e) = crypto::encrypt_file(&db_path, &key_bytes) {
                     tracing::error!("failed to encrypt db: {}", e);
                 }
-                // Also encrypt WAL and SHM if present
-                let wal = db_path.with_extension("sqlite-wal");
-                let shm = db_path.with_extension("sqlite-shm");
-                if wal.exists() {
-                    let _ = crypto::encrypt_file(&wal, &key_copy);
-                }
-                if shm.exists() {
-                    let _ = crypto::encrypt_file(&shm, &key_copy);
+                // WAL and SHM
+                for ext in &["sqlite-wal", "sqlite-shm"] {
+                    let p = db_path.with_extension(ext);
+                    if p.exists() {
+                        let _ = crypto::encrypt_file(&p, &key_bytes);
+                    }
                 }
             }
 
-            // Encrypt data files (screenshots, audio)
+            // Encrypt data files with crash recovery journal
             if data_dir.exists() {
-                if let Err(e) =
-                    migration::encrypt_data_dir(&data_dir, &key_copy, progress_tx).await
+                if let Err(e) = migration::encrypt_data_dir(
+                    &screenpipe_dir,
+                    &data_dir,
+                    key_bytes,
+                    progress_tx,
+                )
+                .await
                 {
                     tracing::error!("failed to encrypt data dir: {}", e);
                 }
             }
 
-            // Zeroize key from memory
-            *master_key.write().await = None;
-
-            // Write sentinel
+            // Write sentinel and mark locked
             let _ = std::fs::write(&sentinel, "locked");
-
-            *state.write().await = VaultState::Locked;
+            *vault_state.write().await = VaultState::Locked;
             info!("vault locked");
+
+            // key_bytes is on the stack and will be dropped here.
+            // For defense in depth, explicitly zero it.
+            #[allow(unused_assignments)]
+            let mut key_bytes = key_bytes;
+            key_bytes.fill(0);
         });
 
         Ok(progress_rx)
     }
 
-    /// Unlock the vault: derive key from password, decrypt all data.
+    /// Unlock the vault: derive key from password, decrypt DB + data files.
+    /// Returns a progress receiver for UI display.
     pub async fn unlock(
         &self,
         password: &str,
@@ -207,11 +212,9 @@ impl VaultManager {
         let meta: VaultMeta = serde_json::from_str(&meta_json)
             .map_err(|e| VaultError::Other(format!("corrupt vault.meta: {}", e)))?;
 
-        // Derive key from password
+        // Derive key from password and decrypt master key
         let password_key = crypto::derive_key(password, &meta.salt)?;
-
-        // Decrypt master key
-        let master_key_bytes = crypto::decrypt(&meta.encrypted_master_key, &password_key)
+        let master_key_bytes = crypto::decrypt_small(&meta.encrypted_master_key, &password_key)
             .map_err(|_| VaultError::WrongPassword)?;
 
         if master_key_bytes.len() != KEY_SIZE {
@@ -220,6 +223,10 @@ impl VaultManager {
 
         let mut master_key = Zeroizing::new([0u8; KEY_SIZE]);
         master_key.copy_from_slice(&master_key_bytes);
+        let key_bytes: [u8; KEY_SIZE] = *master_key;
+
+        // Store key in memory for the system to use
+        *self.master_key.write().await = Some(master_key);
 
         let (progress_tx, progress_rx) = watch::channel(MigrationProgress {
             total_files: 0,
@@ -228,46 +235,45 @@ impl VaultManager {
             processed_bytes: 0,
         });
 
+        let screenpipe_dir = self.screenpipe_dir.clone();
         let data_dir = self.screenpipe_dir.join("data");
         let db_path = self.screenpipe_dir.join("db.sqlite");
         let sentinel = self.screenpipe_dir.join(".vault_locked");
         let vault_state = self.state.clone();
-        let key_copy: [u8; KEY_SIZE] = *master_key;
 
-        // Store key in memory immediately so callers can use it after await
-        *self.master_key.write().await = Some(master_key);
+        *self.state.write().await = VaultState::Migrating { progress: 0.0 };
 
         tokio::spawn(async move {
-            *vault_state.write().await = VaultState::Migrating { progress: 0.0 };
-
-            // Decrypt DB file
+            // Decrypt DB
             if db_path.exists() {
                 info!("decrypting db.sqlite...");
-                if let Err(e) = crypto::decrypt_file(&db_path, &key_copy) {
+                if let Err(e) = crypto::decrypt_file(&db_path, &key_bytes) {
                     tracing::error!("failed to decrypt db: {}", e);
                 }
-                let wal = db_path.with_extension("sqlite-wal");
-                let shm = db_path.with_extension("sqlite-shm");
-                if wal.exists() {
-                    let _ = crypto::decrypt_file(&wal, &key_copy);
-                }
-                if shm.exists() {
-                    let _ = crypto::decrypt_file(&shm, &key_copy);
+                for ext in &["sqlite-wal", "sqlite-shm"] {
+                    let p = db_path.with_extension(ext);
+                    if p.exists() {
+                        let _ = crypto::decrypt_file(&p, &key_bytes);
+                    }
                 }
             }
 
             // Decrypt data files
             if data_dir.exists() {
-                if let Err(e) =
-                    migration::decrypt_data_dir(&data_dir, &key_copy, progress_tx).await
+                if let Err(e) = migration::decrypt_data_dir(
+                    &screenpipe_dir,
+                    &data_dir,
+                    key_bytes,
+                    progress_tx,
+                )
+                .await
                 {
                     tracing::error!("failed to decrypt data dir: {}", e);
                 }
             }
 
-            // Remove sentinel
+            // Remove sentinel and mark unlocked
             let _ = std::fs::remove_file(&sentinel);
-
             *vault_state.write().await = VaultState::Unlocked;
             info!("vault unlocked");
         });
@@ -276,6 +282,7 @@ impl VaultManager {
     }
 
     /// Get the master key (only available while unlocked).
+    /// Used by encrypt-on-write systems in Phase 6.
     pub async fn master_key(&self) -> Option<Zeroizing<[u8; KEY_SIZE]>> {
         self.master_key.read().await.clone()
     }
@@ -291,10 +298,9 @@ mod tests {
         let data_dir = dir.path().join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
 
-        // Create a test file
+        // Create test files
         std::fs::write(data_dir.join("test.jpg"), b"fake jpeg data").unwrap();
-
-        // Create a fake db
+        std::fs::write(data_dir.join("test2.mp4"), b"fake video data").unwrap();
         std::fs::write(dir.path().join("db.sqlite"), b"fake sqlite data").unwrap();
 
         let vault = VaultManager::new(dir.path().to_path_buf());
@@ -306,11 +312,10 @@ mod tests {
         assert!(vault.master_key().await.is_some());
 
         // Lock
-        let mut rx = vault.lock().await.unwrap();
+        let _rx = vault.lock().await.unwrap();
         // Wait for lock to complete
         loop {
-            let state = vault.state().await;
-            if state == VaultState::Locked {
+            if vault.state().await == VaultState::Locked {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -319,21 +324,18 @@ mod tests {
         assert!(dir.path().join(".vault_locked").exists());
 
         // Verify files are encrypted
-        let db_data = std::fs::read(dir.path().join("db.sqlite")).unwrap();
-        assert!(crypto::is_encrypted(&db_data));
-        let jpg_data = std::fs::read(data_dir.join("test.jpg")).unwrap();
-        assert!(crypto::is_encrypted(&jpg_data));
+        assert!(crypto::is_encrypted_file(&dir.path().join("db.sqlite")).unwrap());
+        assert!(crypto::is_encrypted_file(&data_dir.join("test.jpg")).unwrap());
+        assert!(crypto::is_encrypted_file(&data_dir.join("test2.mp4")).unwrap());
 
-        // Unlock with wrong password
+        // Unlock with wrong password should fail
         let result = vault.unlock("wrong-password").await;
-        assert!(result.is_err());
+        assert!(matches!(result, Err(VaultError::WrongPassword)));
 
         // Unlock with correct password
-        // Reset state to locked since wrong password attempt didn't change it
-        let mut rx = vault.unlock("test-password").await.unwrap();
+        let _rx = vault.unlock("test-password").await.unwrap();
         loop {
-            let state = vault.state().await;
-            if state == VaultState::Unlocked {
+            if vault.state().await == VaultState::Unlocked {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -342,9 +344,44 @@ mod tests {
         assert!(!dir.path().join(".vault_locked").exists());
 
         // Verify files are decrypted
-        let db_data = std::fs::read(dir.path().join("db.sqlite")).unwrap();
-        assert_eq!(db_data, b"fake sqlite data");
-        let jpg_data = std::fs::read(data_dir.join("test.jpg")).unwrap();
-        assert_eq!(jpg_data, b"fake jpeg data");
+        assert_eq!(
+            std::fs::read(dir.path().join("db.sqlite")).unwrap(),
+            b"fake sqlite data"
+        );
+        assert_eq!(
+            std::fs::read(data_dir.join("test.jpg")).unwrap(),
+            b"fake jpeg data"
+        );
+        assert_eq!(
+            std::fs::read(data_dir.join("test2.mp4")).unwrap(),
+            b"fake video data"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_double_lock_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+
+        let vault = VaultManager::new(dir.path().to_path_buf());
+        vault.setup("pw").await.unwrap();
+
+        let _rx = vault.lock().await.unwrap();
+        loop {
+            if vault.state().await == VaultState::Locked {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+
+        // Double lock should error
+        assert!(matches!(vault.lock().await, Err(VaultError::AlreadyLocked)));
+    }
+
+    #[tokio::test]
+    async fn test_lock_without_setup_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = VaultManager::new(dir.path().to_path_buf());
+        assert!(matches!(vault.lock().await, Err(VaultError::NotSetUp)));
     }
 }

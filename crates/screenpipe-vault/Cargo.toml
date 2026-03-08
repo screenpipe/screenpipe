@@ -28,6 +28,9 @@ thiserror = "1"
 # Logging
 tracing = { workspace = true }
 
+# File walking
+walkdir = "2"
+
 # OS keychain
 keyring = { version = "3", optional = true }
 
