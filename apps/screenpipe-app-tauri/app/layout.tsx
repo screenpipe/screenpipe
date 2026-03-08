@@ -204,13 +204,6 @@ export default function RootLayout({
       </head>
       <Providers>
         <body className={`${inter.className} scrollbar-hide`}>
-          {!isOverlay && <DeeplinkHandler />}
-          {!isOverlay && <ShortcutTracker />}
-          {!isOverlay && <PipeInstallDialog />}
-          {/* TODO: vault lock UI disabled — CLI-only for now */}
-          {/* {!isOverlay && <VaultLockDialog />} */}
-          {children}
-          {!isOverlay && <Toaster />}
           <DictationProvider>
             {!isOverlay && <DeeplinkHandler />}
             {!isOverlay && <ShortcutTracker />}
