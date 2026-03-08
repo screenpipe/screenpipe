@@ -13,6 +13,8 @@ use crate::store::IcsCalendarEntry;
 use crate::store::IcsCalendarSettingsStore;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use chrono_tz::Tz;
+use futures::future::{BoxFuture, FutureExt};
+use futures::stream::{self, StreamExt};
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -268,31 +270,55 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
 
 // ─── Fetching ────────────────────────────────────────────────────────────────
 
-async fn fetch_and_parse_feed(
-    client: &reqwest::Client,
-    entry: &IcsCalendarEntry,
+trait IcsFeedFetcher {
+    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, String>>;
+}
+
+impl IcsFeedFetcher for reqwest::Client {
+    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, String>> {
+        async move {
+            self.get(url)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .text()
+                .await
+                .map_err(|e| e.to_string())
+        }
+        .boxed()
+    }
+}
+
+async fn fetch_all_feeds<F: IcsFeedFetcher + Sync>(
+    fetcher: &F,
+    entries: &[IcsCalendarEntry],
+) -> Vec<CalendarEventItem> {
+    stream::iter(entries.iter().cloned())
+        .map(|entry| fetch_and_parse_feed(fetcher, entry).boxed())
+        .buffer_unordered(10) // Parallelism limit: 10 concurrent requests
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+async fn fetch_and_parse_feed<F: IcsFeedFetcher + Sync>(
+    client: &F,
+    entry: IcsCalendarEntry,
 ) -> Vec<CalendarEventItem> {
     let url = entry.url.replace("webcal://", "https://");
 
-    match client.get(&url).send().await {
-        Ok(resp) => match resp.text().await {
-            Ok(body) => {
-                let events = parse_ics_to_events(&body, &entry.name);
-                debug!(
-                    "ics_calendar: fetched {} events from '{}'",
-                    events.len(),
-                    entry.name
-                );
-                events
-            }
-            Err(e) => {
-                warn!(
-                    "ics_calendar: failed to read body from '{}': {}",
-                    entry.name, e
-                );
-                Vec::new()
-            }
-        },
+    match client.fetch(&url).await {
+        Ok(body) => {
+            let events = parse_ics_to_events(&body, &entry.name);
+            debug!(
+                "ics_calendar: fetched {} events from '{}'",
+                events.len(),
+                entry.name
+            );
+            events
+        }
         Err(e) => {
             warn!("ics_calendar: failed to fetch '{}': {}", entry.name, e);
             Vec::new()
@@ -316,11 +342,7 @@ pub async fn start_ics_calendar_poller(app: AppHandle) {
                 .collect();
 
             if !enabled_entries.is_empty() {
-                let mut all_events = Vec::new();
-                for entry in &enabled_entries {
-                    let events = fetch_and_parse_feed(&client, entry).await;
-                    all_events.extend(events);
-                }
+                let all_events = fetch_all_feeds(&client, &enabled_entries).await;
 
                 if !all_events.is_empty() {
                     if let Err(e) = screenpipe_events::send_event("calendar_events", all_events) {
@@ -383,12 +405,7 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     }
 
     let client = reqwest::Client::new();
-    let mut all_events = Vec::new();
-
-    for entry in &enabled {
-        let events = fetch_and_parse_feed(&client, entry).await;
-        all_events.extend(events);
-    }
+    let mut all_events = fetch_all_feeds(&client, &enabled).await;
 
     // Filter to next 8 hours only
     let now = Utc::now();
@@ -408,4 +425,49 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     all_events.sort_by(|a, b| a.start.cmp(&b.start));
 
     Ok(all_events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    struct MockFetcher {
+        delay: Duration,
+    }
+
+    impl IcsFeedFetcher for MockFetcher {
+        fn fetch<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, Result<String, String>> {
+            async move {
+                tokio::time::sleep(self.delay).await;
+                Ok("BEGIN:VCALENDAR\nEND:VCALENDAR".to_string())
+            }
+            .boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parallel_fetching() {
+        let entries = vec![
+            IcsCalendarEntry { name: "1".into(), url: "http://example.com/1".into(), enabled: true },
+            IcsCalendarEntry { name: "2".into(), url: "http://example.com/2".into(), enabled: true },
+            IcsCalendarEntry { name: "3".into(), url: "http://example.com/3".into(), enabled: true },
+            IcsCalendarEntry { name: "4".into(), url: "http://example.com/4".into(), enabled: true },
+            IcsCalendarEntry { name: "5".into(), url: "http://example.com/5".into(), enabled: true },
+        ];
+
+        let delay = Duration::from_millis(100);
+        let fetcher = MockFetcher { delay };
+
+        let start = Instant::now();
+        let _ = fetch_all_feeds(&fetcher, &entries).await;
+        let elapsed = start.elapsed();
+
+        // If sequential: 5 * 100ms = 500ms.
+        // If parallel: ~100ms.
+        // We assert it takes less than 300ms to allow for overhead, but definitely less than 500ms.
+        println!("Elapsed: {:?}", elapsed);
+        assert!(elapsed < Duration::from_millis(300), "Fetching took {:?}, expected parallel execution (< 300ms)", elapsed);
+    }
 }
