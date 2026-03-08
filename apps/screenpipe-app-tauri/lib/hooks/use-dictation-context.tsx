@@ -117,9 +117,32 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       wsRef.current = ws;
 
       let startedReceived = false;
+      let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+
+      // Timeout if WebSocket doesn't connect within 5 seconds
+      connectionTimeout = setTimeout(() => {
+        if (!startedReceived) {
+          console.error("[dictation-context] WebSocket connection timeout");
+          notifySubscribers({ type: "error", error: "Dictation failed to start - connection timeout" });
+          // Send stop to ensure backend is not in a started state
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "stop" }));
+          }
+          cleanup();
+          setState("idle");
+          notifySubscribers({ type: "stateChange", state: "idle" });
+          import("@tauri-apps/api/event").then(({ emit }) => {
+            emit("dictation-state-changed", { state: "idle" });
+            emit("dictation-error", { error: "Dictation failed to start - connection timeout" });
+          });
+        }
+      }, 5000);
 
       ws.onopen = () => {
         console.log("[dictation-context] WebSocket connected, sending start command");
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+        }
 
         // Send start command with the configured dictation device
         const device = settingsRef.current.dictationDevice || "";
@@ -149,6 +172,7 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
             notifySubscribers({ type: "stateChange", state: "idle" });
             import("@tauri-apps/api/event").then(({ emit }) => {
               emit("dictation-state-changed", { state: "idle" });
+              emit("dictation-error", { error: "Dictation failed to start" });
             });
           }
         }, pollInterval);
@@ -176,6 +200,10 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
           if (data.error) {
             console.error("[dictation-context] Server error:", data.error);
             notifySubscribers({ type: "error", error: data.error });
+            // Emit error for dictation window
+            import("@tauri-apps/api/event").then(({ emit }) => {
+              emit("dictation-error", { error: data.error });
+            });
           }
 
           if (data.type === "stopped") {
@@ -188,14 +216,25 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 
       ws.onerror = () => {
         console.error("[dictation-context] WebSocket error");
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+        }
         notifySubscribers({ type: "error", error: "Dictation connection error — is screenpipe running?" });
         cleanup();
         setState("idle");
         notifySubscribers({ type: "stateChange", state: "idle" });
+        // Emit error for dictation window
+        import("@tauri-apps/api/event").then(({ emit }) => {
+          emit("dictation-state-changed", { state: "idle" });
+          emit("dictation-error", { error: "Dictation connection error — is screenpipe running?" });
+        });
       };
 
       ws.onclose = () => {
         console.log("[dictation-context] WebSocket closed");
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+        }
       };
     } catch (err: any) {
       console.error("[dictation-context] Failed to connect:", err);
@@ -203,6 +242,11 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       cleanup();
       setState("idle");
       notifySubscribers({ type: "stateChange", state: "idle" });
+      // Emit error for dictation window
+      import("@tauri-apps/api/event").then(({ emit }) => {
+        emit("dictation-state-changed", { state: "idle" });
+        emit("dictation-error", { error: `Failed to start dictation: ${err?.message || err}` });
+      });
     }
   }, [state, cleanup, notifySubscribers]);
 
@@ -345,6 +389,7 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     let unlistenState: UnlistenFn | undefined;
     let unlistenTranscription: UnlistenFn | undefined;
     let unlistenStateRequest: UnlistenFn | undefined;
+    let unlistenError: UnlistenFn | undefined;
 
     const setupListener = async () => {
       // Listen for state changes
@@ -367,6 +412,12 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
         const { emit } = await import("@tauri-apps/api/event");
         emit("dictation-state-changed", { state });
       });
+
+      // Listen for errors
+      unlistenError = await listen<{ error: string }>("dictation-error", (event) => {
+        console.log("[dictation-context] Received error from main window:", event.payload.error);
+        notifySubscribers({ type: "error", error: event.payload.error });
+      });
     };
 
     setupListener();
@@ -385,6 +436,9 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       }
       if (unlistenStateRequest) {
         unlistenStateRequest();
+      }
+      if (unlistenError) {
+        unlistenError();
       }
     };
   }, [notifySubscribers, state]);
