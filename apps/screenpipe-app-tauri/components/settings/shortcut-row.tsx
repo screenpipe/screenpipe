@@ -159,16 +159,20 @@ const ShortcutRow = ({
         description: `${shortcut.replace(/_/g, " ")} enabled`,
       });
 
-      // Remove from disabled shortcuts if it exists
-      updateSettings({
+      // Remove from disabled shortcuts if it exists and update the shortcut value
+      // Use await to ensure settings are updated before we read them
+      await updateSettings({
         disabledShortcuts: settings.disabledShortcuts.filter(
           (s) => s !== shortcut
         ),
+        [shortcut]: keys,
       });
+
+      // Small delay to ensure settings are persisted
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       switch (type) {
         case "global":
-          updateSettings({ [shortcut]: keys });
           // Build updated shortcuts with the NEW value for the changed shortcut
           const updatedShortcuts = {
             showScreenpipeShortcut: shortcut === "showScreenpipeShortcut" ? keys : settings.showScreenpipeShortcut,
