@@ -253,11 +253,19 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
     }
 
     let unlisten: UnlistenFn | undefined;
+    let unlistenRequest: UnlistenFn | undefined;
 
     const setupListener = async () => {
       unlisten = await listen("shortcut-dictation", () => {
         console.log("[dictation-context] Received shortcut-dictation event, toggling");
         toggleDictation();
+      });
+
+      // Respond to state requests from dictation window
+      unlistenRequest = await listen("dictation-request-state", async () => {
+        console.log("[dictation-context] Received state request, current state:", state);
+        const { emit } = await import("@tauri-apps/api/event");
+        emit("dictation-state-changed", { state });
       });
     };
 
@@ -267,8 +275,11 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       if (unlisten) {
         unlisten();
       }
+      if (unlistenRequest) {
+        unlistenRequest();
+      }
     };
-  }, [toggleDictation]);
+  }, [toggleDictation, state]);
 
   // Listen for dictation window close to stop dictation
   useEffect(() => {
@@ -302,22 +313,37 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 
     let unlistenState: UnlistenFn | undefined;
     let unlistenTranscription: UnlistenFn | undefined;
+    let unlistenStateRequest: UnlistenFn | undefined;
 
     const setupListener = async () => {
+      // Listen for state changes
       unlistenState = await listen<{ state: DictationState }>("dictation-state-changed", (event) => {
         console.log("[dictation-context] Received state change from main window:", event.payload.state);
         setState(event.payload.state);
         notifySubscribers({ type: "stateChange", state: event.payload.state });
       });
 
+      // Listen for transcriptions
       unlistenTranscription = await listen<{ text: string }>("dictation-transcription", (event) => {
         console.log("[dictation-context] Received transcription from main window:", event.payload.text);
         setTranscribedText((prev) => (prev ? prev + " " : "") + event.payload.text);
         notifySubscribers({ type: "transcription", text: event.payload.text });
       });
+
+      // Listen for state requests (respond with current state)
+      unlistenStateRequest = await listen("dictation-request-state", async () => {
+        console.log("[dictation-context] Received state request, responding with:", state);
+        const { emit } = await import("@tauri-apps/api/event");
+        emit("dictation-state-changed", { state });
+      });
     };
 
     setupListener();
+
+    // Request current state immediately on mount
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit("dictation-request-state", {});
+    });
 
     return () => {
       if (unlistenState) {
@@ -326,8 +352,11 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
       if (unlistenTranscription) {
         unlistenTranscription();
       }
+      if (unlistenStateRequest) {
+        unlistenStateRequest();
+      }
     };
-  }, [notifySubscribers]);
+  }, [notifySubscribers, state]);
 
   // Cleanup on unmount
   useEffect(() => {
