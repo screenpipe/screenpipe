@@ -173,14 +173,16 @@ const ShortcutRow = ({
 
       switch (type) {
         case "global":
-          // Build updated shortcuts with the NEW value for the changed shortcut
+          // Build updated shortcuts - use keys for the changed shortcut, 
+          // and read from settings for others (but settings may still have old values,
+          // so we handle that in the sync call)
           const updatedShortcuts = {
-            showScreenpipeShortcut: shortcut === "showScreenpipeShortcut" ? keys : settings.showScreenpipeShortcut,
-            startRecordingShortcut: shortcut === "startRecordingShortcut" ? keys : settings.startRecordingShortcut,
-            stopRecordingShortcut: shortcut === "stopRecordingShortcut" ? keys : settings.stopRecordingShortcut,
-            startAudioShortcut: shortcut === "startAudioShortcut" ? keys : settings.startAudioShortcut,
-            stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : settings.stopAudioShortcut,
-            showChatShortcut: shortcut === "showChatShortcut" ? keys : settings.showChatShortcut,
+            showScreenpipeShortcut: shortcut === "showScreenpipeShortcut" ? keys : (settings.showScreenpipeShortcut || ""),
+            startRecordingShortcut: shortcut === "startRecordingShortcut" ? keys : (settings.startRecordingShortcut || ""),
+            stopRecordingShortcut: shortcut === "stopRecordingShortcut" ? keys : (settings.stopRecordingShortcut || ""),
+            startAudioShortcut: shortcut === "startAudioShortcut" ? keys : (settings.startAudioShortcut || ""),
+            stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : (settings.stopAudioShortcut || ""),
+            showChatShortcut: shortcut === "showChatShortcut" ? keys : (settings.showChatShortcut || ""),
             dictationShortcut: shortcut === "dictationShortcut" ? keys : (settings.dictationShortcut || ""),
           };
           await syncShortcuts(updatedShortcuts);
