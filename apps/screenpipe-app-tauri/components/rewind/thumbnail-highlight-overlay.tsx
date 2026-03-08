@@ -46,7 +46,9 @@ export const ThumbnailHighlightOverlay = memo(function ThumbnailHighlightOverlay
 				b.bounds.width * b.bounds.height
 		);
 
-		// Skip if the smallest match already covers >40% of the frame area —
+		if (matches.length === 0) return [];
+
+		// Skip if the smallest match already covers >15% of the frame area —
 		// that means we only have paragraph-level blocks, not useful highlights.
 		const smallest = matches[0];
 		if (smallest.bounds.width * smallest.bounds.height > 0.15) return [];

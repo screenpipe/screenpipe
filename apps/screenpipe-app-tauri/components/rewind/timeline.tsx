@@ -259,7 +259,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		dateChangesRef,
 	});
 
-	const { zoomLevel, targetZoom, setTargetZoom } = useScrollZoom({
+	const { zoomLevel, targetZoom, setTargetZoom, onContainerWheel } = useScrollZoom({
 		containerRef,
 		frames,
 		currentIndex,
@@ -273,6 +273,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		findNextDevice,
 		selectedDeviceId,
 		allDeviceIds,
+		inSearchReviewMode,
+		searchResultIndex,
+		searchResultsCount: searchResults.length,
+		navigateToSearchResultRef,
+		showSearchModal,
 	});
 
 	// Track if user is at "live edge" (viewing newest frame, index 0)
@@ -865,6 +870,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			<div
 				ref={containerRef}
 				className="inset-0 flex flex-col text-foreground relative"
+				onWheel={onContainerWheel}
 				style={{
 					height: embedded ? "100%" : "100vh",
 					overscrollBehavior: "none",
@@ -875,7 +881,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				}}
 			>
 				{/* Main Image - Full Screen - Should fill entire viewport */}
-				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`}>
+				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`} onWheel={onContainerWheel}>
 					{currentFrame ? (
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
@@ -1201,7 +1207,20 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				{/* Search result navigation indicator — must be outside z-10 image container
 				    so it sits above the z-40 timeline slider and receives clicks */}
 				{inSearchReviewMode && (
-					<div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[45] flex items-center gap-3 px-4 py-2 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 text-white text-sm shadow-lg">
+					<div
+						className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[45] flex items-center gap-3 px-4 py-2 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 text-white text-sm shadow-lg"
+						onWheel={(e) => {
+							e.preventDefault();
+							e.stopPropagation();
+							// Scroll/swipe navigates between search results
+							const direction = Math.sign(e.deltaY);
+							if (direction > 0 && searchResultIndex < searchResults.length - 1) {
+								navigateToSearchResult(searchResultIndex + 1);
+							} else if (direction < 0 && searchResultIndex > 0) {
+								navigateToSearchResult(searchResultIndex - 1);
+							}
+						}}
+					>
 						<span className="text-white/60 truncate max-w-[120px]">&ldquo;{searchQuery}&rdquo;</span>
 						<button
 							className="px-1.5 hover:text-white/80 disabled:text-white/30"
@@ -1315,7 +1334,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	
 				{/* Search — inline overlay in embedded mode, standard modal otherwise */}
 				{embedded && showSearchModal ? (
-					<div className="absolute inset-0 z-50 flex flex-col">
+					<div className="absolute inset-0 z-50 flex flex-col" data-search-modal>
 						{/* Backdrop */}
 						<div
 							className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"

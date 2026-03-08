@@ -23,6 +23,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: release-app-${{ github.sha }}
+  cancel-in-progress: true
+
 jobs:
   check_commit:
     runs-on: ubuntu-latest

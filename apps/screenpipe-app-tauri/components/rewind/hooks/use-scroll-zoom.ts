@@ -24,6 +24,12 @@ export function useScrollZoom(opts: {
 	findNextDevice: (fromIndex: number, dir: 1 | -1) => number;
 	selectedDeviceId: string;
 	allDeviceIds: string[];
+	// Search review mode — native scroll navigates between results
+	inSearchReviewMode: boolean;
+	searchResultIndex: number;
+	searchResultsCount: number;
+	navigateToSearchResultRef: React.RefObject<(index: number) => void>;
+	showSearchModal: boolean;
 }) {
 	const {
 		containerRef,
@@ -39,6 +45,11 @@ export function useScrollZoom(opts: {
 		findNextDevice,
 		selectedDeviceId,
 		allDeviceIds,
+		inSearchReviewMode,
+		searchResultIndex,
+		searchResultsCount,
+		navigateToSearchResultRef,
+		showSearchModal,
 	} = opts;
 
 	// Zoom state — owned here so both scroll handler and TimelineSlider share it
@@ -153,27 +164,25 @@ export function useScrollZoom(opts: {
 
 	// Attach scroll/zoom handler so pinch-to-zoom and scroll-to-navigate work.
 	// Overlay mode: attach to document (wheel events go to window under cursor).
-	// Embedded mode: attach to the container element only, so the settings
-	// sidebar and other page areas still scroll normally.
+	// Embedded mode: attach to both document AND the container element to ensure
+	// events are captured in Tauri's settings WebviewWindow.
 	useEffect(() => {
 		const onWheel = (e: WheelEvent) => {
-			// Allow normal scrolling inside panels/dialogs in both overlay and embedded mode
-			const isWithinAiPanel = document
-				.querySelector(".ai-panel")
-				?.contains(e.target as Node);
-			const isWithinAudioPanel = document
-				.querySelector(".audio-transcript-panel")
-				?.contains(e.target as Node);
-			const isWithinTimelineDialog = document
-				.querySelector('[role="dialog"]')
-				?.contains(e.target as Node);
-			const isWithinSettingsDialog = document
-				.querySelector('[data-settings-dialog]')
-				?.contains(e.target as Node);
-
-			if (isWithinAiPanel || isWithinAudioPanel || isWithinTimelineDialog || isWithinSettingsDialog) {
+			// In embedded mode, only handle events within our container
+			if (embedded && containerRef.current && !containerRef.current.contains(e.target as Node)) {
 				return;
 			}
+
+			// Allow normal scrolling inside panels/dialogs
+			const target = e.target as Node;
+			const isWithinExcluded =
+				document.querySelector(".ai-panel")?.contains(target) ||
+				document.querySelector(".audio-transcript-panel")?.contains(target) ||
+				document.querySelector('[role="dialog"]')?.contains(target) ||
+				document.querySelector('[data-settings-dialog]')?.contains(target) ||
+				document.querySelector('[data-search-modal]')?.contains(target);
+
+			if (isWithinExcluded) return;
 
 			// preventDefault to block native browser zoom
 			e.preventDefault();
@@ -182,11 +191,24 @@ export function useScrollZoom(opts: {
 			handleScroll(e);
 		};
 
-		const target = embedded ? containerRef.current : document;
-		if (!target) return;
 		const handler = onWheel as EventListener;
-		target.addEventListener("wheel", handler, { passive: false });
-		return () => target.removeEventListener("wheel", handler);
+
+		// Attach to window, document, AND container to maximize event capture
+		// across different Tauri window types (NSPanel vs WebviewWindow)
+		window.addEventListener("wheel", handler, { passive: false });
+		document.addEventListener("wheel", handler, { passive: false });
+		const container = containerRef.current;
+		if (container) {
+			container.addEventListener("wheel", handler, { passive: false });
+		}
+
+		return () => {
+			window.removeEventListener("wheel", handler);
+			document.removeEventListener("wheel", handler);
+			if (container) {
+				container.removeEventListener("wheel", handler);
+			}
+		};
 	}, [handleScroll, embedded]);
 
 	// Native trackpad pinch-to-zoom via Tauri event (macOS).
@@ -208,5 +230,127 @@ export function useScrollZoom(opts: {
 		return () => { unlisten.then((f) => f()); };
 	}, [setTargetZoom]);
 
-	return { zoomLevel, targetZoom, setTargetZoom };
+	// Native scroll events via Tauri event (macOS).
+	// WKWebView in standard WebviewWindows (settings) consumes trackpad wheel
+	// events at the native level. The Rust side swizzles WKWebView.scrollWheel:
+	// and emits "native-scroll" with deltaX/deltaY/modifier keys.
+	useEffect(() => {
+		// Only use native scroll in embedded mode — overlay gets regular JS wheel events.
+		// Without this guard, scroll would be double-processed in the overlay.
+		if (!embedded) return;
+
+		const unlisten = listen<{
+			deltaX: number;
+			deltaY: number;
+			ctrlKey: boolean;
+			metaKey: boolean;
+		}>("native-scroll", (event) => {
+			const { deltaX, deltaY, ctrlKey, metaKey } = event.payload;
+
+			// Don't intercept scroll when search modal is open — SearchModal
+			// has its own native-scroll listener for scrolling results
+			if (showSearchModal) return;
+
+			pausePlayback();
+
+			// When search results exist, scroll navigates between them.
+			// If not yet in review mode (no result highlighted), start from first/last.
+			if (searchResultsCount > 0) {
+				const direction = Math.sign(deltaY);
+				if (inSearchReviewMode) {
+					if (direction > 0 && searchResultIndex < searchResultsCount - 1) {
+						navigateToSearchResultRef.current(searchResultIndex + 1);
+					} else if (direction < 0 && searchResultIndex > 0) {
+						navigateToSearchResultRef.current(searchResultIndex - 1);
+					}
+				} else {
+					// Enter review mode: scroll down → first result, scroll up → last result
+					navigateToSearchResultRef.current(direction > 0 ? 0 : searchResultsCount - 1);
+				}
+				return;
+			}
+
+			if (hasSearchHighlight) dismissSearchHighlight();
+
+			// Pinch gesture on trackpad sends ctrlKey=true
+			if (ctrlKey || metaKey) {
+				isZoomingRef.current = true;
+				if (zoomTimeoutRef.current) clearTimeout(zoomTimeoutRef.current);
+				zoomTimeoutRef.current = setTimeout(() => {
+					isZoomingRef.current = false;
+				}, 150);
+
+				const zoomDelta = deltaY * 0.008;
+				setTargetZoom((prev) =>
+					Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prev * (1 + zoomDelta))),
+				);
+				return;
+			}
+
+			if (isZoomingRef.current) return;
+
+			// Navigate frames — same logic as handleScroll but using native deltas
+			const scrollIntensity = Math.abs(deltaY);
+			const direction = Math.sign(deltaY); // native deltaY is already inverted
+
+			const zoomMultiplier = 1 / zoomLevel;
+			const indexChange =
+				direction *
+				Math.min(
+					Infinity,
+					Math.max(1, Math.ceil(
+						Math.pow(scrollIntensity / 50, 1.5) * zoomMultiplier,
+					)),
+				);
+
+			requestAnimationFrame(() => {
+				setCurrentIndex((prevIndex: number) => {
+					let newIndex: number;
+					if (matchingIndices) {
+						let pos = 0;
+						let bestDist = Infinity;
+						for (let j = 0; j < matchingIndices.length; j++) {
+							const dist = Math.abs(matchingIndices[j] - prevIndex);
+							if (dist < bestDist) { bestDist = dist; pos = j; }
+						}
+						const newPos = Math.max(0, Math.min(pos + indexChange, matchingIndices.length - 1));
+						newIndex = matchingIndices[newPos];
+					} else {
+						newIndex = Math.min(
+							Math.max(0, Math.floor(prevIndex + indexChange)),
+							frames.length - 1,
+						);
+					}
+
+					if (newIndex !== prevIndex && frames[newIndex]) {
+						setCurrentFrame(frames[newIndex]);
+					}
+
+					return newIndex;
+				});
+			});
+		});
+		return () => { unlisten.then((f) => f()); };
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [embedded, frames, zoomLevel, pausePlayback, matchingIndices, hasSearchHighlight, dismissSearchHighlight, inSearchReviewMode, searchResultIndex, searchResultsCount, showSearchModal]);
+
+	// React onWheel handler for embedded mode — attached directly via JSX prop
+	// as a fallback when addEventListener on document/container doesn't receive events
+	const onContainerWheel = useMemo(() => {
+		return (e: React.WheelEvent) => {
+			const target = e.target as Node;
+			const isWithinExcluded =
+				document.querySelector(".ai-panel")?.contains(target) ||
+				document.querySelector(".audio-transcript-panel")?.contains(target) ||
+				document.querySelector('[role="dialog"]')?.contains(target) ||
+				document.querySelector('[data-settings-dialog]')?.contains(target) ||
+				document.querySelector('[data-search-modal]')?.contains(target);
+			if (isWithinExcluded) return;
+
+			e.preventDefault();
+			handleScroll(e.nativeEvent);
+		};
+	}, [embedded, handleScroll]);
+
+	return { zoomLevel, targetZoom, setTargetZoom, onContainerWheel };
 }

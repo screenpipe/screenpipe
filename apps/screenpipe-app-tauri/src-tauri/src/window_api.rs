@@ -68,6 +68,86 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
     }
 
     info!("magnify gesture handler registered");
+
+    // Register a custom ObjC class that handles scrollWheel forwarding.
+    // WKWebView in standard WebviewWindows (e.g. settings) consumes trackpad
+    // wheel events at the native level — they never reach JavaScript.
+    // We swizzle WKWebView's scrollWheel: to also emit "native-scroll" Tauri
+    // events so the JS timeline code can handle scroll navigation.
+    if Class::get("ScreenpipeScrollInterceptor").is_none() {
+        // Store original IMP so we can call it after emitting
+        static ORIGINAL_SCROLL_WHEEL: std::sync::OnceLock<
+            extern "C" fn(&Object, Sel, *mut Object),
+        > = std::sync::OnceLock::new();
+
+        extern "C" fn swizzled_scroll_wheel(this: &Object, sel: Sel, event: *mut Object) {
+            unsafe {
+                use objc::{msg_send, sel, sel_impl};
+                // Emit Tauri event with scroll data
+                if let Some(app) = MAGNIFY_APP_HANDLE.get() {
+                    let delta_y: f64 = msg_send![event, scrollingDeltaY];
+                    let delta_x: f64 = msg_send![event, scrollingDeltaX];
+                    let modifier_flags: u64 = msg_send![event, modifierFlags];
+                    let ctrl_key = (modifier_flags & (1 << 18)) != 0;
+                    let meta_key = (modifier_flags & (1 << 20)) != 0;
+
+                    let _ = app.emit(
+                        "native-scroll",
+                        serde_json::json!({
+                            "deltaX": delta_x,
+                            "deltaY": delta_y,
+                            "ctrlKey": ctrl_key,
+                            "metaKey": meta_key,
+                        }),
+                    );
+                }
+                // Call original for overlay (NSPanel) windows so JS wheel
+                // events still fire there. For regular windows (settings),
+                // skip the original to prevent double-processing — the
+                // native-scroll Tauri event handles everything.
+                use objc::class;
+                use tauri_nspanel::cocoa::base::{id as cocoa_id, nil as cocoa_nil};
+                let window: cocoa_id = msg_send![this, window];
+                if window != cocoa_nil {
+                    let is_panel: bool = msg_send![window, isKindOfClass: class!(NSPanel)];
+                    if is_panel {
+                        if let Some(original) = ORIGINAL_SCROLL_WHEEL.get() {
+                            original(this, sel, event);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Swizzle WKWebView scrollWheel:
+        unsafe {
+            use objc::{sel, sel_impl};
+            use objc::runtime::{class_getInstanceMethod, method_getImplementation, method_setImplementation};
+
+            let wk_class = Class::get("WKWebView");
+            if let Some(wk_class) = wk_class {
+                let scroll_sel = sel!(scrollWheel:);
+                let method = class_getInstanceMethod(wk_class as *const _ as *mut _, scroll_sel);
+                if !method.is_null() {
+                    let original_imp = method_getImplementation(method as *const _);
+                    let original_fn: extern "C" fn(&Object, Sel, *mut Object) =
+                        std::mem::transmute(original_imp);
+                    let _ = ORIGINAL_SCROLL_WHEEL.set(original_fn);
+
+                    let new_imp: objc::runtime::Imp = std::mem::transmute(
+                        swizzled_scroll_wheel as extern "C" fn(&Object, Sel, *mut Object),
+                    );
+                    method_setImplementation(method as *mut _, new_imp);
+                    info!("WKWebView scrollWheel: swizzled for native-scroll events");
+                }
+            }
+        }
+
+        // Register dummy class so we don't re-swizzle
+        let superclass = Class::get("NSObject").unwrap();
+        let decl = ClassDecl::new("ScreenpipeScrollInterceptor", superclass).unwrap();
+        decl.register();
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -300,6 +380,21 @@ pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa
     }
 
     if wk_view != nil {
+        // Disable native scroll on any enclosing NSScrollView wrapping the WKWebView.
+        // Without this, macOS trackpad wheel events are consumed at the AppKit level
+        // and never reach JavaScript — breaking embedded timeline scroll gestures.
+        let scroll_view: id = msg_send![wk_view, enclosingScrollView];
+        if scroll_view != nil {
+            // NSScrollElasticityNone = 1 — prevents bounce scrolling
+            let _: () = msg_send![scroll_view, setVerticalScrollElasticity: 1i64];
+            let _: () = msg_send![scroll_view, setHorizontalScrollElasticity: 1i64];
+            let _: () = msg_send![scroll_view, setHasVerticalScroller: false];
+            let _: () = msg_send![scroll_view, setHasHorizontalScroller: false];
+        }
+
+        // Attach pinch-to-zoom gesture recognizer (same as NSPanel overlay)
+        attach_magnify_gesture_to_view(wk_view);
+
         // Set first responder immediately (handles the common case)
         let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
 
@@ -1048,6 +1143,10 @@ impl ShowRewindWindow {
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
+                    // On Windows, restore from minimized state before focusing
+                    if window.is_minimized().unwrap_or(false) {
+                        window.unminimize().ok();
+                    }
                     window.set_focus().ok();
                 }
 
@@ -1754,6 +1853,20 @@ impl ShowRewindWindow {
                 #[cfg(target_os = "macos")]
                 let builder = builder.hidden_title(true);
                 let window = builder.build()?;
+
+                // Disable WKWebView's native scroll so wheel events reach JavaScript
+                // (needed for embedded timeline scroll gestures)
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(ns_win) = window.ns_window() {
+                        unsafe {
+                            make_nswindow_webview_first_responder(
+                                ns_win as tauri_nspanel::cocoa::base::id,
+                            );
+                        }
+                    }
+                }
+
                 window
             }
             ShowRewindWindow::Search { query } => {
@@ -2074,6 +2187,13 @@ impl ShowRewindWindow {
         // }
 
         if let Some(window) = id.get(app) {
+            // On Windows, minimize the Settings window instead of closing it
+            // so it stays in the taskbar and can be restored quickly.
+            #[cfg(target_os = "windows")]
+            if id.label() == RewindWindowId::Settings.label() {
+                window.minimize().ok();
+                return Ok(());
+            }
             window.close().ok();
         }
         Ok(())

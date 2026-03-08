@@ -304,7 +304,7 @@ function SettingsPageContent() {
   const isFullHeight = activeSection === "home" || activeSection === "timeline";
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={cn("bg-background", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")}>
       {/* Transparent titlebar area */}
       <div className="h-8 bg-transparent" data-tauri-drag-region></div>
 

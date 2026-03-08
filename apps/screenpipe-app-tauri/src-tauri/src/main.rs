@@ -441,35 +441,31 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             }
             #[cfg(not(target_os = "macos"))]
             {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-
-                // Debug: list all existing windows
-                for (wlabel, _) in app.webview_windows() {
-                    info!("existing window: {}", wlabel);
-                }
+                // Windows uses the Settings window (embedded timeline) as main UI.
+                // Check "settings" label directly instead of overlay labels.
+                let label = "settings";
 
                 if let Some(window) = app.get_webview_window(label) {
                     info!("found {} window, checking visibility", label);
+                    // On Windows, close() minimizes the window, but is_visible()
+                    // still returns true for minimized windows. Check is_minimized()
+                    // to correctly detect "hidden" state.
+                    let is_minimized = window.is_minimized().unwrap_or(false);
                     match window.is_visible() {
-                        Ok(true) => {
-                            info!("{} window is visible, hiding it", label);
+                        Ok(true) if !is_minimized => {
+                            info!("{} window is visible (not minimized), hiding it", label);
                             hide_main_window(app)
+                        }
+                        Ok(true) if is_minimized => {
+                            info!("{} window is minimized, restoring it", label);
+                            show_main_window(app, false)
                         }
                         Ok(false) => {
                             info!("{} window exists but not visible, showing it", label);
                             show_main_window(app, false)
                         }
-                        Err(e) => {
-                            info!(
-                                "error checking visibility: {}, showing main window anyway",
-                                e
-                            );
+                        _ => {
+                            info!("showing main window");
                             show_main_window(app, false)
                         }
                     }
@@ -601,15 +597,13 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             }
             #[cfg(not(target_os = "macos"))]
             {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
+                // Windows uses "settings" window (embedded timeline)
+                let label = "settings";
                 if let Some(window) = app.get_webview_window(label) {
-                    if !window.is_visible().unwrap_or(false) {
+                    // On Windows, minimized windows still report is_visible()=true
+                    let needs_show = !window.is_visible().unwrap_or(false)
+                        || window.is_minimized().unwrap_or(false);
+                    if needs_show {
                         show_main_window(app, false);
                     }
                 } else {

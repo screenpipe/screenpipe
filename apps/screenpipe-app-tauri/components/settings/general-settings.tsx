@@ -6,8 +6,10 @@
 import React, { useEffect, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent } from "@/components/ui/card";
-import { Rocket, RefreshCw, Undo2, Lightbulb } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare, Lightbulb } from "lucide-react";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
@@ -226,6 +228,46 @@ export default function GeneralSettings() {
           </CardContent>
         </Card>
       </div>
+
+      {/* pipe suggestions */}
+      <div className="space-y-2">
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Lightbulb className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Pipe suggestions</h3>
+                  <p className="text-xs text-muted-foreground">Get periodic notifications with automation ideas based on your data</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <select
+                  className="text-xs border rounded px-2 py-1 bg-background"
+                  value={settings?.pipeSuggestionFrequencyHours ?? 24}
+                  onChange={(e) =>
+                    handleSettingsChange({ pipeSuggestionFrequencyHours: parseInt(e.target.value, 10) })
+                  }
+                  disabled={settings?.pipeSuggestionsEnabled === false}
+                >
+                  <option value={6}>every 6h</option>
+                  <option value={12}>every 12h</option>
+                  <option value={24}>daily</option>
+                  <option value={72}>every 3 days</option>
+                  <option value={168}>weekly</option>
+                </select>
+                <Switch
+                  checked={settings?.pipeSuggestionsEnabled !== false}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ pipeSuggestionsEnabled: checked })
+                  }
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
     </div>
   );
 }

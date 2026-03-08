@@ -8,6 +8,7 @@ import { Search, X, Loader2, Clock, MessageSquare, User, ArrowLeft, Mic, Volume2
 import { useKeywordSearchStore, SearchMatch, UiEventResult } from "@/lib/hooks/use-keyword-search-store";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
+import { listen } from "@tauri-apps/api/event";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -298,6 +299,65 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const { inputRef, inputElRef, focusInput } = useSearchFocus(isOpen);
   const gridRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
+
+  // Programmatically scroll via native-scroll events (macOS).
+  // WKWebView in settings WebviewWindow doesn't dispatch JS wheel events,
+  // so CSS overflow can't scroll from trackpad. The Rust side swizzles
+  // WKWebView.scrollWheel: and emits "native-scroll" Tauri events instead.
+  // We find the scrollable element under the cursor and apply the delta.
+  useEffect(() => {
+    if (!isOpen || !embedded) return;
+
+    // Track cursor position for hit-testing
+    let mouseX = 0, mouseY = 0;
+    const onMove = (e: MouseEvent) => { mouseX = e.clientX; mouseY = e.clientY; };
+    document.addEventListener("mousemove", onMove);
+
+    const unlisten = listen<{ deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean }>(
+      "native-scroll",
+      (event) => {
+        const { deltaX, deltaY } = event.payload;
+        // Find element under cursor and walk up to nearest scrollable container
+        const target = document.elementFromPoint(mouseX, mouseY);
+        if (!target) return;
+
+        let el: HTMLElement | null = target as HTMLElement;
+        let scrolledY = false;
+        let scrolledX = false;
+
+        while (el) {
+          const style = window.getComputedStyle(el);
+          const overflowY = style.overflowY;
+          const overflowX = style.overflowX;
+
+          // Vertical scroll
+          if (!scrolledY && Math.abs(deltaY) > 0 && (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight) {
+            el.scrollTop -= deltaY;
+            scrolledY = true;
+          }
+
+          // Horizontal scroll (trackpad horizontal swipe or shift+scroll)
+          if (!scrolledX && Math.abs(deltaX) > 0 && (overflowX === "auto" || overflowX === "scroll") && el.scrollWidth > el.clientWidth) {
+            el.scrollLeft -= deltaX;
+            scrolledX = true;
+          }
+
+          if (scrolledY && scrolledX) break;
+          el = el.parentElement;
+        }
+
+        // Fallback: vertical scroll the grid if nothing else caught it
+        if (!scrolledY && Math.abs(deltaY) > 0 && gridRef.current) {
+          gridRef.current.scrollTop -= deltaY;
+        }
+      },
+    );
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      unlisten.then((f) => f());
+    };
+  }, [isOpen, embedded]);
+
   // Bump to force search effect re-run (fixes stale debouncedQuery after modal reopen)
   const [searchEpoch, setSearchEpoch] = useState(0);
 
@@ -874,11 +934,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setIsLoadingMore(true);
     const newOffset = ocrOffset + OCR_PAGE_SIZE;
     setOcrOffset(newOffset);
-    searchKeywords(debouncedQuery, {
+    const opts: { limit: number; offset: number; start_time?: Date; end_time?: Date } = {
       limit: OCR_PAGE_SIZE,
       offset: newOffset,
-    }).finally(() => setIsLoadingMore(false));
-  }, [isLoadingMore, hasMoreOcr, debouncedQuery, ocrOffset, searchKeywords]);
+    };
+    if (timeFilter) {
+      opts.start_time = new Date(timeFilter + "T00:00:00");
+      opts.end_time = new Date(timeFilter + "T23:59:59.999");
+    }
+    searchKeywords(debouncedQuery, opts).finally(() => setIsLoadingMore(false));
+  }, [isLoadingMore, hasMoreOcr, debouncedQuery, ocrOffset, searchKeywords, timeFilter]);
 
   // Track if we got fewer results than page size (= no more pages)
   useEffect(() => {
@@ -1500,7 +1565,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {timeRanges.length > 1 && (
                 <div className="flex gap-1.5 mb-3 overflow-x-auto scrollbar-hide pb-0.5">
                   <button
-                    onClick={() => { setTimeFilter(null); setSelectedIndex(0); }}
+                    onClick={() => {
+                      setTimeFilter(null);
+                      setSelectedIndex(0);
+                      setOcrOffset(0);
+                      setHasMoreOcr(true);
+                      searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0 });
+                    }}
                     className={cn(
                       "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
                       !timeFilter
@@ -1514,7 +1585,21 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   {timeRanges.map((range) => (
                     <button
                       key={range.dateKey}
-                      onClick={() => { setTimeFilter(timeFilter === range.dateKey ? null : range.dateKey); setSelectedIndex(0); }}
+                      onClick={() => {
+                        const newFilter = timeFilter === range.dateKey ? null : range.dateKey;
+                        setTimeFilter(newFilter);
+                        setSelectedIndex(0);
+                        // Re-query backend with date range for proper pagination
+                        setOcrOffset(0);
+                        setHasMoreOcr(true);
+                        if (newFilter) {
+                          const start = new Date(newFilter + "T00:00:00");
+                          const end = new Date(newFilter + "T23:59:59.999");
+                          searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0, start_time: start, end_time: end });
+                        } else {
+                          searchKeywords(debouncedQuery, { limit: OCR_PAGE_SIZE, offset: 0 });
+                        }
+                      }}
                       className={cn(
                         "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1 whitespace-nowrap shrink-0",
                         timeFilter === range.dateKey
@@ -1597,7 +1682,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               </div>
 
               {/* Load more indicator */}
-              {(isLoadingMore || (hasMoreOcr && searchResults.length >= OCR_PAGE_SIZE)) && (
+              {(isLoadingMore || (hasMoreOcr && filteredResults.length >= OCR_PAGE_SIZE)) && (
                 <div className="flex justify-center py-4">
                   {isLoadingMore ? (
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />

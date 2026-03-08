@@ -209,7 +209,7 @@
     background-color: hsl(var(--background));
     transition: background-color 0ms; /* Instant transition to prevent flash */
   }
-  
+
   body {
     @apply bg-background text-foreground !pointer-events-auto !overscroll-none;
   }
