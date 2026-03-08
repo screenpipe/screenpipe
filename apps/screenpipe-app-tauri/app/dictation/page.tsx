@@ -4,6 +4,8 @@
 
 "use client";
 
+export const dynamic = 'force-dynamic';
+
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Copy, Check, X, Headset, Loader2 } from "lucide-react";
 import { useDictation } from "@/lib/hooks/use-dictation";

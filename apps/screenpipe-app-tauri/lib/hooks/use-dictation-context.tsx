@@ -471,6 +471,18 @@ export function DictationProvider({ children }: { children: React.ReactNode }) {
 export function useDictationContext() {
   const context = useContext(DictationContext);
   if (!context) {
+    // During SSR/build, return a default value instead of throwing
+    if (typeof window === 'undefined') {
+      return {
+        state: 'idle' as DictationState,
+        transcribedText: '',
+        isRecording: false,
+        startDictation: async () => {},
+        stopDictation: async () => {},
+        toggleDictation: () => {},
+        subscribe: () => () => {},
+      };
+    }
     throw new Error("useDictationContext must be used within a DictationProvider");
   }
   return context;
