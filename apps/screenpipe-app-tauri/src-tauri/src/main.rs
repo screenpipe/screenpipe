@@ -325,6 +325,7 @@ impl ShortcutConfig {
             "stop_audio" => "stopAudioShortcut",
             "show_chat" => "showChatShortcut",
             "search" => "searchShortcut",
+            "dictation" => "dictationShortcut",
             _ => shortcut_type,
         };
         self.disabled.contains(&shortcut_type.to_string())
@@ -372,7 +373,7 @@ async fn update_global_shortcuts(
     stop_shortcut: String,
     start_audio_shortcut: String,
     stop_audio_shortcut: String,
-    _profile_shortcuts: HashMap<String, String>, // Keep for API compatibility but ignore
+    profile_shortcuts: HashMap<String, String>,
 ) -> Result<(), String> {
     let store_config = ShortcutConfig::from_store(&app).await?;
     let config = ShortcutConfig {
@@ -383,7 +384,7 @@ async fn update_global_shortcuts(
         stop_audio: stop_audio_shortcut,
         show_chat: store_config.show_chat,
         search: store_config.search,
-        dictation: store_config.dictation,
+        dictation: profile_shortcuts.get("dictationShortcut").cloned().unwrap_or(store_config.dictation),
         disabled: store_config.disabled,
     };
     apply_shortcuts(&app, &config).await
