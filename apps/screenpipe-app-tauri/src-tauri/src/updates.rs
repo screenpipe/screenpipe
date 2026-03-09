@@ -120,6 +120,26 @@ pub fn is_enterprise_build(_app: &tauri::AppHandle) -> bool {
     cfg!(feature = "enterprise-build")
 }
 
+/// Check if user is macOS admin
+pub fn is_macos_admin() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static IS_ADMIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *IS_ADMIN.get_or_init(|| {
+            if let Ok(output) = std::process::Command::new("id").arg("-Gn").output() {
+                if let Ok(groups) = String::from_utf8(output.stdout) {
+                    return groups.split_whitespace().any(|g| g == "admin");
+                }
+            }
+            false
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 pub struct UpdatesManager {
     interval: Duration,
     update_available: Arc<Mutex<bool>>,
@@ -247,6 +267,43 @@ impl UpdatesManager {
         }
         if let Some(update) = check_result? {
             *self.update_available.lock().await = true;
+
+            if !is_macos_admin() {
+                warn!("skipping auto-update: user is not a macOS admin");
+                let _ = self.app.emit(
+                    "update-needs-admin",
+                    serde_json::json!({
+                        "version": update.version
+                    }),
+                );
+
+                let app_notif = self.app.clone();
+                let version_str = update.version.clone();
+                std::thread::spawn(move || {
+                    let _ = app_notif
+                        .notification()
+                        .builder()
+                        .title("screenpipe update available")
+                        .body(format!("update v{} available — ask your admin to install it", version_str))
+                        .show();
+                });
+
+                if let Some(ref item) = self.update_menu_item {
+                    let _ = item.set_enabled(false);
+                    let _ = item.set_text("Ask admin to update");
+                }
+
+                if show_dialog {
+                    self.app
+                        .dialog()
+                        .message(format!("v{} is available, but you need administrator privileges to install it.\n\nplease ask your admin to update screenpipe.", update.version))
+                        .title("update available")
+                        .buttons(MessageDialogButtons::Ok)
+                        .show(|_| {});
+                }
+
+                return Result::Ok(true);
+            }
 
             // Emit "update-downloading" immediately so user sees feedback
             let download_info = serde_json::json!({
@@ -632,4 +689,24 @@ pub fn start_update_check(
     });
 
     Ok(updates_manager)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_macos_admin() {
+        // Just verify it doesn't panic and returns a boolean
+        let is_admin = is_macos_admin();
+        #[cfg(target_os = "macos")]
+        {
+            // The test runner might or might not be admin
+            println!("macOS admin status: {}", is_admin);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(is_admin, "Should return true on non-macOS platforms");
+        }
+    }
 }
