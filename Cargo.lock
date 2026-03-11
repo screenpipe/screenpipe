@@ -6477,7 +6477,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6534,7 +6534,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6560,7 +6560,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6603,7 +6603,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6628,7 +6628,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6695,7 +6695,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6713,7 +6713,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -6753,7 +6753,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.182"
+version = "0.3.183"
 dependencies = [
  "argon2",
  "chacha20poly1305",

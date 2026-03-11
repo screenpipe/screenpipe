@@ -2536,3 +2536,5 @@ async fn main() {
         }
     });
 }
+#[cfg(test)]
+mod updates_test;
