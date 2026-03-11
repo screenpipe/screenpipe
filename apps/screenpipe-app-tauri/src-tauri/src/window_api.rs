@@ -1447,18 +1447,19 @@ impl ShowRewindWindow {
                                         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                                             return;
                                         }
-                                        // Use conditional restore: if focus moved to another
-                                        // screenpipe window (Settings, Chat), just clear the
-                                        // saved app. Only activate the previous external app
-                                        // if our app is no longer active.
-                                        #[cfg(target_os = "macos")]
-                                        restore_frontmost_app_if_external_with_app(Some(&app));
-                                        // order_out removes the invisible panel from
-                                        // the screen so it can't receive stray clicks.
+                                        // Dispatch all AppKit work to main thread — this
+                                        // closure runs on a spawned background thread.
                                         #[cfg(target_os = "macos")]
                                         {
                                             let app2 = app.clone();
                                             let _ = app.run_on_main_thread(move || {
+                                                // Conditional restore: if focus moved to another
+                                                // screenpipe window (Settings, Chat), just clear.
+                                                // Only activate previous external app if our app
+                                                // is no longer active.
+                                                restore_frontmost_app_if_external_with_app(Some(&app2));
+                                                // order_out removes the invisible panel from
+                                                // the screen so it can't receive stray clicks.
                                                 if let Ok(panel) = app2.get_webview_panel("main-window") {
                                                     panel.order_out(None);
                                                 }
@@ -1788,14 +1789,8 @@ impl ShowRewindWindow {
                                         return;
                                     }
                                     info!("Main window hiding after debounce");
-                                    // Use conditional restore: if focus moved to another
-                                    // screenpipe window (Settings, Chat), just clear the
-                                    // saved app. Only activate the previous external app
-                                    // if our app is no longer active.
-                                    #[cfg(target_os = "macos")]
-                                    restore_frontmost_app_if_external_with_app(Some(&app));
-                                    // order_out removes the invisible panel so it
-                                    // can't receive stray clicks at alpha=0.
+                                    // Dispatch all AppKit work to main thread — this
+                                    // closure runs on a spawned background thread.
                                     #[cfg(target_os = "macos")]
                                     {
                                         let app2 = app.clone();
@@ -1804,6 +1799,12 @@ impl ShowRewindWindow {
                                             main_label_for_mode(&mode).to_string()
                                         };
                                         let _ = app.run_on_main_thread(move || {
+                                            // Conditional restore: if focus moved to another
+                                            // screenpipe window, just clear. Only activate
+                                            // previous external app if ours is inactive.
+                                            restore_frontmost_app_if_external_with_app(Some(&app2));
+                                            // order_out removes the invisible panel so it
+                                            // can't receive stray clicks at alpha=0.
                                             if let Ok(panel) = app2.get_webview_panel(&lbl) {
                                                 panel.order_out(None);
                                             }

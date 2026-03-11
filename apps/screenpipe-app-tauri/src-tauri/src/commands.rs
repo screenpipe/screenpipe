@@ -546,11 +546,15 @@ pub async fn search_navigate_to_timeline(
     // Show the Main timeline
     ShowRewindWindow::Main.show(&app_handle).map_err(|e| e.to_string())?;
 
-    // Small delay for the Main webview to restore focus and process events
+    // Emit the navigation event multiple times — the Main webview may take
+    // varying time to restore from order_out and mount the event listener.
+    // The JS side deduplicates via a seekingTimestamp ref.
     let app = app_handle.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        let _ = app.emit("search-navigate-to-timestamp", serde_json::json!({ "timestamp": timestamp }));
+        for i in 0..5 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(if i == 0 { 200 } else { 200 })).await;
+            let _ = app.emit("search-navigate-to-timestamp", serde_json::json!({ "timestamp": timestamp }));
+        }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         let _ = ShowRewindWindow::Search { query: None }.close(&app);
     });

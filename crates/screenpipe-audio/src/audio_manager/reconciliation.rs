@@ -497,6 +497,23 @@ async fn retry_pending_transcriptions(
             }
         };
 
+        // Check if the parent audio_chunks row still exists. If it was deleted
+        // (e.g. by archive cleanup), the INSERT will always fail with a FK
+        // constraint violation — remove the orphaned pending file instead of
+        // retrying forever.
+        let chunk_exists = db.audio_chunk_exists(pending.audio_chunk_id)
+            .await
+            .unwrap_or(false);
+
+        if !chunk_exists {
+            info!(
+                "reconciliation: dropping orphaned pending file for deleted chunk {}",
+                pending.audio_chunk_id
+            );
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+
         // We don't have secondary file paths from the pending file, but they
         // may already have been cleaned up. Pass empty slice — the DB deletion
         // of secondary chunk IDs still happens.

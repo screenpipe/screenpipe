@@ -128,6 +128,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// Pending navigation target from search - will jump when frames load
 	const pendingNavigationRef = useRef<Date | null>(null);
 
+	// Timestamp (ms) of last completed search navigation — used to prevent
+	// the window-focused debounce from resetting position after navigation
+	const lastSearchNavRef = useRef<number>(0);
+
 	// When true, CurrentFrameTimeline uses HTTP JPEG fallback instead of video seek
 	// for the first frame after a cross-date search navigation (avoids ~5s video load)
 	const [searchNavFrame, setSearchNavFrame] = useState(false);
@@ -331,7 +335,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					// Don't reset if a search/calendar navigation is in progress —
 					// onWindowFocus resets currentDate to today, which cancels the
 					// cross-date navigation and discards the pending fetch.
-					if (isNavigatingRef.current || pendingNavigationRef.current) {
+					// Also skip if a search navigation completed recently (within 2s) —
+					// pendingNavigationRef and seekingTimestamp get cleared on completion
+					// but the focus debounce (500ms) may still be pending.
+					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
+					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
 						return;
 					}
 
@@ -359,7 +367,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback]);
+	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
@@ -898,9 +906,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// (order_out) so frames could be stale/empty. navigateDirectToDate does
 	// a fresh fetch and uses pendingNavigationRef to jump once frames arrive.
 	useEffect(() => {
+		let lastHandledTs = "";
 		const unlisten = listen<{ timestamp: string }>("search-navigate-to-timestamp", (event) => {
 			const timestamp = event.payload.timestamp;
+			// Deduplicate — Rust emits multiple times to survive mount race
+			if (timestamp === lastHandledTs) return;
+			lastHandledTs = timestamp;
 			const targetDate = new Date(timestamp);
+			lastSearchNavRef.current = Date.now();
 			setSeekingTimestamp(timestamp);
 			setSearchNavFrame(true);
 			navigateDirectToDate(targetDate);

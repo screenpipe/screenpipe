@@ -76,11 +76,16 @@ pub fn setup_space_listener(app: AppHandle) {
                         return;
                     }
                     debug!("macOS Space changed, hiding overlay");
-                    // Do NOT restore_frontmost_app here — the user intentionally
-                    // switched Spaces, so re-activating the previous app would
-                    // pull them back. Just clear the saved app and hide.
-                    crate::window_api::clear_frontmost_app();
-                    hide_main_window(&app_for_block);
+                    // Dispatch to main thread — this notification callback can
+                    // fire on any thread, and both clear_frontmost_app (ObjC
+                    // release) and hide_main_window (NSPanel order_out) require
+                    // the main thread to avoid autorelease pool corruption.
+                    let app = app_for_block.clone();
+                    let app_inner = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        crate::window_api::clear_frontmost_app();
+                        hide_main_window(&app_inner);
+                    });
                 });
                 let block = block.copy();
 

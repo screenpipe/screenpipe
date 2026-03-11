@@ -490,6 +490,17 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Check whether an audio chunk row exists.
+    pub async fn audio_chunk_exists(&self, chunk_id: i64) -> Result<bool, sqlx::Error> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM audio_chunks WHERE id = ?1)",
+        )
+        .bind(chunk_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists)
+    }
+
     /// Delete multiple audio chunks and their transcriptions in a single transaction.
     /// Much cheaper than N individual delete_audio_chunk calls under write contention.
     pub async fn delete_audio_chunks_batch(&self, chunk_ids: &[i64]) -> Result<(), sqlx::Error> {
