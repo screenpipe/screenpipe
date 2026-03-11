@@ -22,18 +22,6 @@ mod tests {
         db
     }
 
-    /// Helper: manually populate the accessibility FTS index (no triggers in test).
-    async fn index_accessibility_fts(db: &DatabaseManager) {
-        sqlx::query(
-            "INSERT OR IGNORE INTO accessibility_fts(rowid, text_content, app_name, window_name) \
-             SELECT id, text_content, COALESCE(app_name, ''), COALESCE(window_name, '') \
-             FROM accessibility WHERE text_content IS NOT NULL AND text_content != ''",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
-    }
-
     // =========================================================================
     // search_ocr — app_name with dots
     // =========================================================================
@@ -348,11 +336,24 @@ mod tests {
     async fn test_search_accessibility_app_name_with_dots() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("zoom.us", "Meeting Room", "sharing screen", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        // Insert as a frame with full_text (search_accessibility now queries frames_fts)
+        db.insert_snapshot_frame(
+            "test_device",
+            Utc::now(),
+            "/tmp/snap.jpg",
+            Some("zoom.us"),
+            Some("Meeting Room"),
+            None,
+            true,
+            None,
+            Some("sharing screen"),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         let results = db
             .search_accessibility("", Some("zoom.us"), None, None, None, 100, 0)
@@ -372,11 +373,24 @@ mod tests {
     async fn test_search_accessibility_window_name_with_dots() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("Chrome", "docs.google.com", "document text", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        // Insert as a frame with full_text (search_accessibility now queries frames_fts)
+        db.insert_snapshot_frame(
+            "test_device",
+            Utc::now(),
+            "/tmp/snap.jpg",
+            Some("Chrome"),
+            Some("docs.google.com"),
+            None,
+            true,
+            None,
+            Some("document text"),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         let results = db
             .search_accessibility("", None, Some("docs.google.com"), None, None, 100, 0)
@@ -424,11 +438,24 @@ mod tests {
             .await
             .unwrap();
 
-        // Insert accessibility data with dotted app_name
-        db.insert_accessibility_text("zoom.us", "Meeting Room", "sharing screen", None)
-            .await
-            .unwrap();
-        index_accessibility_fts(&db).await;
+        // Insert a second frame with full_text (accessibility path now uses frames_fts)
+        db.insert_snapshot_frame(
+            "test_device",
+            Utc::now(),
+            "/tmp/snap2.jpg",
+            Some("zoom.us"),
+            Some("Meeting Room"),
+            None,
+            true,
+            None,
+            Some("sharing screen"),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         // ContentType::All — exercises ALL search sub-functions
         let results = db

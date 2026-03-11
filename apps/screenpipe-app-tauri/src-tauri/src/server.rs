@@ -49,6 +49,16 @@ pub struct ServerState {
 struct NotificationPayload {
     title: String,
     body: String,
+    /// unique id (auto-generated if omitted)
+    id: Option<String>,
+    /// notification type/category
+    #[serde(rename = "type")]
+    notification_type: Option<String>,
+    /// auto-dismiss after N ms (default 20000)
+    #[serde(rename = "autoDismissMs")]
+    auto_dismiss_ms: Option<u64>,
+    /// timeout in ms (alias for autoDismissMs)
+    timeout: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -375,19 +385,38 @@ async fn send_notification(
     Json(payload): Json<NotificationPayload>,
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!("Received notification request: {:?}", payload);
-    match state.app_handle.emit("notification-requested", &payload) {
-        Ok(e) => {
-            info!("Notification sent: {:?}", e);
+
+    // Build the panel payload matching what the frontend expects
+    let panel_id = payload.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let dismiss_ms = payload.auto_dismiss_ms
+        .or(payload.timeout)
+        .unwrap_or(20000);
+
+    let panel_payload = serde_json::json!({
+        "id": panel_id,
+        "type": payload.notification_type.unwrap_or_else(|| "pipe".to_string()),
+        "title": payload.title,
+        "body": payload.body,
+        "actions": [],
+        "autoDismissMs": dismiss_ms,
+    });
+
+    let panel_json = panel_payload.to_string();
+
+    // Use the show_notification_panel command directly
+    match crate::commands::show_notification_panel(state.app_handle.clone(), panel_json).await {
+        Ok(()) => {
+            info!("Notification panel shown");
             Ok(Json(ApiResponse {
                 success: true,
                 message: "Notification sent successfully".to_string(),
             }))
         }
         Err(e) => {
-            error!("Failed to send notification: {}", e);
+            error!("Failed to show notification panel: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to send notification: {}", e),
+                format!("Failed to show notification: {}", e),
             ))
         }
     }
@@ -730,20 +759,19 @@ pub fn spawn_server(app_handle: tauri::AppHandle, port: u16) -> mpsc::Sender<()>
 
 /*
 
+# Simple notification (just title + body)
 curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
-  -d '{"title": "Test Notification", "body": "This is a test notification body"}'
+  -d '{"title": "Test", "body": "This is a test notification"}'
 
-  curl -X POST http://localhost:11435/notify \
+# Markdown body
+curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
-  -d '{"title": "Special Characters: !@#$%^&*()", "body": "Testing with émojis 😀🎉"}'
+  -d '{"title": "Meeting Summary", "body": "**Q3 Planning**\n- Budget approved\n- Launch date: *Oct 15*\n- [Notes](https://example.com)"}'
 
-  curl -X POST http://localhost:11435/notify \
+# Custom auto-dismiss (5 seconds)
+curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
-  -d '{"title": "Long Notification", "body": "This is a much longer notification body to test how the system handles larger amounts of text. It might wrap or be truncated depending on the system'\''s limitations."}'
-
-  curl -X POST http://localhost:11435/notify \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Malformed JSON", "body": "This JSON is malformed}'
+  -d '{"title": "Saved", "body": "Note saved to Obsidian", "timeout": 5000}'
 
 */

@@ -33,6 +33,7 @@ export default function RootLayout({
 }) {
   const pathname = usePathname();
   const isOverlay = pathname === "/shortcut-reminder";
+  const isSearch = pathname === "/search";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -182,7 +183,7 @@ export default function RootLayout({
   }, []);
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className={isSearch ? "bg-transparent" : ""}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -203,13 +204,15 @@ export default function RootLayout({
         />
       </head>
       <Providers>
-        <body className={`${inter.className} scrollbar-hide`}>
+        <body className={`${inter.className} scrollbar-hide ${isSearch ? "bg-transparent" : ""}`}>
           <DictationProvider>
-            {!isOverlay && <DeeplinkHandler />}
-            {!isOverlay && <ShortcutTracker />}
-            {!isOverlay && <PipeInstallDialog />}
-            {children}
-            {!isOverlay && <Toaster />}
+          {!isOverlay && <DeeplinkHandler />}
+          {!isOverlay && <ShortcutTracker />}
+          {!isOverlay && <PipeInstallDialog />}
+          {/* TODO: vault lock UI disabled — CLI-only for now */}
+          {/* {!isOverlay && <VaultLockDialog />} */}
+          {children}
+          {!isOverlay && <Toaster />}
           </DictationProvider>
         </body>
       </Providers>

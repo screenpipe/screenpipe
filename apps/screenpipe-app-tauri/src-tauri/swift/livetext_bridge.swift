@@ -63,9 +63,9 @@ private class LiveTextManager {
     /// VisionKit from computing hit regions against a zero/stale frame.
     var pendingAnalysis: ImageAnalysis?
     var hostContentView: NSView?
-    /// Transparent guard view that sits above the overlay in the nav bar
-    /// region, preventing VisionKit from intercepting clicks on controls.
-    var guardView: ClickGuardView?
+    /// Named guard views that sit above the overlay, preventing VisionKit
+    /// from intercepting clicks on UI controls (nav bar, filters, scrubber, etc.).
+    var guardViews: [String: ClickGuardView] = [:]
 
     /// Reusable URLSession for fetching frame images (avoid per-call session alloc).
     lazy var urlSession: URLSession = {
@@ -120,10 +120,10 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
         // Clean up any existing overlay from a previous init call
         // (component remounts, HMR, etc. can trigger multiple inits)
         MainActor.assumeIsolated {
-            mgr.guardView?.removeFromSuperview()
+            for (_, view) in mgr.guardViews { view.removeFromSuperview() }
             mgr.overlayView?.removeFromSuperview()
         }
-        mgr.guardView = nil
+        mgr.guardViews.removeAll()
         mgr.overlayView = nil
         mgr.currentAnalysis = nil
         mgr.hostContentView = contentView
@@ -398,10 +398,10 @@ public func ltDestroy() -> Int32 {
     if #available(macOS 13.0, *) {
         let mgr = LiveTextManager.shared
         mainThreadPreservingFocus(mgr.hostContentView) {
-            mgr.guardView?.removeFromSuperview()
+            for (_, view) in mgr.guardViews { view.removeFromSuperview() }
             mgr.overlayView?.removeFromSuperview()
         }
-        mgr.guardView = nil
+        mgr.guardViews.removeAll()
         mgr.overlayView = nil
         mgr.analyzer = nil
         mgr.currentAnalysis = nil
@@ -417,13 +417,16 @@ public func ltDestroy() -> Int32 {
 // MARK: - Click Guard (nav bar protection)
 
 /// Place a transparent guard view above the Live Text overlay so VisionKit
-/// hit regions cannot intercept clicks in the navigation bar area.
+/// hit regions cannot intercept clicks on UI controls.
+/// Each guard is identified by a string key (e.g. "navbar", "filters", "scrubber").
 /// The guard returns nil from hitTest, letting clicks pass through to the
 /// WKWebView (which sits below the overlay in the view hierarchy).
 @_cdecl("lt_set_guard_rect")
-public func ltSetGuardRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
+public func ltSetGuardRect(_ key: UnsafePointer<CChar>?, _ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
+        guard let key = key else { return -2 }
+        let keyStr = String(cString: key)
         let mgr = LiveTextManager.shared
         guard let overlay = mgr.overlayView, let contentView = mgr.hostContentView else { return -1 }
 
@@ -433,14 +436,14 @@ public func ltSetGuardRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if mgr.guardView == nil {
+                if mgr.guardViews[keyStr] == nil {
                     let guard_ = ClickGuardView()
                     guard_.wantsLayer = true
                     // Sits above the overlay in the view hierarchy
                     contentView.addSubview(guard_, positioned: .above, relativeTo: overlay)
-                    mgr.guardView = guard_
+                    mgr.guardViews[keyStr] = guard_
                 }
-                mgr.guardView?.frame = NSRect(x: x, y: appKitY, width: w, height: h)
+                mgr.guardViews[keyStr]?.frame = NSRect(x: x, y: appKitY, width: w, height: h)
             }
         }
         return 0
@@ -449,15 +452,22 @@ public func ltSetGuardRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -
     return -1
 }
 
+/// Remove a specific named guard, or all guards if key is nil.
 @_cdecl("lt_remove_guard")
-public func ltRemoveGuard() -> Int32 {
+public func ltRemoveGuard(_ key: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
         let mgr = LiveTextManager.shared
+        let keyStr = key.map { String(cString: $0) }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                mgr.guardView?.removeFromSuperview()
-                mgr.guardView = nil
+                if let keyStr = keyStr {
+                    mgr.guardViews[keyStr]?.removeFromSuperview()
+                    mgr.guardViews.removeValue(forKey: keyStr)
+                } else {
+                    for (_, view) in mgr.guardViews { view.removeFromSuperview() }
+                    mgr.guardViews.removeAll()
+                }
             }
         }
         return 0

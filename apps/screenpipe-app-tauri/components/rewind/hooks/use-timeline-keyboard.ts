@@ -281,18 +281,4 @@ export function useTimelineKeyboard(opts: {
 		return () => window.removeEventListener("keydown", handleArrowKeys);
 	}, [frames, setCurrentFrame, showSearchModal, isPlaying, seekPlayback, pausePlayback, inSearchReviewMode, searchResultIndex, searchResults, hasSearchHighlight, dismissSearchHighlight]);
 
-	// Listen for open-search event from Rust (Cmd+K global shortcut)
-	useEffect(() => {
-		const unlisten = listen("open-search", () => {
-			if (!showSearchModal) {
-				setShowSearchModal(true);
-				resetFilters();
-			}
-		});
-
-		return () => {
-			unlisten.then((fn) => fn());
-		};
-	}, [showSearchModal]);
-
 }

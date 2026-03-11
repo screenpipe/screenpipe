@@ -707,6 +707,7 @@ pub async fn close_window(
     }
 }
 
+#[derive(PartialEq)]
 pub enum RewindWindowId {
     Main,
     Home,
@@ -777,7 +778,7 @@ impl RewindWindowId {
         Some(match self {
             RewindWindowId::Main => (800.0, 600.0),
             RewindWindowId::Home => (800.0, 600.0),
-            RewindWindowId::Search => (800.0, 600.0),
+            RewindWindowId::Search => (400.0, 56.0),
             RewindWindowId::Onboarding => (450.0, 500.0),
             RewindWindowId::Chat => (600.0, 750.0),
             RewindWindowId::PermissionRecovery => (500.0, 580.0),
@@ -1104,7 +1105,27 @@ impl ShowRewindWindow {
                         .eval(&format!("window.location.replace(`/search/{}`);", query))
                         .ok();
                 }
-                window.show().ok();
+                // Bring Search panel to front above Main (level 1002)
+                #[cfg(target_os = "macos")]
+                {
+                    let window_clone = window.clone();
+                    run_on_main_thread_safe(app, move || {
+                        use objc::{msg_send, sel, sel_impl};
+                        if let Ok(panel) = window_clone.to_panel() {
+                            panel.set_level(1002);
+                            panel.order_front_regardless();
+                            unsafe {
+                                let _: () = msg_send![&*panel, makeKeyWindow];
+                            }
+                        } else {
+                            let _ = window_clone.show();
+                        }
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.show().ok();
+                }
                 return Ok(window);
             }
 
@@ -1619,6 +1640,7 @@ impl ShowRewindWindow {
                         .focused(true)
                         .transparent(true)
                         .visible(false)
+                        .skip_taskbar(true)
                         .drag_and_drop(false)
                         .min_inner_size(clamped_min.0, clamped_min.1)
                         .inner_size(logical_size.width, logical_size.height)
@@ -1876,15 +1898,100 @@ impl ShowRewindWindow {
                 let mut url = "/search".to_string();
                 info!("query: {:?}", query);
                 if let Some(q) = query {
-                    // Simple URL encoding for the query parameter
-                    // let encoded_query = q.replace(' ', "%20").replace('#', "%23").replace('&', "%26");
                     url.push_str(&format!("{}", q));
                 }
 
-                let builder = self.window_builder(app, url.clone()).focused(true);
-                #[cfg(target_os = "macos")]
-                let builder = builder.hidden_title(true);
+                // Raycast-style floating search bar — compact, centered, no chrome
+                // Start thin (just the input row), JS will resize as results appear
+                let bar_w = 680.0_f64;
+                let bar_h = 80.0; // input row + footer
+                let (x, y) = if let Ok(Some(monitor)) = app.primary_monitor() {
+                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let pos = monitor.position();
+                    let scale = monitor.scale_factor();
+                    let origin_x = pos.x as f64 / scale;
+                    let origin_y = pos.y as f64 / scale;
+                    (
+                        origin_x + (logical.width - bar_w.min(logical.width - 40.0)) / 2.0,
+                        origin_y + logical.height * 0.22, // ~22% from top
+                    )
+                } else {
+                    (200.0, 140.0)
+                };
+                let bar_w = if let Ok(Some(monitor)) = app.primary_monitor() {
+                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    bar_w.min(logical.width - 40.0)
+                } else {
+                    bar_w
+                };
+
+                let builder = WebviewWindow::builder(
+                    app,
+                    self.id().label(),
+                    WebviewUrl::App(url.into()),
+                )
+                .title("")
+                .visible(false) // show after panel conversion
+                .accept_first_mouse(true)
+                .shadow(true)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .inner_size(bar_w, bar_h)
+                .min_inner_size(400.0, 56.0)
+                .position(x, y)
+                .focused(true)
+                .resizable(true);
+
                 let window = builder.build()?;
+
+                // Convert to NSPanel at level 1002 so it floats above Main (1001)
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(_panel) = window.to_panel() {
+                        info!("search window converted to panel");
+                    }
+                    let window_clone = window.clone();
+                    run_on_main_thread_safe(app, move || {
+                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+                        use objc::{msg_send, sel, sel_impl};
+
+                        if let Ok(panel) = window_clone.to_panel() {
+                            // Level 1002 — above Main timeline (1001)
+                            panel.set_level(1002);
+
+                            // NSNonactivatingPanelMask (128) — critical for appearing
+                            // over fullscreen apps without triggering Space switch
+                            unsafe {
+                                let current: i32 = msg_send![&*panel, styleMask];
+                                panel.set_style_mask(current | 128);
+                            }
+
+                            panel.set_hides_on_deactivate(false);
+
+                            // Full-screen + move-to-active-space behaviors
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
+                            );
+
+                            panel.order_front_regardless();
+
+                            // Make the panel key so the search input receives keyboard focus
+                            unsafe {
+                                let _: () = msg_send![&*panel, makeKeyWindow];
+                            }
+                        } else {
+                            info!("search panel conversion failed, showing as regular window");
+                            let _ = window_clone.show();
+                        }
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window.show();
+                }
 
                 window
             }
@@ -2171,11 +2278,11 @@ impl ShowRewindWindow {
             }
             #[cfg(target_os = "windows")]
             {
-                // Minimize instead of hide so the app stays in the Windows taskbar.
-                // hide() removes the window from the taskbar entirely.
+                // Hide overlay windows — the Home window is the persistent taskbar
+                // presence, so the overlay doesn't need to stay visible there.
                 for label in &["main", "main-window"] {
                     if let Some(window) = app.get_webview_window(label) {
-                        window.minimize().ok();
+                        window.hide().ok();
                     }
                 }
             }

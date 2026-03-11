@@ -282,7 +282,7 @@ impl UpdatesManager {
                 item.set_text("Downloading latest version of screenpipe")?;
             }
 
-            if let Some(tray) = self.app.tray_by_id("screenpipe_main") {
+            {
                 let theme = dark_light::detect().unwrap_or(Mode::Dark);
                 let icon_path = if theme == Mode::Light {
                     "assets/screenpipe-logo-tray-updates-black.png"
@@ -295,9 +295,17 @@ impl UpdatesManager {
                     .path()
                     .resolve(icon_path, tauri::path::BaseDirectory::Resource)?;
 
-                if let Ok(image) = tauri::image::Image::from_path(path) {
-                    crate::safe_icon::safe_set_icon_as_template(&tray, image)?;
-                }
+                let image = tauri::image::Image::from_path(path)?;
+
+                // TrayIcon must be accessed/dropped on the main thread
+                let app_clone = self.app.clone();
+                let _ = self.app.run_on_main_thread(move || {
+                    if let Some(tray) = app_clone.tray_by_id("screenpipe_main") {
+                        if let Err(e) = crate::safe_icon::safe_set_icon_as_template(&tray, image) {
+                            error!("failed to set tray update icon: {}", e);
+                        }
+                    }
+                });
             }
 
             // Download and install on all platforms

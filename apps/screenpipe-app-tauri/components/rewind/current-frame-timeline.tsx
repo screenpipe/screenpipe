@@ -48,6 +48,8 @@ interface CurrentFrameTimelineProps {
 	embedded?: boolean;
 	/** Ref to the nav bar element — used by Live Text to place a click guard */
 	navBarRef?: React.RefObject<HTMLDivElement | null>;
+	/** Named guard refs for Live Text click guards (e.g. filters, scrubber) */
+	guardRefs?: Record<string, React.RefObject<HTMLDivElement | null>>;
 }
 
 
@@ -83,6 +85,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	isSearchModalOpen,
 	embedded,
 	navBarRef,
+	guardRefs,
 }) => {
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
@@ -273,6 +276,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		videoRef,
 		windowLabel: liveTextWindowLabel,
 		navBarRef,
+		guardRefs,
 	});
 
 	if (!frameId) {

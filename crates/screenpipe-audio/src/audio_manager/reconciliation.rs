@@ -146,28 +146,34 @@ pub async fn reconcile_untranscribed(
 
     let engine_config = transcription_engine.config();
     let mut success_count = 0;
+    let mut consecutive_db_errors = 0u32;
+    const MAX_CONSECUTIVE_DB_ERRORS: u32 = 3;
 
     for batch in &batches {
+        // Bail out early if the DB is saturated — don't amplify contention
+        if consecutive_db_errors >= MAX_CONSECUTIVE_DB_ERRORS {
+            warn!(
+                "reconciliation: aborting — {} consecutive DB errors, pool likely saturated",
+                consecutive_db_errors
+            );
+            break;
+        }
         let (device_name, is_input) = extract_device_from_path(&batch[0].file_path);
 
         // Read and concatenate audio from all chunks in this batch
         let mut combined_samples: Vec<f32> = Vec::new();
         let mut sample_rate = 0u32;
         let mut valid_chunks: Vec<&UntranscribedChunk> = Vec::new();
+        let mut orphan_chunk_ids: Vec<i64> = Vec::new();
 
         for chunk in batch {
             let path = Path::new(&chunk.file_path);
             if !path.exists() {
                 warn!(
-                    "reconciliation: audio file missing, deleting orphan chunk {}",
+                    "reconciliation: audio file missing, marking orphan chunk {} for deletion",
                     chunk.id
                 );
-                if let Err(e) = db.delete_audio_chunk(chunk.id).await {
-                    warn!(
-                        "reconciliation: failed to delete orphan chunk {}: {}",
-                        chunk.id, e
-                    );
-                }
+                orphan_chunk_ids.push(chunk.id);
                 continue;
             }
 
@@ -192,6 +198,19 @@ pub async fn reconcile_untranscribed(
                         chunk.id, e
                     );
                 }
+            }
+        }
+
+        // Batch-delete orphan chunks (missing audio files)
+        if !orphan_chunk_ids.is_empty() {
+            if let Err(e) = db.delete_audio_chunks_batch(&orphan_chunk_ids).await {
+                warn!(
+                    "reconciliation: failed to batch-delete {} orphan chunks: {}",
+                    orphan_chunk_ids.len(), e
+                );
+                consecutive_db_errors += 1;
+            } else {
+                consecutive_db_errors = 0;
             }
         }
 
@@ -237,23 +256,41 @@ pub async fn reconcile_untranscribed(
             }
         };
 
-        // Silent audio: delete all chunks in this batch so they don't zombie-loop
+        // Silent audio: delete chunks only if they're old enough (2+ hours) to avoid
+        // nuking audio from active calls where pauses produce empty transcriptions.
         if full_text.trim().is_empty() {
-            debug!(
-                "reconciliation: batch for {} produced empty transcription, deleting {} silent chunks",
-                device_name,
-                valid_chunks.len()
-            );
-            for chunk in &valid_chunks {
-                if let Err(e) = db.delete_audio_chunk(chunk.id).await {
-                    warn!(
-                        "reconciliation: failed to delete silent chunk {}: {}",
-                        chunk.id, e
-                    );
-                }
-                let _ = std::fs::remove_file(&chunk.file_path);
+            let min_age = chrono::Duration::hours(2);
+            let cutoff = chrono::Utc::now() - min_age;
+            let old_chunks: Vec<_> = valid_chunks
+                .iter()
+                .filter(|c| c.timestamp < cutoff)
+                .collect();
+            if old_chunks.is_empty() {
+                debug!(
+                    "reconciliation: batch for {} produced empty transcription, but chunks are too recent to delete — skipping",
+                    device_name
+                );
+                continue;
             }
-            success_count += valid_chunks.len();
+            debug!(
+                "reconciliation: batch for {} produced empty transcription, deleting {} silent chunks (>2h old)",
+                device_name,
+                old_chunks.len()
+            );
+            let old_chunk_ids: Vec<i64> = old_chunks.iter().map(|c| c.id).collect();
+            if let Err(e) = db.delete_audio_chunks_batch(&old_chunk_ids).await {
+                warn!(
+                    "reconciliation: failed to batch-delete {} silent chunks: {}",
+                    old_chunks.len(), e
+                );
+                consecutive_db_errors += 1;
+            } else {
+                consecutive_db_errors = 0;
+                for chunk in &old_chunks {
+                    let _ = std::fs::remove_file(&chunk.file_path);
+                }
+                success_count += old_chunks.len();
+            }
             continue;
         }
 
@@ -300,12 +337,16 @@ pub async fn reconcile_untranscribed(
             .map(|c| c.file_path.clone())
             .collect();
         match finalize_batch(db, &pending, on_insert, data_dir, &secondary_paths).await {
-            Ok(count) => success_count += count,
+            Ok(count) => {
+                consecutive_db_errors = 0;
+                success_count += count;
+            }
             Err(e) => {
                 warn!(
                     "reconciliation: DB write failed for chunk {}, saved to pending cache: {}",
                     primary_chunk.id, e
                 );
+                consecutive_db_errors += 1;
                 // The pending JSON file persists — next sweep will retry
                 continue;
             }
@@ -393,18 +434,21 @@ async fn finalize_batch(
     }
 
     // Delete secondary chunks — they're merged into the primary
-    for (i, chunk_id) in pending.secondary_chunk_ids.iter().enumerate() {
-        if let Err(e) = db.delete_audio_chunk(*chunk_id).await {
+    if !pending.secondary_chunk_ids.is_empty() {
+        if let Err(e) = db
+            .delete_audio_chunks_batch(&pending.secondary_chunk_ids)
+            .await
+        {
             warn!(
-                "reconciliation: failed to delete merged chunk {}: {}",
-                chunk_id, e
+                "reconciliation: failed to batch-delete {} merged chunks: {}",
+                pending.secondary_chunk_ids.len(),
+                e
             );
         }
-        // Clean up the audio file too
-        if i < secondary_file_paths.len() {
-            let _ = std::fs::remove_file(&secondary_file_paths[i]);
+        for path in secondary_file_paths {
+            let _ = std::fs::remove_file(path);
         }
-        count += 1;
+        count += pending.secondary_chunk_ids.len();
     }
 
     Ok(count)

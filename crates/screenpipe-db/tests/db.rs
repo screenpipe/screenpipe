@@ -460,13 +460,13 @@ mod tests {
                 .await
                 .unwrap();
         println!("Raw frames in DB: {:?}", raw_frames);
-        // Check if OCR text is properly indexed in FTS
+        // Check if frames are properly indexed in FTS (ocr_text_fts was dropped)
         let ocr_fts_data: Vec<(i64, String)> =
-            sqlx::query_as("SELECT rowid, text FROM ocr_text_fts")
+            sqlx::query_as("SELECT id, full_text FROM frames_fts")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();
-        println!("OCR FTS data: {:?}", ocr_fts_data);
+        println!("Frames FTS data (full_text): {:?}", ocr_fts_data);
 
         // check if frames_fts is properly indexed
         let frame_fts_data: Vec<(i64, String, String, String, bool)> = sqlx::query_as(
@@ -1518,17 +1518,10 @@ mod tests {
         }
     }
 
-    /// Manually index accessibility rows into FTS for tests.
-    /// The background FTS indexer doesn't run in tests, so we do it inline.
-    async fn index_accessibility_fts(db: &DatabaseManager) {
-        sqlx::query(
-            "INSERT OR IGNORE INTO accessibility_fts(rowid, text_content, app_name, window_name) \
-             SELECT id, text_content, COALESCE(app_name, ''), COALESCE(window_name, '') \
-             FROM accessibility WHERE text_content IS NOT NULL AND text_content != ''",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    /// No-op: accessibility and accessibility_fts tables were dropped by migration.
+    /// Kept as a stub so existing call sites don't need to be removed.
+    async fn index_accessibility_fts(_db: &DatabaseManager) {
+        // Tables dropped — nothing to index.
     }
 
     // =========================================================================

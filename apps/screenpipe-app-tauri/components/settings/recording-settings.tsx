@@ -1537,8 +1537,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Transcription Mode - audio capture setting, independent of transcription engine */}
-        {!settings.disableAudio && (
+        {/* Transcription Mode - hidden when transcription engine is disabled */}
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -1593,8 +1593,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Filter Music - audio filtering, independent of transcription engine */}
-        {!settings.disableAudio && (
+        {/* Filter Music - hidden when transcription engine is disabled */}
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">

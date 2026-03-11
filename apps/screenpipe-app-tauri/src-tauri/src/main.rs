@@ -55,6 +55,7 @@ mod livetext;
 mod livetext_ffi;
 mod permissions;
 mod pi;
+mod pipe_suggestions_scheduler;
 mod recording;
 mod reminders;
 mod remote_sync_commands;
@@ -538,45 +539,15 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
     )
     .await?;
 
-    // Register search shortcut (global - opens overlay with search focused) (defer off event stack)
+    // Register search shortcut (global - opens floating Search bar only, hides timeline)
     register_shortcut(app, &config.search, config.is_disabled("search"), |app| {
         let app_for_closure = app.clone();
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
             info!("search shortcut triggered");
-            let mut needed_show = false;
-            // Always show the overlay, then emit search event to focus the search input
-            {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-                if let Some(window) = app.get_webview_window(label) {
-                    let needs_show = !window.is_visible().unwrap_or(false)
-                        || window.is_minimized().unwrap_or(false);
-                    if needs_show {
-                        show_main_window(app, false);
-                        needed_show = true;
-                    }
-                } else {
-                    show_main_window(app, false);
-                    needed_show = true;
-                }
-            }
-            if needed_show {
-                // Webview was just created/shown — the frontend listener hasn't
-                // mounted yet, so emit with a delay to let the page load.
-                let app_clone = app.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    let _ = app_clone.emit("open-search", ());
-                });
-            } else {
-                let _ = app.emit("open-search", ());
-            }
+            // Hide Main timeline if visible so only the search bar shows
+            hide_main_window(app);
+            let _ = ShowRewindWindow::Search { query: None }.show(app);
         });
     })
     .await?;
@@ -1363,6 +1334,8 @@ async fn main() {
                 commands::open_google_calendar_auth_window,
                 commands::ensure_webview_focus,
                 commands::close_window,
+                commands::resize_search_window,
+                commands::search_navigate_to_timeline,
                 commands::reset_main_window,
                 commands::set_window_size,
                 // Onboarding commands
@@ -1432,6 +1405,9 @@ async fn main() {
                 reminders::reminders_set_custom_prompt,
                 reminders::reminders_get_audio_only,
                 reminders::reminders_set_audio_only,
+                // Pipe suggestions scheduler commands
+                pipe_suggestions_scheduler::pipe_suggestions_get_settings,
+                pipe_suggestions_scheduler::pipe_suggestions_update_settings,
                 // Calendar commands
                 calendar::calendar_status,
                 calendar::calendar_authorize,
@@ -1483,6 +1459,7 @@ async fn main() {
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let reminders_state = reminders::RemindersState::new();
     let suggestions_state = suggestions::SuggestionsState::new();
+    let pipe_suggestions_state = pipe_suggestions_scheduler::PipeSuggestionsState::new();
     #[allow(clippy::single_match)]
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1504,11 +1481,11 @@ async fn main() {
                 #[cfg(target_os = "windows")]
                 {
                     if window.label() == "home" {
-                        // Let the close proceed (don't prevent it)
-                        return;
-                    } else if window.label() == "main-window" {
+                        // Minimize instead of closing so the Home window stays in the
+                        // taskbar as the persistent app icon.
                         let _ = window.minimize();
                     } else {
+                        // Overlay and other windows: hide (they're skip_taskbar anyway)
                         let _ = window.hide();
                     }
                 }
@@ -1572,6 +1549,7 @@ async fn main() {
         .manage(pi_state)
         .manage(reminders_state)
         .manage(suggestions_state)
+        .manage(pipe_suggestions_state)
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
             spawn_screenpipe,
@@ -1600,6 +1578,8 @@ async fn main() {
             commands::open_login_window,
             commands::ensure_webview_focus,
             commands::close_window,
+            commands::resize_search_window,
+            commands::search_navigate_to_timeline,
             commands::reset_main_window,
             commands::set_window_size,
             // Permission recovery commands
@@ -1676,6 +1656,9 @@ async fn main() {
             reminders::reminders_set_custom_prompt,
             reminders::reminders_get_audio_only,
             reminders::reminders_set_audio_only,
+            // Pipe suggestions scheduler commands
+            pipe_suggestions_scheduler::pipe_suggestions_get_settings,
+            pipe_suggestions_scheduler::pipe_suggestions_update_settings,
             // Calendar commands
             calendar::calendar_status,
             calendar::calendar_authorize,
@@ -2344,6 +2327,17 @@ async fn main() {
                 reminders::auto_start_scheduler(app_handle_clone, &reminders_state_clone).await;
             });
 
+            // Auto-start pipe suggestions scheduler if enabled
+            let app_handle_clone = app_handle.clone();
+            let pipe_suggestions_state = app_handle.state::<pipe_suggestions_scheduler::PipeSuggestionsState>();
+            let pipe_suggestions_state_clone = pipe_suggestions_scheduler::PipeSuggestionsState {
+                scheduler_handle: pipe_suggestions_state.scheduler_handle.clone(),
+            };
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                pipe_suggestions_scheduler::auto_start_scheduler(app_handle_clone, &pipe_suggestions_state_clone).await;
+            });
+
             // Start calendar events publisher (publishes to event bus for meeting detection)
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
@@ -2452,16 +2446,21 @@ async fn main() {
                     // Shut down embedded server (incl. audio manager / ggml Metal cleanup)
                     // MUST happen synchronously before exit() runs C++ static destructors,
                     // otherwise the ggml Metal device destructor hits a freed resource → SIGABRT.
+                    //
+                    // Run on a dedicated thread to avoid "Cannot start a runtime from within
+                    // a runtime" panic when the Exit event fires from a tokio async context.
                     let app_handle_shutdown = app_handle.app_handle().clone();
-                    let _ = tauri::async_runtime::block_on(async move {
-                        if let Some(recording_state) =
-                            app_handle_shutdown.try_state::<recording::RecordingState>()
-                        {
-                            if let Some(handle) = recording_state.handle.lock().await.take() {
-                                handle.shutdown_and_wait().await;
+                    let _ = std::thread::spawn(move || {
+                        tauri::async_runtime::block_on(async move {
+                            if let Some(recording_state) =
+                                app_handle_shutdown.try_state::<recording::RecordingState>()
+                            {
+                                if let Some(handle) = recording_state.handle.lock().await.take() {
+                                    handle.shutdown_and_wait().await;
+                                }
                             }
-                        }
-                    });
+                        })
+                    }).join();
 
                     // Cleanup Pi sidecar
                     let app_handle_pi = app_handle.app_handle().clone();

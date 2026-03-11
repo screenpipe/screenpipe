@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
@@ -186,8 +186,7 @@ export default function ShortcutReminderPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              commands.showWindow("Main");
-              emit("open-search");
+              commands.showWindow({ Search: { query: null } });
               posthog.capture("shortcut_reminder_search_clicked");
             }}
             onMouseDown={(e) => e.stopPropagation()}

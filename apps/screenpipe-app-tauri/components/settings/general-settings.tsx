@@ -206,11 +206,19 @@ export default function GeneralSettings() {
                 <select
                   className="text-xs border rounded px-2 py-1 bg-background"
                   value={settings?.pipeSuggestionFrequencyHours ?? 24}
-                  onChange={(e) =>
-                    handleSettingsChange({ pipeSuggestionFrequencyHours: parseInt(e.target.value, 10) })
-                  }
+                  onChange={(e) => {
+                    const freq = parseInt(e.target.value, 10);
+                    handleSettingsChange({ pipeSuggestionFrequencyHours: freq });
+                    commands.pipeSuggestionsUpdateSettings(
+                      settings?.pipeSuggestionsEnabled !== false,
+                      freq
+                    ).catch(() => {});
+                  }}
                   disabled={settings?.pipeSuggestionsEnabled === false}
                 >
+                  <option value={1}>every 1h</option>
+                  <option value={2}>every 2h</option>
+                  <option value={3}>every 3h</option>
                   <option value={6}>every 6h</option>
                   <option value={12}>every 12h</option>
                   <option value={24}>daily</option>
@@ -219,9 +227,13 @@ export default function GeneralSettings() {
                 </select>
                 <Switch
                   checked={settings?.pipeSuggestionsEnabled !== false}
-                  onCheckedChange={(checked) =>
-                    handleSettingsChange({ pipeSuggestionsEnabled: checked })
-                  }
+                  onCheckedChange={(checked) => {
+                    handleSettingsChange({ pipeSuggestionsEnabled: checked });
+                    commands.pipeSuggestionsUpdateSettings(
+                      checked,
+                      settings?.pipeSuggestionFrequencyHours ?? 24
+                    ).catch(() => {});
+                  }}
                 />
               </div>
             </div>

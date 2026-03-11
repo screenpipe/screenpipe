@@ -246,6 +246,30 @@ async closeWindow(window: ShowRewindWindow) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Resize the Search NSPanel. Regular Tauri setSize doesn't work on NSPanels.
+ */
+async resizeSearchWindow(width: number, height: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resize_search_window", { width, height }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Navigate from Search to a timestamp on the Main timeline.
+ * Shows Main, emits the navigation event from the app handle (not a webview),
+ * then closes the Search window.
+ */
+async searchNavigateToTimeline(timestamp: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Hide the Main panel so the next shortcut press reconfigures it for the new mode.
  */
 async resetMainWindow() : Promise<void> {
@@ -808,6 +832,28 @@ async remindersSetAudioOnly(audioOnly: boolean) : Promise<Result<null, string>> 
 }
 },
 /**
+ * Get current pipe suggestions settings.
+ */
+async pipeSuggestionsGetSettings() : Promise<Result<PipeSuggestionsSettings, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pipe_suggestions_get_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Update pipe suggestions settings and restart the scheduler.
+ */
+async pipeSuggestionsUpdateSettings(enabled: boolean, frequencyHours: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pipe_suggestions_update_settings", { enabled, frequencyHours }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Check Calendar authorization status (no popup).
  */
 async calendarStatus() : Promise<Result<CalendarStatus, string>> {
@@ -1021,6 +1067,7 @@ apiKey: string | null;
  * Max output tokens (default 4096)
  */
 maxTokens?: number }
+export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
 export type ReminderItem = { identifier: string; title: string; notes: string | null; completed: boolean }
 export type RemindersStatus = { available: boolean; authorized: boolean; authorizationStatus: string; schedulerRunning: boolean; reminderCount: number }
 export type ScanResult = { remindersCreated: bigint; items: ReminderItem[]; contextChars: bigint; error: string | null }

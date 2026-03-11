@@ -35,7 +35,6 @@ jobs:
       contents: read
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
-      # publish is now a separate workflow: publish-release.yml
       should_test: ${{ steps.check.outputs.should_test }}
       macos_arm_runner: ${{ steps.check-runner.outputs.macos_arm_runner }}
       windows_runner: ${{ steps.check-runner.outputs.windows_runner }}
@@ -237,12 +236,11 @@ jobs:
             tauri-args: "--target aarch64-pc-windows-msvc --features official-build"
             target: aarch64-pc-windows-msvc
             os_type: "windows"
-          # Linux disabled - too many bundling issues
-          # - platform: "ubuntu-22.04"
-          #   args: "--target x86_64-unknown-linux-gnu"
-          #   target: x86_64-unknown-linux-gnu
-          #   tauri-args: ""
-          #   os_type: "linux"
+          - platform: "ubuntu-24.04"
+            args: "--target x86_64-unknown-linux-gnu"
+            target: x86_64-unknown-linux-gnu
+            tauri-args: "--target x86_64-unknown-linux-gnu --features official-build"
+            os_type: "linux"
 
     runs-on: ${{ matrix.platform == 'macos-26' && fromJSON('["self-hosted", "macos-26"]') || matrix.platform == 'macos-test' && fromJSON('["self-hosted", "macos-test"]') || matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
     timeout-minutes: 120
@@ -485,25 +483,12 @@ jobs:
             libayatana-appindicator3-dev \
             libsamplerate-dev \
             libwebrtc-audio-processing-dev \
+            libpipewire-0.3-dev \
             libgtk-3-dev \
             librsvg2-dev \
-            patchelf
-          # download old versions because of EGL issues, see https://github.com/h3poteto/fedistar/issues/1717
-          mkdir -p /tmp/ubuntu-packages
-          cd /tmp/ubuntu-packages
-          wget https://launchpadlibrarian.net/723972773/libwebkit2gtk-4.1-0_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/723972761/libwebkit2gtk-4.1-dev_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/723972770/libjavascriptcoregtk-4.1-0_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/723972746/libjavascriptcoregtk-4.1-dev_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/723972735/gir1.2-javascriptcoregtk-4.1_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/723972739/gir1.2-webkit2-4.1_2.44.0-0ubuntu0.22.04.1_amd64.deb
-          wget https://launchpadlibrarian.net/606433947/libicu70_70.1-2ubuntu1_amd64.deb
-          wget https://launchpadlibrarian.net/606433941/libicu-dev_70.1-2ubuntu1_amd64.deb
-          wget https://launchpadlibrarian.net/606433945/icu-devtools_70.1-2ubuntu1_amd64.deb
-          wget https://launchpadlibrarian.net/595623693/libjpeg8_8c-2ubuntu10_amd64.deb
-          wget https://launchpadlibrarian.net/587202140/libjpeg-turbo8_2.1.2-0ubuntu1_amd64.deb
-          wget https://launchpadlibrarian.net/592959859/xdg-desktop-portal-gtk_1.14.0-1build1_amd64.deb
-          sudo apt-get install -y /tmp/ubuntu-packages/*.deb
+            patchelf \
+            libwebkit2gtk-4.1-dev \
+            xdg-desktop-portal-gtk
 
       - name: Install frontend dependencies
         working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
@@ -719,6 +704,32 @@ jobs:
             echo "Build keychain unlocked and search list verified"
             security find-identity -v -p codesigning "$BUILD_KC" 2>&1 | tail -3
           fi
+
+      - name: Build (Linux)
+        if: matrix.os_type == 'linux'
+        working-directory: apps/screenpipe-app-tauri
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
+          NO_STRIP: true
+        run: |
+          # Wrap ldd so linuxdeploy doesn't crash on the statically-linked bun sidecar.
+          # bun is built with musl and ldd exits 1 on it, which kills linuxdeploy's GTK plugin.
+          sudo mv /usr/bin/ldd /usr/bin/ldd.real
+          sudo tee /usr/bin/ldd > /dev/null << 'WRAPPER'
+          #!/bin/bash
+          if [[ "$1" == *"/bun"* ]] || [[ "$1" == *"bun-"* ]]; then
+            echo "	statically linked"
+            exit 0
+          fi
+          exec /usr/bin/ldd.real "$@"
+          WRAPPER
+          sudo chmod +x /usr/bin/ldd
+          bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
 
       - name: Build (Windows)
         if: matrix.os_type == 'windows'
@@ -1013,6 +1024,47 @@ jobs:
 
           Write-Host "R2 upload complete for Windows"
 
+      - name: Upload to Cloudflare R2 (Linux)
+        if: matrix.os_type == 'linux'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
+
+          echo "uploading Linux bundles for v${VERSION} to R2..."
+          echo "bundle dir contents:"
+          find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
+
+          UPLOADED=0
+
+          # Upload AppImage
+          for f in "${BUNDLE_DIR}"/appimage/*.AppImage; do
+            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
+          done
+
+          # Upload deb
+          for f in "${BUNDLE_DIR}"/deb/*.deb; do
+            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
+          done
+
+          # Upload updater artifacts (.tar.gz + .sig) if present
+          for f in "${BUNDLE_DIR}"/appimage/*.tar.gz "${BUNDLE_DIR}"/appimage/*.sig; do
+            [ -f "$f" ] && aws s3 cp "$f" "${R2_PREFIX}/$(basename "$f")" --endpoint-url "$R2_ENDPOINT" && echo "  ✅ $(basename "$f")" && UPLOADED=$((UPLOADED+1))
+          done
+
+          if [ "$UPLOADED" -eq 0 ]; then
+            echo "❌ No Linux artifacts found to upload!"
+            exit 1
+          fi
+
+          echo "R2 upload complete for Linux ($UPLOADED files)"
 
   generate-changelog:
     needs: [check_commit, publish-tauri]

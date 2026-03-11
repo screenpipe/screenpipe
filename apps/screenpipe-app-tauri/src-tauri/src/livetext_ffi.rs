@@ -30,9 +30,9 @@ extern "C" {
 
     pub fn lt_destroy() -> i32;
 
-    pub fn lt_set_guard_rect(x: f64, y: f64, w: f64, h: f64) -> i32;
+    pub fn lt_set_guard_rect(key: *const c_char, x: f64, y: f64, w: f64, h: f64) -> i32;
 
-    pub fn lt_remove_guard() -> i32;
+    pub fn lt_remove_guard(key: *const c_char) -> i32;
 
     pub fn lt_free_string(ptr: *mut c_char);
 }

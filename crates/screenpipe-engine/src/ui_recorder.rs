@@ -7,19 +7,13 @@
 //! Integrates screenpipe-a11y capture with the server's recording loop.
 
 use anyhow::Result;
-use screenpipe_a11y::tree::{
-    cache::TreeCache, create_tree_walker, TreeWalkResult, TreeWalkerConfig, TruncationReason,
-};
 use screenpipe_a11y::{UiCaptureConfig, UiRecorder};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-
-/// Shared signal to wake the tree walker thread immediately on app/window switch.
-type WakeSignal = Arc<(Mutex<bool>, Condvar)>;
 
 /// Configuration for UI event capture
 #[derive(Debug, Clone)]
@@ -254,13 +248,6 @@ pub async fn start_ui_recording(
         }
     };
 
-    // Clone db before it's moved into the event processing task
-    let tree_db = db.clone();
-
-    // Wake signal: event task signals this on app/window switch to trigger immediate tree walk
-    let wake_signal: WakeSignal = Arc::new((Mutex::new(false), Condvar::new()));
-    let wake_signal_tx = wake_signal.clone();
-
     // Spawn the event processing task
     let task_handle = tokio::spawn(async move {
         let session_id = Uuid::new_v4().to_string();
@@ -280,19 +267,6 @@ pub async fn start_ui_recording(
             match handle.recv_timeout(Duration::from_millis(100)) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
-
-                    // Signal the tree walker to do an immediate walk on app/window switch
-                    if matches!(
-                        db_event.event_type,
-                        screenpipe_db::UiEventType::AppSwitch
-                            | screenpipe_db::UiEventType::WindowFocus
-                    ) {
-                        let (lock, cvar) = &*wake_signal_tx;
-                        if let Ok(mut woken) = lock.lock() {
-                            *woken = true;
-                            cvar.notify_one();
-                        }
-                    }
 
                     // Send capture triggers for event-driven capture
                     if let Some(ref trigger_tx) = capture_trigger_tx {
@@ -385,312 +359,17 @@ pub async fn start_ui_recording(
         info!("UI recording session ended: {}", session_id);
     });
 
-    // Spawn tree walker task (AX tree walking for full-text capture)
-    let tree_walker_handle = if config.enable_tree_walker {
-        let tree_stop = stop_flag.clone();
-        let walk_interval = Duration::from_millis(config.tree_walk_interval_ms);
-        let rt_handle = tokio::runtime::Handle::current();
-        let ignored_windows_clone = config.ignored_windows.clone();
-        let included_windows_clone = config.included_windows.clone();
-
-        // Run the entire tree walker loop in a dedicated thread since AX APIs are synchronous IPC.
-        // On Windows we use std::thread instead of spawn_blocking because COM (UIA) requires
-        // controlled initialization from thread birth — tokio's blocking pool may already have
-        // COM initialized with incompatible threading model, causing E_FAIL (0x80004005).
-        let tree_wake = wake_signal.clone();
-        #[cfg(target_os = "windows")]
-        {
-            let join_handle = std::thread::Builder::new()
-                .name("tree-walker".to_string())
-                .spawn(move || {
-                    if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        run_tree_walker(
-                            tree_db,
-                            tree_stop,
-                            walk_interval,
-                            rt_handle,
-                            tree_wake,
-                            ignored_windows_clone,
-                            included_windows_clone,
-                        );
-                    })) {
-                        error!("tree-walker thread panicked: {:?}", e);
-                    }
-                })
-                .expect("failed to spawn tree-walker thread");
-            // Wrap in a JoinHandle<()> compatible with the tokio handle used on other platforms
-            Some(tokio::task::spawn_blocking(move || {
-                let _ = join_handle.join();
-            }))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Some(tokio::task::spawn_blocking(move || {
-                if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_tree_walker(
-                        tree_db,
-                        tree_stop,
-                        walk_interval,
-                        rt_handle,
-                        tree_wake,
-                        ignored_windows_clone,
-                        included_windows_clone,
-                    );
-                })) {
-                    error!("tree-walker thread panicked: {:?}", e);
-                }
-            }))
-        }
-    } else {
-        info!("AX tree walker is disabled");
-        None
-    };
-
     Ok(UiRecorderHandle {
         stop_flag,
         task_handle: Some(task_handle),
-        tree_walker_handle,
+        tree_walker_handle: None,
     })
 }
 
-/// Metrics for the tree walker — logged periodically for quantified measurement.
-struct TreeWalkerMetrics {
-    walks_total: u64,
-    walks_stored: u64,
-    walks_deduped: u64,
-    walks_empty: u64,
-    walks_error: u64,
-    walks_immediate: u64,
-    walks_truncated: u64,
-    walks_truncated_timeout: u64,
-    walks_truncated_max_nodes: u64,
-    total_walk_duration_ms: u64,
-    max_walk_duration_ms: u64,
-    total_text_chars: u64,
-    total_nodes: u64,
-    max_depth_reached: u64,
-    last_report: std::time::Instant,
-}
 
-impl TreeWalkerMetrics {
-    fn new() -> Self {
-        Self {
-            walks_total: 0,
-            walks_stored: 0,
-            walks_deduped: 0,
-            walks_empty: 0,
-            walks_error: 0,
-            walks_immediate: 0,
-            walks_truncated: 0,
-            walks_truncated_timeout: 0,
-            walks_truncated_max_nodes: 0,
-            total_walk_duration_ms: 0,
-            max_walk_duration_ms: 0,
-            total_text_chars: 0,
-            total_nodes: 0,
-            max_depth_reached: 0,
-            last_report: std::time::Instant::now(),
-        }
-    }
-
-    fn report_if_due(&mut self) {
-        if self.last_report.elapsed() >= Duration::from_secs(60) && self.walks_total > 0 {
-            let avg_ms = self.total_walk_duration_ms / self.walks_total.max(1);
-            let avg_nodes = self.total_nodes / self.walks_total.max(1);
-            let truncation_rate = self.walks_truncated as f64 / self.walks_total as f64;
-            let truncation_pct = (truncation_rate * 100.0) as u64;
-            debug!(
-                "tree walker stats (last 60s): walks={}, stored={}, deduped={}, empty={}, errors={}, immediate={}, avg_walk={}ms, max_walk={}ms, total_chars={}, avg_nodes={}, max_depth={}, truncated={}% ({} timeout, {} max_nodes)",
-                self.walks_total, self.walks_stored, self.walks_deduped,
-                self.walks_empty, self.walks_error, self.walks_immediate,
-                avg_ms, self.max_walk_duration_ms, self.total_text_chars,
-                avg_nodes, self.max_depth_reached, truncation_pct,
-                self.walks_truncated_timeout, self.walks_truncated_max_nodes
-            );
-
-            // Publish snapshot to global for health endpoint / PostHog
-            if let Ok(mut snap) = TREE_WALKER_METRICS.lock() {
-                *snap = TreeWalkerSnapshot {
-                    walks_total: self.walks_total,
-                    walks_stored: self.walks_stored,
-                    walks_deduped: self.walks_deduped,
-                    walks_empty: self.walks_empty,
-                    walks_error: self.walks_error,
-                    walks_truncated: self.walks_truncated,
-                    walks_truncated_timeout: self.walks_truncated_timeout,
-                    walks_truncated_max_nodes: self.walks_truncated_max_nodes,
-                    truncation_rate,
-                    avg_walk_duration_ms: avg_ms,
-                    max_walk_duration_ms: self.max_walk_duration_ms,
-                    avg_nodes_per_walk: avg_nodes,
-                    max_depth_reached: self.max_depth_reached,
-                    total_text_chars: self.total_text_chars,
-                };
-            }
-
-            *self = Self::new();
-        }
-    }
-}
-
-/// Minimum interval between walks to prevent storms during rapid app switching.
-const MIN_WALK_COOLDOWN: Duration = Duration::from_millis(500);
-
-/// Delay after wake signal to let the new window settle before walking.
-const WAKE_SETTLE_DELAY: Duration = Duration::from_millis(300);
-
-/// Run the accessibility tree walker loop (blocking — runs in a dedicated thread).
-/// Walks the focused window's AX tree periodically and stores text in the accessibility table.
-/// Wakes immediately on app/window switch via the condvar signal, with a 500ms cooldown.
-fn run_tree_walker(
-    db: Arc<DatabaseManager>,
-    stop: Arc<AtomicBool>,
-    walk_interval: Duration,
-    rt_handle: tokio::runtime::Handle,
-    wake_signal: WakeSignal,
-    ignored_windows: Vec<String>,
-    included_windows: Vec<String>,
-) {
-    info!("Starting AX tree walker (interval: {:?})", walk_interval);
-
-    let tree_config = TreeWalkerConfig {
-        walk_interval,
-        ignored_windows,
-        included_windows,
-        ..Default::default()
-    };
-    let walker = create_tree_walker(tree_config);
-    let mut cache = TreeCache::new();
-    let mut metrics = TreeWalkerMetrics::new();
-    let mut last_walk = std::time::Instant::now() - walk_interval; // allow immediate first walk
-
-    while !stop.load(Ordering::Relaxed) {
-        // Enforce minimum cooldown between walks
-        let since_last = last_walk.elapsed();
-        if since_last < MIN_WALK_COOLDOWN {
-            std::thread::sleep(MIN_WALK_COOLDOWN - since_last);
-        }
-
-        last_walk = std::time::Instant::now();
-        metrics.walks_total += 1;
-
-        match walker.walk_focused_window() {
-            Ok(TreeWalkResult::Found(snap)) => {
-                let walk_ms = snap.walk_duration.as_millis() as u64;
-                metrics.total_walk_duration_ms += walk_ms;
-                metrics.max_walk_duration_ms = metrics.max_walk_duration_ms.max(walk_ms);
-                metrics.total_nodes += snap.node_count as u64;
-                if snap.max_depth_reached as u64 > metrics.max_depth_reached {
-                    metrics.max_depth_reached = snap.max_depth_reached as u64;
-                }
-                if snap.truncated {
-                    metrics.walks_truncated += 1;
-                    match snap.truncation_reason {
-                        TruncationReason::Timeout => metrics.walks_truncated_timeout += 1,
-                        TruncationReason::MaxNodes => metrics.walks_truncated_max_nodes += 1,
-                        TruncationReason::None => {}
-                    }
-                }
-
-                if cache.should_store(&snap) {
-                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        debug!("Stop flag set, skipping DB insert for accessibility text");
-                        break;
-                    }
-
-                    metrics.total_text_chars += snap.text_content.len() as u64;
-
-                    // Spawn the DB write on the runtime and wait via std channel.
-                    // Unlike block_on, this won't panic during runtime shutdown —
-                    // the spawned task is silently cancelled and the channel closes.
-                    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
-                    let db_c = db.clone();
-                    let app = snap.app_name.clone();
-                    let win = snap.window_name.clone();
-                    let text = snap.text_content.clone();
-                    let url = snap.browser_url.clone();
-                    rt_handle.spawn(async move {
-                        let r = db_c
-                            .insert_accessibility_text(&app, &win, &text, url.as_deref())
-                            .await;
-                        let _ = result_tx.send(r);
-                    });
-
-                    match result_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                        Ok(Ok(_id)) => {
-                            debug!(
-                                "Stored accessibility text: app={}, window={}, len={}, nodes={}, walk={}ms",
-                                snap.app_name,
-                                snap.window_name,
-                                snap.text_content.len(),
-                                snap.node_count,
-                                walk_ms
-                            );
-                            cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
-                            metrics.walks_stored += 1;
-                        }
-                        Ok(Err(e)) => {
-                            debug!("Failed to insert accessibility text: {}", e);
-                            metrics.walks_error += 1;
-                        }
-                        Err(_) => {
-                            // Channel closed (runtime shutdown) or timed out
-                            if stop.load(Ordering::Relaxed) {
-                                debug!("Runtime shutting down, stopping tree-walker DB writes");
-                                break;
-                            }
-                            debug!("DB insert timed out");
-                            metrics.walks_error += 1;
-                        }
-                    }
-                } else {
-                    metrics.walks_deduped += 1;
-                }
-            }
-            Ok(TreeWalkResult::Skipped) => {
-                metrics.walks_empty += 1;
-            }
-            Ok(TreeWalkResult::NotFound) => {
-                metrics.walks_empty += 1;
-            }
-            Err(e) => {
-                debug!("Tree walk error: {}", e);
-                metrics.walks_error += 1;
-            }
-        }
-
-        metrics.report_if_due();
-
-        // Sleep for walk_interval, but wake immediately if app/window switch detected
-        let (lock, cvar) = &*wake_signal;
-        if let Ok(woken) = lock.lock() {
-            if *woken {
-                // Already signaled — small delay to let the new window settle
-                drop(woken);
-                std::thread::sleep(WAKE_SETTLE_DELAY);
-                if let Ok(mut w) = lock.lock() {
-                    *w = false;
-                }
-                metrics.walks_immediate += 1;
-            } else {
-                // Wait with timeout — returns early if signaled by app/window switch
-                if let Ok((mut w, timeout_result)) = cvar.wait_timeout(woken, walk_interval) {
-                    if !timeout_result.timed_out() {
-                        metrics.walks_immediate += 1;
-                        // Signaled — settle delay before walking
-                        *w = false;
-                        drop(w);
-                        std::thread::sleep(WAKE_SETTLE_DELAY);
-                    } else {
-                        *w = false;
-                    }
-                }
-            }
-        }
-    }
-
-    info!("AX tree walker stopped");
-}
+// Dead code below removed: TreeWalkerMetrics, run_tree_walker, constants.
+// Tree walker is disabled — paired_capture.rs handles accessibility capture.
+// Keeping this comment as a tombstone for git blame.
 
 async fn flush_batch(
     db: &Arc<DatabaseManager>,

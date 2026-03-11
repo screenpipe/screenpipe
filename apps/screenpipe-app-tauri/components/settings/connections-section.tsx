@@ -910,6 +910,7 @@ export function ConnectionsSection() {
     return null;
   });
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
+  const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -931,12 +932,20 @@ export function ConnectionsSection() {
 
   useEffect(() => { refreshStatus(); }, [selected, refreshStatus]);
 
-  const fetchIntegrations = useCallback(async () => {
-    try {
-      const res = await fetch("http://localhost:3030/connections");
-      const data = await res.json();
-      if (data.data) setIntegrations(data.data);
-    } catch { /* server may not be running */ }
+  const fetchIntegrations = useCallback(async (retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const res = await fetch("http://localhost:3030/connections");
+        const data = await res.json();
+        if (data.data) {
+          setIntegrations(data.data);
+          setIntegrationsLoaded(true);
+          return;
+        }
+      } catch { /* server may not be running yet */ }
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
+    }
+    setIntegrationsLoaded(true);
   }, []);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
@@ -1036,14 +1045,26 @@ export function ConnectionsSection() {
 
       {/* Grid */}
       <div className="grid grid-cols-3 gap-2">
-        {filtered.map((tile) => (
-          <Tile
-            key={tile.id}
-            tile={tile}
-            selected={selected === tile.id}
-            onClick={() => setSelected(selected === tile.id ? null : tile.id)}
-          />
-        ))}
+        {!integrationsLoaded ? (
+          Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border bg-card animate-pulse">
+              <div className="w-8 h-8 rounded-md bg-muted" />
+              <div className="flex-1 space-y-1.5">
+                <div className="h-3 bg-muted rounded w-20" />
+                <div className="h-2 bg-muted rounded w-12" />
+              </div>
+            </div>
+          ))
+        ) : (
+          filtered.map((tile) => (
+            <Tile
+              key={tile.id}
+              tile={tile}
+              selected={selected === tile.id}
+              onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+            />
+          ))
+        )}
       </div>
 
       {/* Expanded panel */}

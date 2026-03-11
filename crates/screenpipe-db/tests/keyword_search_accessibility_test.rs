@@ -135,7 +135,7 @@ mod tests {
 
         assert!(
             !results.is_empty(),
-            "keyword search should still find frame via ocr_text_fts"
+            "keyword search should still find frame via frames_fts"
         );
         assert_eq!(results[0].app_name, "Chrome");
     }

@@ -958,6 +958,52 @@ impl IcsCalendarSettingsStore {
     }
 }
 
+// ─── Pipe Suggestions Settings ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipeSuggestionsSettingsStore {
+    pub enabled: bool,
+    #[serde(default = "default_pipe_suggestion_frequency")]
+    pub frequency_hours: u32,
+    #[serde(default)]
+    pub last_shown_at: Option<String>,
+}
+
+fn default_pipe_suggestion_frequency() -> u32 {
+    24
+}
+
+impl Default for PipeSuggestionsSettingsStore {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            frequency_hours: 24,
+            last_shown_at: None,
+        }
+    }
+}
+
+impl PipeSuggestionsSettingsStore {
+    pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        if store.is_empty() {
+            return Ok(None);
+        }
+        let settings =
+            serde_json::from_value(store.get("pipe_suggestions").unwrap_or(Value::Null));
+        match settings {
+            Ok(settings) => Ok(settings),
+            Err(_) => Ok(None),
+        }
+    }
+
+    pub fn save(&self, app: &AppHandle) -> Result<(), String> {
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        store.set("pipe_suggestions", json!(self));
+        store.save().map_err(|e| e.to_string())
+    }
+}
+
 impl RemindersSettingsStore {
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;

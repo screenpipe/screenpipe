@@ -260,12 +260,17 @@
     -webkit-image-analysis: none;
   }
 
-  /* Selectable text layer — override global user-select:none for OCR text overlay.
+  /* Selectable text layer — override global user-select:none for OCR text overlay
+     and chat message prose content.
      Must override *, :not(input):not(textarea), and ::before/::after rules above. */
   .selectable-text-layer,
   .selectable-text-layer *,
   .selectable-text-layer *::before,
-  .selectable-text-layer *::after {
+  .selectable-text-layer *::after,
+  .prose,
+  .prose *,
+  .prose *::before,
+  .prose *::after {
     -webkit-user-select: text !important;
     -moz-user-select: text !important;
     -ms-user-select: text !important;
@@ -274,7 +279,9 @@
     -webkit-user-drag: none !important;
   }
   .selectable-text-layer::selection,
-  .selectable-text-layer *::selection {
+  .selectable-text-layer *::selection,
+  .prose::selection,
+  .prose *::selection {
     background-color: rgba(59, 130, 246, 0.35) !important;
   }
 

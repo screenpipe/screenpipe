@@ -652,12 +652,14 @@ async fn get_archive_chunk(
     .fetch_all(pool)
     .await?;
 
-    // Get accessibility records in range
+    // Accessibility data now lives in frames.full_text (text_source='accessibility')
     let accessibility: Vec<(i64, String, String, String, String, Option<String>)> = sqlx::query_as(
         r#"
-        SELECT id, timestamp, app_name, window_name, text_content, browser_url
-        FROM accessibility
-        WHERE timestamp >= ? AND timestamp < ?
+        SELECT id, timestamp,
+               COALESCE(app_name, ''), COALESCE(window_name, ''),
+               COALESCE(full_text, ''), browser_url
+        FROM frames
+        WHERE timestamp >= ? AND timestamp < ? AND text_source = 'accessibility'
         ORDER BY timestamp ASC
         LIMIT ?
         "#,
@@ -881,12 +883,13 @@ async fn count_records_in_range(
     .fetch_one(pool)
     .await?;
 
-    let (accessibility,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM accessibility WHERE timestamp >= ? AND timestamp < ?")
-            .bind(&start_str)
-            .bind(&end_str)
-            .fetch_one(pool)
-            .await?;
+    let (accessibility,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM frames WHERE timestamp >= ? AND timestamp < ? AND text_source = 'accessibility'",
+    )
+    .bind(&start_str)
+    .bind(&end_str)
+    .fetch_one(pool)
+    .await?;
 
     let (ui_events,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM ui_events WHERE timestamp >= ? AND timestamp < ?")

@@ -287,42 +287,49 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 last_status = current_status.to_string();
                 last_theme = theme;
 
-                if let Some(main_tray) = app.tray_by_id("screenpipe_main") {
-                    let icon_path = if is_unhealthy_icon(current_status) {
-                        if theme == Mode::Light {
-                            "assets/screenpipe-logo-tray-black-failed.png"
-                        } else {
-                            "assets/screenpipe-logo-tray-white-failed.png"
-                        }
+                // Resolve icon path on this thread (no AppKit calls)
+                let icon_path = if is_unhealthy_icon(current_status) {
+                    if theme == Mode::Light {
+                        "assets/screenpipe-logo-tray-black-failed.png"
                     } else {
-                        if theme == Mode::Light {
-                            "assets/screenpipe-logo-tray-black.png"
-                        } else {
-                            "assets/screenpipe-logo-tray-white.png"
-                        }
-                    };
+                        "assets/screenpipe-logo-tray-white-failed.png"
+                    }
+                } else {
+                    if theme == Mode::Light {
+                        "assets/screenpipe-logo-tray-black.png"
+                    } else {
+                        "assets/screenpipe-logo-tray-white.png"
+                    }
+                };
 
-                    let icon_path = match app.path().resolve(icon_path, BaseDirectory::Resource) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            error!("failed to resolve icon path: {}", e);
-                            continue;
-                        }
-                    };
+                let icon_path = match app.path().resolve(icon_path, BaseDirectory::Resource) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("failed to resolve icon path: {}", e);
+                        continue;
+                    }
+                };
 
-                    match tauri::image::Image::from_path(&icon_path) {
-                        Ok(image) => {
-                            if let Err(e) =
-                                crate::safe_icon::safe_set_icon_as_template(&main_tray, image)
-                            {
-                                error!("failed to set tray icon: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("failed to load tray icon from {:?}: {}", icon_path, e);
+                let image = match tauri::image::Image::from_path(&icon_path) {
+                    Ok(img) => img,
+                    Err(e) => {
+                        error!("failed to load tray icon from {:?}: {}", icon_path, e);
+                        continue;
+                    }
+                };
+
+                // TrayIcon must be accessed and dropped on the main thread
+                // (NSStatusBar operations crash if called from a tokio thread)
+                let app_clone = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Some(main_tray) = app_clone.tray_by_id("screenpipe_main") {
+                        if let Err(e) =
+                            crate::safe_icon::safe_set_icon_as_template(&main_tray, image)
+                        {
+                            error!("failed to set tray icon: {}", e);
                         }
                     }
-                }
+                });
             }
         }
     });

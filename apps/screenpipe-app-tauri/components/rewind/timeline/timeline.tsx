@@ -137,6 +137,10 @@ interface TimelineSliderProps {
 	selectedMeeting?: string; // "all" or a meeting id
 	onMeetingChange?: (meetingId: string) => void;
 	onRefresh?: () => void;
+	/** Ref attached to the filter column — used for Live Text click guard */
+	filtersRef?: React.MutableRefObject<HTMLDivElement | null>;
+	/** Ref attached to the scrubber area — used for Live Text click guard */
+	scrubberRef?: React.MutableRefObject<HTMLDivElement | null>;
 }
 
 interface AppGroup {
@@ -291,6 +295,8 @@ export const TimelineSlider = ({
 	selectedMeeting = "all",
 	onMeetingChange,
 	onRefresh,
+	filtersRef,
+	scrubberRef,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
@@ -943,6 +949,7 @@ export const TimelineSlider = ({
 		<div className="relative w-full" dir="rtl">
 			{/* Filter icon column + inline expand (design E) */}
 			<div
+				ref={(el) => { if (filtersRef) filtersRef.current = el; }}
 				className="absolute left-3 bottom-[calc(100%-60px)] z-30 flex flex-col gap-0.5 items-start"
 				dir="ltr"
 				onMouseLeave={() => setExpandedFilterSection(null)}
@@ -1308,7 +1315,10 @@ export const TimelineSlider = ({
 			</div>
 
 			<div
-				ref={containerRef}
+				ref={(el) => {
+					(containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+					if (scrubberRef) (scrubberRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+				}}
 				tabIndex={0}
 				className="w-full overflow-x-auto overflow-y-visible scrollbar-hide bg-gradient-to-t from-black/50 to-black/0 outline-none"
 				style={{

@@ -9,7 +9,6 @@ import {
 } from "@tauri-apps/plugin-notification";
 
 import { listen } from "@tauri-apps/api/event";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { showNotificationPanel } from "@/lib/hooks/use-notification-panel";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 
@@ -18,11 +17,7 @@ type NotificationRequested = {
   body: string;
 };
 
-const PIPE_SUGGESTION_KEY = "lastPipeSuggestionNotif";
-const STARTUP_DELAY_MS = 30 * 60 * 1000; // 30 minutes after app start
-
 const NotificationHandler: React.FC = () => {
-  const { settings, isSettingsLoaded } = useSettings();
 
   useEffect(() => {
     const checkAndRequestPermission = async () => {
@@ -53,51 +48,26 @@ const NotificationHandler: React.FC = () => {
         console.log(
           `notification requested ${event.payload.title} ${event.payload.body}`
         );
-        sendNotification({
+        // Use in-app notification panel instead of OS notifications
+        showNotificationPanel({
+          id: `legacy-${Date.now()}`,
+          type: "general",
           title: event.payload.title,
           body: event.payload.body,
+          actions: [],
+          autoDismissMs: 20000,
+        }).catch(() => {
+          // Fallback to OS notification if panel fails
+          sendNotification({
+            title: event.payload.title,
+            body: event.payload.body,
+          });
         });
       });
     };
 
     checkAndRequestPermission();
   }, []);
-
-  // pipe suggestion notification
-  useEffect(() => {
-    if (!isSettingsLoaded) return;
-
-    const enabled = settings.pipeSuggestionsEnabled !== false; // default true
-    if (!enabled) return;
-
-    const frequencyMs = (settings.pipeSuggestionFrequencyHours || 24) * 60 * 60 * 1000;
-
-    const timer = setTimeout(async () => {
-      try {
-        const lastShown = localStorage?.getItem(PIPE_SUGGESTION_KEY);
-        if (lastShown && Date.now() - parseInt(lastShown, 10) < frequencyMs) {
-          return;
-        }
-
-        await showNotificationPanel({
-          id: "pipe-suggestion",
-          type: "pipe-suggestion",
-          title: "automate something today",
-          body: "AI can suggest pipes based on what you've been doing — click to explore ideas",
-          actions: [
-            { label: "show me ideas", action: "open_pipe_suggestions", primary: true },
-          ],
-          autoDismissMs: 30000,
-        });
-
-        localStorage?.setItem(PIPE_SUGGESTION_KEY, Date.now().toString());
-      } catch {
-        // ignore
-      }
-    }, STARTUP_DELAY_MS);
-
-    return () => clearTimeout(timer);
-  }, [isSettingsLoaded, settings.pipeSuggestionsEnabled, settings.pipeSuggestionFrequencyHours]);
 
   // listen for pipe suggestion action from notification panel
   useEffect(() => {
