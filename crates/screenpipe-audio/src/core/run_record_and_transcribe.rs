@@ -117,39 +117,72 @@ async fn recv_audio_chunk(
             metrics.update_audio_level(&chunk);
             metrics.update_audio_level_for_device(device_name, &chunk);
             update_device_capture_time(device_name);
+            // Log audio receipt for diagnostic purposes - helps detect when buffer stops
+            info!(
+                "audio chunk received: device={}, samples={}, audio_level={:.6}",
+                device_name,
+                chunk.len(),
+                calculate_rms(&chunk)
+            );
             Ok(Some(chunk))
         }
         Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
-            debug!(
-                "audio channel lagged by {} messages for {}, continuing",
+            warn!(
+                "audio channel lagged by {} messages for {}, this may indicate buffer overflow",
                 n, device_name
             );
             Ok(None)
         }
         Ok(Err(e)) => {
-            error!("error receiving audio data: {}", e);
+            error!("error receiving audio data from {}: {}", device_name, e);
             Err(anyhow!("Audio stream error: {}", e))
         }
         Err(_timeout) => {
-            if audio_stream.device.device_type == DeviceType::Output {
+            // Audio buffer has stopped receiving data - this is the key diagnostic event
+            // for issue #1626
+            let is_output = audio_stream.device.device_type == DeviceType::Output;
+            let channel_len = receiver.len();
+            
+            if is_output {
+                // Output devices (system audio on macOS) going idle is normal
                 debug!(
-                    "no audio from output device {} for {}s - idle (normal), continuing",
-                    device_name, AUDIO_RECEIVE_TIMEOUT_SECS
+                    "no audio from output device {} for {}s - idle (normal behavior), channel_len={}, continuing",
+                    device_name, AUDIO_RECEIVE_TIMEOUT_SECS, channel_len
                 );
                 return Ok(None);
             }
-            debug!(
-                "no audio received from {} for {}s - stream may be hijacked, triggering reconnect",
-                device_name, AUDIO_RECEIVE_TIMEOUT_SECS
+            
+            // Input device (microphone) timeout is unusual and may indicate:
+            // - Another app took control of the microphone (e.g., Wispr Flow)
+            // - System audio subsystem issue
+            // - Physical device disconnection
+            warn!(
+                "AUDIO BUFFER STOPPED: no audio received from input device '{}' for {}s - \
+                possible audio hijack or device issue. channel_len={}, is_disconnected={}, \
+                this may require manual restart or indicate an app took microphone control",
+                device_name,
+                AUDIO_RECEIVE_TIMEOUT_SECS,
+                channel_len,
+                audio_stream.is_disconnected.load(Ordering::Relaxed)
             );
             metrics.record_stream_timeout();
             audio_stream.is_disconnected.store(true, Ordering::Relaxed);
             Err(anyhow!(
-                "Audio stream timeout - no data received for {}s (possible audio hijack)",
-                AUDIO_RECEIVE_TIMEOUT_SECS
+                "Audio stream timeout - no data received for {}s from {} (possible audio hijack or device issue)",
+                AUDIO_RECEIVE_TIMEOUT_SECS,
+                device_name
             ))
         }
     }
+}
+
+/// Calculate RMS (root mean square) audio level for diagnostics
+fn calculate_rms(samples: &[f32]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    (sum_sq / samples.len() as f64).sqrt()
 }
 
 fn now_epoch_secs() -> u64 {

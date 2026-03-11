@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use crate::utils::audio::audio_to_mono;
@@ -260,6 +260,12 @@ fn build_input_stream(
                 &config.config(),
                 move |data: &[f32], _: &_| {
                     let mono = audio_to_mono(data, channels);
+                    debug!(
+                        "audio buffer received: {} samples ({} bytes), channel capacity: {}",
+                        mono.len(),
+                        mono.len() * std::mem::size_of::<f32>(),
+                        tx.len()
+                    );
                     let _ = tx.send(mono);
                 },
                 error_callback,
@@ -272,6 +278,12 @@ fn build_input_stream(
                 move |data: &[i16], _: &_| {
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                     let mono = audio_to_mono(&f32_data, channels);
+                    debug!(
+                        "audio buffer received: {} samples ({} bytes), channel capacity: {}",
+                        mono.len(),
+                        mono.len() * std::mem::size_of::<f32>(),
+                        tx.len()
+                    );
                     let _ = tx.send(mono);
                 },
                 error_callback,
@@ -287,6 +299,12 @@ fn build_input_stream(
                         .map(|&s| (s as f64 / 2147483648.0) as f32)
                         .collect();
                     let mono = audio_to_mono(&f32_data, channels);
+                    debug!(
+                        "audio buffer received: {} samples ({} bytes), channel capacity: {}",
+                        mono.len(),
+                        mono.len() * std::mem::size_of::<f32>(),
+                        tx.len()
+                    );
                     let _ = tx.send(mono);
                 },
                 error_callback,
@@ -299,6 +317,12 @@ fn build_input_stream(
                 move |data: &[i8], _: &_| {
                     let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 128.0).collect();
                     let mono = audio_to_mono(&f32_data, channels);
+                    debug!(
+                        "audio buffer received: {} samples ({} bytes), channel capacity: {}",
+                        mono.len(),
+                        mono.len() * std::mem::size_of::<f32>(),
+                        tx.len()
+                    );
                     let _ = tx.send(mono);
                 },
                 error_callback,
