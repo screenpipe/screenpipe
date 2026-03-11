@@ -45,9 +45,22 @@ struct PendingTranscription {
     file_path: String,
 }
 
-/// Maximum number of consecutive 30s chunks to concatenate into a single batch.
-/// 10 x 30s = 5 minutes — gives Whisper much more context for better quality.
-const MAX_BATCH_CHUNKS: usize = 10;
+/// Default maximum batch duration in seconds when no user override is set.
+/// Engine-aware: Deepgram can handle hours, local Whisper tops out around 10 min.
+fn default_max_batch_duration_secs(engine: &AudioTranscriptionEngine) -> u64 {
+    match engine {
+        // Cloud engines can handle long audio
+        AudioTranscriptionEngine::Deepgram => 3600, // 1 hour
+        // OpenAI-compatible has 25MB limit (~10 min at typical bitrates)
+        AudioTranscriptionEngine::OpenAICompatible => 600,
+        // Local Whisper quality degrades past ~10 min
+        _ => 600,
+    }
+}
+
+/// Maximum gap between consecutive chunks (in seconds) before starting a new batch.
+/// A gap >60s likely means a break in conversation (e.g., lunch, switching meetings).
+const MAX_GAP_BETWEEN_CHUNKS_SECS: i64 = 60;
 
 /// Finds audio chunks with no transcription row (orphans), groups consecutive
 /// chunks from the same device, concatenates them, and transcribes the batch.
@@ -61,13 +74,14 @@ pub async fn reconcile_untranscribed(
     transcription_engine: &TranscriptionEngine,
     on_insert: Option<&AudioInsertCallback>,
     _whisper_context: Option<Arc<WhisperContext>>,
-    _audio_engine: Arc<AudioTranscriptionEngine>,
+    audio_engine: Arc<AudioTranscriptionEngine>,
     _deepgram_api_key: Option<String>,
     _openai_compatible_config: Option<OpenAICompatibleConfig>,
     _languages: Vec<Language>,
     _vocabulary: &[VocabularyEntry],
     segmentation_manager: Option<Arc<SegmentationManager>>,
     data_dir: Option<&Path>,
+    batch_max_duration_secs: Option<u64>,
 ) -> usize {
     // Prevent concurrent reconciliation runs — two Whisper sessions = 200%+ CPU
     if RECONCILIATION_RUNNING
@@ -115,11 +129,13 @@ pub async fn reconcile_untranscribed(
     );
 
     // Group consecutive chunks by device for batched transcription.
-    let batches = group_chunks_by_device(&chunks);
+    let max_duration =
+        batch_max_duration_secs.unwrap_or_else(|| default_max_batch_duration_secs(&audio_engine));
+    let batches = group_chunks_by_device(&chunks, max_duration);
     debug!(
-        "reconciliation: grouped into {} batches (max {}x30s each)",
+        "reconciliation: grouped into {} batches (max {}s each)",
         batches.len(),
-        MAX_BATCH_CHUNKS
+        max_duration
     );
 
     let engine_config = transcription_engine.config();
@@ -521,18 +537,38 @@ async fn extract_speaker_id(
 
 /// Group chunks into batches of consecutive chunks from the same device.
 /// Chunks are already ordered by timestamp DESC from the DB query (newest first).
-fn group_chunks_by_device(chunks: &[UntranscribedChunk]) -> Vec<Vec<&UntranscribedChunk>> {
+///
+/// Batching rules:
+/// 1. Same device only — device change starts a new batch
+/// 2. Duration cap — total batch duration must not exceed `max_duration_secs`
+/// 3. Gap detection — a gap of >60s between consecutive chunks starts a new batch
+///    (likely a break between meetings/conversations)
+fn group_chunks_by_device(
+    chunks: &[UntranscribedChunk],
+    max_duration_secs: u64,
+) -> Vec<Vec<&UntranscribedChunk>> {
     let mut batches: Vec<Vec<&UntranscribedChunk>> = Vec::new();
+    // Each chunk is ~30s of audio
+    const CHUNK_DURATION_SECS: u64 = 30;
 
     for chunk in chunks {
         let (device, _) = extract_device_from_path(&chunk.file_path);
 
-        let should_start_new = match batches.last() {
-            None => true,
-            Some(current_batch) => {
-                let (last_device, _) = extract_device_from_path(&current_batch[0].file_path);
-                last_device != device || current_batch.len() >= MAX_BATCH_CHUNKS
+        let should_start_new = if let Some(current_batch) = batches.last() {
+            let (last_device, _) = extract_device_from_path(&current_batch[0].file_path);
+            if last_device != device {
+                true
+            } else if (current_batch.len() as u64) * CHUNK_DURATION_SECS >= max_duration_secs {
+                // Duration cap reached
+                true
+            } else {
+                // Check for gap between this chunk and the last one in the batch
+                let last_chunk = current_batch.last().unwrap();
+                let gap = (chunk.timestamp - last_chunk.timestamp).num_seconds().abs();
+                gap > MAX_GAP_BETWEEN_CHUNKS_SECS
             }
+        } else {
+            true
         };
 
         if should_start_new {
@@ -599,70 +635,106 @@ mod tests {
 
     #[test]
     fn group_chunks_same_device() {
+        let now = chrono::Utc::now();
         let chunks = vec![
             UntranscribedChunk {
                 id: 1,
                 file_path: "/data/input (input)_2026-02-27_23-15-08.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now,
             },
             UntranscribedChunk {
                 id: 2,
                 file_path: "/data/input (input)_2026-02-27_23-15-38.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now + chrono::Duration::seconds(30),
             },
             UntranscribedChunk {
                 id: 3,
                 file_path: "/data/input (input)_2026-02-27_23-16-08.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now + chrono::Duration::seconds(60),
             },
         ];
-        let batches = group_chunks_by_device(&chunks);
+        let batches = group_chunks_by_device(&chunks, 600);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].len(), 3);
     }
 
     #[test]
     fn group_chunks_alternating_devices() {
+        let now = chrono::Utc::now();
         let chunks = vec![
             UntranscribedChunk {
                 id: 1,
                 file_path: "/data/input (input)_2026-02-27_23-15-08.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now,
             },
             UntranscribedChunk {
                 id: 2,
                 file_path: "/data/Display 3 (output)_2026-02-27_23-15-08.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now,
             },
             UntranscribedChunk {
                 id: 3,
                 file_path: "/data/input (input)_2026-02-27_23-15-38.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now + chrono::Duration::seconds(30),
             },
             UntranscribedChunk {
                 id: 4,
                 file_path: "/data/Display 3 (output)_2026-02-27_23-15-38.mp4".to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: now + chrono::Duration::seconds(30),
             },
         ];
-        let batches = group_chunks_by_device(&chunks);
+        let batches = group_chunks_by_device(&chunks, 600);
         // input, output, input, output -> 4 batches (alternating)
         assert_eq!(batches.len(), 4);
     }
 
     #[test]
-    fn group_chunks_respects_max_batch() {
+    fn group_chunks_respects_max_duration() {
+        let now = chrono::Utc::now();
+        // 13 chunks x 30s = 390s, with max_duration=300s should split into 2 batches
         let mut chunks = Vec::new();
-        for i in 0..(MAX_BATCH_CHUNKS + 3) {
+        for i in 0..13 {
             chunks.push(UntranscribedChunk {
                 id: i as i64,
                 file_path: format!("/data/input (input)_2026-02-27_23-{:02}-08.mp4", i),
-                timestamp: chrono::Utc::now(),
+                timestamp: now + chrono::Duration::seconds(i as i64 * 30),
             });
         }
-        let batches = group_chunks_by_device(&chunks);
+        let batches = group_chunks_by_device(&chunks, 300); // 300s = 10 chunks max
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].len(), MAX_BATCH_CHUNKS);
+        assert_eq!(batches[0].len(), 10);
         assert_eq!(batches[1].len(), 3);
+    }
+
+    #[test]
+    fn group_chunks_gap_detection() {
+        let now = chrono::Utc::now();
+        let chunks = vec![
+            UntranscribedChunk {
+                id: 1,
+                file_path: "/data/input (input)_2026-02-27_23-15-08.mp4".to_string(),
+                timestamp: now,
+            },
+            UntranscribedChunk {
+                id: 2,
+                file_path: "/data/input (input)_2026-02-27_23-15-38.mp4".to_string(),
+                timestamp: now + chrono::Duration::seconds(30),
+            },
+            // 5 minute gap — should start new batch
+            UntranscribedChunk {
+                id: 3,
+                file_path: "/data/input (input)_2026-02-27_23-20-38.mp4".to_string(),
+                timestamp: now + chrono::Duration::seconds(330),
+            },
+            UntranscribedChunk {
+                id: 4,
+                file_path: "/data/input (input)_2026-02-27_23-21-08.mp4".to_string(),
+                timestamp: now + chrono::Duration::seconds(360),
+            },
+        ];
+        let batches = group_chunks_by_device(&chunks, 3600);
+        assert_eq!(batches.len(), 2, "5-minute gap should split into 2 batches");
+        assert_eq!(batches[0].len(), 2);
+        assert_eq!(batches[1].len(), 2);
     }
 }

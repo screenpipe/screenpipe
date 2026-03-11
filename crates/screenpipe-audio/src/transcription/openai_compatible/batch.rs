@@ -77,13 +77,15 @@ pub async fn transcribe_with_openai_compatible(
         form = form.text("language", lang_code.to_string());
     }
 
-    // Pass vocabulary/hotwords as the `prompt` field.
-    // OpenAI Whisper API uses this as initial prompt for biasing.
-    // VibeVoice-ASR (via mlx-audio) maps this to `--context` for hotwords.
+    // Pass vocabulary/hotwords for transcription biasing.
+    // - OpenAI Whisper API: uses `prompt` as initial_prompt
+    // - mlx-audio (VibeVoice-ASR): uses `context` for hotwords (ignores `prompt`)
+    // Send both fields so it works regardless of which server is running.
     if !vocabulary.is_empty() {
         let prompt = vocabulary.join(", ");
-        debug!("passing vocabulary as prompt: {}", prompt);
-        form = form.text("prompt", prompt);
+        debug!("passing vocabulary as prompt + context: {}", prompt);
+        form = form.text("prompt", prompt.clone());
+        form = form.text("context", prompt);
     }
 
     // Build request with optional authentication

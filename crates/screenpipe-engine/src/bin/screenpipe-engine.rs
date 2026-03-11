@@ -1126,10 +1126,7 @@ async fn check_for_updates() {
             latest.green(),
             current,
         );
-        eprintln!(
-            "  run: {}",
-            "npx screenpipe@latest record".cyan()
-        );
+        eprintln!("  run: {}", "npx screenpipe@latest record".cyan());
         eprintln!();
     }
 }

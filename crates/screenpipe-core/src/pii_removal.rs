@@ -900,14 +900,14 @@ mod tests {
         // Based on actual leaks found in the user's data
 
         // Stripe webhook secret from terminal
-        let stripe_leak = "whsec BnlsS222bkRvslineRtsak70Nxo10467";
+        let _stripe_leak = "whsec BnlsS222bkRvslineRtsak70Nxo10467";
         // Note: This has a space instead of underscore - edge case
         // The pattern expects underscore, so let's test the proper format
         let stripe_proper = "whsec_BnlsS222bkRvslineRtsak70Nxo10467";
         assert!(contains_pii(stripe_proper));
 
         // Supabase JWT from dashboard
-        let supabase_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let _supabase_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         // This is truncated but should still match the pattern start
         assert!(contains_pii(
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.abc123"
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn test_discord_token_detection() {
         // Discord token format: base64.timestamp.hmac
-        let discord_token = "MjM4NDk0NzU2NTIxMzc3Nzky.CunGFQ.wUILz7z6HoJzVeq6pyHPmVgQgV4";
+        let _discord_token = "MjM4NDk0NzU2NTIxMzc3Nzky.CunGFQ.wUILz7z6HoJzVeq6pyHPmVgQgV4";
         // Note: This is a fake token format
         assert!(contains_pii(
             "NTk0NzU2NTIxMzc3Nzk2NDEy.XQ0bXQ.vHc7MzY3NDk0NzU2NTIxMzc3Nzk"

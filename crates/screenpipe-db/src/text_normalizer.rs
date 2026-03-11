@@ -48,7 +48,7 @@ pub fn sanitize_fts5_query(query: &str) -> String {
     query
         .split_whitespace()
         .filter_map(|token| {
-            let cleaned = token.replace('\\', "").replace('"', "");
+            let cleaned = token.replace(['\\', '"'], "");
             if cleaned.is_empty() {
                 return None;
             }
@@ -90,7 +90,7 @@ pub fn expand_search_query(query: &str) -> String {
     let expanded_terms: Vec<String> = query
         .split_whitespace()
         .flat_map(|word| {
-            let cleaned = word.replace('\\', "").replace('"', "");
+            let cleaned = word.replace(['\\', '"'], "");
             let split = split_compound(&cleaned);
             let parts: Vec<&str> = split.split_whitespace().collect();
 

@@ -41,7 +41,10 @@ pub async fn livetext_is_available() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         let result = unsafe { livetext_ffi::lt_is_available() };
-        info!("livetext_is_available: lt_is_available() returned {}", result);
+        info!(
+            "livetext_is_available: lt_is_available() returned {}",
+            result
+        );
         return Ok(result == 1);
     }
     #[cfg(not(target_os = "macos"))]
@@ -62,21 +65,26 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
         crate::window_api::run_on_main_thread_safe(&app, move || {
             let result = (|| -> Result<(), String> {
                 // Try NSPanel first (overlay/window timeline), fall back to regular WebviewWindow (settings)
-                let ns_window_ptr: u64 = if let Ok(panel) = app_clone.get_webview_panel(&window_label) {
-                    &*panel as *const _ as *mut std::ffi::c_void as u64
-                } else if let Some(window) = app_clone.get_webview_window(&window_label) {
-                    let raw: *mut std::ffi::c_void = window.ns_window()
-                        .map_err(|e| format!("failed to get ns_window for '{}': {:?}", window_label, e))?;
-                    raw as u64
-                } else {
-                    return Err(format!("no panel or window found for '{}'", window_label));
-                };
+                let ns_window_ptr: u64 =
+                    if let Ok(panel) = app_clone.get_webview_panel(&window_label) {
+                        &*panel as *const _ as *mut std::ffi::c_void as u64
+                    } else if let Some(window) = app_clone.get_webview_window(&window_label) {
+                        let raw: *mut std::ffi::c_void = window.ns_window().map_err(|e| {
+                            format!("failed to get ns_window for '{}': {:?}", window_label, e)
+                        })?;
+                        raw as u64
+                    } else {
+                        return Err(format!("no panel or window found for '{}'", window_label));
+                    };
 
                 let status = unsafe { livetext_ffi::lt_init(ns_window_ptr) };
                 if status != 0 {
                     return Err(format!("lt_init returned error code: {}", status));
                 }
-                info!("live text overlay initialized for window '{}'", window_label);
+                info!(
+                    "live text overlay initialized for window '{}'",
+                    window_label
+                );
                 Ok(())
             })();
             let _ = tx.send(result);
@@ -137,8 +145,8 @@ pub async fn livetext_analyze(
 
                 unsafe {
                     if status != 0 {
-                        let err =
-                            extract_and_free(out_error).unwrap_or_else(|| "unknown error".to_string());
+                        let err = extract_and_free(out_error)
+                            .unwrap_or_else(|| "unknown error".to_string());
                         extract_and_free(out_text);
                         return Err(format!("live text analysis failed: {}", err));
                     }
@@ -214,4 +222,24 @@ pub async fn livetext_hide() -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     Ok(())
+}
+
+/// Place a transparent click guard above the Live Text overlay in the given
+/// rectangle (web/CSS coordinates: origin top-left). This prevents VisionKit's
+/// text-selection hit regions from intercepting clicks on the nav bar.
+#[tauri::command]
+pub async fn livetext_set_guard_rect(x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = unsafe { livetext_ffi::lt_set_guard_rect(x, y, w, h) };
+        if status != 0 {
+            return Err(format!("lt_set_guard_rect error: {}", status));
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (x, y, w, h);
+        Ok(())
+    }
 }

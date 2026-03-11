@@ -62,6 +62,8 @@ pub enum SearchResult {
     UI(UiContent),
     /// User input actions (clicks, keystrokes, clipboard)
     Input(UiEventRecord),
+    /// Persistent memory
+    Memory(MemoryRecord),
 }
 
 #[derive(FromRow, Debug)]
@@ -115,6 +117,7 @@ pub struct OCRResult {
 /// - `audio` - Transcribed speech
 /// - `input` - User actions (clicks, keystrokes, clipboard)
 /// - `accessibility` - Accessibility tree text
+/// - `memory` - Persistent facts, preferences, decisions
 #[derive(OaSchema, Debug, Deserialize, PartialEq, Default, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
@@ -129,6 +132,8 @@ pub enum ContentType {
     Input,
     /// Accessibility tree text
     Accessibility,
+    /// Persistent memories: facts, preferences, decisions, insights
+    Memory,
 }
 
 #[derive(FromRow)]
@@ -152,6 +157,19 @@ pub struct Speaker {
     pub id: i64,
     pub name: String,
     pub metadata: String,
+}
+
+/// A persistent memory: fact, preference, decision, or insight.
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
+pub struct MemoryRecord {
+    pub id: i64,
+    pub content: String,
+    pub source: String,
+    pub source_context: Option<String>,
+    pub tags: Option<String>,
+    pub importance: f64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -756,6 +774,10 @@ mod tests {
         assert_eq!(
             ContentType::Accessibility,
             serde_json::from_str(r#""accessibility""#).unwrap()
+        );
+        assert_eq!(
+            ContentType::Memory,
+            serde_json::from_str(r#""memory""#).unwrap()
         );
     }
 }

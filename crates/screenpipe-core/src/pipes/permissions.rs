@@ -449,6 +449,7 @@ mod tests {
             days: Some("Mon,Tue,Wed,Thu,Fri".to_string()),
             allow_raw_sql: false, // explicit deny
             allow_frames: true,
+            connections: vec![],
         };
         let perms = PipePermissions::from_config(&config);
         assert_eq!(perms.allow_apps, vec!["slack"]);
@@ -483,6 +484,7 @@ mod tests {
             days: None,
             allow_raw_sql: true,
             allow_frames: true,
+            connections: vec![],
         };
         let perms = PipePermissions::from_config(&config);
         // all permissions default to allow — no restrictions

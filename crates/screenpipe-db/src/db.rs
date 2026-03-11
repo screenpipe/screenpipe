@@ -29,7 +29,7 @@ use futures::future::try_join_all;
 use crate::{
     text_similarity::is_similar_transcription, AudioChunksResponse, AudioDevice, AudioEntry,
     AudioResult, AudioResultRaw, ContentType, DeviceType, Element, ElementRow, ElementSource,
-    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord, OCREntry,
+    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord, MemoryRecord, OCREntry,
     OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, SearchMatch, SearchMatchGroup,
     SearchResult, Speaker, TagContentType, TextBounds, TextPosition, TimeSeriesChunk, UiContent,
     UiEventRecord, UiEventRow, VideoMetadata,
@@ -53,6 +53,8 @@ pub struct DeleteTimeRangeResult {
     pub ui_events_deleted: u64,
     pub video_files: Vec<String>,
     pub audio_files: Vec<String>,
+    /// Snapshot JPEG files that were uploaded to cloud and can be deleted.
+    pub snapshot_files: Vec<String>,
 }
 
 /// A transaction wrapper that uses `BEGIN IMMEDIATE` to acquire the write lock upfront,
@@ -2077,6 +2079,23 @@ impl DatabaseManager {
                     .await?;
                 results.extend(input_results.into_iter().map(SearchResult::Input));
             }
+            ContentType::Memory => {
+                let start_str = start_time.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+                let end_str = end_time.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+                let memory_results = self
+                    .list_memories(
+                        Some(query).filter(|q| !q.is_empty()),
+                        None,
+                        None,
+                        None,
+                        start_str.as_deref(),
+                        end_str.as_deref(),
+                        limit,
+                        offset,
+                    )
+                    .await?;
+                results.extend(memory_results.into_iter().map(SearchResult::Memory));
+            }
         }
 
         // Sort results by timestamp in descending order
@@ -2086,12 +2105,14 @@ impl DatabaseManager {
                 SearchResult::Audio(audio) => audio.timestamp,
                 SearchResult::UI(ui) => ui.timestamp,
                 SearchResult::Input(input) => input.timestamp,
+                SearchResult::Memory(m) => m.created_at.parse::<DateTime<Utc>>().unwrap_or_default(),
             };
             let timestamp_b = match b {
                 SearchResult::OCR(ocr) => ocr.timestamp,
                 SearchResult::Audio(audio) => audio.timestamp,
                 SearchResult::UI(ui) => ui.timestamp,
                 SearchResult::Input(input) => input.timestamp,
+                SearchResult::Memory(m) => m.created_at.parse::<DateTime<Utc>>().unwrap_or_default(),
             };
             timestamp_b.cmp(&timestamp_a)
         });
@@ -2833,6 +2854,21 @@ impl DatabaseManager {
                     "audio_transcriptions_fts MATCH ?1"
                 }
             ),
+            ContentType::Memory => {
+                let start_str = start_time.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+                let end_str = end_time.map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+                let count = self
+                    .count_memories(
+                        Some(query).filter(|q| !q.is_empty()),
+                        None,
+                        None,
+                        None,
+                        start_str.as_deref(),
+                        end_str.as_deref(),
+                    )
+                    .await?;
+                return Ok(count as usize);
+            }
             ContentType::Input => {
                 // Count ui_events using parameterized LIKE queries
                 let mut conditions = Vec::new();
@@ -3823,12 +3859,26 @@ impl DatabaseManager {
         let start_str = start.to_rfc3339();
         let end_str = end.to_rfc3339();
 
-        // 1. Collect video file paths for chunks that become fully orphaned
-        // ?1 and ?2 are numbered params — reused automatically, only need 2 binds
+        // 1. Collect video file paths for chunks that become fully orphaned.
+        // Only include files that have been uploaded to cloud (cloud_blob_id IS NOT NULL)
+        // or files not managed by archive (no cloud tracking needed for non-archive deletes).
         let video_files: Vec<String> = sqlx::query_scalar(
             r#"SELECT file_path FROM video_chunks
                WHERE id IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)
-               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)
+               AND (cloud_blob_id IS NOT NULL OR file_path LIKE 'cloud://%')"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Also collect snapshot files that have been uploaded
+        let snapshot_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT snapshot_path FROM frames
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL
+               AND cloud_blob_id IS NOT NULL"#,
         )
         .bind(&start_str)
         .bind(&end_str)
@@ -3847,29 +3897,7 @@ impl DatabaseManager {
         .fetch_all(&mut **tx.conn())
         .await?;
 
-        // 3. Delete chunked_text_entries (no CASCADE) — by frame_id
-        sqlx::query(
-            "DELETE FROM chunked_text_entries WHERE frame_id IN (SELECT id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)",
-        )
-        .bind(&start_str)
-        .bind(&end_str)
-        .execute(&mut **tx.conn())
-        .await?;
-
-        // Also delete chunked_text_entries by audio_chunk_id for orphaned audio chunks
-        sqlx::query(
-            r#"DELETE FROM chunked_text_entries WHERE audio_chunk_id IN (
-                SELECT id FROM audio_chunks
-                WHERE id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
-                AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)
-            )"#,
-        )
-        .bind(&start_str)
-        .bind(&end_str)
-        .execute(&mut **tx.conn())
-        .await?;
-
-        // 4. Delete ocr_text — triggers ocr_text_delete -> cleans ocr_text_fts
+        // 3. Delete ocr_text — triggers ocr_text_delete -> cleans ocr_text_fts
         let ocr_result = sqlx::query(
             "DELETE FROM ocr_text WHERE frame_id IN (SELECT id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)",
         )
@@ -3951,7 +3979,89 @@ impl DatabaseManager {
             ui_events_deleted,
             video_files,
             audio_files,
+            snapshot_files,
         })
+    }
+
+    // =========================================================================
+    // Cloud archive media upload tracking
+    // =========================================================================
+
+    /// Get video chunks that haven't been uploaded to cloud yet, before cutoff.
+    /// Returns (chunk_id, file_path, min_frame_timestamp).
+    pub async fn get_unuploaded_video_chunks(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
+        let cutoff_str = cutoff.to_rfc3339();
+        sqlx::query_as(
+            r#"SELECT vc.id, vc.file_path, MIN(f.timestamp) as min_ts
+               FROM video_chunks vc
+               JOIN frames f ON f.video_chunk_id = vc.id
+               WHERE vc.cloud_blob_id IS NULL
+                 AND f.timestamp < ?1
+               GROUP BY vc.id
+               HAVING MAX(f.timestamp) < ?1
+               ORDER BY min_ts ASC
+               LIMIT ?2"#,
+        )
+        .bind(&cutoff_str)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Get snapshot frames (not yet compacted into video chunks) that haven't
+    /// been uploaded to cloud yet, before cutoff.
+    /// Returns (frame_id, snapshot_path, timestamp).
+    pub async fn get_unuploaded_snapshots(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
+        let cutoff_str = cutoff.to_rfc3339();
+        sqlx::query_as(
+            r#"SELECT id, snapshot_path, timestamp
+               FROM frames
+               WHERE snapshot_path IS NOT NULL
+                 AND cloud_blob_id IS NULL
+                 AND timestamp < ?1
+               ORDER BY timestamp ASC
+               LIMIT ?2"#,
+        )
+        .bind(&cutoff_str)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Mark a video chunk as uploaded to cloud.
+    pub async fn mark_video_chunk_uploaded(
+        &self,
+        chunk_id: i64,
+        blob_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE video_chunks SET cloud_blob_id = ?1 WHERE id = ?2")
+            .bind(blob_id)
+            .bind(chunk_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Mark a snapshot frame as uploaded to cloud.
+    pub async fn mark_snapshot_uploaded(
+        &self,
+        frame_id: i64,
+        blob_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE frames SET cloud_blob_id = ?1 WHERE id = ?2")
+            .bind(blob_id)
+            .bind(frame_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn get_similar_speakers(
@@ -5508,6 +5618,220 @@ LIMIT ? OFFSET ?
         .await?;
         Ok(meeting)
     }
+
+    // ========================================================================
+    // Memories
+    // ========================================================================
+
+    pub async fn insert_memory(
+        &self,
+        content: &str,
+        source: &str,
+        source_context: Option<&str>,
+        tags: Option<&str>,
+        importance: f64,
+    ) -> Result<i64, SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let id = sqlx::query(
+            "INSERT INTO memories (content, source, source_context, tags, importance) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(content)
+        .bind(source)
+        .bind(source_context)
+        .bind(tags.unwrap_or("[]"))
+        .bind(importance)
+        .execute(&mut **tx.conn())
+        .await?
+        .last_insert_rowid();
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn get_memory_by_id(&self, id: i64) -> Result<MemoryRecord, SqlxError> {
+        sqlx::query_as::<_, MemoryRecord>(
+            "SELECT id, content, source, source_context, tags, importance, \
+             created_at, updated_at \
+             FROM memories WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn update_memory(
+        &self,
+        id: i64,
+        content: Option<&str>,
+        tags: Option<&str>,
+        importance: Option<f64>,
+        source_context: Option<&str>,
+    ) -> Result<(), SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+
+        let mut sets = vec!["updated_at = ?1"];
+        if content.is_some() {
+            sets.push("content = ?2");
+        }
+        if tags.is_some() {
+            sets.push("tags = ?3");
+        }
+        if importance.is_some() {
+            sets.push("importance = ?4");
+        }
+        if source_context.is_some() {
+            sets.push("source_context = ?5");
+        }
+
+        let sql = format!(
+            "UPDATE memories SET {} WHERE id = ?6",
+            sets.join(", ")
+        );
+
+        sqlx::query(&sql)
+            .bind(&now)
+            .bind(content)
+            .bind(tags)
+            .bind(importance)
+            .bind(source_context)
+            .bind(id)
+            .execute(&mut **tx.conn())
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_memory(&self, id: i64) -> Result<(), SqlxError> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+        sqlx::query("DELETE FROM memories WHERE id = ?1")
+            .bind(id)
+            .execute(&mut **tx.conn())
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn list_memories(
+        &self,
+        query: Option<&str>,
+        source: Option<&str>,
+        tags_filter: Option<&str>,
+        min_importance: Option<f64>,
+        start_time: Option<&str>,
+        end_time: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<MemoryRecord>, SqlxError> {
+        let use_fts = query.is_some_and(|q| !q.is_empty());
+
+        let mut sql = if use_fts {
+            String::from(
+                "SELECT m.id, m.content, m.source, m.source_context, m.tags, m.importance, \
+                 m.created_at, m.updated_at \
+                 FROM memories_fts fts \
+                 JOIN memories m ON m.id = fts.rowid \
+                 WHERE 1=1",
+            )
+        } else {
+            String::from(
+                "SELECT id, content, source, source_context, tags, importance, \
+                 created_at, updated_at \
+                 FROM memories WHERE 1=1",
+            )
+        };
+
+        if use_fts {
+            sql.push_str(" AND fts.memories_fts MATCH ?1");
+        }
+        if source.is_some() {
+            sql.push_str(" AND source = ?2");
+        }
+        if tags_filter.is_some() {
+            sql.push_str(" AND tags LIKE '%' || ?3 || '%'");
+        }
+        if min_importance.is_some() {
+            sql.push_str(" AND importance >= ?4");
+        }
+        if start_time.is_some() {
+            sql.push_str(" AND created_at >= ?5");
+        }
+        if end_time.is_some() {
+            sql.push_str(" AND created_at <= ?6");
+        }
+
+        sql.push_str(" ORDER BY importance DESC, created_at DESC LIMIT ?7 OFFSET ?8");
+
+        let fts_query = query.map(|q| crate::text_normalizer::sanitize_fts5_query(q));
+
+        sqlx::query_as::<_, MemoryRecord>(&sql)
+            .bind(fts_query.as_deref())
+            .bind(source)
+            .bind(tags_filter)
+            .bind(min_importance)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    pub async fn count_memories(
+        &self,
+        query: Option<&str>,
+        source: Option<&str>,
+        tags_filter: Option<&str>,
+        min_importance: Option<f64>,
+        start_time: Option<&str>,
+        end_time: Option<&str>,
+    ) -> Result<i64, SqlxError> {
+        let use_fts = query.is_some_and(|q| !q.is_empty());
+
+        let mut sql = if use_fts {
+            String::from(
+                "SELECT COUNT(*) FROM memories_fts fts \
+                 JOIN memories m ON m.id = fts.rowid \
+                 WHERE 1=1",
+            )
+        } else {
+            String::from("SELECT COUNT(*) FROM memories WHERE 1=1")
+        };
+
+        if use_fts {
+            sql.push_str(" AND fts.memories_fts MATCH ?1");
+        }
+        if source.is_some() {
+            sql.push_str(" AND source = ?2");
+        }
+        if tags_filter.is_some() {
+            sql.push_str(" AND tags LIKE '%' || ?3 || '%'");
+        }
+        if min_importance.is_some() {
+            sql.push_str(" AND importance >= ?4");
+        }
+        if start_time.is_some() {
+            sql.push_str(" AND created_at >= ?5");
+        }
+        if end_time.is_some() {
+            sql.push_str(" AND created_at <= ?6");
+        }
+
+        let fts_query = query.map(|q| crate::text_normalizer::sanitize_fts5_query(q));
+
+        sqlx::query_scalar::<_, i64>(&sql)
+            .bind(fts_query.as_deref())
+            .bind(source)
+            .bind(tags_filter)
+            .bind(min_importance)
+            .bind(start_time)
+            .bind(end_time)
+            .fetch_one(&self.pool)
+            .await
+    }
+
 }
 
 pub fn find_matching_positions(blocks: &[OcrTextBlock], query: &str) -> Vec<TextPosition> {

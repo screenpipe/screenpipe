@@ -294,4 +294,16 @@ export function useTimelineKeyboard(opts: {
 			unlisten.then((fn) => fn());
 		};
 	}, [showSearchModal]);
+
+	// Listen for delayed open-search from Home page tab switch (Windows)
+	useEffect(() => {
+		const handler = () => {
+			if (!showSearchModal) {
+				setShowSearchModal(true);
+				resetFilters();
+			}
+		};
+		window.addEventListener("open-search-delayed", handler);
+		return () => window.removeEventListener("open-search-delayed", handler);
+	}, [showSearchModal]);
 }

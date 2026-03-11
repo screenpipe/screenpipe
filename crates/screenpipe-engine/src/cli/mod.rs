@@ -359,6 +359,8 @@ impl RecordArgs {
             analytics_enabled: !self.disable_telemetry,
             analytics_id: String::new(),
             vocabulary: vec![],
+            ignore_incognito_windows: true,
+            batch_max_duration_secs: None,
         }
     }
 }

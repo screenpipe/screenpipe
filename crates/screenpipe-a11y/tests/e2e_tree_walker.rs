@@ -20,7 +20,9 @@
 
 #[cfg(target_os = "macos")]
 mod e2e {
-    use screenpipe_a11y::tree::{cache::TreeCache, create_tree_walker, TreeWalkerConfig};
+    use screenpipe_a11y::tree::{
+        cache::TreeCache, create_tree_walker, TreeWalkResult, TreeWalkerConfig,
+    };
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -87,9 +89,7 @@ mod e2e {
         }
     }
 
-    fn create_walker(
-        max_nodes: usize,
-    ) -> Box<dyn screenpipe_a11y::tree::TreeWalkerPlatform> {
+    fn create_walker(max_nodes: usize) -> Box<dyn screenpipe_a11y::tree::TreeWalkerPlatform> {
         let config = TreeWalkerConfig {
             max_nodes,
             ..Default::default()
@@ -137,9 +137,9 @@ mod e2e {
         // Walk and verify
         let result = walker.walk_focused_window();
         assert!(result.is_ok(), "walk should not error");
-        let snap = result.unwrap();
+        let walk_result = result.unwrap();
 
-        if let Some(snap) = snap {
+        if let TreeWalkResult::Found(snap) = walk_result {
             println!(
                 "  Walk result: app={}, nodes={}, text_len={}, walk={:?}",
                 snap.app_name,
@@ -191,12 +191,13 @@ mod e2e {
             return;
         }
 
-        let snap1 = walker.walk_focused_window().unwrap();
-        if snap1.is_none() {
-            eprintln!("  [skip] Finder returned no snapshot");
-            return;
-        }
-        let snap1 = snap1.unwrap();
+        let snap1 = match walker.walk_focused_window().unwrap() {
+            TreeWalkResult::Found(s) => s,
+            _ => {
+                eprintln!("  [skip] Finder returned no snapshot");
+                return;
+            }
+        };
         println!(
             "  Finder: nodes={}, hash={}, text_len={}",
             snap1.node_count,
@@ -211,13 +212,14 @@ mod e2e {
             return;
         }
 
-        let snap2 = walker.walk_focused_window().unwrap();
-        if snap2.is_none() {
-            eprintln!("  [skip] Calculator returned no snapshot");
-            let _ = applescript(r#"tell application "Calculator" to quit"#);
-            return;
-        }
-        let snap2 = snap2.unwrap();
+        let snap2 = match walker.walk_focused_window().unwrap() {
+            TreeWalkResult::Found(s) => s,
+            _ => {
+                eprintln!("  [skip] Calculator returned no snapshot");
+                let _ = applescript(r#"tell application "Calculator" to quit"#);
+                return;
+            }
+        };
         println!(
             "  Calculator: nodes={}, hash={}, text_len={}",
             snap2.node_count,
@@ -252,8 +254,8 @@ mod e2e {
         // Use whatever app is currently focused — walk twice rapidly
         // If the same app/window is focused and content hasn't changed, dedup should work
         let snap = match walker.walk_focused_window().unwrap() {
-            Some(s) => s,
-            None => {
+            TreeWalkResult::Found(s) => s,
+            _ => {
                 println!("  [skip] No focused window");
                 return;
             }
@@ -270,7 +272,7 @@ mod e2e {
 
         // Walk again immediately — no user interaction, content should be stable
         let snap2 = walker.walk_focused_window().unwrap();
-        if let Some(snap2) = snap2 {
+        if let TreeWalkResult::Found(snap2) = snap2 {
             let hashes_match = snap.content_hash == snap2.content_hash;
             let should = cache.should_store(&snap2);
             println!(
@@ -313,12 +315,12 @@ mod e2e {
 
         for _ in 0..iterations {
             match walker.walk_focused_window() {
-                Ok(Some(snap)) => {
+                Ok(TreeWalkResult::Found(snap)) => {
                     durations.push(snap.walk_duration.as_micros() as u64);
                     node_counts.push(snap.node_count);
                     text_lengths.push(snap.text_content.len());
                 }
-                Ok(None) => {}
+                Ok(_) => {}
                 Err(_) => {
                     errors += 1;
                 }
@@ -437,7 +439,7 @@ mod e2e {
             activate_and_wait(target, Duration::from_secs(3));
 
             match walker.walk_focused_window() {
-                Ok(Some(snap)) => {
+                Ok(TreeWalkResult::Found(snap)) => {
                     if cache.should_store(&snap) {
                         cache.record_store(&snap.app_name, &snap.window_name, snap.simhash);
                         stored += 1;
@@ -445,7 +447,7 @@ mod e2e {
                         deduped += 1;
                     }
                 }
-                Ok(None) => empty += 1,
+                Ok(_) => empty += 1,
                 Err(_) => {}
             }
         }
@@ -517,7 +519,7 @@ mod e2e {
         let result = walker.walk_focused_window();
         assert!(result.is_ok());
 
-        if let Ok(Some(snap)) = result {
+        if let Ok(TreeWalkResult::Found(snap)) = result {
             assert!(
                 snap.node_count <= 21,
                 "node count {} should be near limit of 20",

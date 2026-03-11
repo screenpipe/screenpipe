@@ -643,7 +643,7 @@ mod timeline_performance_tests {
         println!("Frames with audio: {}", frames_with_audio.len());
 
         for frame in &result.frames {
-            let has_audio = !frame.audio_entries.is_empty();
+            let _has_audio = !frame.audio_entries.is_empty();
             println!(
                 "Frame at {:?}: {} audio entries",
                 frame.timestamp,
@@ -660,7 +660,7 @@ mod timeline_performance_tests {
         );
 
         // Verify the audio is on the correct frames (frames 2, 3, 4 based on timestamps)
-        let frame_timestamps_with_audio: Vec<_> =
+        let _frame_timestamps_with_audio: Vec<_> =
             frames_with_audio.iter().map(|f| f.timestamp).collect();
 
         let expected_start = audio_start_time;

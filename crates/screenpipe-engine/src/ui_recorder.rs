@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use screenpipe_a11y::tree::{
-    cache::TreeCache, create_tree_walker, TreeWalkerConfig, TruncationReason,
+    cache::TreeCache, create_tree_walker, TreeWalkResult, TreeWalkerConfig, TruncationReason,
 };
 use screenpipe_a11y::{UiCaptureConfig, UiRecorder};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
@@ -575,7 +575,7 @@ fn run_tree_walker(
         metrics.walks_total += 1;
 
         match walker.walk_focused_window() {
-            Ok(Some(snap)) => {
+            Ok(TreeWalkResult::Found(snap)) => {
                 let walk_ms = snap.walk_duration.as_millis() as u64;
                 metrics.total_walk_duration_ms += walk_ms;
                 metrics.max_walk_duration_ms = metrics.max_walk_duration_ms.max(walk_ms);
@@ -647,7 +647,10 @@ fn run_tree_walker(
                     metrics.walks_deduped += 1;
                 }
             }
-            Ok(None) => {
+            Ok(TreeWalkResult::Skipped) => {
+                metrics.walks_empty += 1;
+            }
+            Ok(TreeWalkResult::NotFound) => {
                 metrics.walks_empty += 1;
             }
             Err(e) => {

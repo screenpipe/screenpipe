@@ -28,7 +28,8 @@ pub fn detect_hardware_capability() -> HardwareCapability {
     let cpu_cores = sys.cpus().len();
     let total_memory_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
 
-    let is_weak = cfg!(target_os = "windows") || (!has_gpu && (cpu_cores < 8 || total_memory_gb < 8.0));
+    let is_weak =
+        cfg!(target_os = "windows") || (!has_gpu && (cpu_cores < 8 || total_memory_gb < 8.0));
 
     let is_windows = cfg!(target_os = "windows");
 

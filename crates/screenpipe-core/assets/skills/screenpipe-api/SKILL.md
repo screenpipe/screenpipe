@@ -7,13 +7,6 @@ description: Query the user's screen recordings, audio, UI elements, and usage a
 
 Local REST API at `http://localhost:3030`. Full reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
 
-## Shell
-
-- **macOS/Linux** → `bash`, `curl`
-- **Windows** → `powershell`, `curl.exe` (not the alias)
-
-All examples use bash. On Windows: `curl.exe`, PowerShell date syntax, `$env:TEMP\`, `$env:USERPROFILE`.
-
 ## Context Window Protection
 
 API responses can be large. Always write curl output to a file first (`curl ... -o /tmp/sp_result.json`), check size (`wc -c /tmp/sp_result.json`), and if over 5KB read only the first 50-100 lines. Extract what you need with `jq`. NEVER dump full large responses into context.
@@ -31,7 +24,7 @@ curl "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `q` | string | No | Keywords. Do NOT use for audio searches — transcriptions are noisy, q filters too aggressively. |
-| `content_type` | string | No | `all` (default), `ocr`, `audio`, `input`, `accessibility` |
+| `content_type` | string | No | `all` (default), `ocr`, `audio`, `input`, `accessibility`, `memory` |
 | `limit` | integer | No | Max 1-20. Default: 10 |
 | `offset` | integer | No | Pagination. Default: 0 |
 | `start_time` | ISO 8601 or relative | **Yes** | Accepts `2024-01-15T10:00:00Z` or `16h ago`, `2d ago`, `30m ago` |
@@ -100,7 +93,7 @@ Returns app usage with accurate `active_minutes`, first/last seen, recent texts,
 Lightweight FTS search across UI elements (~100-500 bytes each vs 5-20KB from `/search`).
 
 ```bash
-curl "http://localhost:3030/elements?q=Submit&role=AXButton&start_time=1h%20ago&limit=10"
+curl "http://localhost:3030/elements?q=Submit&start_time=1h%20ago&limit=10"
 ```
 
 Parameters: `q`, `frame_id`, `source` (`accessibility`|`ocr`), `role`, `start_time`, `end_time`, `app_name`, `limit`, `offset`.
@@ -113,9 +106,26 @@ Returns accessibility text, parsed nodes, and extracted URLs for a frame.
 curl "http://localhost:3030/frames/6789/context"
 ```
 
-### Common Roles
+### Common Roles (platform-specific)
 
-`AXButton`, `AXStaticText`, `AXLink`, `AXTextField`, `AXTextArea`, `AXMenuItem`, `AXCheckBox`, `AXImage`, `AXGroup`, `AXWebArea`, `line` (OCR)
+Roles are **not normalized** across platforms. Use the correct format for the user's OS:
+
+| Concept | macOS | Windows | Linux |
+|---------|-------|---------|-------|
+| Button | `AXButton` | `Button` | `Button` |
+| Static text | `AXStaticText` | `Text` | `Label` |
+| Link | `AXLink` | `Hyperlink` | `Link` |
+| Text field | `AXTextField` | `Edit` | `Entry` |
+| Text area | `AXTextArea` | `Document` | `Text` |
+| Menu item | `AXMenuItem` | `MenuItem` | `MenuItem` |
+| Checkbox | `AXCheckBox` | `CheckBox` | `CheckBox` |
+| Group | `AXGroup` | `Group` | `Group` |
+| Web area | `AXWebArea` | `Pane` | `DocumentWeb` |
+| Heading | `AXHeading` | `Header` | `Heading` |
+| Tab | `AXTab` | `TabItem` | `Tab` |
+| List item | `AXRow` | `ListItem` | `ListItem` |
+
+OCR roles (all platforms): `line`, `word`, `block`, `paragraph`, `page`
 
 ---
 
@@ -195,6 +205,8 @@ curl -X POST http://localhost:3030/raw_sql \
 | `speakers` | `name`, `metadata` | — |
 | `ui_events` | `event_type`, `app_name`, `window_title`, `browser_url` | `timestamp` |
 | `accessibility` | `app_name`, `window_name`, `text_content`, `browser_url` | `timestamp` |
+| `meetings` | `meeting_app`, `title`, `attendees`, `detection_source` | `meeting_start` |
+| `memories` | `content`, `source`, `tags`, `importance` | `created_at` |
 
 ### Example Queries
 
@@ -250,13 +262,116 @@ If not connected, tell user to set up in Settings > Connections.
 
 ---
 
-## 9. Other Endpoints
+## 9. Meetings — `GET /meetings`
+
+```bash
+curl "http://localhost:3030/meetings?start_time=1d%20ago&end_time=now&limit=10&offset=0"
+curl "http://localhost:3030/meetings/42"
+```
+
+Returns detected meetings (from calendar, app detection, window titles, UI elements, multi-speaker audio).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | integer | Meeting ID |
+| `meeting_start` | ISO 8601 | Start time |
+| `meeting_end` | ISO 8601? | End time (null if ongoing) |
+| `meeting_app` | string | App (zoom, teams, meet, etc.) |
+| `title` | string? | Meeting title |
+| `attendees` | string? | Attendees |
+| `detection_source` | string | How detected (`app`, `calendar`, `ui`, etc.) |
+
+Also available via raw SQL: `SELECT * FROM meetings WHERE meeting_start > datetime('now', '-24 hours') LIMIT 20`
+
+---
+
+## 10. Speakers — Management & Reassignment
+
+```bash
+# Search speakers by name
+curl "http://localhost:3030/speakers/search?name=John"
+
+# Get unnamed speakers (for labeling)
+curl "http://localhost:3030/speakers/unnamed?limit=20&offset=0"
+
+# Get speakers similar to a given speaker (by voice embedding)
+curl "http://localhost:3030/speakers/similar?speaker_id=29&limit=5"
+
+# Update speaker name/metadata
+curl -X POST http://localhost:3030/speakers/update \
+  -H "Content-Type: application/json" \
+  -d '{"id": 29, "name": "Jordan"}'
+
+# Reassign speaker for an audio chunk (propagates to similar chunks by default)
+curl -X POST http://localhost:3030/speakers/reassign \
+  -H "Content-Type: application/json" \
+  -d '{"audio_chunk_id": 456, "new_speaker_name": "Jordan", "propagate_similar": true}'
+# Returns: new_speaker_id, transcriptions_updated, old_assignments (for undo)
+
+# Undo a speaker reassignment
+curl -X POST http://localhost:3030/speakers/undo-reassign \
+  -H "Content-Type: application/json" \
+  -d '{"old_assignments": [{"transcription_id": 1, "old_speaker_id": 29}]}'
+
+# Merge two speakers (keeps one, merges the other into it)
+curl -X POST http://localhost:3030/speakers/merge \
+  -H "Content-Type: application/json" \
+  -d '{"speaker_to_keep_id": 5, "speaker_to_merge_id": 29}'
+
+# Mark speaker as hallucination (false detection)
+curl -X POST http://localhost:3030/speakers/hallucination \
+  -H "Content-Type: application/json" \
+  -d '{"speaker_id": 29}'
+
+# Delete a speaker (also removes associated audio chunk files)
+curl -X POST http://localhost:3030/speakers/delete \
+  -H "Content-Type: application/json" \
+  -d '{"id": 29}'
+```
+
+### Speaker Reassignment Workflow
+
+When the user says "that was actually Jordan, not Karishma":
+1. Search audio results to find the `chunk_id` for the misidentified audio
+2. Call `POST /speakers/reassign` with `audio_chunk_id` and `new_speaker_name`
+3. With `propagate_similar: true` (default), it also fixes similar-sounding chunks
+
+---
+
+## 11. Memories — Persistent Facts & Preferences
+
+Store and retrieve persistent memories (user preferences, decisions, project context).
+
+```bash
+# Create a memory
+curl -X POST http://localhost:3030/memories \
+  -H "Content-Type: application/json" \
+  -d '{"content": "User prefers dark mode", "source": "user", "tags": ["preference", "ui"], "importance": 0.7}'
+
+# List/search memories
+curl "http://localhost:3030/memories?q=preference&limit=10"
+
+# Update a memory
+curl -X PUT http://localhost:3030/memories/1 \
+  -H "Content-Type: application/json" \
+  -d '{"content": "User prefers dark mode in all apps", "importance": 0.8}'
+
+# Delete a memory
+curl -X DELETE http://localhost:3030/memories/1
+```
+
+Parameters for `GET /memories`: `q` (FTS search), `source`, `tags`, `min_importance`, `start_time`, `end_time`, `limit`, `offset`.
+
+Memories also appear in `/search?content_type=memory`. Use sparingly — only store genuinely useful long-lived facts, not transient observations.
+
+---
+
+## 12. Other Endpoints
 
 ```bash
 curl http://localhost:3030/health              # Health check
 curl http://localhost:3030/audio/list           # Audio devices
 curl http://localhost:3030/vision/list          # Monitors
-curl "http://localhost:3030/speakers/search?name=John"  # Search speakers
 ```
 
 ---

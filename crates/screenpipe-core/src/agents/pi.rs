@@ -118,6 +118,7 @@ impl PiExecutor {
             "screenpipe-pipes",
             "screenpipe-retranscribe",
             "screenpipe-search",
+            "screenpipe-qa",
         ];
         let skills_root = project_dir.join(".pi").join("skills");
         for old in &deprecated {
@@ -330,11 +331,18 @@ impl PiExecutor {
                         "https://chatgpt.com/backend-api",
                         "OPENAI_CHATGPT_TOKEN",
                     ),
+                    "anthropic" => (
+                        "anthropic-byok",
+                        provider_url.unwrap_or("https://api.anthropic.com"),
+                        "ANTHROPIC_API_KEY",
+                    ),
                     other => (other, provider_url.unwrap_or(""), "CUSTOM_API_KEY"),
                 };
 
                 let wire_api = if prov == "openai-chatgpt" {
                     "openai-codex-responses"
+                } else if prov == "anthropic" {
+                    "anthropic-messages"
                 } else {
                     "openai-completions"
                 };
@@ -478,6 +486,9 @@ impl PiExecutor {
                     "openai-chatgpt" => {
                         cmd.env("OPENAI_CHATGPT_TOKEN", key);
                     }
+                    "anthropic" | "anthropic-byok" => {
+                        cmd.env("ANTHROPIC_API_KEY", key);
+                    }
                     "custom" => {
                         cmd.env("CUSTOM_API_KEY", key);
                     }
@@ -574,6 +585,9 @@ impl PiExecutor {
                     }
                     "openai-chatgpt" => {
                         cmd.env("OPENAI_CHATGPT_TOKEN", key);
+                    }
+                    "anthropic" | "anthropic-byok" => {
+                        cmd.env("ANTHROPIC_API_KEY", key);
                     }
                     "custom" => {
                         cmd.env("CUSTOM_API_KEY", key);
@@ -901,6 +915,9 @@ impl AgentExecutor for PiExecutor {
 
         info!("installing pi into {} via bun …", install_dir.display());
 
+        // Seed package.json with overrides to fix lru-cache resolution on Windows
+        seed_pi_package_json(&install_dir);
+
         let mut cmd = std::process::Command::new(&bun);
         cmd.current_dir(&install_dir).args(["add", PI_PACKAGE]);
 
@@ -974,6 +991,50 @@ pub fn find_bun_executable() -> Option<String> {
 /// Returns the screenpipe-managed pi install directory (`~/.screenpipe/pi-agent/`).
 fn pi_local_install_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".screenpipe").join("pi-agent"))
+}
+
+/// Seed the pi-agent package.json with overrides to fix dependency resolution.
+/// `hosted-git-info` requires `lru-cache@^10`, but bun on Windows can hoist
+/// an ESM-only lru-cache@7.x that breaks CJS `require()`.
+fn seed_pi_package_json(install_dir: &Path) {
+    let pkg_path = install_dir.join("package.json");
+    if pkg_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
+            if !contents.contains("overrides") {
+                if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
+                    if let Some(obj) = pkg.as_object_mut() {
+                        obj.insert(
+                            "overrides".to_string(),
+                            json!({
+                                "hosted-git-info": {
+                                    "lru-cache": "^10.0.0"
+                                }
+                            }),
+                        );
+                    }
+                    if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
+                        let _ = std::fs::write(&pkg_path, new_contents);
+                        info!("Added lru-cache overrides to existing pi-agent package.json");
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let pkg_json = json!({
+        "overrides": {
+            "hosted-git-info": {
+                "lru-cache": "^10.0.0"
+            }
+        }
+    });
+    match std::fs::write(
+        &pkg_path,
+        serde_json::to_string_pretty(&pkg_json).unwrap_or_default(),
+    ) {
+        Ok(_) => info!("Seeded pi-agent package.json with lru-cache overrides"),
+        Err(e) => warn!("Failed to seed pi-agent package.json: {}", e),
+    }
 }
 
 /// Find the JS entrypoint for the locally-installed pi package.

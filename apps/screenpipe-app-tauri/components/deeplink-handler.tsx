@@ -80,7 +80,7 @@ export function DeeplinkHandler() {
         });
       }
 
-      if (url.includes("settings")) {
+      if (url.includes("settings") || url.includes("home")) {
         await openSettingsWindow();
       }
 

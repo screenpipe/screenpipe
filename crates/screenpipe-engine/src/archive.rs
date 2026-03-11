@@ -69,6 +69,10 @@ struct ArchiveRuntime {
     is_uploading: bool,
     /// Number of chunks uploaded in the current/last run.
     chunks_uploaded: u64,
+    /// Number of media files uploaded in the current/last run.
+    media_files_uploaded: u64,
+    /// Number of media files pending upload.
+    media_files_pending: u64,
     /// Notify channel to trigger an immediate run.
     run_now: Arc<tokio::sync::Notify>,
 }
@@ -122,6 +126,8 @@ pub struct ArchiveStatusResponse {
     pub pending_count: u64,
     pub is_uploading: bool,
     pub chunks_uploaded: u64,
+    pub media_files_uploaded: u64,
+    pub media_files_pending: u64,
 }
 
 // ============================================================================
@@ -229,6 +235,8 @@ pub async fn archive_init(
         storage_limit: 0,
         is_uploading: false,
         chunks_uploaded: 0,
+        media_files_uploaded: 0,
+        media_files_pending: 0,
         run_now,
     };
 
@@ -332,6 +340,8 @@ pub async fn archive_status(
             pending_count: 0,
             is_uploading: false,
             chunks_uploaded: 0,
+            media_files_uploaded: 0,
+            media_files_pending: 0,
         })),
         Some(runtime) => {
             // Count pending records between watermark and cutoff
@@ -359,6 +369,8 @@ pub async fn archive_status(
                 pending_count,
                 is_uploading: runtime.is_uploading,
                 chunks_uploaded: runtime.chunks_uploaded,
+                media_files_uploaded: runtime.media_files_uploaded,
+                media_files_pending: runtime.media_files_pending,
             }))
         }
     }
@@ -429,21 +441,38 @@ fn spawn_archive_loop(
                 continue;
             }
 
-            // Upload data in chunks: [watermark, cutoff]
+            // Step 1: Upload media files (MP4s + snapshots) before metadata
             info!(
-                "archive: uploading data from {} to {}",
-                watermark.to_rfc3339(),
+                "archive: uploading media files before cutoff {}",
                 cutoff.to_rfc3339()
             );
 
-            // Mark as uploading
             {
                 let mut guard = state.write().await;
                 if let Some(rt) = guard.as_mut() {
                     rt.is_uploading = true;
                     rt.chunks_uploaded = 0;
+                    rt.media_files_uploaded = 0;
                 }
             }
+
+            let media_result = upload_media_files(&db, &manager, cutoff, state.clone()).await;
+
+            if let Err(ref e) = media_result {
+                warn!("archive: media upload error (non-fatal): {}", e);
+                let mut guard = state.write().await;
+                if let Some(rt) = guard.as_mut() {
+                    rt.last_error = Some(format!("media_upload: {}", e));
+                }
+                // Continue to metadata upload — media files stay on disk safely
+            }
+
+            // Step 2: Upload metadata in chunks: [watermark, cutoff]
+            info!(
+                "archive: uploading metadata from {} to {}",
+                watermark.to_rfc3339(),
+                cutoff.to_rfc3339()
+            );
 
             let mut current_watermark = watermark;
             let mut upload_error = false;
@@ -579,7 +608,7 @@ async fn get_archive_chunk(
     let start_str = start.to_rfc3339();
     let end_str = end.to_rfc3339();
 
-    // Get frames in range
+    // Get frames in range (include cloud_blob_id for video chunk or frame snapshot)
     #[allow(clippy::type_complexity)]
     let frames: Vec<(
         i64,
@@ -589,10 +618,13 @@ async fn get_archive_chunk(
         Option<String>,
         Option<String>,
         String,
+        Option<String>,
     )> = sqlx::query_as(
         r#"
-        SELECT f.id, f.timestamp, f.offset_index, f.app_name, f.window_name, f.browser_url, f.device_name
+        SELECT f.id, f.timestamp, f.offset_index, f.app_name, f.window_name, f.browser_url, f.device_name,
+               COALESCE(f.cloud_blob_id, vc.cloud_blob_id) as cloud_blob_id
         FROM frames f
+        LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
         WHERE f.timestamp >= ? AND f.timestamp < ?
         ORDER BY f.timestamp ASC
         LIMIT ?
@@ -689,7 +721,17 @@ async fn get_archive_chunk(
     let mut frame_records = Vec::new();
     let mut frame_sync_map = std::collections::HashMap::new();
 
-    for (id, timestamp, offset_index, app_name, window_name, browser_url, device_name) in &frames {
+    for (
+        id,
+        timestamp,
+        offset_index,
+        app_name,
+        window_name,
+        browser_url,
+        device_name,
+        cloud_blob_id,
+    ) in &frames
+    {
         let sync_id = Uuid::new_v4().to_string();
         frame_sync_map.insert(*id, sync_id.clone());
         frame_records.push(FrameRecord {
@@ -700,7 +742,7 @@ async fn get_archive_chunk(
             window_name: window_name.clone(),
             browser_url: browser_url.clone(),
             device_name: device_name.clone(),
-            cloud_frame_path: None,
+            cloud_frame_path: cloud_blob_id.clone(),
         });
     }
 
@@ -857,25 +899,211 @@ async fn count_records_in_range(
 }
 
 /// Delete data before cutoff and remove orphan media files from disk.
+/// Only deletes video/snapshot files that have been uploaded to cloud
+/// (cloud_blob_id IS NOT NULL).
 async fn do_cleanup(db: &Arc<DatabaseManager>, cutoff: DateTime<Utc>) -> anyhow::Result<()> {
     let epoch = DateTime::<Utc>::MIN_UTC;
     let result = db.delete_time_range(epoch, cutoff).await?;
 
     info!(
-        "archive: deleted frames={} ocr={} audio={} accessibility={} ui_events={}",
+        "archive: deleted frames={} ocr={} audio={} accessibility={} ui_events={} \
+         (video_files={} snapshot_files={} audio_files={})",
         result.frames_deleted,
         result.ocr_deleted,
         result.audio_transcriptions_deleted,
         result.accessibility_deleted,
         result.ui_events_deleted,
+        result.video_files.len(),
+        result.snapshot_files.len(),
+        result.audio_files.len(),
     );
 
-    // Delete orphan media files from disk
-    for path in result.video_files.iter().chain(result.audio_files.iter()) {
+    // Delete orphan media files from disk (only those confirmed uploaded)
+    for path in result
+        .video_files
+        .iter()
+        .chain(result.audio_files.iter())
+        .chain(result.snapshot_files.iter())
+    {
         if let Err(e) = tokio::fs::remove_file(path).await {
             warn!("archive: failed to delete file {}: {}", path, e);
         }
     }
 
     Ok(())
+}
+
+/// Info returned from a successful media file upload.
+struct UploadResultInfo {
+    blob_id: String,
+    storage_used: u64,
+    storage_limit: u64,
+}
+
+/// Maximum file size we'll attempt to upload (50 MB — Supabase default limit).
+const MAX_MEDIA_FILE_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Upload media files (video chunks + snapshots) that haven't been uploaded yet.
+/// Each file is uploaded individually. On failure, the file stays on disk and
+/// will be retried on the next archive run.
+async fn upload_media_files(
+    db: &Arc<DatabaseManager>,
+    manager: &Arc<SyncManager>,
+    cutoff: DateTime<Utc>,
+    state: Arc<RwLock<Option<ArchiveRuntime>>>,
+) -> anyhow::Result<()> {
+    // Upload video chunks (compacted MP4s)
+    let chunks = db.get_unuploaded_video_chunks(cutoff, 100).await?;
+    let chunk_count = chunks.len();
+
+    // Upload snapshots (un-compacted JPEGs)
+    let snapshots = db.get_unuploaded_snapshots(cutoff, 500).await?;
+    let snapshot_count = snapshots.len();
+
+    let total_pending = chunk_count + snapshot_count;
+    info!(
+        "archive: {} media files pending upload ({} video chunks, {} snapshots)",
+        total_pending, chunk_count, snapshot_count
+    );
+
+    {
+        let mut guard = state.write().await;
+        if let Some(rt) = guard.as_mut() {
+            rt.media_files_pending = total_pending as u64;
+        }
+    }
+
+    let mut files_uploaded: u64 = 0;
+
+    // Upload video chunks
+    for (chunk_id, file_path, timestamp) in &chunks {
+        match upload_single_file(manager, file_path, timestamp, BlobType::Frames).await {
+            Ok(result) => {
+                if let Err(e) = db
+                    .mark_video_chunk_uploaded(*chunk_id, &result.blob_id)
+                    .await
+                {
+                    warn!(
+                        "archive: uploaded chunk {} but failed to mark in DB: {}",
+                        chunk_id, e
+                    );
+                    // File is on cloud but not marked — will be re-uploaded next run.
+                    // Not ideal but safe (no data loss).
+                    continue;
+                }
+                files_uploaded += 1;
+                let mut guard = state.write().await;
+                if let Some(rt) = guard.as_mut() {
+                    rt.media_files_uploaded = files_uploaded;
+                    rt.storage_used = result.storage_used;
+                    rt.storage_limit = result.storage_limit;
+                }
+                info!(
+                    "archive: uploaded video chunk {} ({} bytes), blob_id={}",
+                    chunk_id,
+                    std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0),
+                    result.blob_id
+                );
+            }
+            Err(e) => {
+                // Check for quota exceeded — stop uploading if we hit the limit
+                let err_str = format!("{}", e);
+                if err_str.contains("quota exceeded") || err_str.contains("QuotaExceeded") {
+                    warn!("archive: quota exceeded, stopping media upload");
+                    let mut guard = state.write().await;
+                    if let Some(rt) = guard.as_mut() {
+                        rt.last_error = Some("quota exceeded".to_string());
+                    }
+                    return Err(e);
+                }
+                warn!(
+                    "archive: failed to upload video chunk {} ({}), skipping: {}",
+                    chunk_id, file_path, e
+                );
+                // Continue to next file — this one will be retried next run
+            }
+        }
+    }
+
+    // Upload snapshots
+    for (frame_id, snapshot_path, timestamp) in &snapshots {
+        match upload_single_file(manager, snapshot_path, timestamp, BlobType::Frames).await {
+            Ok(result) => {
+                if let Err(e) = db.mark_snapshot_uploaded(*frame_id, &result.blob_id).await {
+                    warn!(
+                        "archive: uploaded snapshot {} but failed to mark in DB: {}",
+                        frame_id, e
+                    );
+                    continue;
+                }
+                files_uploaded += 1;
+                let mut guard = state.write().await;
+                if let Some(rt) = guard.as_mut() {
+                    rt.media_files_uploaded = files_uploaded;
+                    rt.storage_used = result.storage_used;
+                    rt.storage_limit = result.storage_limit;
+                }
+            }
+            Err(e) => {
+                let err_str = format!("{}", e);
+                if err_str.contains("quota exceeded") || err_str.contains("QuotaExceeded") {
+                    warn!("archive: quota exceeded, stopping media upload");
+                    return Err(e);
+                }
+                warn!(
+                    "archive: failed to upload snapshot {} ({}), skipping: {}",
+                    frame_id, snapshot_path, e
+                );
+            }
+        }
+    }
+
+    info!(
+        "archive: media upload complete — {}/{} files uploaded",
+        files_uploaded, total_pending
+    );
+
+    Ok(())
+}
+
+/// Upload a single media file. Returns the blob_id on success.
+async fn upload_single_file(
+    manager: &SyncManager,
+    file_path: &str,
+    timestamp: &str,
+    blob_type: BlobType,
+) -> anyhow::Result<UploadResultInfo> {
+    use std::path::Path;
+
+    let path = Path::new(file_path);
+    if !path.exists() {
+        return Err(anyhow::anyhow!("file not found: {}", file_path));
+    }
+
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_MEDIA_FILE_SIZE {
+        return Err(anyhow::anyhow!(
+            "file too large ({} bytes > {} limit): {}",
+            metadata.len(),
+            MAX_MEDIA_FILE_SIZE,
+            file_path
+        ));
+    }
+
+    if metadata.len() == 0 {
+        return Err(anyhow::anyhow!("empty file: {}", file_path));
+    }
+
+    let data = tokio::fs::read(path).await?;
+
+    let result = manager
+        .upload(&data, blob_type, timestamp, timestamp, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    Ok(UploadResultInfo {
+        blob_id: result.blob_id,
+        storage_used: result.storage_used,
+        storage_limit: result.storage_limit,
+    })
 }

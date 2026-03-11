@@ -61,6 +61,7 @@
 pub mod activity_feed;
 pub mod config;
 pub mod events;
+pub mod incognito;
 pub mod platform;
 pub mod tree;
 

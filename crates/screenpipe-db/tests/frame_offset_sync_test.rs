@@ -9,7 +9,6 @@
 /// as the source of truth, ensuring consistent offsets even when frames are dropped.
 ///
 /// Run with: cargo test --package screenpipe-db --test frame_offset_sync_test -- --nocapture
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -110,7 +109,7 @@ mod tests {
         // Simulate: Capture produces frames with frame_numbers 0, 1, 2, 3, 4
         // But video queue drops frame 2 (due to queue full)
         // Video encoder writes: frame_0 -> pos 0, frame_1 -> pos 1, frame_3 -> pos 2, frame_4 -> pos 3
-        let video_written_frames = vec![0u64, 1, 3, 4]; // Frame 2 was dropped
+        let video_written_frames = [0u64, 1, 3, 4]; // Frame 2 was dropped
         let mut video_position_to_frame: std::collections::HashMap<u64, u64> =
             std::collections::HashMap::new();
         for (video_pos, frame_num) in video_written_frames.iter().enumerate() {
@@ -119,7 +118,7 @@ mod tests {
 
         // OCR queue doesn't drop anything, processes all 5 frames
         // DB inserts use get_next_frame_offset which returns 0, 1, 2, 3, 4
-        let ocr_processed_frames = vec![0u64, 1, 2, 3, 4];
+        let ocr_processed_frames = [0u64, 1, 2, 3, 4];
         let frame_names = ["App0", "App1", "App2", "App3", "App4"];
 
         for (i, frame_num) in ocr_processed_frames.iter().enumerate() {
@@ -206,7 +205,7 @@ mod tests {
 
         // OCR processes frames 0, 1, 2, 3, 4
         // But we only insert frames that exist in video
-        let ocr_processed_frames = vec![0u64, 1, 2, 3, 4];
+        let ocr_processed_frames = [0u64, 1, 2, 3, 4];
         let frame_names = ["App0", "App1", "App2", "App3", "App4"];
 
         for frame_num in ocr_processed_frames.iter() {

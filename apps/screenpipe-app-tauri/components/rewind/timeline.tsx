@@ -95,6 +95,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const [showSearchModal, setShowSearchModal] = useState(false);
 
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const navBarRef = useRef<HTMLDivElement | null>(null);
 	const [startAndEndDates, setStartAndEndDates] = useState<TimeRange>(() => {
 		// Lazy init to avoid SSR/client hydration mismatch from new Date()
 		const now = new Date();
@@ -180,6 +181,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		selectedDomain,
 		selectedSpeaker,
 		selectedTag,
+		selectedMeeting,
 		matchingIndices,
 		resetFilters,
 		allDeviceIds,
@@ -189,6 +191,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		handleDomainChange,
 		handleSpeakerChange,
 		handleTagChange,
+		handleMeetingChange,
 		findNextDevice,
 		selectedDeviceIdRef,
 		selectedAppNameRef,
@@ -201,6 +204,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setCurrentIndex,
 		setCurrentFrame,
 		tags,
+		meetings,
 	});
 
 	// Audio playback engine
@@ -755,6 +759,19 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		getStartDateAndSet();
 	}, []);
 
+	// Keep the end date fresh so the timeline doesn't get stuck at an old boundary
+	useEffect(() => {
+		const updateEnd = () => {
+			setStartAndEndDates((prev) => ({
+				...prev,
+				end: new Date(),
+			}));
+		};
+		// Update every minute
+		const interval = setInterval(updateEnd, 60_000);
+		return () => clearInterval(interval);
+	}, []);
+
 	const MAX_DATE_RETRIES = 7; // Don't walk back more than 7 days
 
 	useEffect(() => {
@@ -887,6 +904,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							currentFrame={currentFrame}
 							allDeviceIds={allDeviceIds}
 							embedded={embedded}
+							navBarRef={navBarRef}
 							searchNavFrame={searchNavFrame}
 							onSearchNavComplete={() => setSearchNavFrame(false)}
 							isArrowNav={isArrowNav}
@@ -979,7 +997,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 									</p>
 
 									<button
-										onClick={() => commands.showWindow({ Settings: { page: null } })}
+										onClick={() => commands.showWindow({ Home: { page: null } })}
 										className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-full text-sm font-medium hover:bg-primary/90 transition-colors"
 									>
 										<Settings className="w-4 h-4" />
@@ -1034,7 +1052,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				{!embedded && <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/10 via-black/2 to-transparent z-30 pointer-events-none" />}
 
 				{/* Top Controls */}
-				<div className={`absolute top-0 left-0 right-0 z-40 px-4 pb-4 ${embedded ? "pt-2" : "pt-[calc(env(safe-area-inset-top)+16px)]"}`}>
+				<div ref={navBarRef} className={`absolute top-0 left-0 right-0 z-40 px-4 pb-4 ${embedded ? "pt-2" : "pt-[calc(env(safe-area-inset-top)+16px)]"}`}>
 					<TimelineControls
 						currentDate={currentDate}
 						startAndEndDates={startAndEndDates}
@@ -1288,6 +1306,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							onSpeakerChange={handleSpeakerChange}
 							selectedTag={selectedTag}
 							onTagChange={handleTagChange}
+							meetings={meetings}
+							selectedMeeting={selectedMeeting}
+							onMeetingChange={handleMeetingChange}
 							onRefresh={handleRefresh}
 						/>
 					) : (

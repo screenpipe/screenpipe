@@ -41,7 +41,7 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
     // Ping in case chat is already mounted (won't re-emit "chat-ready" on its own)
     emit("chat-ping", {});
   });
-  await emit("chat-prefill", data);
+  await emit("chat-prefill", { ...data, targetWindow: "chat" });
 }
 
 // ============================================================================

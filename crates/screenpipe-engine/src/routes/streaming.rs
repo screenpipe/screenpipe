@@ -1098,11 +1098,10 @@ pub async fn handle_video_export_post(
             .into_response();
     }
 
-    // Create exports directory
-    let exports_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".screenpipe")
-        .join("exports");
+    // Create exports directory — use the configured data dir (respects --data-dir)
+    // instead of hardcoding dirs::home_dir() which can resolve to a different
+    // drive on Windows, splitting outputs across C: and F: drives.
+    let exports_dir = state.screenpipe_dir.join("exports");
     if let Err(e) = tokio::fs::create_dir_all(&exports_dir).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

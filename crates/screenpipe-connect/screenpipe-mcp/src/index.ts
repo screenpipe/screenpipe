@@ -93,8 +93,8 @@ const BASE_TOOLS: Tool[] = [
         },
         content_type: {
           type: "string",
-          enum: ["all", "ocr", "audio", "input", "accessibility"],
-          description: "Content type filter: 'audio' (transcriptions — use for meetings/calls/conversations), 'accessibility' (accessibility tree text, preferred for screen content), 'ocr' (screen text via OCR, legacy fallback), 'input' (clicks, keystrokes, clipboard, app switches), 'all'. Default: 'all'. For meeting/call queries, ALWAYS use 'audio'.",
+          enum: ["all", "ocr", "audio", "input", "accessibility", "memory"],
+          description: "Content type filter: 'audio' (transcriptions — use for meetings/calls/conversations), 'accessibility' (accessibility tree text, preferred for screen content), 'ocr' (screen text via OCR, legacy fallback), 'input' (clicks, keystrokes, clipboard, app switches), 'memory' (persistent facts/preferences/decisions stored via update-memory), 'all'. Default: 'all'. For meeting/call queries, ALWAYS use 'audio'.",
           default: "all",
         },
         limit: {
@@ -346,6 +346,57 @@ const BASE_TOOLS: Tool[] = [
       required: ["frame_id"],
     },
   },
+  {
+    name: "update-memory",
+    description:
+      "Create, update, or delete a persistent memory. Memories are facts, preferences, decisions, " +
+      "and insights about the user that persist across conversations.\n\n" +
+      "USE SPARINGLY: Only store genuinely useful, long-lived facts. Good: user preferences, important decisions, " +
+      "project context. Bad: transient observations, things easily re-searchable.\n\n" +
+      "RETRIEVE: Use search-content with content_type='memory' to find stored memories.\n\n" +
+      "EXAMPLES:\n" +
+      "- Create: {content: 'prefers dark mode', tags: ['preference']}\n" +
+      "- Update: {id: 42, content: 'switched to light mode'}\n" +
+      "- Delete: {id: 42, delete: true}",
+    annotations: {
+      title: "Update Memory",
+      destructiveHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "integer",
+          description:
+            "Memory ID. If provided, updates or deletes that memory. If omitted, creates new.",
+        },
+        content: {
+          type: "string",
+          description: "The memory text. Required for create, optional for update.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Categorization tags (e.g., ['preference', 'work', 'project-x'])",
+        },
+        importance: {
+          type: "number",
+          description:
+            "Importance score 0.0-1.0. Higher = surfaces more in search. Default: 0.5",
+        },
+        source_context: {
+          type: "object",
+          description:
+            "Optional context linking to source data (frame_ids, timestamps, app_name)",
+        },
+        delete: {
+          type: "boolean",
+          description: "If true, deletes the memory identified by 'id'",
+        },
+      },
+    },
+  },
 ];
 
 // List tools handler
@@ -372,6 +423,24 @@ const RESOURCES = [
     name: "Search Dashboard",
     description: "Interactive search UI for exploring screen recordings and audio transcriptions",
     mimeType: "text/html",
+  },
+  {
+    uri: "screenpipe://pipe-creation-guide",
+    name: "Pipe Creation Guide",
+    description: "How to create screenpipe pipes (scheduled AI automations): format, YAML frontmatter, schedule syntax, API parameters, and example templates",
+    mimeType: "text/markdown",
+  },
+  {
+    uri: "screenpipe://api-reference",
+    name: "REST API Reference",
+    description: "Full screenpipe REST API reference: search, activity-summary, elements, frames, export, retranscribe, raw SQL, connections, speakers (60+ endpoints)",
+    mimeType: "text/markdown",
+  },
+  {
+    uri: "screenpipe://cli-reference",
+    name: "CLI Reference",
+    description: "Screenpipe CLI commands: pipe management (list, enable, run, install, delete) and connection management (Telegram, Slack, Discord, etc.)",
+    mimeType: "text/markdown",
   },
 ];
 
@@ -432,6 +501,7 @@ Screenpipe captures four types of data:
 - **Search screen text**: \`{"q": "search term", "content_type": "all"}\`
 - **Get keyboard input**: \`{"content_type": "input"}\`
 - **Get audio only**: \`{"content_type": "audio"}\`
+- **Recall memories**: \`{"content_type": "memory"}\` or \`{"q": "preference", "content_type": "memory"}\`
 
 ## Common User Requests → Correct Tool Choice
 | User says | Use this tool | Key params |
@@ -441,6 +511,10 @@ Screenpipe captures four types of data:
 | "how long on X" / "which apps" / "time spent" | activity-summary | start_time, end_time |
 | "what was I doing" | activity-summary | start_time, end_time (then drill into search-content) |
 | "what was I reading/looking at" | search-content | content_type:"all", start_time |
+| "remember that I..." / user states a preference | update-memory | content, tags |
+
+## Memory
+Use \`update-memory\` to store persistent facts, preferences, and decisions. Retrieve with \`search-content\` content_type="memory". Be selective — only store things that are genuinely useful across conversations. Don't store transient observations or things easily found by searching raw data.
 
 ## Behavior Rules
 - Act immediately on clear requests. NEVER ask "what time range?" or "which content type?" when the intent is obvious.
@@ -451,7 +525,7 @@ Screenpipe captures four types of data:
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | q | Search query | (none - returns all) |
-| content_type | all/ocr/audio/input/accessibility | all |
+| content_type | all/ocr/audio/input/accessibility/memory | all |
 | limit | Max results | 10 |
 | start_time | ISO 8601 UTC or relative (e.g. '16h ago') | (no filter) |
 | end_time | ISO 8601 UTC or relative (e.g. 'now') | (no filter) |
@@ -557,6 +631,491 @@ When showing search results to users, create clickable links so they can jump to
       };
     }
 
+    case "screenpipe://pipe-creation-guide":
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: "text/markdown",
+            text: `# Screenpipe Pipe Creation Guide
+
+## What is a pipe?
+
+A pipe is a scheduled AI agent defined as a single markdown file: \`~/.screenpipe/pipes/{name}/pipe.md\`
+Every N minutes, screenpipe runs a coding agent (like pi or claude-code) with the pipe's prompt.
+The agent can query your screen data, write files, call external APIs, send notifications, etc.
+
+## pipe.md format
+
+The file starts with YAML frontmatter on the very first line (no blank lines before it), then the prompt body:
+
+\`\`\`markdown
+---
+schedule: every 30m
+enabled: true
+---
+
+Your prompt instructions here...
+\`\`\`
+
+### Config fields
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| \`schedule\` | \`every 30m\`, \`every 1h\`, \`every day at 9am\`, \`every monday at 9am\`, \`manual\`, or cron: \`*/30 * * * *\` | When to run |
+| \`enabled\` | \`true\` / \`false\` | Whether the pipe is active |
+| \`preset\` | AI preset name (e.g. \`Oai\`) | Which AI model to use |
+| \`history\` | \`true\` / \`false\` | Include previous output as context |
+| \`connections\` | list of connection IDs | Required integrations (e.g. \`obsidian\`, \`telegram\`) |
+
+## Context header
+
+Before execution, screenpipe prepends a context header to the prompt with:
+- Time range (start/end timestamps based on the schedule interval)
+- Current date and user's timezone
+- Screenpipe API base URL (http://localhost:3030)
+- Output directory
+
+The AI agent uses this context to query the right time range. No template variables needed in the prompt.
+
+## Screenpipe search API
+
+The agent queries screen data via the local REST API:
+
+\`\`\`
+curl "http://localhost:3030/search?limit=20&content_type=all&start_time=<ISO8601>&end_time=<ISO8601>"
+\`\`\`
+
+### Query parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| \`q\` | Text search query (optional — skip for audio, transcriptions are noisy) |
+| \`content_type\` | \`all\`, \`ocr\`, \`audio\`, \`input\`, \`accessibility\`, \`memory\` (prefer \`all\` or \`accessibility\`) |
+| \`limit\` | Max results (default 20) |
+| \`offset\` | Pagination offset |
+| \`start_time\` / \`end_time\` | ISO 8601 timestamps or relative (\`1h ago\`, \`now\`) |
+| \`app_name\` | Filter by app (e.g. \`Google Chrome\`, \`Slack\`) |
+| \`window_name\` | Filter by window title |
+| \`browser_url\` | Filter by URL |
+| \`min_length\` / \`max_length\` | Filter by text length |
+| \`speaker_name\` | Filter audio by speaker |
+
+Other useful endpoints:
+- \`GET /activity-summary?start_time=...&end_time=...\` — lightweight overview (~200 tokens)
+- \`GET /elements?q=...&role=AXButton&start_time=...\` — UI elements
+- \`GET /connections/{id}\` — get integration credentials (telegram, slack, obsidian, etc.)
+- \`POST /raw_sql\` — run SQL queries (always include LIMIT)
+
+Full API reference: read the \`screenpipe://api-reference\` resource.
+
+## Installing and running
+
+After creating the pipe.md file:
+
+\`\`\`bash
+bunx screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
+bunx screenpipe@latest pipe enable my-pipe
+bunx screenpipe@latest pipe run my-pipe   # test immediately
+\`\`\`
+
+## Example pipes
+
+### Daily recap (manual trigger)
+\`\`\`markdown
+---
+schedule: manual
+enabled: true
+---
+
+Analyze my screen and audio recordings from today (last 16 hours). Use limit=10 per search, max 5 searches total.
+
+## Summary
+One sentence: what I mainly did today.
+
+## Accomplishments
+- Top 3 things I finished, with timestamps
+
+## Key Moments
+- Important things I saw, said, or heard
+
+## Unfinished Work
+- What I should continue tomorrow
+\`\`\`
+
+### Obsidian sync (every hour)
+\`\`\`markdown
+---
+schedule: every 1h
+enabled: true
+connections:
+  - obsidian
+---
+
+Sync screenpipe activity to Obsidian vault as a daily note.
+
+1. Get vault path from GET http://localhost:3030/connections/obsidian
+2. Read existing daily note (merge into it)
+3. Query search API in 30-minute chunks with min_length=50
+4. Synthesize activities, extract action items, write note
+\`\`\`
+
+### Slack standup (every weekday at 9am)
+\`\`\`markdown
+---
+schedule: every weekday at 9am
+enabled: true
+connections:
+  - slack
+---
+
+Generate standup update from yesterday's activity and post to Slack.
+
+1. Query activity-summary for yesterday
+2. Search for key accomplishments and blockers
+3. Format as: Done / Doing / Blocked
+4. POST to Slack webhook from GET http://localhost:3030/connections/slack
+\`\`\`
+
+## Optimization tips
+
+- Be specific about expected output format
+- Give step-by-step instructions
+- Add error handling: "if API returns empty, try content_type=accessibility instead of ocr"
+- Add validation: "before writing, verify you have at least 3 entries"
+- Specify exact file paths, API parameters, output structure
+- Keep search limit low (10-20) and use time ranges from the context header
+- Use \`min_length=50\` to skip noisy OCR fragments`,
+          },
+        ],
+      };
+
+    case "screenpipe://api-reference":
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: "text/markdown",
+            text: `# Screenpipe REST API Reference
+
+Local REST API at \`http://localhost:3030\`. Full reference (60+ endpoints): https://docs.screenpi.pe/llms-full.txt
+
+## Shell
+
+- **macOS/Linux** → \`bash\`, \`curl\`
+- **Windows** → \`powershell\`, \`curl.exe\` (not the alias)
+
+## Context Window Protection
+
+API responses can be large. Always write curl output to a file first (\`curl ... -o /tmp/sp_result.json\`), check size (\`wc -c\`), and if over 5KB read only the first 50-100 lines. Extract what you need with \`jq\`. NEVER dump full large responses into context.
+
+---
+
+## 1. Search — \`GET /search\`
+
+\`\`\`bash
+curl "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
+\`\`\`
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| \`q\` | string | No | Keywords. Do NOT use for audio — transcriptions are noisy. |
+| \`content_type\` | string | No | \`all\` (default), \`ocr\`, \`audio\`, \`input\`, \`accessibility\` |
+| \`limit\` | integer | No | Max 1-20. Default: 10 |
+| \`offset\` | integer | No | Pagination. Default: 0 |
+| \`start_time\` | ISO 8601 or relative | **Yes** | \`2024-01-15T10:00:00Z\` or \`16h ago\`, \`2d ago\`, \`30m ago\` |
+| \`end_time\` | ISO 8601 or relative | No | Defaults to now. \`now\`, \`1h ago\` |
+| \`app_name\` | string | No | e.g. "Google Chrome", "Slack", "zoom.us" |
+| \`window_name\` | string | No | Window title substring |
+| \`speaker_name\` | string | No | Filter audio by speaker (case-insensitive partial) |
+| \`focused\` | boolean | No | Only focused windows |
+
+### Critical Rules
+
+1. **ALWAYS include \`start_time\`** — queries without time bounds WILL timeout
+2. **Start with 1-2 hour ranges** — expand only if no results
+3. **Use \`app_name\`** when user mentions a specific app
+4. **"recent"** = 30 min. **"today"** = since midnight. **"yesterday"** = yesterday's range
+
+### Response Format
+
+\`\`\`json
+{
+  "data": [
+    {"type": "OCR", "content": {"frame_id": 12345, "text": "...", "timestamp": "...", "app_name": "Chrome"}},
+    {"type": "Audio", "content": {"chunk_id": 678, "transcription": "...", "timestamp": "...", "speaker": {"name": "John"}}},
+    {"type": "UI", "content": {"id": 999, "text": "Clicked Submit", "timestamp": "...", "app_name": "Safari"}}
+  ],
+  "pagination": {"limit": 10, "offset": 0, "total": 42}
+}
+\`\`\`
+
+---
+
+## 2. Activity Summary — \`GET /activity-summary\`
+
+\`\`\`bash
+curl "http://localhost:3030/activity-summary?start_time=1h%20ago&end_time=now"
+\`\`\`
+
+Returns app usage with \`active_minutes\`, first/last seen, recent texts, audio summary. ~200-500 tokens. Best starting point.
+
+---
+
+## 3. Elements — \`GET /elements\`
+
+Lightweight FTS search across UI elements (~100-500 bytes each).
+
+\`\`\`bash
+curl "http://localhost:3030/elements?q=Submit&role=AXButton&start_time=1h%20ago&limit=10"
+\`\`\`
+
+Parameters: \`q\`, \`frame_id\`, \`source\` (\`accessibility\`|\`ocr\`), \`role\`, \`start_time\`, \`end_time\`, \`app_name\`, \`limit\`, \`offset\`.
+
+### Frame Context — \`GET /frames/{id}/context\`
+
+Returns accessibility text, parsed nodes, and extracted URLs for a frame.
+
+Common roles: \`AXButton\`, \`AXStaticText\`, \`AXLink\`, \`AXTextField\`, \`AXTextArea\`, \`AXMenuItem\`, \`AXCheckBox\`
+
+---
+
+## 4. Frames — \`GET /frames/{frame_id}\`
+
+Returns raw PNG screenshot. Never fetch more than 2-3 per query.
+
+---
+
+## 5. Media Export — \`POST /frames/export\`
+
+\`\`\`bash
+curl -X POST http://localhost:3030/frames/export \\
+  -H "Content-Type: application/json" \\
+  -d '{"start_time": "5m ago", "end_time": "now", "fps": 1.0}'
+\`\`\`
+
+FPS guidelines: 5min→1.0, 30min→0.5, 1h→0.2, 2h+→0.1. Max 10,000 frames.
+
+---
+
+## 6. Retranscribe — \`POST /audio/retranscribe\`
+
+\`\`\`bash
+curl -X POST http://localhost:3030/audio/retranscribe \\
+  -H "Content-Type: application/json" \\
+  -d '{"start": "1h ago", "end": "now"}'
+\`\`\`
+
+Optional: \`engine\`, \`vocabulary\` (array of \`{"word": "...", "replacement": "..."}\`), \`prompt\` (topic context).
+
+---
+
+## 7. Raw SQL — \`POST /raw_sql\`
+
+\`\`\`bash
+curl -X POST http://localhost:3030/raw_sql \\
+  -H "Content-Type: application/json" \\
+  -d '{"query": "SELECT ... LIMIT 100"}'
+\`\`\`
+
+Every SELECT needs LIMIT. Always filter by time. Read-only.
+
+### Schema
+
+| Table | Key Columns | Time Column |
+|-------|-------------|-------------|
+| \`frames\` | \`app_name\`, \`window_name\`, \`browser_url\`, \`focused\` | \`timestamp\` |
+| \`ocr_text\` | \`text\`, \`app_name\`, \`window_name\` | join via \`frame_id\` |
+| \`elements\` | \`source\`, \`role\`, \`text\` | join via \`frame_id\` |
+| \`audio_transcriptions\` | \`transcription\`, \`device\`, \`speaker_id\`, \`is_input_device\` | \`timestamp\` |
+| \`speakers\` | \`name\`, \`metadata\` | — |
+| \`ui_events\` | \`event_type\`, \`app_name\`, \`window_title\`, \`browser_url\` | \`timestamp\` |
+| \`accessibility\` | \`app_name\`, \`window_name\`, \`text_content\` | \`timestamp\` |
+
+### Example Queries
+
+\`\`\`sql
+-- Most used apps (last 24h)
+SELECT app_name, COUNT(*) as frames FROM frames
+WHERE timestamp > datetime('now', '-24 hours') AND app_name IS NOT NULL
+GROUP BY app_name ORDER BY frames DESC LIMIT 20
+
+-- Speaker stats
+SELECT COALESCE(NULLIF(s.name, ''), 'Unknown') as speaker, COUNT(*) as segments
+FROM audio_transcriptions at LEFT JOIN speakers s ON at.speaker_id = s.id
+WHERE at.timestamp > datetime('now', '-24 hours')
+GROUP BY at.speaker_id ORDER BY segments DESC LIMIT 20
+\`\`\`
+
+---
+
+## 8. Connections — \`GET /connections\`
+
+\`\`\`bash
+curl http://localhost:3030/connections              # List all
+curl http://localhost:3030/connections/telegram      # Get credentials
+\`\`\`
+
+Services: Telegram (\`bot_token\` + \`chat_id\`), Slack (\`webhook_url\`), Discord (\`webhook_url\`), Todoist (\`api_token\`), Teams (\`webhook_url\`), Email (SMTP config).
+
+---
+
+## 9. Speakers
+
+\`\`\`bash
+curl "http://localhost:3030/speakers/search?name=John"
+curl "http://localhost:3030/speakers/unnamed?limit=10"
+curl -X POST http://localhost:3030/speakers/update -H "Content-Type: application/json" -d '{"id": 5, "name": "John"}'
+curl -X POST http://localhost:3030/speakers/merge -H "Content-Type: application/json" -d '{"speaker_to_keep_id": 1, "speaker_to_merge_id": 2}'
+\`\`\`
+
+---
+
+## 10. Other Endpoints
+
+\`\`\`bash
+curl http://localhost:3030/health              # Health check
+curl http://localhost:3030/audio/list           # Audio devices
+curl http://localhost:3030/vision/list          # Monitors
+\`\`\`
+
+## Pipes API
+
+\`\`\`bash
+curl http://localhost:3030/pipes/list                              # List all pipes
+curl -X POST http://localhost:3030/pipes/enable -d '{"name":"..."}'  # Enable
+curl -X POST http://localhost:3030/pipes/disable -d '{"name":"..."}' # Disable
+curl -X POST http://localhost:3030/pipes/run -d '{"name":"..."}'     # Run once
+curl "http://localhost:3030/pipes/{name}/executions?limit=5"       # Execution history
+\`\`\`
+
+## Deep Links
+
+\`\`\`markdown
+[10:30 AM — Chrome](screenpipe://frame/12345)              # OCR results (use frame_id)
+[meeting at 3pm](screenpipe://timeline?timestamp=ISO8601)  # Audio results (use timestamp)
+\`\`\`
+
+Only use IDs/timestamps from actual search results. Never fabricate.`,
+          },
+        ],
+      };
+
+    case "screenpipe://cli-reference":
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: "text/markdown",
+            text: `# Screenpipe CLI Reference
+
+Use \`bunx screenpipe@latest\` to run CLI commands (or \`npx screenpipe@latest\`). No separate install needed.
+
+## Shell
+
+- **macOS/Linux** → \`bash\`
+- **Windows** → \`powershell\`
+
+---
+
+## Pipe Management
+
+Pipes are markdown-based AI automations. Each pipe lives at \`~/.screenpipe/pipes/<name>/pipe.md\`.
+
+### Commands
+
+\`\`\`bash
+bunx screenpipe@latest pipe list                    # List all pipes (compact table)
+bunx screenpipe@latest pipe enable <name>           # Enable a pipe
+bunx screenpipe@latest pipe disable <name>          # Disable a pipe
+bunx screenpipe@latest pipe run <name>              # Run once immediately (for testing)
+bunx screenpipe@latest pipe logs <name>             # View execution logs
+bunx screenpipe@latest pipe install <url-or-path>   # Install from GitHub or local path
+bunx screenpipe@latest pipe delete <name>           # Delete a pipe
+bunx screenpipe@latest pipe models list             # View AI model presets
+\`\`\`
+
+### Creating a Pipe
+
+Create \`~/.screenpipe/pipes/<name>/pipe.md\` with YAML frontmatter + prompt:
+
+\`\`\`markdown
+---
+schedule: every 30m
+enabled: true
+preset: Oai
+---
+
+Your prompt instructions here. The AI agent executes this on schedule.
+\`\`\`
+
+**Schedule syntax**: \`every 30m\`, \`every 1h\`, \`every day at 9am\`, \`every monday at 9am\`, \`manual\`, or cron: \`*/30 * * * *\`
+
+**Config fields**: \`schedule\`, \`enabled\` (bool), \`preset\` (AI preset name), \`history\` (bool — include previous output), \`connections\` (list of required integrations)
+
+After creating:
+\`\`\`bash
+bunx screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
+bunx screenpipe@latest pipe enable my-pipe
+bunx screenpipe@latest pipe run my-pipe   # test immediately
+\`\`\`
+
+### Editing Config
+
+Edit frontmatter in the pipe.md file directly, or via API:
+
+\`\`\`bash
+curl -X POST http://localhost:3030/pipes/<name>/config \\
+  -H "Content-Type: application/json" \\
+  -d '{"config": {"schedule": "every 1h", "enabled": true}}'
+\`\`\`
+
+### Rules
+
+1. Use \`pipe list\` (not \`--json\`) — table output is compact
+2. Never dump full pipe JSON — can be 15MB+
+3. Check logs first when debugging: \`pipe logs <name>\`
+4. Use \`pipe run <name>\` to test before waiting for schedule
+
+---
+
+## Connection Management
+
+Manage integrations (Telegram, Slack, Discord, Email, Todoist, Teams) from the CLI.
+
+### Commands
+
+\`\`\`bash
+bunx screenpipe@latest connection list              # List all connections + status
+bunx screenpipe@latest connection list --json       # JSON output
+bunx screenpipe@latest connection get <id>          # Show saved credentials
+bunx screenpipe@latest connection set <id> key=val  # Save credentials
+bunx screenpipe@latest connection test <id>         # Test a connection
+bunx screenpipe@latest connection remove <id>       # Remove credentials
+\`\`\`
+
+### Examples
+
+\`\`\`bash
+# Set up Telegram
+bunx screenpipe@latest connection set telegram bot_token=123456:ABC-DEF chat_id=5776185278
+
+# Set up Slack webhook
+bunx screenpipe@latest connection set slack webhook_url=https://hooks.slack.com/services/...
+
+# Verify it works
+bunx screenpipe@latest connection test telegram
+\`\`\`
+
+Connection IDs: \`telegram\`, \`slack\`, \`discord\`, \`email\`, \`todoist\`, \`teams\`, \`google-calendar\`, \`apple-intelligence\`, \`openclaw\`, \`obsidian\`
+
+Credentials are stored locally at \`~/.screenpipe/connections.json\`.`,
+          },
+        ],
+      };
+
     default:
       throw new Error(`Unknown resource: ${uri}`);
   }
@@ -585,6 +1144,14 @@ const PROMPTS = [
     description: "Get audio transcriptions from meetings",
     arguments: [
       { name: "hours", description: "Hours to look back (default: 3)", required: false },
+    ],
+  },
+  {
+    name: "create-pipe",
+    description: "Create a new screenpipe pipe (scheduled AI automation)",
+    arguments: [
+      { name: "description", description: "What the pipe should do", required: true },
+      { name: "schedule", description: "Schedule (e.g., 'every 30m', 'every day at 9am', 'manual')", required: false },
     ],
   },
 ];
@@ -674,6 +1241,85 @@ Use search-content with:
 - limit: 100
 
 Common meeting apps: zoom.us, Microsoft Teams, Google Meet, Slack`,
+            },
+          },
+        ],
+      };
+    }
+
+    case "create-pipe": {
+      const description = promptArgs?.description || "a useful automation";
+      const schedule = promptArgs?.schedule || "every 30m";
+
+      return {
+        description: `Create a new screenpipe pipe: ${description}`,
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: `Create a new screenpipe pipe based on this description: "${description}"
+Schedule: ${schedule}
+
+## How to create a pipe
+
+A pipe is a TypeScript file that runs on a schedule or manually. It uses the screenpipe API to access screen/audio data and can send notifications, call AI, etc.
+
+### Pipe structure
+\`\`\`typescript
+const pipe = () => import("https://raw.githubusercontent.com/nichochar/screenpipe/refs/heads/main/pipes/pipe-modules/pipe-core/index.ts");
+
+async function main() {
+  const sp = await pipe();
+
+  // Query recent screen/audio data
+  const results = await sp.queryScreenpipe({
+    q: "search term",
+    contentType: "all", // "ocr" | "audio" | "all" | "ui"
+    limit: 50,
+    startTime: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    endTime: new Date().toISOString(),
+  });
+
+  // Send notification
+  await sp.sendDesktopNotification({ title: "Title", body: "Body" });
+
+  // Call AI (uses user's configured AI provider)
+  const response = await sp.generateText({
+    messages: [{ role: "user", content: "Analyze this data..." }],
+  });
+}
+
+main();
+\`\`\`
+
+### Key APIs available in pipes
+- \`queryScreenpipe(params)\` - Search screen text (OCR/UI), audio transcriptions
+- \`sendDesktopNotification({ title, body })\` - System notifications
+- \`generateText({ messages, model? })\` - AI text generation
+- \`generateObject({ messages, schema, model? })\` - AI structured output
+- \`loadPipeConfig()\` - Load pipe configuration
+- \`fetch()\` - HTTP requests to external services
+
+### pipe.json config
+\`\`\`json
+{
+  "cron": "${schedule === "manual" ? "" : schedule.replace("every ", "*/").replace("m", " * * * *").replace("h", " * * *")}",
+  "is_nextjs": false,
+  "fields": [
+    { "name": "setting_name", "type": "string", "default": "value", "description": "Setting description" }
+  ]
+}
+\`\`\`
+
+### Important notes
+- Use \`contentType: "ui"\` for accessibility/structured text, \`"ocr"\` for raw screen text
+- Always handle empty results gracefully
+- Use \`startTime\`/\`endTime\` to scope queries
+- Pipes run in Bun runtime with full TypeScript support
+- For scheduled pipes, keep execution fast (< 30s)
+
+Create the pipe with the necessary files (pipe.ts and pipe.json). Follow the patterns above exactly.`,
             },
           },
         ],
@@ -779,6 +1425,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               `[Accessibility] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
               `${content.timestamp || ""}\n` +
               `${content.text || ""}`
+            );
+          } else if (result.type === "Memory") {
+            const tagsStr = content.tags?.length
+              ? ` [${content.tags.join(", ")}]`
+              : "";
+            const importance =
+              content.importance != null
+                ? ` (importance: ${content.importance})`
+                : "";
+            formattedResults.push(
+              `[Memory #${content.id}]${tagsStr}${importance}\n` +
+                `${content.created_at || ""}\n` +
+                `${content.content || ""}`
             );
           }
         }
@@ -1169,6 +1828,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      case "update-memory": {
+        if (args.delete && args.id) {
+          const response = await fetchAPI(`/memories/${args.id}`, {
+            method: "DELETE",
+          });
+          if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+          return {
+            content: [
+              { type: "text", text: `Memory ${args.id} deleted.` },
+            ],
+          };
+        }
+        if (args.id) {
+          // Update existing memory
+          const body: Record<string, unknown> = {};
+          if (args.content !== undefined) body.content = args.content;
+          if (args.tags !== undefined) body.tags = args.tags;
+          if (args.importance !== undefined) body.importance = args.importance;
+          if (args.source_context !== undefined)
+            body.source_context = args.source_context;
+          const response = await fetchAPI(`/memories/${args.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+          const memory = await response.json();
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Memory ${memory.id} updated: "${memory.content}"`,
+              },
+            ],
+          };
+        }
+        // Create new memory
+        if (!args.content) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: 'content' is required to create a memory",
+              },
+            ],
+          };
+        }
+        const memoryBody: Record<string, unknown> = {
+          content: args.content,
+          source: "mcp",
+          tags: args.tags || [],
+          importance: args.importance ?? 0.5,
+        };
+        if (args.source_context) memoryBody.source_context = args.source_context;
+        const memoryResponse = await fetchAPI("/memories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(memoryBody),
+        });
+        if (!memoryResponse.ok)
+          throw new Error(`HTTP error: ${memoryResponse.status}`);
+        const newMemory = await memoryResponse.json();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Memory created (id: ${newMemory.id}): "${newMemory.content}"`,
+            },
+          ],
+        };
       }
 
       default:

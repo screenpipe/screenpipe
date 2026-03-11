@@ -76,6 +76,7 @@ import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { platform } from "@tauri-apps/plugin-os";
@@ -1559,6 +1560,35 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   }
                 />
               </div>
+              {["smart", "batch"].includes(settings.transcriptionMode ?? "realtime") && (
+                <div className="mt-2.5 pt-2.5 border-t border-border/50">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                      Max batch duration
+                      <HelpTooltip text="Maximum duration of audio to batch before transcribing. Longer batches give better context for transcription quality. 0 = auto (engine default: Deepgram 1h, Whisper/OpenAI 10min)." />
+                    </span>
+                    <span className="text-xs font-mono text-foreground">
+                      {(settings.batchMaxDurationSecs ?? 0) === 0
+                        ? "auto"
+                        : `${Math.floor((settings.batchMaxDurationSecs ?? 0) / 60)}min`}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[settings.batchMaxDurationSecs ?? 0]}
+                    onValueChange={([value]) =>
+                      handleSettingsChange({ batchMaxDurationSecs: value }, true)
+                    }
+                    min={0}
+                    max={3600}
+                    step={60}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
+                    <span>auto</span>
+                    <span>60min</span>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

@@ -7,16 +7,28 @@
 //! Each integration defines its fields and a test function.
 //! Pi receives credentials directly in its context and makes API calls itself.
 
+pub mod airtable;
 pub mod discord;
 pub mod email;
+pub mod github_issues;
+pub mod hubspot;
+pub mod jira;
 pub mod linear;
+pub mod logseq;
+pub mod make;
+pub mod n8n;
 pub mod notion;
+pub mod ntfy;
+pub mod obsidian;
 pub mod perplexity;
+pub mod pushover;
 pub mod slack;
 pub mod teams;
 pub mod telegram;
 pub mod todoist;
+pub mod toggl;
 pub mod whatsapp;
+pub mod zapier;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -65,11 +77,7 @@ pub trait Integration: Send + Sync {
     fn def(&self) -> &'static IntegrationDef;
 
     /// Verify credentials work. Returns a human-readable success message.
-    async fn test(
-        &self,
-        client: &reqwest::Client,
-        creds: &Map<String, Value>,
-    ) -> Result<String>;
+    async fn test(&self, client: &reqwest::Client, creds: &Map<String, Value>) -> Result<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +95,18 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(notion::Notion),
         Box::new(linear::Linear),
         Box::new(perplexity::Perplexity),
+        Box::new(obsidian::Obsidian),
+        Box::new(n8n::N8n),
+        Box::new(make::Make),
+        Box::new(zapier::Zapier),
+        Box::new(github_issues::GithubIssues),
+        Box::new(jira::Jira),
+        Box::new(hubspot::HubSpot),
+        Box::new(airtable::Airtable),
+        Box::new(logseq::Logseq),
+        Box::new(pushover::Pushover),
+        Box::new(ntfy::Ntfy),
+        Box::new(toggl::Toggl),
     ]
 }
 
@@ -112,10 +132,7 @@ pub fn load_store(screenpipe_dir: &Path) -> HashMap<String, SavedConnection> {
     }
 }
 
-pub fn save_store(
-    screenpipe_dir: &Path,
-    data: &HashMap<String, SavedConnection>,
-) -> Result<()> {
+pub fn save_store(screenpipe_dir: &Path, data: &HashMap<String, SavedConnection>) -> Result<()> {
     let path = store_path(screenpipe_dir);
     let json = serde_json::to_string_pretty(data)?;
     std::fs::write(&path, json)?;

@@ -31,6 +31,7 @@ use tracing::{error, info, warn};
 pub struct EmbeddedServerHandle {
     shutdown_tx: broadcast::Sender<()>,
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
+    audio_manager: Option<std::sync::Arc<screenpipe_audio::audio_manager::AudioManager>>,
 }
 
 #[allow(dead_code)]
@@ -54,6 +55,19 @@ impl EmbeddedServerHandle {
             ui_handle.stop();
         }
         let _ = self.shutdown_tx.send(());
+
+        // Shut down audio manager BEFORE runtime teardown so the ggml Metal
+        // device is released cleanly (avoids SIGABRT in C++ static destructors).
+        if let Some(audio_manager) = self.audio_manager.take() {
+            info!("Shutting down audio manager (releasing ggml Metal resources)...");
+            match tokio::time::timeout(Duration::from_secs(5), audio_manager.shutdown()).await {
+                Ok(Ok(())) => info!("Audio manager shut down cleanly"),
+                Ok(Err(e)) => warn!("Audio manager shutdown error: {:?}", e),
+                Err(_) => warn!("Audio manager shutdown timed out after 5s"),
+            }
+            // Drop remaining Arc refs so the ggml model is freed now, not during exit()
+            drop(audio_manager);
+        }
 
         // Now wait for UI recorder tasks to actually finish
         if let Some(ui_handle) = self.ui_recorder_handle.take() {
@@ -480,6 +494,7 @@ pub async fn start_embedded_server(
     Ok(EmbeddedServerHandle {
         shutdown_tx,
         ui_recorder_handle,
+        audio_manager: Some(audio_manager),
     })
 }
 
@@ -498,6 +513,7 @@ mod tests {
         let handle = EmbeddedServerHandle {
             shutdown_tx,
             ui_recorder_handle: Some(screenpipe_engine::UiRecorderHandle::new_for_test(flag)),
+            audio_manager: None,
         };
 
         assert!(!flag_clone.load(Ordering::Relaxed));
@@ -514,6 +530,7 @@ mod tests {
         let handle = EmbeddedServerHandle {
             shutdown_tx,
             ui_recorder_handle: None,
+            audio_manager: None,
         };
 
         handle.shutdown();
@@ -529,6 +546,7 @@ mod tests {
         let handle = EmbeddedServerHandle {
             shutdown_tx,
             ui_recorder_handle: None,
+            audio_manager: None,
         };
 
         // Should not panic when ui_recorder_handle is None

@@ -1,16 +1,19 @@
 ---
 schedule: every 1h
 enabled: false
+connections:
+  - obsidian
 ---
 
 Sync screenpipe activity to an Obsidian vault as a daily markdown log.
 
 ## Task
 
-1. Read the existing daily note file first (if it exists) — merge into it
-2. Query the screenpipe search API for the time range in 30-minute chunks
-3. Use `min_length=50` to skip noisy/short OCR fragments
-4. Synthesize activities, extract action items, write the note
+1. Fetch the Obsidian vault path from `GET http://localhost:3030/connections/obsidian` — the `vault_path` and `daily_note_folder` fields tell you where to write
+2. Read the existing daily note file first (if it exists) — merge into it
+3. Query the screenpipe search API for the time range in 30-minute chunks
+4. Use `min_length=50` to skip noisy/short OCR fragments
+5. Synthesize activities, extract action items, write the note to the vault
 
 ## Search API
 

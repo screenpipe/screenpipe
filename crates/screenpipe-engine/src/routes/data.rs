@@ -75,6 +75,13 @@ pub(crate) async fn delete_time_range_handler(
         }
     }
 
+    // Delete uploaded snapshot files from disk
+    for path in &result.snapshot_files {
+        if let Err(e) = std::fs::remove_file(path) {
+            warn!("failed to delete snapshot file {}: {}", path, e);
+        }
+    }
+
     Ok(JsonResponse(DeleteTimeRangeResponse {
         frames_deleted: result.frames_deleted,
         ocr_deleted: result.ocr_deleted,

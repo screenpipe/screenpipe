@@ -16,6 +16,7 @@ export type AIProviderType =
 	| "native-ollama"
 	| "openai"
 	| "openai-chatgpt"
+	| "anthropic"
 	| "custom"
 	| "embedded"
 	| "pi";
@@ -50,6 +51,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "screenpipe-cloud";
+	  }
+	| {
+			provider: "anthropic";
+			apiKey: string;
 	  }
 	| {
 			provider: "custom";
@@ -131,6 +136,8 @@ export type Settings = SettingsStore & {
 	openaiCompatibleModel?: string;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
+	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 3600s, Whisper 600s) */
+	batchMaxDurationSecs?: number;
 	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
 	pipeSuggestionsEnabled?: boolean;
 	/** Hours between pipe suggestion notifications (default: 24) */

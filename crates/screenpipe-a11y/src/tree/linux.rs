@@ -16,8 +16,8 @@
 //! - Enable with: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
-    TruncationReason,
+    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    TreeWalkerPlatform, TruncationReason,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -159,8 +159,6 @@ const EXCLUDED_APPS: &[&str] = &[
     "openbox",
     "compiz",
 ];
-
-const SENSITIVE_TITLES: &[&str] = &["password", "private", "incognito", "secret"];
 
 /// Known browser process names for URL extraction.
 const BROWSER_NAMES: &[&str] = &[
@@ -853,7 +851,7 @@ impl LinuxTreeWalker {
 }
 
 impl TreeWalkerPlatform for LinuxTreeWalker {
-    fn walk_focused_window(&self) -> Result<Option<TreeSnapshot>> {
+    fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
 
         // Safety: single-threaded access guaranteed by walker thread design
@@ -862,23 +860,24 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         // Find the focused window
         let (app_name, window_title, window_ref, _pid) = match find_focused_window(conn) {
             Some(result) => result,
-            None => return Ok(None),
+            None => return Ok(TreeWalkResult::NotFound),
         };
 
-        // Check sensitive window titles
-        let window_lower = window_title.to_lowercase();
-        if SENSITIVE_TITLES.iter().any(|s| window_lower.contains(s)) {
-            return Ok(None);
+        // Skip incognito / private browsing windows (localized title check)
+        if self.config.ignore_incognito_windows && crate::incognito::is_title_private(&window_title)
+        {
+            return Ok(TreeWalkResult::Skipped);
         }
 
         let app_lower = app_name.to_lowercase();
+        let window_lower = window_title.to_lowercase();
 
         // Apply user-configured ignored windows
         if self.config.ignored_windows.iter().any(|pattern| {
             let p = pattern.to_lowercase();
             app_lower.contains(&p) || window_lower.contains(&p)
         }) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured included windows (whitelist)
@@ -888,7 +887,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
                 app_lower.contains(&p) || window_lower.contains(&p)
             });
             if !matches {
-                return Ok(None);
+                return Ok(TreeWalkResult::Skipped);
             }
         }
 
@@ -940,7 +939,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             walk_duration
         );
 
-        Ok(Some(TreeSnapshot {
+        Ok(TreeWalkResult::Found(TreeSnapshot {
             app_name,
             window_name: window_title,
             text_content,
@@ -1013,11 +1012,11 @@ mod tests {
     }
 
     #[test]
-    fn test_sensitive_titles() {
-        assert!(SENSITIVE_TITLES
-            .iter()
-            .any(|s| "enter password".contains(s)));
-        assert!(!SENSITIVE_TITLES.iter().any(|s| "calculator".contains(s)));
+    fn test_incognito_detection() {
+        use crate::incognito::is_title_private;
+        assert!(is_title_private("Enter Password - Chrome"));
+        assert!(is_title_private("Private Browsing - Firefox"));
+        assert!(!is_title_private("Calculator"));
     }
 
     #[test]

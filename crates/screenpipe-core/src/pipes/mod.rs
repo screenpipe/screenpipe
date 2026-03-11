@@ -114,6 +114,11 @@ pub struct PipeConfig {
     )]
     pub allow_frames: bool,
 
+    /// Connections this pipe uses (e.g. `["obsidian", "slack"]`).
+    /// The AI can query `GET /connections/<id>` at runtime to get credentials.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<String>,
+
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
@@ -1686,6 +1691,14 @@ impl PipeManager {
                         config.preset = Some(s.to_string());
                     }
                 }
+                "connections" => {
+                    if let Some(arr) = v.as_array() {
+                        config.connections = arr
+                            .iter()
+                            .filter_map(|item| item.as_str().map(String::from))
+                            .collect();
+                    }
+                }
                 _ => {
                     config.config.insert(k.clone(), v.clone());
                 }
@@ -2021,8 +2034,13 @@ impl PipeManager {
 
                     let pipe_dir = pipes_dir.join(name);
 
-                    let prompt =
-                        render_prompt_with_port(config, body, api_port, preset_prompt.as_deref(), extra_context.as_deref());
+                    let prompt = render_prompt_with_port(
+                        config,
+                        body,
+                        api_port,
+                        preset_prompt.as_deref(),
+                        extra_context.as_deref(),
+                    );
                     let pipe_name = name.clone();
                     let logs_ref = logs.clone();
                     let running_ref = running.clone();
@@ -2870,6 +2888,7 @@ mod tests {
             allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
+            connections: vec![],
         };
         let body = "Do something useful";
         let serialized = serialize_pipe(&config, body).unwrap();
@@ -2964,6 +2983,7 @@ mod tests {
             allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
+            connections: vec![],
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
         assert!(prompt.contains("http://localhost:3031"));
@@ -2992,6 +3012,7 @@ mod tests {
             allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
+            connections: vec![],
         };
         let prompt = render_prompt_with_port(&config, "hello", 3030, None, None);
         assert!(prompt.contains("http://localhost:3030"));
@@ -3018,6 +3039,7 @@ mod tests {
             allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
+            connections: vec![],
         };
         let prompt = render_prompt_with_port(
             &config,
@@ -3052,6 +3074,7 @@ mod tests {
             allow_raw_sql: true,
             allow_frames: true,
             config: HashMap::new(),
+            connections: vec![],
         };
         let prompt = render_prompt_with_port(&config, "body text", 3030, None, None);
         assert!(!prompt.contains("System prompt:"));
@@ -3125,6 +3148,7 @@ mod tests {
                 allow_raw_sql: true,
                 allow_frames: true,
                 config: HashMap::new(),
+                connections: vec![],
             },
             last_run: None,
             last_success: None,

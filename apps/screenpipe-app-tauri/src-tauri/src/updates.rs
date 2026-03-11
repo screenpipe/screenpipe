@@ -427,8 +427,18 @@ impl UpdatesManager {
                     "auto-update enabled, restarting to apply update v{}",
                     update.version
                 );
-                // Give user time to read the notification
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                // Emit event so the frontend can display a countdown/warning
+                let _ = self.app.emit(
+                    "update-restarting",
+                    serde_json::json!({
+                        "version": update.version,
+                        "delay_secs": 30,
+                    }),
+                );
+                // Give user 30 seconds to finish what they're doing before restarting.
+                // Previous 5-second delay was too aggressive and interrupted fullscreen
+                // apps (games, presentations) without adequate warning.
+                tokio::time::sleep(Duration::from_secs(30)).await;
                 if let Err(err) =
                     stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()).await
                 {

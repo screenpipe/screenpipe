@@ -9,7 +9,6 @@
 /// 2. Cross-device duplicates (similarity check across all devices)
 ///
 /// Run with: cargo test --package screenpipe-db --test audio_duplicate_test -- --nocapture
-
 #[cfg(test)]
 mod tests {
     use screenpipe_db::{AudioDevice, DatabaseManager, DeviceType};

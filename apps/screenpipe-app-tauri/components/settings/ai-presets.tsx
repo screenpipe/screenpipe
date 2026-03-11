@@ -107,7 +107,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "embedded" | "pi";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi";
   title: string;
   description: string;
   imageSrc: string;
@@ -369,6 +369,42 @@ const AISection = ({
     updateSettingsPreset({ apiKey: value });
   }, [updateSettingsPreset]);
 
+  // Auto-set max output tokens based on model name
+  const getDefaultMaxTokens = useCallback((model: string): number | null => {
+    const m = model.toLowerCase();
+    // Claude models
+    if (m.includes("opus")) return 64000;
+    if (m.includes("sonnet-4") || m.includes("sonnet-3.7")) return 64000;
+    if (m.includes("haiku")) return 8192;
+    // OpenAI models
+    if (m.includes("gpt-5")) return 128000;
+    if (m.includes("o3") || m.includes("o4") || m.includes("o1")) return 100000;
+    if (m.includes("gpt-4.1")) return 32768;
+    if (m.includes("gpt-oss")) return 8192;
+    // Google models
+    if (m.includes("gemini-3") || m.includes("gemini-2.5-pro")) return 65536;
+    if (m.includes("gemini")) return 8192;
+    // DeepSeek
+    if (m.includes("deepseek")) return 8192;
+    // Qwen
+    if (m.includes("qwen")) return 8192;
+    // Mistral
+    if (m.includes("mistral")) return 4096;
+    // Local/OSS models
+    if (m.includes("llama")) return 4096;
+    if (m.includes("phi")) return 16384;
+    return null; // unknown model, don't change
+  }, []);
+
+  useEffect(() => {
+    const model = settingsPreset?.model;
+    if (!model) return;
+    const tokens = getDefaultMaxTokens(model);
+    if (tokens && (settingsPreset as any)?.maxTokens !== tokens) {
+      updateSettingsPreset({ maxTokens: tokens } as any);
+    }
+  }, [settingsPreset?.model]);
+
   const handleCustomPromptChange = useCallback((value: string, isValid: boolean) => {
     updateSettingsPreset({ prompt: value });
   }, [updateSettingsPreset]);
@@ -395,6 +431,10 @@ const AISection = ({
         newUrl = "https://api.openai.com/v1";
         newModel = "gpt-5.4";
         break;
+      case "anthropic":
+        newUrl = "https://api.anthropic.com";
+        newModel = "claude-sonnet-4-5-20250514";
+        break;
       case "pi":
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "claude-haiku-4-5";
@@ -418,6 +458,7 @@ const AISection = ({
     diagnosticsAbortRef.current?.abort();
     const abort = new AbortController();
     diagnosticsAbortRef.current = abort;
+    const isChatGpt = settingsPreset?.provider === "openai-chatgpt";
 
     setTestStatus("testing");
     setTestResults(INITIAL_DIAGNOSTICS);
@@ -440,11 +481,14 @@ const AISection = ({
     };
 
     // Determine models URL
+    const isAnthropic = settingsPreset?.provider === "anthropic";
     let modelsUrl: string;
     if (settingsPreset?.provider === "native-ollama") {
       modelsUrl = "http://localhost:11434/api/tags";
     } else if (settingsPreset?.provider === "openai" || settingsPreset?.provider === "openai-chatgpt") {
       modelsUrl = "https://api.openai.com/v1/models";
+    } else if (isAnthropic) {
+      modelsUrl = "https://api.anthropic.com/v1/models";
     } else {
       modelsUrl = `${settingsPreset?.url}/models`;
     }
@@ -464,6 +508,10 @@ const AISection = ({
         skipRemaining("auth", `Could not get ChatGPT token: ${err}. You may need to rebuild the app.`);
         return;
       }
+    } else if (isAnthropic && settingsPreset?.apiKey) {
+      headers["x-api-key"] = settingsPreset.apiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      headers["anthropic-dangerous-direct-browser-access"] = "true";
     } else if (settingsPreset?.apiKey) {
       headers["Authorization"] = `Bearer ${settingsPreset.apiKey}`;
     }
@@ -474,99 +522,110 @@ const AISection = ({
       endpoint: { status: "running", message: "Connecting..." },
     }));
 
-    let modelsResponse: Response;
-    try {
-      modelsResponse = await fetch(modelsUrl, {
-        headers,
-        signal: abort.signal,
-      });
-    } catch (err: any) {
-      if (abort.signal.aborted) return;
-      const hint =
-        settingsPreset?.provider === "native-ollama"
-          ? "Is Ollama running? Try: `ollama serve`"
-          : settingsPreset?.provider === "custom"
-          ? "Verify the URL is correct and the server is running"
-          : "Check your network connection";
-      skipRemaining("endpoint", `Connection failed: ${hint}`);
-      return;
-    }
-
-    if (abort.signal.aborted) return;
-
-    // Step 1 pass
-    setTestResults((prev) => ({
-      ...prev,
-      endpoint: { status: "pass", message: isChatGpt ? "Reachable (OAuth)" : `GET ${modelsResponse.status}` },
-      auth: { status: "running", message: "Checking..." },
-    }));
-
-    // Step 2: Auth check
-    // ChatGPT OAuth tokens lack model.read scope so /v1/models returns 403 — skip to chat test
-    if (settingsPreset?.provider === "openai-chatgpt" && (modelsResponse.status === 403 || modelsResponse.status === 401)) {
+    // Anthropic: skip /v1/models (may not be available for all keys) and go straight to chat test
+    let modelsResponse: Response | null = null;
+    if (isAnthropic) {
       setTestResults((prev) => ({
         ...prev,
-        auth: { status: "pass", message: "OAuth token present" },
-        models: { status: "pass", message: "Using known models (API scope limited)" },
+        endpoint: { status: "pass", message: "api.anthropic.com" },
+        auth: { status: "pass", message: "Will verify with chat test" },
+        models: { status: "pass", message: "Using known models" },
         chat: { status: "running", message: "Sending test message..." },
       }));
-    } else if (modelsResponse.status === 401 || modelsResponse.status === 403) {
-      const hint =
-        settingsPreset?.provider === "openai"
-          ? "Check your API key at platform.openai.com"
-          : "Check your API key is valid and has credits";
-      skipRemaining("auth", `${modelsResponse.status} Unauthorized. ${hint}`);
-      return;
-    } else if (!modelsResponse.ok) {
-      skipRemaining("auth", `Unexpected status ${modelsResponse.status}`);
-      return;
     } else {
-      setTestResults((prev) => ({
-        ...prev,
-        auth: { status: "pass", message: "API key accepted" },
-        models: { status: "running", message: "Loading..." },
-      }));
-    }
-
-    // Step 3: Parse models (skip for openai-chatgpt when /v1/models returned 403)
-    if (modelsResponse.ok) {
-      let modelCount = 0;
+      const modelsFetchFn = fetch;
       try {
-        const data = await modelsResponse.json();
-        if (settingsPreset?.provider === "native-ollama") {
-          const ollamaModels = (data.models || []).map((m: any) => ({
-            id: m.name,
-            name: m.name,
-            provider: "ollama",
-          }));
-          modelCount = ollamaModels.length;
-          setModels(ollamaModels);
-        } else {
-          const apiModels = (data.data || []).map((m: any) => ({
-            id: m.id,
-            name: m.id,
-            provider: settingsPreset?.provider || "custom",
-          }));
-          modelCount = apiModels.length;
-          setModels(apiModels);
-        }
-      } catch {
+        modelsResponse = await modelsFetchFn(modelsUrl, {
+          headers,
+          signal: abort.signal,
+        });
+      } catch (err: any) {
         if (abort.signal.aborted) return;
-        skipRemaining("models", "Failed to parse models response");
+        const hint =
+          settingsPreset?.provider === "native-ollama"
+            ? "Is Ollama running? Try: `ollama serve`"
+            : settingsPreset?.provider === "custom"
+            ? "Verify the URL is correct and the server is running"
+            : "Check your network connection";
+        skipRemaining("endpoint", `Connection failed: ${hint}`);
         return;
       }
 
       if (abort.signal.aborted) return;
 
+      // Step 1 pass
       setTestResults((prev) => ({
         ...prev,
-        models: { status: "pass", message: `${modelCount} model${modelCount !== 1 ? "s" : ""} loaded` },
-        chat: { status: "running", message: "Sending test message..." },
+        endpoint: { status: "pass", message: isChatGpt ? "Reachable (OAuth)" : `GET ${modelsResponse!.status}` },
+        auth: { status: "running", message: "Checking..." },
       }));
+
+      // Step 2: Auth check
+      // ChatGPT OAuth tokens lack model.read scope so /v1/models returns 403 — skip to chat test
+      if (settingsPreset?.provider === "openai-chatgpt" && (modelsResponse!.status === 403 || modelsResponse!.status === 401)) {
+        setTestResults((prev) => ({
+          ...prev,
+          auth: { status: "pass", message: "OAuth token present" },
+          models: { status: "pass", message: "Using known models (API scope limited)" },
+          chat: { status: "running", message: "Sending test message..." },
+        }));
+      } else if (modelsResponse!.status === 401 || modelsResponse!.status === 403) {
+        const hint =
+          settingsPreset?.provider === "openai"
+            ? "Check your API key at platform.openai.com"
+            : "Check your API key is valid and has credits";
+        skipRemaining("auth", `${modelsResponse!.status} Unauthorized. ${hint}`);
+        return;
+      } else if (!modelsResponse!.ok) {
+        skipRemaining("auth", `Unexpected status ${modelsResponse!.status}`);
+        return;
+      } else {
+        setTestResults((prev) => ({
+          ...prev,
+          auth: { status: "pass", message: "API key accepted" },
+          models: { status: "running", message: "Loading..." },
+        }));
+      }
+
+      // Step 3: Parse models (skip for openai-chatgpt when /v1/models returned 403)
+      if (modelsResponse!.ok) {
+        let modelCount = 0;
+        try {
+          const data = await modelsResponse!.json();
+          if (settingsPreset?.provider === "native-ollama") {
+            const ollamaModels = (data.models || []).map((m: any) => ({
+              id: m.name,
+              name: m.name,
+              provider: "ollama",
+            }));
+            modelCount = ollamaModels.length;
+            setModels(ollamaModels);
+          } else {
+            const apiModels = (data.data || []).map((m: any) => ({
+              id: m.id,
+              name: m.id,
+              provider: settingsPreset?.provider || "custom",
+            }));
+            modelCount = apiModels.length;
+            setModels(apiModels);
+          }
+        } catch {
+          if (abort.signal.aborted) return;
+          skipRemaining("models", "Failed to parse models response");
+          return;
+        }
+
+        if (abort.signal.aborted) return;
+
+        setTestResults((prev) => ({
+          ...prev,
+          models: { status: "pass", message: `${modelCount} model${modelCount !== 1 ? "s" : ""} loaded` },
+          chat: { status: "running", message: "Sending test message..." },
+        }));
+      }
     }
 
     // Step 4: Test chat completion (or Codex Responses API for ChatGPT OAuth)
-    const isChatGpt = settingsPreset?.provider === "openai-chatgpt";
     let chatUrl: string;
     if (settingsPreset?.provider === "native-ollama") {
       chatUrl = "http://localhost:11434/v1/chat/completions";
@@ -574,12 +633,16 @@ const AISection = ({
       chatUrl = "https://api.openai.com/v1/chat/completions";
     } else if (isChatGpt) {
       chatUrl = "https://chatgpt.com/backend-api/codex/responses";
+    } else if (isAnthropic) {
+      chatUrl = "https://api.anthropic.com/v1/messages";
     } else {
       chatUrl = `${settingsPreset?.url}/chat/completions`;
     }
 
     const chatBody = isChatGpt
       ? { model: settingsPreset?.model || "", instructions: "reply briefly", input: [{ role: "user", content: "say hi" }], store: false, stream: true }
+      : isAnthropic
+      ? { model: settingsPreset?.model || "", messages: [{ role: "user", content: "say hi" }], max_tokens: 50 }
       : { model: settingsPreset?.model || "", messages: [{ role: "user", content: "say hi" }], max_tokens: 50 };
 
     // For ChatGPT Codex endpoint, extract account ID from JWT and add required headers
@@ -599,8 +662,8 @@ const AISection = ({
       chatHeaders["OpenAI-Beta"] = "responses=experimental";
     }
 
-    // Use tauriFetch for chatgpt.com to bypass CORS
-    const fetchFn = isChatGpt ? tauriFetch : fetch;
+    // Use tauriFetch for chatgpt.com and Anthropic to bypass CORS
+    const fetchFn = (isChatGpt || isAnthropic) ? tauriFetch : fetch;
 
     const chatStart = performance.now();
     try {
@@ -631,6 +694,9 @@ const AISection = ({
       if (isChatGpt) {
         // Streaming SSE — just confirm we got a 200 response
         reply = "Stream started OK";
+      } else if (isAnthropic) {
+        const chatData = await chatResponse.json();
+        reply = chatData.content?.[0]?.text?.slice(0, 100) || "No response";
       } else {
         const chatData = await chatResponse.json();
         reply = chatData.choices?.[0]?.message?.content?.slice(0, 100) || "No response";
@@ -742,6 +808,42 @@ const AISection = ({
           }
           break;
 
+        case "anthropic": {
+          try {
+            const anthropicResp = await tauriFetch("https://api.anthropic.com/v1/models", {
+              headers: {
+                "x-api-key": settingsPreset?.apiKey || "",
+                "anthropic-version": "2023-06-01",
+                "anthropic-dangerous-direct-browser-access": "true",
+              },
+            });
+            if (anthropicResp.ok) {
+              const anthropicData = await anthropicResp.json();
+              setModels(
+                (anthropicData.data || []).map((m: any) => ({
+                  id: m.id,
+                  name: m.display_name || m.id,
+                  provider: "anthropic",
+                }))
+              );
+            } else {
+              // Fallback to hardcoded models
+              setModels([
+                { id: "claude-opus-4-6-20250828", name: "Claude Opus 4.6", provider: "anthropic" },
+                { id: "claude-sonnet-4-5-20250514", name: "Claude Sonnet 4.5", provider: "anthropic" },
+                { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+              ]);
+            }
+          } catch {
+            setModels([
+              { id: "claude-opus-4-6-20250828", name: "Claude Opus 4.6", provider: "anthropic" },
+              { id: "claude-sonnet-4-5-20250514", name: "Claude Sonnet 4.5", provider: "anthropic" },
+              { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
+            ]);
+          }
+          break;
+        }
+
         case "openai-chatgpt": {
           // Try /v1/models with OAuth token; fall back to known models if it fails.
           let loaded = false;
@@ -823,6 +925,7 @@ const AISection = ({
   useEffect(() => {
     if (
       (settingsPreset?.provider === "openai" ||
+        settingsPreset?.provider === "anthropic" ||
         settingsPreset?.provider === "custom") &&
       !settingsPreset?.apiKey
     )
@@ -837,7 +940,7 @@ const AISection = ({
     if (!settingsPreset?.provider) return;
 
     const needsApiKey =
-      settingsPreset.provider === "openai" || settingsPreset.provider === "custom";
+      settingsPreset.provider === "openai" || settingsPreset.provider === "anthropic" || settingsPreset.provider === "custom";
     if (needsApiKey && !settingsPreset.apiKey) return;
 
     if (settingsPreset.provider === "openai-chatgpt" || settingsPreset.provider === "native-ollama" || settingsPreset.url) {
@@ -884,6 +987,15 @@ const AISection = ({
             imageSrc="/images/openai.png"
             selected={settingsPreset?.provider === "openai-chatgpt"}
             onClick={() => handleAiProviderChange("openai-chatgpt")}
+          />
+
+          <AIProviderCard
+            type="anthropic"
+            title="Anthropic"
+            description="Use your Anthropic API key for Claude models"
+            imageSrc="/images/anthropic.png"
+            selected={settingsPreset?.provider === "anthropic"}
+            onClick={() => handleAiProviderChange("anthropic")}
           />
 
           <AIProviderCard
@@ -945,7 +1057,7 @@ const AISection = ({
         />
       )}
 
-      {(settingsPreset?.provider === "custom" || (isApiKeyRequired &&
+      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
         settingsPreset?.provider === "openai")) && (
           <div className="w-full">
             <div className="flex flex-col gap-4 mb-4 w-full">
@@ -981,6 +1093,15 @@ const AISection = ({
                   )}
                 </Button>
               </div>
+              {settingsPreset?.provider === "anthropic" && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 w-fit"
+                  onClick={() => openUrl("https://console.anthropic.com/settings/keys")}
+                >
+                  Get your API key at console.anthropic.com
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1128,6 +1249,21 @@ const AISection = ({
               </Command>
             </PopoverContent>
           </Popover>
+          {settingsPreset?.provider === "native-ollama" && (
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p>
+                <span className="font-medium">recommended:</span>{" "}
+                <code className="bg-secondary/50 px-1 rounded">qwen3.5:9b</code>{" "}
+                <code className="bg-secondary/50 px-1 rounded">glm-4.7:9b</code>{" "}
+                <code className="bg-secondary/50 px-1 rounded">qwen3.5:4b</code>{" "}
+                (all support tool calling)
+              </p>
+              <p>
+                GPU strongly recommended. without a dedicated GPU, local models will be very slow and pipes may time out.
+                for best results consider screenpipe cloud or groq as custom provider.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1156,7 +1292,7 @@ const AISection = ({
             Max Output Tokens
           </Label>
           <p className="text-xs text-muted-foreground mb-2">
-            Maximum tokens the model can generate per response. Lower values work better with providers like Groq.
+            Maximum tokens the model can generate per response.
           </p>
           <Input
             id="maxTokens"
@@ -1168,6 +1304,30 @@ const AISection = ({
             onChange={(e) => updateSettingsPreset({ maxTokens: parseInt(e.target.value) || 4096 } as any)}
             className="w-full"
           />
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {[
+              { label: "8k", value: 8192, hint: "haiku / qwen / deepseek" },
+              { label: "32k", value: 32768, hint: "gpt-4.1" },
+              { label: "64k", value: 64000, hint: "opus / sonnet" },
+              { label: "65k", value: 65536, hint: "gemini 3 pro" },
+              { label: "100k", value: 100000, hint: "o3 / o4" },
+              { label: "128k", value: 128000, hint: "gpt-5" },
+            ].map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                  (settingsPreset as any)?.maxTokens === preset.value
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/50 hover:bg-muted border-border"
+                }`}
+                onClick={() => updateSettingsPreset({ maxTokens: preset.value } as any)}
+              >
+                {preset.label}
+                <span className="text-[10px] ml-1 opacity-60">{preset.hint}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1311,6 +1471,7 @@ const AISection = ({
 const providerImageSrc: Record<string, string> = {
   openai: "/images/openai.png",
   "openai-chatgpt": "/images/openai.png",
+  anthropic: "/images/anthropic.png",
   "native-ollama": "/images/ollama.png",
   custom: "/images/custom.png",
   pi: "/images/screenpipe.png",

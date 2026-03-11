@@ -4,7 +4,9 @@
 
 //! macOS accessibility tree walker using cidre AX APIs.
 
-use super::{AccessibilityTreeNode, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform};
+use super::{
+    AccessibilityTreeNode, TreeSnapshot, TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform,
+};
 use anyhow::Result;
 use chrono::Utc;
 use cidre::{ax, cf, ns};
@@ -154,23 +156,27 @@ fn looks_like_url(s: &str) -> bool {
 /// macOS tree walker using cidre's AX bindings.
 pub struct MacosTreeWalker {
     config: TreeWalkerConfig,
+    incognito_detector: Box<dyn crate::incognito::IncognitoDetector>,
 }
 
 impl MacosTreeWalker {
     pub fn new(config: TreeWalkerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            incognito_detector: crate::incognito::create_detector(),
+        }
     }
 }
 
 impl TreeWalkerPlatform for MacosTreeWalker {
-    fn walk_focused_window(&self) -> Result<Option<TreeSnapshot>> {
+    fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         // Wrap in autorelease pool — cidre AX/NS APIs create autoreleased
         // ObjC objects. Without this, objects accumulate on the tokio
         // blocking thread (reused across calls), causing a memory leak
         // proportional to capture rate.
         // Note: ar_pool requires R: Clone, so we return Result<_, String>
         // and convert back to anyhow::Error.
-        cidre::objc::ar_pool(|| -> Result<Option<TreeSnapshot>, String> {
+        cidre::objc::ar_pool(|| -> Result<TreeWalkResult, String> {
             self.walk_focused_window_inner()
                 .map_err(|e| format!("{}", e))
         })
@@ -179,7 +185,7 @@ impl TreeWalkerPlatform for MacosTreeWalker {
 }
 
 impl MacosTreeWalker {
-    fn walk_focused_window_inner(&self) -> Result<Option<TreeSnapshot>> {
+    fn walk_focused_window_inner(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
 
         // 1. Get the focused application via the AX system-wide element.
@@ -188,14 +194,14 @@ impl MacosTreeWalker {
         let sys = ax::UiElement::sys_wide();
         let focused_app = match sys.focused_app() {
             Ok(app) => app,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(TreeWalkResult::NotFound),
         };
         let pid = match focused_app.pid() {
             Ok(pid) => pid,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(TreeWalkResult::NotFound),
         };
         let Some(app) = ns::RunningApp::with_pid(pid) else {
-            return Ok(None);
+            return Ok(TreeWalkResult::NotFound);
         };
 
         let app_name = app
@@ -216,7 +222,7 @@ impl MacosTreeWalker {
             "loginwindow",
         ];
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured ignored windows (check app name)
@@ -224,7 +230,7 @@ impl MacosTreeWalker {
             let p = pattern.to_lowercase();
             app_lower.contains(&p)
         }) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // 2. Get the focused window via AX API
@@ -243,32 +249,34 @@ impl MacosTreeWalker {
 
         let window_val = match ax_app.attr_value(ax::attr::focused_window()) {
             Ok(v) => v,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(TreeWalkResult::NotFound),
         };
 
         if window_val.get_type_id() != ax::UiElement::type_id() {
-            return Ok(None);
+            return Ok(TreeWalkResult::NotFound);
         }
         let window: &ax::UiElement = unsafe { std::mem::transmute(&*window_val) };
 
         let window_name = get_string_attr(window, ax::attr::title()).unwrap_or_default();
 
-        // Skip windows with sensitive titles
-        let window_lower = window_name.to_lowercase();
-        if window_lower.contains("password")
-            || window_lower.contains("private")
-            || window_lower.contains("incognito")
-            || window_lower.contains("secret")
+        // Skip incognito / private browsing windows.  Uses the full detector
+        // which checks AppleScript window properties for Chromium browsers
+        // (Arc, Chrome, Edge, etc.) and falls back to localized title matching.
+        if self.config.ignore_incognito_windows
+            && self
+                .incognito_detector
+                .is_incognito(&app_name, 0, &window_name)
         {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured ignored windows (also check window title)
+        let window_lower = window_name.to_lowercase();
         if self.config.ignored_windows.iter().any(|pattern| {
             let p = pattern.to_lowercase();
             window_lower.contains(&p)
         }) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured included windows (also check window title)
@@ -282,7 +290,7 @@ impl MacosTreeWalker {
                 window_lower.contains(&p)
             });
             if !matches_app && !matches_window {
-                return Ok(None);
+                return Ok(TreeWalkResult::Skipped);
             }
         }
 
@@ -337,7 +345,7 @@ impl MacosTreeWalker {
             walk_duration
         );
 
-        Ok(Some(TreeSnapshot {
+        Ok(TreeWalkResult::Found(TreeSnapshot {
             app_name,
             window_name,
             text_content,
@@ -761,7 +769,7 @@ mod tests {
             ..Default::default()
         };
         let walker = MacosTreeWalker::new(config);
-        if let Ok(Some(snapshot)) = walker.walk_focused_window() {
+        if let Ok(TreeWalkResult::Found(snapshot)) = walker.walk_focused_window() {
             assert!(snapshot.node_count <= 11); // +1 for the rounding in the check
         }
     }

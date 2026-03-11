@@ -197,6 +197,10 @@ export function PrivacySection() {
     handleSettingsChange({ usePiiRemoval: checked }, true);
   };
 
+  const handleIncognitoToggle = (checked: boolean) => {
+    handleSettingsChange({ ignoreIncognitoWindows: checked }, true);
+  };
+
   const handleAnalyticsToggle = (checked: boolean) => {
     handleSettingsChange({ analyticsEnabled: checked }, true);
   };
@@ -399,6 +403,31 @@ export function PrivacySection() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Incognito Detection */}
+      <Card className="border-border bg-card">
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  ignore incognito windows
+                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages. on macos, uses native browser APIs for chromium browsers (chrome, edge, brave, arc)." />
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  skip all private browsing sessions
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="ignoreIncognitoWindows"
+              checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
+              onCheckedChange={handleIncognitoToggle}
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Window Filtering */}
       <div className="space-y-2">

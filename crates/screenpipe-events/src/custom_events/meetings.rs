@@ -53,6 +53,8 @@ pub async fn poll_meetings_events() -> Result<()> {
 
     // Calendar state
     let mut current_calendar_events: Vec<CalendarEventSignal> = Vec::new();
+    // Track calendar meeting end time so we can auto-end when the event is over
+    let mut calendar_meeting_end: Option<DateTime<Utc>> = None;
 
     while let Some(event) = subscription.next().await {
         let name = event.name;
@@ -65,12 +67,13 @@ pub async fn poll_meetings_events() -> Result<()> {
                         events.into_iter().filter(|e| !e.is_all_day).collect();
 
                     // Proactive detection: if a non-all-day calendar event with 2+ attendees
-                    // started within the last 2 minutes, emit meeting_started
+                    // is currently in progress, emit meeting_started.
+                    // Previously this only checked events started within 2 minutes,
+                    // which broke after app restarts mid-meeting.
                     if !meeting_in_progress
                         && last_meeting_end.is_none_or(|t| t.elapsed() >= MEETING_RESTART_TIMEOUT)
                     {
                         let now = Utc::now();
-                        let two_min_ago = now - chrono::Duration::minutes(2);
 
                         for cal_event in &current_calendar_events {
                             if cal_event.attendees.len() >= 2 {
@@ -78,12 +81,10 @@ pub async fn poll_meetings_events() -> Result<()> {
                                     let start_utc = start.with_timezone(&Utc);
                                     if let Ok(end) = DateTime::parse_from_rfc3339(&cal_event.end) {
                                         let end_utc = end.with_timezone(&Utc);
-                                        // Event started recently and hasn't ended
-                                        if start_utc >= two_min_ago
-                                            && start_utc <= now
-                                            && end_utc > now
-                                        {
+                                        // Event is currently in progress
+                                        if start_utc <= now && end_utc > now {
                                             meeting_in_progress = true;
+                                            calendar_meeting_end = Some(end_utc);
                                             let _ = send_event(
                                                 "meeting_started",
                                                 MeetingEvent {
@@ -103,6 +104,27 @@ pub async fn poll_meetings_events() -> Result<()> {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Auto-end calendar-triggered meetings when the calendar event is over
+                    if meeting_in_progress {
+                        if let Some(end_time) = calendar_meeting_end {
+                            if Utc::now() > end_time {
+                                meeting_in_progress = false;
+                                last_meeting_end = Some(Instant::now());
+                                calendar_meeting_end = None;
+                                let _ = send_event(
+                                    "meeting_ended",
+                                    MeetingEvent {
+                                        app: "Calendar (event ended)".to_string(),
+                                        timestamp: Utc::now(),
+                                        calendar_title: None,
+                                        calendar_attendees: None,
+                                    },
+                                );
+                                tracing::info!("meeting ended via calendar event end time");
                             }
                         }
                     }
@@ -148,6 +170,7 @@ pub async fn poll_meetings_events() -> Result<()> {
                 {
                     meeting_in_progress = false;
                     last_meeting_end = Some(Instant::now());
+                    calendar_meeting_end = None;
                     send_event(
                         "meeting_ended",
                         MeetingEvent {
@@ -210,6 +233,7 @@ pub async fn poll_meetings_events() -> Result<()> {
                 if has_end_phrases && meeting_in_progress {
                     meeting_in_progress = false;
                     last_meeting_end = Some(Instant::now());
+                    calendar_meeting_end = None;
                     send_event(
                         "meeting_ended",
                         MeetingEvent {
@@ -272,6 +296,7 @@ pub async fn poll_meetings_events() -> Result<()> {
                 {
                     meeting_in_progress = false;
                     last_meeting_end = Some(Instant::now());
+                    calendar_meeting_end = None;
                     send_event(
                         "meeting_ended",
                         MeetingEvent {

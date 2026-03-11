@@ -33,6 +33,8 @@ pub struct VisionManagerConfig {
     pub monitor_ids: Vec<String>,
     /// When true, record every connected monitor regardless of `monitor_ids`.
     pub use_all_monitors: bool,
+    /// Automatically detect and skip incognito / private browsing windows.
+    pub ignore_incognito_windows: bool,
 }
 
 /// Status of the VisionManager
@@ -254,6 +256,7 @@ impl VisionManager {
             monitor_y: monitor.y() as f64,
             monitor_width: monitor.width() as f64,
             monitor_height: monitor.height() as f64,
+            ignore_incognito_windows: self.config.ignore_incognito_windows,
             ..TreeWalkerConfig::default()
         };
 

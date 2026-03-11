@@ -621,10 +621,28 @@ async fn do_capture(
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous)
     let config = tree_walker_config.clone();
-    let tree_snapshot = tokio::task::spawn_blocking(move || {
+    let tree_walk_result = tokio::task::spawn_blocking(move || {
         crate::paired_capture::walk_accessibility_tree(&config)
     })
     .await?;
+
+    // If the window was skipped (incognito/private browsing or user filter),
+    // bail out entirely — don't OCR the screenshot.
+    use screenpipe_a11y::tree::TreeWalkResult;
+    let tree_snapshot = match tree_walk_result {
+        TreeWalkResult::Found(snap) => Some(snap),
+        TreeWalkResult::Skipped => {
+            debug!(
+                "skipping capture: window filtered (incognito/private) on monitor {}",
+                monitor_id
+            );
+            return Ok(CaptureOutput {
+                result: None,
+                image,
+            });
+        }
+        TreeWalkResult::NotFound => None,
+    };
 
     // Content dedup: skip capture if accessibility text hasn't changed.
     // Never dedup Idle/Manual triggers — these are fallback captures that must

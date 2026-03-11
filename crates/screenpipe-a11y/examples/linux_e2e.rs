@@ -75,10 +75,8 @@ fn main() {
                                 }
                             }
                             "app_switch" => {
-                                if let screenpipe_a11y::events::EventData::AppSwitch {
-                                    name,
-                                    pid,
-                                } = &event.data
+                                if let screenpipe_a11y::events::EventData::AppSwitch { name, pid } =
+                                    &event.data
                                 {
                                     println!(
                                         "  [{:>5.1}s] APP_SWITCH: {:?} (pid={})",

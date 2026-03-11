@@ -70,3 +70,5 @@ screenpipe-app-tauri/src-tauri/.next/
 # Claude Code
 .claude/worktrees/
 .claude/*.local* # local changes are specific to the individual developer, let's not check them in for everyone.
+apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-arm64-1.19.2/
+apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/

@@ -178,13 +178,9 @@ impl VaultManager {
 
             // Encrypt data files with crash recovery journal
             if data_dir.exists() {
-                if let Err(e) = migration::encrypt_data_dir(
-                    &screenpipe_dir,
-                    &data_dir,
-                    key_bytes,
-                    progress_tx,
-                )
-                .await
+                if let Err(e) =
+                    migration::encrypt_data_dir(&screenpipe_dir, &data_dir, key_bytes, progress_tx)
+                        .await
                 {
                     tracing::error!("failed to encrypt data dir: {}", e);
                 }
@@ -206,10 +202,7 @@ impl VaultManager {
 
     /// Unlock the vault: derive key from password, decrypt DB + data files.
     /// Returns a progress receiver for UI display.
-    pub async fn unlock(
-        &self,
-        password: &str,
-    ) -> VaultResult<watch::Receiver<MigrationProgress>> {
+    pub async fn unlock(&self, password: &str) -> VaultResult<watch::Receiver<MigrationProgress>> {
         let state = self.state.read().await.clone();
         match state {
             VaultState::None => return Err(VaultError::NotSetUp),
@@ -274,13 +267,9 @@ impl VaultManager {
 
             // Decrypt data files
             if data_dir.exists() {
-                if let Err(e) = migration::decrypt_data_dir(
-                    &screenpipe_dir,
-                    &data_dir,
-                    key_bytes,
-                    progress_tx,
-                )
-                .await
+                if let Err(e) =
+                    migration::decrypt_data_dir(&screenpipe_dir, &data_dir, key_bytes, progress_tx)
+                        .await
                 {
                     tracing::error!("failed to decrypt data dir: {}", e);
                 }

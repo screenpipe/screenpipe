@@ -23,12 +23,27 @@ const GATEWAY_JS: &str = include_str!("gateway.mjs");
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayEvent {
-    Qr { data: String },
-    Connected { name: String, phone: String },
-    Disconnected { reason: String },
-    Error { message: String },
-    Http { port: u16 },
-    SendResult { id: String, success: bool, error: Option<String> },
+    Qr {
+        data: String,
+    },
+    Connected {
+        name: String,
+        phone: String,
+    },
+    Disconnected {
+        reason: String,
+    },
+    Error {
+        message: String,
+    },
+    Http {
+        port: u16,
+    },
+    SendResult {
+        id: String,
+        success: bool,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,7 +98,10 @@ impl WhatsAppGateway {
             .context("failed to write whatsapp gateway script")?;
 
         // Install baileys + pino if needed
-        let node_modules = self.screenpipe_dir.join("node_modules").join("@whiskeysockets");
+        let node_modules = self
+            .screenpipe_dir
+            .join("node_modules")
+            .join("@whiskeysockets");
         if !node_modules.exists() {
             info!("installing @whiskeysockets/baileys, pino, and ws...");
             let install = Command::new(bun_path)
@@ -135,8 +153,7 @@ impl WhatsAppGateway {
                     }
                     Ok(GatewayEvent::Connected { name, phone }) => {
                         info!("whatsapp: connected as {} ({})", name, phone);
-                        *status.lock().await =
-                            WhatsAppStatus::Connected { name, phone };
+                        *status.lock().await = WhatsAppStatus::Connected { name, phone };
                     }
                     Ok(GatewayEvent::Disconnected { reason }) => {
                         warn!("whatsapp: disconnected — {}", reason);
@@ -146,8 +163,7 @@ impl WhatsAppGateway {
                     }
                     Ok(GatewayEvent::Error { message }) => {
                         error!("whatsapp gateway error: {}", message);
-                        *status.lock().await =
-                            WhatsAppStatus::Error { message };
+                        *status.lock().await = WhatsAppStatus::Error { message };
                     }
                     Ok(GatewayEvent::Http { port }) => {
                         info!("whatsapp: gateway HTTP on port {}", port);
@@ -198,6 +214,23 @@ impl WhatsAppGateway {
             .join("creds.json")
             .exists()
     }
+}
+
+/// Find bun executable on PATH.
+pub fn which_bun() -> Option<String> {
+    std::process::Command::new("which")
+        .arg("bun")
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
 }
 
 /// Find node executable on PATH.

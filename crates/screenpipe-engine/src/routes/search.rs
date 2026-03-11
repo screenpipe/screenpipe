@@ -30,7 +30,7 @@ use crate::server::AppState;
 use crate::video_utils::extract_frame;
 
 use super::content::{
-    AudioContent, ContentItem, InputContent, OCRContent, PaginationInfo, UiContent,
+    AudioContent, ContentItem, InputContent, MemoryContent, OCRContent, PaginationInfo, UiContent,
 };
 
 // Update the SearchQuery struct
@@ -265,6 +265,7 @@ pub(crate) async fn search(
                 .app_name
                 .as_ref()
                 .is_none_or(|app| !is_screenpipe_app(app)),
+            SearchResult::Memory(_) => true,
         })
         .map(|result| {
             let truncate = |text: String| -> String {
@@ -328,6 +329,23 @@ pub(crate) async fn search(
                     modifiers: input.modifiers,
                     element_role: input.element.as_ref().and_then(|e| e.role.clone()),
                     element_name: input.element.as_ref().and_then(|e| e.name.clone()),
+                }),
+                SearchResult::Memory(m) => ContentItem::Memory(MemoryContent {
+                    id: m.id,
+                    content: truncate(m.content.clone()),
+                    source: m.source.clone(),
+                    source_context: m
+                        .source_context
+                        .as_ref()
+                        .and_then(|s| serde_json::from_str(s).ok()),
+                    tags: m
+                        .tags
+                        .as_ref()
+                        .and_then(|t| serde_json::from_str(t).ok())
+                        .unwrap_or_default(),
+                    importance: m.importance,
+                    created_at: m.created_at.clone(),
+                    updated_at: m.updated_at.clone(),
                 }),
             }
         })

@@ -28,6 +28,13 @@ struct CalendarEventItem {
     end: String,
     attendees: Vec<String>,
     is_all_day: bool,
+    /// Source identifier: "native" for OS calendar, "ics" for ICS feeds.
+    #[serde(default = "default_source")]
+    source: String,
+}
+
+fn default_source() -> String {
+    "native".to_string()
 }
 
 /// Start the calendar bridge background task.
@@ -64,6 +71,7 @@ pub fn start_calendar_bridge(detector: Arc<MeetingDetector>) -> JoinHandle<()> {
                         start_epoch_ms: start.timestamp_millis(),
                         end_epoch_ms: end.timestamp_millis(),
                         attendees: item.attendees,
+                        source: item.source,
                     })
                 })
                 .collect();

@@ -82,6 +82,15 @@ or run the CLI:
 npx screenpipe@latest record
 ```
 
+then 
+
+```bash
+claude mcp add screenpipe -- npx -y screenpipe-mcp
+```
+
+then ask claude `what did i see in the last 5 mins?` or `summarize today conversations` or `create a pipe that updates linear every time i work on task X`
+
+
 ## specs
 
 - 5-10% cpu usage

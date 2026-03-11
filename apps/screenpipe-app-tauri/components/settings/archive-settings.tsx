@@ -33,6 +33,8 @@ interface ArchiveStatus {
   pending_count: number;
   is_uploading: boolean;
   chunks_uploaded: number;
+  media_files_uploaded: number;
+  media_files_pending: number;
 }
 
 const RETENTION_OPTIONS = [
@@ -322,7 +324,7 @@ export function ArchiveSettings() {
                     {status.is_uploading ? (
                       <span className="flex items-center gap-1.5 text-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        uploading ({status.chunks_uploaded} chunks)
+                        uploading ({status.chunks_uploaded} chunks, {status.media_files_uploaded} media files)
                       </span>
                     ) : status.enabled ? (
                       status.pending_count > 0 ? (
@@ -344,6 +346,23 @@ export function ArchiveSettings() {
                     </span>
                     <span className="text-foreground">
                       {status.pending_count.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+
+                {/* Media files */}
+                {(status.media_files_uploaded > 0 || status.media_files_pending > 0) && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      Media files
+                    </span>
+                    <span className="text-foreground">
+                      {status.media_files_uploaded.toLocaleString()} uploaded
+                      {status.media_files_pending > 0 && (
+                        <span className="text-muted-foreground">
+                          {" "}/ {status.media_files_pending.toLocaleString()} pending
+                        </span>
+                      )}
                     </span>
                   </div>
                 )}

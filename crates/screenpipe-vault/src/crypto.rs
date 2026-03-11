@@ -238,7 +238,10 @@ pub fn decrypt_small(data: &[u8], key: &[u8; KEY_SIZE]) -> VaultResult<Vec<u8>> 
 }
 
 /// Derive a master key from a password using Argon2id.
-pub fn derive_key(password: &str, salt: &[u8; SALT_SIZE]) -> VaultResult<Zeroizing<[u8; KEY_SIZE]>> {
+pub fn derive_key(
+    password: &str,
+    salt: &[u8; SALT_SIZE],
+) -> VaultResult<Zeroizing<[u8; KEY_SIZE]>> {
     use argon2::{Argon2, Params, Version};
 
     let params = Params::new(65536, 3, 4, Some(KEY_SIZE))

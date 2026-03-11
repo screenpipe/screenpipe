@@ -46,6 +46,8 @@ interface CurrentFrameTimelineProps {
 	isSearchModalOpen?: boolean;
 	/** Whether the timeline is embedded in the settings window */
 	embedded?: boolean;
+	/** Ref to the nav bar element — used by Live Text to place a click guard */
+	navBarRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 
@@ -80,6 +82,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	adjacentFrames,
 	isSearchModalOpen,
 	embedded,
+	navBarRef,
 }) => {
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
@@ -250,11 +253,11 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 	// --- Live Text hook (native macOS VisionKit overlay) ---
 	// Determine which window/panel to attach VisionKit overlay to.
-	// In embedded mode, use the "settings" window (regular WebviewWindow).
+	// In embedded mode, use the "home" window (regular WebviewWindow).
 	// The overlay is positioned precisely over the frame using absolute
 	// coordinates from containerRef + renderedImageInfo.
 	const liveTextWindowLabel = embedded
-		? "settings"
+		? "home"
 		: settings?.overlayMode === "window" ? "main-window" : "main";
 
 	const { nativeLiveTextActive } = useLiveText({
@@ -269,6 +272,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		useVideoMode,
 		videoRef,
 		windowLabel: liveTextWindowLabel,
+		navBarRef,
 	});
 
 	if (!frameId) {

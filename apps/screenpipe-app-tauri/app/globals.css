@@ -254,6 +254,12 @@
     draggable: false;
   }
 
+  /* Disable macOS Live Text analysis on search modal thumbnail images.
+     Live Text creates invisible interactive overlays that steal click events. */
+  [role="dialog"] img {
+    -webkit-image-analysis: none;
+  }
+
   /* Selectable text layer — override global user-select:none for OCR text overlay.
      Must override *, :not(input):not(textarea), and ::before/::after rules above. */
   .selectable-text-layer,

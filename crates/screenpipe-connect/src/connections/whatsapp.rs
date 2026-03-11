@@ -42,10 +42,7 @@ impl Integration for WhatsApp {
     async fn test(&self, client: &reqwest::Client, creds: &Map<String, Value>) -> Result<String> {
         let phone_number_id = require_str(creds, "phone_number_id")?;
         let access_token = require_str(creds, "access_token")?;
-        let url = format!(
-            "https://graph.facebook.com/v21.0/{}",
-            phone_number_id
-        );
+        let url = format!("https://graph.facebook.com/v21.0/{}", phone_number_id);
         client
             .get(&url)
             .bearer_auth(access_token)

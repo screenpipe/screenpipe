@@ -244,6 +244,12 @@ pub struct SettingsStore {
     #[serde(rename = "chatAlwaysOnTop", default = "default_true")]
     pub chat_always_on_top: bool,
 
+    /// Automatically detect and skip incognito / private browsing windows.
+    /// Uses localized title matching (20+ languages) and on macOS, native
+    /// AppleScript detection for Chromium browsers.
+    #[serde(rename = "ignoreIncognitoWindows", default = "default_true")]
+    pub ignore_incognito_windows: bool,
+
     /// Catch-all for fields added by the frontend (e.g. chatHistory, deviceId)
     /// that the Rust struct doesn't know about. Without this, `save()` would
     /// serialize only known fields and silently wipe frontend-only data.
@@ -289,6 +295,8 @@ pub enum AIProviderType {
     ScreenpipeCloud,
     #[serde(rename = "pi", alias = "opencode")]
     Pi,
+    #[serde(rename = "anthropic")]
+    Anthropic,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -588,6 +596,7 @@ impl Default for SettingsStore {
             show_overlay_in_screen_recording: false,
             video_quality: "balanced".to_string(),
             chat_always_on_top: true,
+            ignore_incognito_windows: true,
             extra: std::collections::HashMap::new(),
         }
     }
@@ -616,6 +625,7 @@ impl SettingsStore {
                 "screenpipe-cloud",
                 "opencode",
                 "pi",
+                "anthropic",
             ];
             if let Some(presets) = obj.get_mut("aiPresets") {
                 if let Some(arr) = presets.as_array_mut() {
@@ -626,10 +636,10 @@ impl SettingsStore {
                                     "unknown AI provider '{}' in preset, falling back to 'custom'",
                                     provider
                                 );
-                                preset
-                                    .as_object_mut()
-                                    .unwrap()
-                                    .insert("provider".to_string(), Value::String("custom".to_string()));
+                                preset.as_object_mut().unwrap().insert(
+                                    "provider".to_string(),
+                                    Value::String("custom".to_string()),
+                                );
                             }
                         }
                     }
@@ -692,6 +702,7 @@ impl SettingsStore {
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
             ignored_urls: self.ignored_urls.clone(),
+            ignore_incognito_windows: self.ignore_incognito_windows,
             languages: self
                 .languages
                 .iter()
@@ -745,6 +756,11 @@ impl SettingsStore {
                     .ok()
                 })
                 .unwrap_or_default(),
+            batch_max_duration_secs: self
+                .extra
+                .get("batchMaxDurationSecs")
+                .and_then(|v| v.as_u64())
+                .filter(|&v| v > 0),
         }
     }
 

@@ -21,6 +21,18 @@ public func ltFreeString(_ ptr: UnsafeMutablePointer<CChar>?) {
     if let ptr = ptr { free(ptr) }
 }
 
+// MARK: - Click Guard View
+
+/// Transparent NSView placed above the Live Text overlay in the nav bar region.
+/// Returns nil from hitTest so clicks fall through to the WKWebView underneath,
+/// preventing VisionKit's invisible text-selection hit regions from eating clicks
+/// meant for the navigation controls.
+private class ClickGuardView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil  // always pass clicks through
+    }
+}
+
 // MARK: - LiveTextManager Singleton
 
 #if canImport(VisionKit)
@@ -51,6 +63,9 @@ private class LiveTextManager {
     /// VisionKit from computing hit regions against a zero/stale frame.
     var pendingAnalysis: ImageAnalysis?
     var hostContentView: NSView?
+    /// Transparent guard view that sits above the overlay in the nav bar
+    /// region, preventing VisionKit from intercepting clicks on controls.
+    var guardView: ClickGuardView?
 
     /// Reusable URLSession for fetching frame images (avoid per-call session alloc).
     lazy var urlSession: URLSession = {
@@ -105,8 +120,10 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
         // Clean up any existing overlay from a previous init call
         // (component remounts, HMR, etc. can trigger multiple inits)
         MainActor.assumeIsolated {
+            mgr.guardView?.removeFromSuperview()
             mgr.overlayView?.removeFromSuperview()
         }
+        mgr.guardView = nil
         mgr.overlayView = nil
         mgr.currentAnalysis = nil
         mgr.hostContentView = contentView
@@ -381,14 +398,68 @@ public func ltDestroy() -> Int32 {
     if #available(macOS 13.0, *) {
         let mgr = LiveTextManager.shared
         mainThreadPreservingFocus(mgr.hostContentView) {
+            mgr.guardView?.removeFromSuperview()
             mgr.overlayView?.removeFromSuperview()
         }
+        mgr.guardView = nil
         mgr.overlayView = nil
         mgr.analyzer = nil
         mgr.currentAnalysis = nil
         mgr.pendingAnalysis = nil
         mgr.hostContentView = nil
         mgr.urlSession.invalidateAndCancel()
+        return 0
+    }
+    #endif
+    return -1
+}
+
+// MARK: - Click Guard (nav bar protection)
+
+/// Place a transparent guard view above the Live Text overlay so VisionKit
+/// hit regions cannot intercept clicks in the navigation bar area.
+/// The guard returns nil from hitTest, letting clicks pass through to the
+/// WKWebView (which sits below the overlay in the view hierarchy).
+@_cdecl("lt_set_guard_rect")
+public func ltSetGuardRect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
+    #if canImport(VisionKit)
+    if #available(macOS 13.0, *) {
+        let mgr = LiveTextManager.shared
+        guard let overlay = mgr.overlayView, let contentView = mgr.hostContentView else { return -1 }
+
+        let contentHeight = contentView.frame.height
+        // Convert from top-left web coordinates to bottom-left AppKit coordinates
+        let appKitY = contentHeight - (y + h)
+
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if mgr.guardView == nil {
+                    let guard_ = ClickGuardView()
+                    guard_.wantsLayer = true
+                    // Sits above the overlay in the view hierarchy
+                    contentView.addSubview(guard_, positioned: .above, relativeTo: overlay)
+                    mgr.guardView = guard_
+                }
+                mgr.guardView?.frame = NSRect(x: x, y: appKitY, width: w, height: h)
+            }
+        }
+        return 0
+    }
+    #endif
+    return -1
+}
+
+@_cdecl("lt_remove_guard")
+public func ltRemoveGuard() -> Int32 {
+    #if canImport(VisionKit)
+    if #available(macOS 13.0, *) {
+        let mgr = LiveTextManager.shared
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                mgr.guardView?.removeFromSuperview()
+                mgr.guardView = nil
+            }
+        }
         return 0
     }
     #endif

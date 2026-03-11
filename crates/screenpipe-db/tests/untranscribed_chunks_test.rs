@@ -5,7 +5,6 @@
 /// Tests for `get_untranscribed_chunks` — the reconciliation sweep query.
 ///
 /// Run with: cargo test --package screenpipe-db --test untranscribed_chunks_test -- --nocapture
-
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};

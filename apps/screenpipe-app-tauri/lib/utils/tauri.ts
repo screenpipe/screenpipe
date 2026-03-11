@@ -602,7 +602,7 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
 }
 },
 /**
- * Abort current Pi operation
+ * Abort current Pi operation. Waits for the Pi SDK to confirm the abort completed.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -613,7 +613,8 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
- * Start a new Pi session (clears conversation history)
+ * Start a new Pi session (clears conversation history).
+ * Waits for the Pi SDK to finish aborting any in-flight work and resetting state.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -946,7 +947,7 @@ async getHardwareCapability() : Promise<HardwareCapability> {
 /** user-defined types **/
 
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi"
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
@@ -966,7 +967,12 @@ startDisplay: string;
 /**
  * Pre-formatted local time, e.g. "5:00 PM" — for display.
  */
-endDisplay: string; attendees: string[]; location: string | null; calendarName: string; isAllDay: boolean }
+endDisplay: string; attendees: string[]; location: string | null; calendarName: string; isAllDay: boolean; 
+/**
+ * Source identifier: "native" for OS calendar, "ics" for ICS feeds.
+ * Used by meeting detector to merge events from multiple publishers.
+ */
+source?: string }
 export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
@@ -1080,8 +1086,14 @@ videoQuality?: string;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */
-chatAlwaysOnTop?: boolean }
-export type ShowRewindWindow = "Main" | { Settings: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery" | "Dictation"
+chatAlwaysOnTop?: boolean; 
+/**
+ * Automatically detect and skip incognito / private browsing windows.
+ * Uses localized title matching (20+ languages) and on macOS, native
+ * AppleScript detection for Chromium browsers.
+ */
+ignoreIncognitoWindows?: boolean }
+export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery" | "Dictation"
 export type Suggestion = { text: string }
 /**
  * Sync configuration.

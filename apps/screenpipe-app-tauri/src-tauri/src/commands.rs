@@ -85,7 +85,9 @@ pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
     #[cfg(target_os = "macos")]
     let window_to_show = ShowRewindWindow::Main;
     #[cfg(not(target_os = "macos"))]
-    let window_to_show = ShowRewindWindow::Settings { page: None };
+    let window_to_show = ShowRewindWindow::Home {
+        page: Some("timeline".to_string()),
+    };
 
     match window_to_show.show(app_handle) {
         Ok(window) => {
@@ -127,7 +129,7 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
     #[cfg(target_os = "macos")]
     let window_to_close = ShowRewindWindow::Main;
     #[cfg(not(target_os = "macos"))]
-    let window_to_close = ShowRewindWindow::Settings { page: None };
+    let window_to_close = ShowRewindWindow::Home { page: None };
 
     if let Err(e) = (ShowRewindWindow::Settings { page: None }).close(app_handle) {
         error!("failed to close settings window: {}", e);
@@ -229,25 +231,20 @@ pub fn update_show_screenpipe_shortcut(
         move |app_handle, _event, _shortcut| {
             #[cfg(target_os = "macos")]
             {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                let mode = SettingsStore::get(app_handle)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-                if let Some(window) = app_handle.get_webview_window(label) {
-                    match window.is_visible() {
-                        Ok(true) => hide_main_window(app_handle),
-                        _ => show_main_window(app_handle, true),
-                    }
+                use crate::window_api::MAIN_PANEL_SHOWN;
+                // Use logical visibility (MAIN_PANEL_SHOWN) instead of
+                // window.is_visible() — the latter returns true even when
+                // the panel's alpha is 0 (auto-hidden on focus loss), causing
+                // the shortcut to "hide" an already-invisible panel.
+                if MAIN_PANEL_SHOWN.load(std::sync::atomic::Ordering::SeqCst) {
+                    hide_main_window(app_handle);
                 } else {
                     show_main_window(app_handle, true);
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
-                if let Some(window) = app_handle.get_webview_window("settings") {
+                if let Some(window) = app_handle.get_webview_window("home") {
                     match window.is_visible() {
                         Ok(true) => hide_main_window(app_handle),
                         _ => show_main_window(app_handle, true),

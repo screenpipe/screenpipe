@@ -28,6 +28,11 @@ const AUDIO_MEETING_COOLDOWN: Duration = Duration::from_secs(120);
 /// from Google Meet but is still on the call), not a standalone detector.
 const APP_CONFIRMATION_WINDOW: Duration = Duration::from_secs(300); // 5 minutes
 
+/// Buffer before a calendar event's start time to handle early joins.
+/// Most people join meetings 5-15 min early — this ensures calendar-based
+/// detection activates even when you join before the scheduled time.
+const CALENDAR_EARLY_JOIN_BUFFER: Duration = Duration::from_secs(15 * 60); // 15 minutes
+
 /// A calendar event signal fed into the meeting detector.
 /// Contains only the fields needed for meeting detection — no serde/chrono deps.
 #[derive(Debug, Clone)]
@@ -37,6 +42,9 @@ pub struct CalendarSignal {
     pub start_epoch_ms: i64,
     pub end_epoch_ms: i64,
     pub attendees: Vec<String>,
+    /// Source identifier (e.g. "native", "ics") — used to merge events from
+    /// multiple calendar publishers without overwriting each other.
+    pub source: String,
 }
 
 /// Calendar context for the currently active calendar-based meeting.
@@ -277,10 +285,19 @@ impl MeetingDetector {
         }
     }
 
-    /// Replace stored calendar events and refresh the calendar meeting atomic.
+    /// Merge calendar events by source — replaces only events from the same source,
+    /// preserving events from other sources. This allows the native macOS calendar
+    /// publisher (every 60s) and ICS poller (every 10 min) to coexist without
+    /// overwriting each other's events.
     pub async fn on_calendar_events(&self, events: Vec<CalendarSignal>) {
         let mut state = self.state.write().await;
-        state.calendar_events = events;
+        if let Some(source) = events.first().map(|e| e.source.clone()) {
+            // Remove all events from this source, then add the new ones
+            state.calendar_events.retain(|e| e.source != source);
+            state.calendar_events.extend(events);
+        } else {
+            // Empty list with no source tag — clear nothing, just skip
+        }
         let active = self.is_calendar_meeting_active(&state);
         self.in_calendar_meeting.store(active, Ordering::Relaxed);
     }
@@ -313,16 +330,30 @@ impl MeetingDetector {
             || (last_output > 0 && (now - last_output) < window)
     }
 
-    /// Returns the first active calendar event (2+ attendees, overlapping now).
+    /// Returns the first active calendar event overlapping now (with 15-min early-join buffer).
+    ///
+    /// For native calendar events: requires 2+ attendees (filters out "focus time" blocks).
+    /// For ICS events: accepts any non-all-day event, because many ICS feeds strip
+    /// attendee lists for privacy (Google public feeds, Outlook shared calendars).
+    /// The audio confirmation step in `is_calendar_meeting_active` still gates false positives.
     fn active_calendar_event<'a>(
         &self,
         state: &'a MeetingState,
         now: i64,
     ) -> Option<&'a CalendarSignal> {
-        state
-            .calendar_events
-            .iter()
-            .find(|e| e.attendees.len() >= 2 && e.start_epoch_ms <= now && e.end_epoch_ms > now)
+        let buffer_ms = CALENDAR_EARLY_JOIN_BUFFER.as_millis() as i64;
+        state.calendar_events.iter().find(|e| {
+            let in_time_window = (e.start_epoch_ms - buffer_ms) <= now && e.end_epoch_ms > now;
+            if !in_time_window {
+                return false;
+            }
+            // ICS feeds often lack attendees — trust the event + audio confirmation
+            if e.source == "ics" {
+                return true;
+            }
+            // Native calendar: require 2+ attendees to filter out solo blocks
+            e.attendees.len() >= 2
+        })
     }
 
     /// Returns calendar context (title + attendees) for the active calendar meeting, if any.
@@ -359,7 +390,17 @@ impl MeetingDetector {
         let has_recent_app = self.had_recent_app_meeting_atomic();
         let audio_active = has_recent_app && self.is_bidirectional_audio_active();
 
-        // Track transition from active → inactive for cooldown (Fix 2)
+        // When audio extension is active, refresh the app confirmation timestamp
+        // so the 5-min APP_CONFIRMATION_WINDOW doesn't expire while the user is
+        // still in a bidirectional conversation (e.g., coding in terminal while
+        // screen-sharing on Google Meet). Without this, the meeting detection
+        // dies after 5 min even though both mic and speakers are active.
+        if audio_active {
+            self.last_app_meeting_epoch_ms
+                .store(now_millis(), Ordering::Relaxed);
+        }
+
+        // Track transition from active → inactive for cooldown
         let was_active = self.was_audio_meeting.load(Ordering::Relaxed);
         if was_active && !audio_active {
             // Audio meeting just ended — record cooldown start
@@ -1053,6 +1094,7 @@ mod tests {
             start_epoch_ms: now - 60_000,  // started 1 min ago
             end_epoch_ms: now + 3_600_000, // ends in 1 hour
             attendees: attendees.iter().map(|s| s.to_string()).collect(),
+            source: "native".to_string(),
         }
     }
 
@@ -1065,6 +1107,7 @@ mod tests {
             start_epoch_ms: now + 3_600_000, // starts in 1 hour
             end_epoch_ms: now + 7_200_000,   // ends in 2 hours
             attendees: attendees.iter().map(|s| s.to_string()).collect(),
+            source: "native".to_string(),
         }
     }
 
@@ -1077,6 +1120,20 @@ mod tests {
             start_epoch_ms: now - 7_200_000, // started 2 hours ago
             end_epoch_ms: now - 3_600_000,   // ended 1 hour ago
             attendees: attendees.iter().map(|s| s.to_string()).collect(),
+            source: "native".to_string(),
+        }
+    }
+
+    /// Helper: create an ICS CalendarSignal (no attendees, source="ics").
+    fn calendar_ics_now(title: &str) -> CalendarSignal {
+        let now = now_millis();
+        CalendarSignal {
+            event_id: format!("ics-{}", title),
+            title: title.to_string(),
+            start_epoch_ms: now - 60_000,
+            end_epoch_ms: now + 3_600_000,
+            attendees: vec![],
+            source: "ics".to_string(),
         }
     }
 
@@ -1131,7 +1188,7 @@ mod tests {
     async fn test_calendar_event_not_yet_started_no_meeting() {
         let detector = MeetingDetector::new();
 
-        // Future event
+        // Future event (well beyond early-join buffer)
         let events = vec![calendar_future("Tomorrow's Meeting", &["Alice", "Bob"])];
         detector.on_calendar_events(events).await;
 
@@ -1140,6 +1197,55 @@ mod tests {
         assert!(
             !detector.is_in_meeting(),
             "future calendar event should NOT trigger meeting"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calendar_early_join_detected() {
+        // User joins 10 min before calendar event start — should still detect
+        let detector = MeetingDetector::new();
+
+        let now = now_millis();
+        let events = vec![CalendarSignal {
+            event_id: "early-join".to_string(),
+            title: "Sprint Planning".to_string(),
+            start_epoch_ms: now + 10 * 60_000, // starts in 10 min
+            end_epoch_ms: now + 70 * 60_000,   // ends in 70 min
+            attendees: vec!["Alice".to_string(), "Bob".to_string()],
+            source: "native".to_string(),
+        }];
+        detector.on_calendar_events(events).await;
+
+        // Audio activity confirms user is present
+        detector.on_audio_activity(&DeviceType::Output, true);
+
+        assert!(
+            detector.is_in_meeting(),
+            "early join (10 min before start) should be detected via calendar buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calendar_early_join_too_early_not_detected() {
+        // User is doing something 20 min before event — beyond the 15-min buffer
+        let detector = MeetingDetector::new();
+
+        let now = now_millis();
+        let events = vec![CalendarSignal {
+            event_id: "too-early".to_string(),
+            title: "Later Meeting".to_string(),
+            start_epoch_ms: now + 20 * 60_000, // starts in 20 min
+            end_epoch_ms: now + 80 * 60_000,
+            attendees: vec!["Alice".to_string(), "Bob".to_string()],
+            source: "native".to_string(),
+        }];
+        detector.on_calendar_events(events).await;
+
+        detector.on_audio_activity(&DeviceType::Output, true);
+
+        assert!(
+            !detector.is_in_meeting(),
+            "20 min before event should NOT trigger (beyond 15-min buffer)"
         );
     }
 
@@ -1247,6 +1353,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_audio_extension_sustains_beyond_app_confirmation_window() {
+        // The exact bug scenario: user joins Google Meet, tabs to terminal to
+        // code while presenting, stays there for >5 min. Without the fix,
+        // APP_CONFIRMATION_WINDOW (5 min) expires and meeting detection drops
+        // even though bidirectional audio is active.
+        let detector = MeetingDetector::new();
+
+        // Step 1: User was in Google Meet
+        detector
+            .on_app_switch("Arc", Some("call - meet.google.com/abc"))
+            .await;
+        assert!(detector.is_in_meeting());
+
+        // Step 2: Tab away, grace period expires
+        detector.on_app_switch("WezTerm", None).await;
+        {
+            let mut state = detector.state.write().await;
+            state.last_meeting_focus =
+                Some(Instant::now() - MEETING_GRACE_PERIOD - Duration::from_secs(1));
+        }
+        detector.check_grace_period().await;
+        assert!(!detector.in_meeting.load(Ordering::Relaxed));
+
+        // Step 3: Audio extension kicks in
+        detector.on_audio_activity(&DeviceType::Input, true);
+        detector.on_audio_activity(&DeviceType::Output, true);
+        assert!(detector.is_in_meeting(), "audio extension should work");
+
+        // Step 4: Simulate 6 minutes passing — beyond APP_CONFIRMATION_WINDOW
+        // The app meeting timestamp was refreshed by audio extension,
+        // so it should still be within the window
+        let six_min_ago = now_millis() - APP_CONFIRMATION_WINDOW.as_millis() as i64 - 60_000;
+        // If the fix works, last_app_meeting_epoch_ms was refreshed to ~now
+        // by the is_in_meeting() call above, so it should still be recent
+        let stored_ts = detector.last_app_meeting_epoch_ms.load(Ordering::Relaxed);
+        assert!(
+            (now_millis() - stored_ts) < 1000,
+            "audio extension should have refreshed app meeting timestamp"
+        );
+
+        // Continuous audio — meeting should still be detected
+        detector.on_audio_activity(&DeviceType::Input, true);
+        detector.on_audio_activity(&DeviceType::Output, true);
+        assert!(
+            detector.is_in_meeting(),
+            "audio extension should sustain meeting beyond 5-min APP_CONFIRMATION_WINDOW"
+        );
+    }
+
+    #[tokio::test]
     async fn test_calendar_meeting_ends_when_event_ends() {
         // The calendar meeting should end when the calendar event itself ends,
         // even if it was previously latched.
@@ -1265,6 +1421,128 @@ mod tests {
         assert!(
             !detector.is_in_meeting(),
             "calendar meeting should end when the calendar event ends"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Source-based merge (fix: native + ICS don't overwrite each other)
+    // ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_native_and_ics_events_merge() {
+        let detector = MeetingDetector::new();
+
+        // ICS publisher sends an event
+        let ics_events = vec![calendar_ics_now("ICS Standup")];
+        detector.on_calendar_events(ics_events).await;
+
+        // Native publisher sends a different event
+        let native_events = vec![calendar_now("Native 1:1", &["Alice", "Bob"])];
+        detector.on_calendar_events(native_events).await;
+
+        // Both should be present
+        let state = detector.state.read().await;
+        assert_eq!(
+            state.calendar_events.len(),
+            2,
+            "should have both ICS and native events, got {:?}",
+            state
+                .calendar_events
+                .iter()
+                .map(|e| &e.title)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_same_source_replaces_not_accumulates() {
+        let detector = MeetingDetector::new();
+
+        // Native publisher sends 2 events
+        let events1 = vec![
+            calendar_now("Morning Standup", &["Alice", "Bob"]),
+            calendar_now("Sprint Review", &["Alice", "Charlie"]),
+        ];
+        detector.on_calendar_events(events1).await;
+
+        // Native publisher refreshes (every 60s) — should replace, not append
+        let events2 = vec![calendar_now("Morning Standup", &["Alice", "Bob"])];
+        detector.on_calendar_events(events2).await;
+
+        let state = detector.state.read().await;
+        assert_eq!(
+            state.calendar_events.len(),
+            1,
+            "same-source update should replace, not accumulate"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_native_refresh_preserves_ics() {
+        let detector = MeetingDetector::new();
+
+        // ICS event first
+        let ics = vec![calendar_ics_now("ICS Meeting")];
+        detector.on_calendar_events(ics).await;
+
+        // Native publisher refreshes every 60s with its own events
+        let native = vec![calendar_now("Native Meeting", &["A", "B"])];
+        detector.on_calendar_events(native).await;
+
+        // Native refreshes again (could be empty if no native events)
+        // Empty vec has no source → should not clear anything
+        detector.on_calendar_events(vec![]).await;
+
+        let state = detector.state.read().await;
+        // ICS event should still be there, native event should still be there
+        assert_eq!(
+            state.calendar_events.len(),
+            2,
+            "empty update should not clear events"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // ICS events without attendees (fix: ICS feeds strip attendees)
+    // ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_ics_event_no_attendees_triggers_meeting() {
+        let detector = MeetingDetector::new();
+
+        // ICS event with NO attendees (common with Google public feeds)
+        let events = vec![calendar_ics_now("Team Sync")];
+        detector.on_calendar_events(events).await;
+
+        // Audio confirms user is present
+        detector.on_audio_activity(&DeviceType::Output, true);
+
+        assert!(
+            detector.is_in_meeting(),
+            "ICS event without attendees should trigger meeting (feeds strip attendees)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_native_event_no_attendees_does_not_trigger() {
+        let detector = MeetingDetector::new();
+
+        // Native event with 0 attendees (e.g., "Focus Time" block)
+        let now = now_millis();
+        let events = vec![CalendarSignal {
+            event_id: "focus".to_string(),
+            title: "Focus Time".to_string(),
+            start_epoch_ms: now - 60_000,
+            end_epoch_ms: now + 3_600_000,
+            attendees: vec![],
+            source: "native".to_string(),
+        }];
+        detector.on_calendar_events(events).await;
+        detector.on_audio_activity(&DeviceType::Output, true);
+
+        assert!(
+            !detector.is_in_meeting(),
+            "native event with 0 attendees should NOT trigger (likely a focus block)"
         );
     }
 }

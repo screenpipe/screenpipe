@@ -17,6 +17,9 @@ export function useLiveText(opts: {
 	useVideoMode: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	windowLabel?: string;
+	/** Ref to the nav bar element — a click guard will be placed over it to prevent
+	 *  VisionKit's Live Text hit regions from intercepting clicks on navigation controls. */
+	navBarRef?: React.RefObject<HTMLDivElement | null>;
 }) {
 	const {
 		debouncedFrame,
@@ -28,6 +31,7 @@ export function useLiveText(opts: {
 		isMac,
 		windowLabel: windowLabelProp,
 		containerRef,
+		navBarRef,
 	} = opts;
 
 	// Native macOS Live Text overlay (VisionKit ImageAnalysisOverlayView)
@@ -139,6 +143,19 @@ export function useLiveText(opts: {
 		const pos = getAbsolutePosition(renderedImageInfo);
 		invoke("livetext_update_position", pos).catch(() => {});
 	}, [nativeLiveTextActive, renderedImageInfo?.offsetX, renderedImageInfo?.offsetY, renderedImageInfo?.width, renderedImageInfo?.height]);
+
+	// Place a click guard over the nav bar so VisionKit hit regions
+	// don't intercept clicks on navigation controls.
+	useEffect(() => {
+		if (!nativeLiveTextActive || !navBarRef?.current) return;
+		const rect = navBarRef.current.getBoundingClientRect();
+		invoke("livetext_set_guard_rect", {
+			x: rect.left,
+			y: rect.top,
+			w: rect.width,
+			h: rect.height,
+		}).catch(() => {});
+	}, [nativeLiveTextActive, renderedImageInfo?.width, renderedImageInfo?.height]);
 
 	// Highlight search terms (native Live Text, macOS 14+)
 	useEffect(() => {

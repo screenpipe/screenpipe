@@ -8,7 +8,8 @@
 //! the focused window's tree and extract all visible text — matching macOS behavior.
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
+    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    TreeWalkerPlatform,
 };
 use crate::events::AccessibilityNode;
 use crate::platform::windows_uia::UiaContext;
@@ -44,9 +45,6 @@ const EXCLUDED_APPS: &[&str] = &[
     "pickerhost",
     "snippingtool",
 ];
-
-/// Window title patterns that indicate sensitive content.
-const SENSITIVE_TITLES: &[&str] = &["password", "private", "incognito", "secret"];
 
 /// UIA control types that should be skipped (decorative, not text-bearing).
 const SKIP_TYPES: &[&str] = &[
@@ -167,7 +165,7 @@ impl Drop for WindowsTreeWalker {
 }
 
 impl TreeWalkerPlatform for WindowsTreeWalker {
-    fn walk_focused_window(&self) -> Result<Option<TreeSnapshot>> {
+    fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
 
         // Safety: single-threaded access guaranteed by walker thread design
@@ -176,7 +174,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Get the focused window
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd == HWND::default() {
-            return Ok(None);
+            return Ok(TreeWalkResult::NotFound);
         }
 
         // Get process info
@@ -188,7 +186,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Skip excluded apps
         let app_lower = app_name.to_lowercase();
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Get window title
@@ -198,18 +196,19 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             String::from_utf16_lossy(&buf[..len as usize])
         };
 
-        // Skip sensitive windows
-        let window_lower = window_name.to_lowercase();
-        if SENSITIVE_TITLES.iter().any(|s| window_lower.contains(s)) {
-            return Ok(None);
+        // Skip incognito / private browsing windows (localized title check)
+        if self.config.ignore_incognito_windows && crate::incognito::is_title_private(&window_name)
+        {
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured ignored windows (check app name and window title)
+        let window_lower = window_name.to_lowercase();
         if self.config.ignored_windows.iter().any(|pattern| {
             let p = pattern.to_lowercase();
             app_lower.contains(&p) || window_lower.contains(&p)
         }) {
-            return Ok(None);
+            return Ok(TreeWalkResult::Skipped);
         }
 
         // Apply user-configured included windows (whitelist mode)
@@ -219,19 +218,19 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
                 app_lower.contains(&p) || window_lower.contains(&p)
             });
             if !matches {
-                return Ok(None);
+                return Ok(TreeWalkResult::Skipped);
             }
         }
 
         // Check timeout budget
         if start.elapsed() >= self.config.walk_timeout {
-            return Ok(None);
+            return Ok(TreeWalkResult::NotFound);
         }
 
         // Capture the accessibility tree
         let root = match uia.capture_window_tree(hwnd, self.config.max_nodes) {
             Some(tree) => tree,
-            None => return Ok(None),
+            None => return Ok(TreeWalkResult::NotFound),
         };
 
         // Get monitor dimensions for normalizing element bounds to 0-1 coords
@@ -279,7 +278,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         );
 
         // Windows walker doesn't have timeout-based truncation yet — report as complete
-        Ok(Some(TreeSnapshot {
+        Ok(TreeWalkResult::Found(TreeSnapshot {
             app_name,
             window_name,
             text_content: text_buffer,
@@ -733,13 +732,11 @@ mod tests {
     }
 
     #[test]
-    fn test_sensitive_titles() {
-        assert!(SENSITIVE_TITLES
-            .iter()
-            .any(|s| "enter password".contains(s)));
-        assert!(SENSITIVE_TITLES
-            .iter()
-            .any(|s| "private browsing".contains(s)));
-        assert!(!SENSITIVE_TITLES.iter().any(|s| "calculator".contains(s)));
+    fn test_incognito_detection() {
+        use crate::incognito::is_title_private;
+        assert!(is_title_private("Enter Password - Chrome"));
+        assert!(is_title_private("Private Browsing - Firefox"));
+        assert!(is_title_private("New Tab - Google Chrome (Incognito)"));
+        assert!(!is_title_private("Calculator"));
     }
 }

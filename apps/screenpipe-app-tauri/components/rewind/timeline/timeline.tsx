@@ -4,9 +4,10 @@
 import { StreamTimeSeriesResponse, TimeRange } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { getStore, type ChatConversation } from "@/lib/hooks/use-settings";
-import { isAfter, subDays, format } from "date-fns";
+import { isAfter, subDays, addDays, startOfDay, format } from "date-fns";
 import { motion } from "framer-motion";
-import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw } from "lucide-react";
+import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw, Phone, PanelBottomClose, PanelBottomOpen } from "lucide-react";
+import type { Meeting } from "@/lib/hooks/use-meetings";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import posthog from "posthog-js";
@@ -132,6 +133,9 @@ interface TimelineSliderProps {
 	onSpeakerChange?: (speaker: string) => void;
 	selectedTag?: string; // "all" or a tag name
 	onTagChange?: (tag: string) => void;
+	meetings?: Meeting[]; // Detected meetings for call filter
+	selectedMeeting?: string; // "all" or a meeting id
+	onMeetingChange?: (meetingId: string) => void;
 	onRefresh?: () => void;
 }
 
@@ -283,11 +287,16 @@ export const TimelineSlider = ({
 	onSpeakerChange,
 	selectedTag = "all",
 	onTagChange,
+	meetings = [],
+	selectedMeeting = "all",
+	onMeetingChange,
 	onRefresh,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
+	const forwardObserverTargetRef = useRef<HTMLDivElement>(null);
 	const lastFetchRef = useRef<Date | null>(null);
+	const lastForwardFetchRef = useRef<Date | null>(null);
 
 	const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
 	const [hoveredRect, setHoveredRect] = useState<{ x: number; y: number } | null>(null);
@@ -386,6 +395,7 @@ export const TimelineSlider = ({
 
 	// Filter dot tooltip state (portal-based to escape overflow clipping)
 	const [hoveredFilterDot, setHoveredFilterDot] = useState<{ name: string; x: number; y: number } | null>(null);
+	const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 	// Which filter section is expanded (icon column design E)
 	const [expandedFilterSection, setExpandedFilterSection] = useState<string | null>(null);
 
@@ -753,6 +763,40 @@ export const TimelineSlider = ({
 		return () => observer.disconnect();
 	}, [fetchNextDayData, currentDate, startAndEndDates]);
 
+	// Forward observer: fetch newer day's data when scrolling left (toward newer frames)
+	useEffect(() => {
+		const forwardTarget = forwardObserverTargetRef.current;
+		if (!forwardTarget) return;
+
+		const forwardObserver = new IntersectionObserver(
+			(entries) => {
+				const entry = entries[0];
+				if (!entry.isIntersecting) return;
+
+				const nextDate = addDays(currentDate, 1);
+				const today = startOfDay(new Date());
+				const now = new Date();
+				const canFetch =
+					!lastForwardFetchRef.current ||
+					now.getTime() - lastForwardFetchRef.current.getTime() > 1000;
+
+				// Don't fetch beyond today
+				if (!isAfter(startOfDay(nextDate), today) && canFetch) {
+					lastForwardFetchRef.current = now;
+					fetchNextDayData(nextDate);
+				}
+			},
+			{
+				root: containerRef.current,
+				threshold: 1.0,
+				rootMargin: "0px 0px 0px 20%",
+			},
+		);
+
+		forwardObserver.observe(forwardTarget);
+		return () => forwardObserver.disconnect();
+	}, [fetchNextDayData, currentDate]);
+
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container || !frames[currentIndex]) return;
@@ -917,7 +961,7 @@ export const TimelineSlider = ({
 					</button>
 				)}
 				{/* Monitor row */}
-				{allDeviceIds.length > 1 && onDeviceChange && (
+				{allDeviceIds.length > 1 && onDeviceChange && !filtersCollapsed && (
 					<div
 						className="flex items-center gap-0 group/filter"
 						onMouseEnter={() => setExpandedFilterSection("monitor")}
@@ -965,7 +1009,7 @@ export const TimelineSlider = ({
 					</div>
 				)}
 				{/* App row */}
-				{viewportAppNames.length > 1 && onAppChange && (
+				{viewportAppNames.length > 1 && onAppChange && !filtersCollapsed && (
 					<div
 						className="flex items-center gap-0 group/filter"
 						onMouseEnter={() => setExpandedFilterSection("app")}
@@ -1013,7 +1057,7 @@ export const TimelineSlider = ({
 					</div>
 				)}
 				{/* Domain row */}
-				{viewportDomains.length > 1 && onDomainChange && (
+				{viewportDomains.length > 1 && onDomainChange && !filtersCollapsed && (
 					<div
 						className="flex items-center gap-0 group/filter"
 						onMouseEnter={() => setExpandedFilterSection("domain")}
@@ -1061,7 +1105,7 @@ export const TimelineSlider = ({
 					</div>
 				)}
 				{/* Speaker row */}
-				{viewportSpeakers.length > 0 && onSpeakerChange && (
+				{viewportSpeakers.length > 0 && onSpeakerChange && !filtersCollapsed && (
 					<div
 						className="flex items-center gap-0 group/filter"
 						onMouseEnter={() => setExpandedFilterSection("speaker")}
@@ -1108,8 +1152,63 @@ export const TimelineSlider = ({
 						</div>
 					</div>
 				)}
+				{/* Calls row */}
+				{meetings.length > 0 && onMeetingChange && !filtersCollapsed && (
+					<div
+						className="flex items-center gap-0 group/filter"
+						onMouseEnter={() => setExpandedFilterSection("calls")}
+					>
+						<button
+							className={cn(
+								"p-1.5 rounded-l-md transition-colors shrink-0",
+								"bg-background/80 backdrop-blur-sm border border-border border-r-0",
+								expandedFilterSection === "calls" && "bg-foreground/10",
+								selectedMeeting !== "all" && "ring-1 ring-primary/50",
+							)}
+							title="Calls"
+						>
+							<Phone className="w-3.5 h-3.5 text-foreground/70" />
+						</button>
+						<div
+							className={cn(
+								"flex items-center gap-1.5 overflow-hidden transition-all duration-200 ease-out",
+								"bg-background/80 backdrop-blur-sm border border-border border-l-0 rounded-r-md",
+								expandedFilterSection === "calls" ? "max-w-[300px] px-2 py-1.5 opacity-100" : "max-w-0 px-0 py-1.5 opacity-0 border-transparent",
+							)}
+						>
+							{meetings.map((meeting) => {
+								const speakerNames = [...meeting.speakers.values()].map((s) => s.name);
+								const label = speakerNames.length > 0
+									? speakerNames.slice(0, 2).join(", ") + (speakerNames.length > 2 ? ` +${speakerNames.length - 2}` : "")
+									: `${Math.round(meeting.durationSecs / 60)}m call`;
+								const timeLabel = `${meeting.startTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+								return (
+									<button
+										key={meeting.id}
+										onClick={() => onMeetingChange(selectedMeeting === meeting.id ? "all" : meeting.id)}
+										className="rounded-full transition-all duration-200 hover:scale-125 shrink-0"
+										style={{
+											width: selectedMeeting === meeting.id ? 8 : 6,
+											height: selectedMeeting === meeting.id ? 8 : 6,
+											backgroundColor: selectedMeeting === meeting.id
+												? "hsl(var(--primary))"
+												: selectedMeeting === "all"
+													? "hsl(142, 40%, 55%)"
+													: "hsl(var(--foreground) / 0.15)",
+										}}
+										onMouseEnter={(e) => {
+											const rect = e.currentTarget.getBoundingClientRect();
+											setHoveredFilterDot({ name: `${label} (${timeLabel})`, x: rect.right + 8, y: rect.top + rect.height / 2 });
+										}}
+										onMouseLeave={() => setHoveredFilterDot(null)}
+									/>
+								);
+							})}
+						</div>
+					</div>
+				)}
 				{/* Tag row */}
-				{viewportTags.length > 0 && onTagChange && (
+				{viewportTags.length > 0 && onTagChange && !filtersCollapsed && (
 					<div
 						className="flex items-center gap-0 group/filter"
 						onMouseEnter={() => setExpandedFilterSection("tag")}
@@ -1191,6 +1290,21 @@ export const TimelineSlider = ({
 						</span>
 					</div>
 				</div>
+				{/* Collapse/expand filters toggle */}
+				<button
+					className={cn(
+						"p-1.5 rounded-md transition-colors shrink-0",
+						"bg-background/80 backdrop-blur-sm border border-border",
+					)}
+					onClick={() => setFiltersCollapsed((prev) => !prev)}
+					title={filtersCollapsed ? "Show filters" : "Hide filters"}
+				>
+					{filtersCollapsed ? (
+						<PanelBottomOpen className="w-3.5 h-3.5 text-foreground/70" />
+					) : (
+						<PanelBottomClose className="w-3.5 h-3.5 text-foreground/70" />
+					)}
+				</button>
 			</div>
 
 			<div
@@ -1207,6 +1321,7 @@ export const TimelineSlider = ({
 					onMouseUp={handleDragEnd}
 					onMouseLeave={handleDragEnd}
 				>
+					<div ref={forwardObserverTargetRef} className="h-full w-1" />
 					{appGroups.map((group, groupIndex) => {
 						const groupWidth = getGroupWidth(group);
 						const showLabel = groupWidth > 60; // Only show label if group is wide enough

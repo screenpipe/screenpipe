@@ -149,7 +149,7 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
             variant="ghost"
             size="sm"
             className="h-5 px-2 text-xs"
-            onClick={() => window.location.href = "/settings"}
+            onClick={() => window.location.href = "/home"}
           >
             sign in to update
           </Button>
@@ -172,7 +172,7 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
             variant="default"
             size="sm"
             className="h-7 px-3 text-xs"
-            onClick={() => window.location.href = "/settings"}
+            onClick={() => window.location.href = "/home"}
           >
             sign in
           </Button>

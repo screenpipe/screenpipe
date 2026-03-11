@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=c92760e#c92760e7cfc9912162a411ba14ec2d90500fd44c"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4#1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4"
 dependencies = [
  "hf-hub 0.4.3",
  "qwen3-asr-sys",
@@ -5004,6 +5004,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5f95fe501e1cb81dec2f66ee3129025759b602817aa2c77ff421390c418cc34"
 dependencies = [
  "half",
+ "libloading",
  "ndarray",
  "ort-sys",
  "tracing",
@@ -5705,7 +5706,7 @@ checksum = "640c9bd8497b02465aeef5375144c26062e0dcd5939dfcbb0f5db76cb8c17c73"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=c92760e#c92760e7cfc9912162a411ba14ec2d90500fd44c"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4#1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4"
 dependencies = [
  "cc",
  "cmake",
@@ -6476,7 +6477,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6533,7 +6534,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6559,7 +6560,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6602,7 +6603,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6627,7 +6628,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6694,7 +6695,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6712,7 +6713,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -6752,9 +6753,8 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.179"
+version = "0.3.182"
 dependencies = [
- "anyhow",
  "argon2",
  "chacha20poly1305",
  "keyring",
@@ -9120,7 +9120,7 @@ dependencies = [
 [[package]]
 name = "whisper-rs"
 version = "0.15.1"
-source = "git+https://github.com/tazz4843/whisper-rs.git?rev=d38738df8dc54b12d2918494586ba0817c3cb12f#d38738df8dc54b12d2918494586ba0817c3cb12f"
+source = "git+https://github.com/divanshu-go/whisper-rs.git?rev=43a3a2cd4db3609fa266a0d695b00acb737be1b3#43a3a2cd4db3609fa266a0d695b00acb737be1b3"
 dependencies = [
  "tracing",
  "whisper-rs-sys",
@@ -9129,7 +9129,7 @@ dependencies = [
 [[package]]
 name = "whisper-rs-sys"
 version = "0.14.1"
-source = "git+https://github.com/tazz4843/whisper-rs.git?rev=d38738df8dc54b12d2918494586ba0817c3cb12f#d38738df8dc54b12d2918494586ba0817c3cb12f"
+source = "git+https://github.com/divanshu-go/whisper-rs.git?rev=43a3a2cd4db3609fa266a0d695b00acb737be1b3#43a3a2cd4db3609fa266a0d695b00acb737be1b3"
 dependencies = [
  "bindgen 0.71.1",
  "cfg-if",

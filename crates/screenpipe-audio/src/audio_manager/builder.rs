@@ -68,6 +68,9 @@ pub struct AudioManagerOptions {
     pub meeting_detector: Option<Arc<MeetingDetector>>,
     /// Custom vocabulary entries for transcription biasing and word replacement.
     pub vocabulary: Vec<VocabularyEntry>,
+    /// User-configurable maximum batch duration in seconds for reconciliation.
+    /// When set, overrides the engine-aware default. None = use engine default.
+    pub batch_max_duration_secs: Option<u64>,
 }
 
 impl Default for AudioManagerOptions {
@@ -98,6 +101,7 @@ impl Default for AudioManagerOptions {
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
             vocabulary: vec![],
+            batch_max_duration_secs: None,
         }
     }
 }
@@ -207,6 +211,11 @@ impl AudioManagerBuilder {
 
     pub fn vocabulary(mut self, vocabulary: Vec<VocabularyEntry>) -> Self {
         self.options.vocabulary = vocabulary;
+        self
+    }
+
+    pub fn batch_max_duration_secs(mut self, secs: Option<u64>) -> Self {
+        self.options.batch_max_duration_secs = secs;
         self
     }
 

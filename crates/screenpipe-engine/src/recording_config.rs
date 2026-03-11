@@ -47,6 +47,8 @@ pub struct RecordingConfig {
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
     pub ignored_urls: Vec<String>,
+    /// Automatically detect and skip incognito / private browsing windows.
+    pub ignore_incognito_windows: bool,
     pub languages: Vec<Language>,
 
     // Cloud/auth
@@ -75,6 +77,11 @@ pub struct RecordingConfig {
 
     /// Custom vocabulary for transcription biasing and word replacement.
     pub vocabulary: Vec<VocabularyEntry>,
+
+    /// User-configurable maximum batch duration in seconds for batch transcription.
+    /// When set, overrides the engine-aware default (Deepgram=3600s, Whisper/OpenAI=600s).
+    /// None = use engine-aware defaults.
+    pub batch_max_duration_secs: Option<u64>,
 }
 
 impl RecordingConfig {
@@ -112,6 +119,7 @@ impl RecordingConfig {
             .filter_music(self.filter_music)
             .transcription_mode(self.transcription_mode.clone())
             .vocabulary(self.vocabulary.clone())
+            .batch_max_duration_secs(self.batch_max_duration_secs)
     }
 
     /// Build a `VisionManagerConfig` from this config.
@@ -128,6 +136,7 @@ impl RecordingConfig {
             use_pii_removal: self.use_pii_removal,
             monitor_ids: self.monitor_ids.clone(),
             use_all_monitors: self.use_all_monitors,
+            ignore_incognito_windows: self.ignore_incognito_windows,
         }
     }
 }

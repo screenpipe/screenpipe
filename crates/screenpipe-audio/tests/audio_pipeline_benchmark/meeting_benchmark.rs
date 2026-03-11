@@ -86,6 +86,7 @@ async fn replay_scenario(
                                 start_epoch_ms: now_ms - 1000, // already started
                                 end_epoch_ms: now_ms + (total_duration_secs * 1000.0) as i64,
                                 attendees,
+                                source: "native".to_string(),
                             }])
                             .await;
                     }

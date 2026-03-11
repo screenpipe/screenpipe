@@ -38,6 +38,20 @@ pub enum ContentItem {
     UI(UiContent),
     /// User input actions (clicks, keystrokes, clipboard)
     Input(InputContent),
+    /// Persistent memory: fact, preference, decision, insight
+    Memory(MemoryContent),
+}
+
+#[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
+pub struct MemoryContent {
+    pub id: i64,
+    pub content: String,
+    pub source: String,
+    pub source_context: Option<serde_json::Value>,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]

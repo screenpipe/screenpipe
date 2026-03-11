@@ -261,10 +261,12 @@ const FrameThumbnail = ({ frameId, alt }: { frameId: number; alt: string }) => {
           src={src}
           alt={alt}
           className={cn(
-            "w-full h-full object-cover transition-opacity",
+            "w-full h-full object-cover transition-opacity select-none",
             isLoading ? "opacity-0" : "opacity-100"
           )}
           loading="lazy"
+          draggable={false}
+          data-lm-disable="true"
           onLoad={() => setIsLoading(false)}
           onError={() => {
             if (retryCount.current < 3) {
@@ -434,18 +436,30 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   // Build time range labels from raw rows
   const buildTimeRanges = useCallback((rows: { dateKey: string; timestamp: string; count: number }[]) => {
-    return rows.map(r => {
+    // Re-bucket by local date since SQL DATE() operates on UTC strings.
+    // Multiple UTC dates can map to the same local date, so merge counts.
+    const buckets = new Map<string, { label: string; dateKey: string; timestamp: string; count: number }>();
+    for (const r of rows) {
       const d = new Date(r.timestamp);
-      let label: string;
-      if (isToday(d)) {
-        label = format(d, "h a");
-      } else if (isYesterday(d)) {
-        label = "yesterday " + format(d, "h a");
+      const localDateKey = format(d, "yyyy-MM-dd");
+      const existing = buckets.get(localDateKey);
+      if (existing) {
+        existing.count += r.count;
       } else {
-        label = format(d, "MMM d");
+        let label: string;
+        if (isToday(d)) {
+          label = format(d, "h a");
+        } else if (isYesterday(d)) {
+          label = "yesterday " + format(d, "h a");
+        } else {
+          label = format(d, "MMM d");
+        }
+        buckets.set(localDateKey, { label, dateKey: localDateKey, timestamp: r.timestamp, count: r.count });
       }
-      return { label, dateKey: r.dateKey, timestamp: r.timestamp, count: r.count };
-    }).slice(0, 10);
+    }
+    return [...buckets.values()]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 10);
   }, []);
 
   // Async facet loading — fires a lightweight SQL aggregation query
@@ -573,16 +587,6 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       .slice(0, 10);
   }, [speakerTranscriptions]);
 
-  // Use facet data for filter chips (falls back to result-derived if facets not loaded yet)
-  const resultAppCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const r of searchResults) {
-      counts.set(r.app_name, (counts.get(r.app_name) || 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [searchResults]);
-
-  const appCounts = facetApps.length > 0 ? facetApps : resultAppCounts;
   const domainCounts = facetDomains;
   const timeRanges = facetTimeRanges;
 
@@ -610,8 +614,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   const matchesTimeFilter = useCallback((timestamp: string) => {
     if (!timeFilter) return true;
-    return timestamp.startsWith(timeFilter);
+    // Compare in local time — timeFilter is a local date like "2026-02-28"
+    const d = new Date(timestamp);
+    const localDate = format(d, "yyyy-MM-dd");
+    return localDate === timeFilter;
   }, [timeFilter]);
+
+  // Derive app chips from time-filtered results so they stay consistent
+  // when a date chip is active. Uses actual search result app_names to
+  // guarantee the client-side filter (r.app_name === appFilter) matches.
+  const appCounts = useMemo(() => {
+    const source = timeFilter
+      ? searchResults.filter(r => matchesTimeFilter(r.timestamp))
+      : searchResults;
+    const counts = new Map<string, number>();
+    for (const r of source) {
+      counts.set(r.app_name, (counts.get(r.app_name) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [searchResults, timeFilter, matchesTimeFilter]);
 
   const filteredResults = useMemo(() => {
     let results = searchResults;
@@ -1482,6 +1503,27 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
+          {/* Screen results skeleton — keyword search still in flight but UI events already loaded */}
+          {isSearching && searchResults.length === 0 && contentFilter !== "input" && uiEventResults.length > 0 && (
+            <div className="mb-4">
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                <Monitor className="w-3 h-3" />
+                screen
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="bg-muted animate-pulse rounded overflow-hidden">
+                    <div className="aspect-video" />
+                    <div className="p-2 space-y-1">
+                      <div className="h-3 bg-muted-foreground/20 rounded w-16" />
+                      <div className="h-2 bg-muted-foreground/20 rounded w-24" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Screen results grid */}
           {searchResults.length > 0 && contentFilter !== "input" && (
             <>
@@ -1509,7 +1551,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   {appCounts.map(([app, count]) => (
                     <button
                       key={app}
-                      onClick={() => { setAppFilter(appFilter === app ? null : app); setSelectedIndex(0); }}
+                      onClick={() => { const newApp = appFilter === app ? null : app; setAppFilter(newApp); if (newApp) setDomainFilter(null); setSelectedIndex(0); }}
                       className={cn(
                         "px-2.5 py-1 text-[11px] rounded-full border transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0",
                         appFilter === app
@@ -1530,8 +1572,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 </div>
               )}
 
-              {/* Domain filter chips */}
-              {domainCounts.length > 1 && (
+              {/* Domain filter chips — hide when a non-browser app is selected
+                  (non-browser apps don't have URLs so domain chips are irrelevant) */}
+              {domainCounts.length > 1 && (!appFilter || filteredResults.some(r => r.url)) && (
                 <div className="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-0.5">
                   <button
                     onClick={() => { setDomainFilter(null); setSelectedIndex(0); }}
@@ -1879,20 +1922,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       role="dialog"
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] isolate"
-      onWheel={(e) => {
-        e.stopPropagation();
-        e.preventDefault();
-      }}
+      onWheel={(e) => e.stopPropagation()}
       onTouchMove={(e) => e.stopPropagation()}
     >
       {/* Backdrop - captures all pointer events to prevent interaction with timeline */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
-        onWheel={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-        }}
+        onWheel={(e) => e.stopPropagation()}
         onTouchMove={(e) => e.stopPropagation()}
       />
 

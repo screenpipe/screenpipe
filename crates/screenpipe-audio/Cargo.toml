@@ -40,9 +40,7 @@ hf-hub = "0.3.2"
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
 rubato = "0.15.0"
-whisper-rs = { git = "https://github.com/tazz4843/whisper-rs.git", rev = "d38738df8dc54b12d2918494586ba0817c3cb12f", features = [
-  "tracing_backend",
-] } # pin revision to avoid breaking changes
+whisper-rs = { git = "https://github.com/divanshu-go/whisper-rs.git", rev = "43a3a2cd4db3609fa266a0d695b00acb737be1b3", features = ["tracing_backend"] }
 
 # Log
 log = { workspace = true }
@@ -81,7 +79,7 @@ ort-sys = "=2.0.0-rc.6"
 knf-rs = "0.3.2"
 futures = "0.3.31"
 deepgram = "0.6.4"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "c92760e", default-features = false, features = ["qwen3-asr-ggml"], optional = true }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4", default-features = false, features = ["qwen3-asr-ggml"], optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
 
@@ -89,11 +87,19 @@ rand = "0.9.0"
 libpulse-binding = { version = "2.28", optional = true }
 libpulse-simple-binding = { version = "2.28", optional = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 ort = { version = "=2.0.0-rc.6", features = [
   "download-binaries",
   "copy-dylibs",
 ] }
+esaxx-rs = "0.1.10"
+samplerate = { version = "0.2.4" }
+libsamplerate-sys = "0.1.10"
+
+# Windows ARM64: use our own ONNX Runtime DLL at runtime (load-dynamic); no compile-time link, no ort.pyke.io cache
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+ort = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
 esaxx-rs = "0.1.10"
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"

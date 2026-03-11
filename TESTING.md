@@ -106,7 +106,7 @@ commits: `28e5c247`
 - [ ] **Lower RMS threshold for batch mode output devices** — In batch transcription mode, verify that output devices correctly use a lower RMS threshold.
 - [ ] **OpenAI-compatible STT connection test** — Configure OpenAI-compatible STT, then use the connection test feature. Verify it accurately reports connection status.
 - [ ] **OpenAI-compatible STT editable model input** — When using OpenAI-compatible STT, verify that the model input fields are editable.
-- [ ] **OpenAI-compatible STT with custom vocabulary** — Configure OpenAI-compatible STT with a custom vocabulary. Verify that transcription accuracy improves when this vocabulary is present in the audio.
+- [ ] **OpenAI-compatible STT with custom vocabulary** — Configure OpenAI-compatible STT with a custom vocabulary. Verify that transcription accuracy improves when this vocabulary is present in the audio. Verify that vocabulary is sent as both prompt and context. (`d3a4b6bcc`)
 - [ ] **OpenAI-compatible transcription engine support** — Enable and configure the OpenAI-compatible transcription engine. Verify that audio is correctly captured and transcribed using this engine.
 - [ ] **"transcribing..." only for recent chunks** — Verify that the "transcribing..." caption/indicator only appears for audio chunks that are less than 2 minutes old. (`b70116b`)
 - [ ] **no transcribing caption on old silent chunks** — Verify that old silent audio chunks do not trigger or display a "transcribing..." caption. (`54a550f4`)
@@ -132,6 +132,19 @@ commits: device_monitor.rs atomic swap, tiered backoff, empty device list guard
 - [ ] **health endpoint during output recovery** — `curl localhost:3030/health` shows `device_status_details` with output device present within 15 seconds of recovery.
 - [ ] **SCK transient failure doesn't cascade** — if ScreenCaptureKit returns empty device list, running devices are NOT disconnected. Verify: `grep "device list returned empty" ~/.screenpipe/screenpipe-app.*.log` shows warning but no disconnections.
 - [ ] **DB gap query after device switch** — run: `sqlite3 ~/.screenpipe/db.sqlite "SELECT t1.timestamp as gap_start, t2.timestamp as gap_end, (julianday(t2.timestamp) - julianday(t1.timestamp)) * 86400 as gap_seconds FROM audio_transcriptions t1 JOIN audio_transcriptions t2 ON t2.id = (SELECT MIN(id) FROM audio_transcriptions WHERE id > t1.id AND is_input_device = 0) WHERE t1.is_input_device = 0 AND (julianday(t2.timestamp) - julianday(t1.timestamp)) * 86400 > 60 ORDER BY t1.timestamp;"` — should return no rows if output was continuously captured.
+
+#### meeting detection & speaker identification
+
+commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
+
+- [ ] **restart during active meeting** — start a 1:1 calendar meeting (2 attendees), quit app mid-meeting, relaunch. meeting re-detected via calendar event still in progress. speaker names assigned. verify: `grep "meeting detected via calendar" ~/.screenpipe/screenpipe-app.*.log` shows detection after restart. verify: `sqlite3 ~/.screenpipe/db.sqlite "SELECT id, name FROM speakers WHERE name != ''"` shows both user and attendee names.
+- [ ] **calendar-only meeting detection** — schedule a 1:1 meeting with 2 attendees, no meeting app (Zoom/Meet) open. meeting detected purely via calendar. verify: `grep "meeting_started" ~/.screenpipe/screenpipe-app.*.log`.
+- [ ] **calendar meeting auto-end** — calendar meeting detected, wait past the calendar event end time. meeting_ended fires. verify: `grep "meeting ended via calendar" ~/.screenpipe/screenpipe-app.*.log`.
+- [ ] **speaker naming in 1:1** — during 1:1 call with userName set in settings, input speaker named as user, output speaker named as other attendee. verify: `curl 'localhost:3030/search?content_type=audio&speaker_name=<attendee>&limit=5'` returns results.
+- [ ] **auto-name input speaker** — with userName set, after ~2 minutes of speaking into mic, dominant input speaker named. verify: `grep "auto speaker identification: named" ~/.screenpipe/screenpipe-app.*.log`.
+- [ ] **speaker names survive restart** — speaker named pre-restart stays named post-restart. verify: `sqlite3 ~/.screenpipe/db.sqlite "SELECT id, name FROM speakers WHERE name != ''"` shows same speakers before and after restart.
+- [ ] **no duplicate speaker naming on restart** — restart during meeting, speakers already named aren't overwritten or duplicated. verify: no duplicate names in speakers table.
+- [ ] **meeting detection stability** — Verify that meeting detection does not drop when alt-tabbing during long calls. (`7684f1d47`)
 
 ### 5. frame comparison & OCR pipeline
 
@@ -330,6 +343,9 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Text selection not blocked by URL overlays** — On URL-heavy pages, verify that text selection is not blocked by clickable URL overlays.
 - [ ] **AI suggestion chip refresh and animations** — Verify a refresh button exists on AI suggestion chips, and appropriate animations (e.g., loading spinner) are shown when refreshing.
 - [ ] **Activity summary time measurement and relative parsing** — Verify activity summaries display accurate time measurements and relative time parsing (e.g., "5 minutes ago", "yesterday") works correctly in the UI.
+- [ ] **Hybrid OCR for canvas apps** — Verify that text from Google Docs and Figma (canvas-rendered) is captured using hybrid OCR. (`4d2b05990`, `f09f1e9aa`)
+- [ ] **Search modal scroll** — Verify that the search modal is scrollable on Windows/Linux embedded timeline and trackpad/wheel scrolling works. (`f108f1f0d`, `2a2bd9b5`, `5762c60bf`)
+- [ ] **Search modal UX** — Verify that click interference from Live Text and wheel handlers is resolved, and app/date filter timezone bugs are fixed. (`0c883819e`, `b7123231`, `f09f1e9aa`)
 
 commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`
 
@@ -384,6 +400,7 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **capture full accessibility tree for Chromium/Electron apps on Windows** — On Windows, verify that the full accessibility tree is captured for Chromium/Electron applications. (`2e50c772`)
 - [ ] **Accessibility tree bounds for text overlay** — On Windows, verify that text overlays accurately reflect the accessibility tree bounds, making selection and interaction precise.
 - [ ] **Filter noisy system apps** — On Windows, verify that noisy system apps are filtered out from screen capture and do not appear in the timeline or search results.
+- [ ] **Settings window instead of overlay** — On Windows, verify that the Settings window is used instead of the overlay for settings, and the shortcut toggle works correctly. (`c13e21b55`)
 
 commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`, `67caf1d1`
 
@@ -566,6 +583,10 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **ChatGPT OAuth provider in pipes** — Configure ChatGPT OAuth provider. Verify that pipes using ChatGPT work correctly.
 - [ ] **Reduced excessive Pi restarts** — When changing AI preset values or other settings, verify that excessive Pi restarts are reduced. Monitor logs for unnecessary restart messages.
 - [ ] **Invalid UTF-8 in Pi streaming** — Execute a pipe that outputs invalid UTF-8 characters to stdout/stderr. Verify that Pi streaming correctly handles these without crashing or displaying garbled output.
+- [ ] **Auto-abort stuck Pi agent** — Verify that the Pi agent is auto-aborted if stuck before sending a new message. (`602419151`)
+- [ ] **Pi crash loop fix (Windows)** — Verify that the Pi agent doesn't enter a crash loop on Windows due to lru-cache interop issues. (`de56176e5`)
+- [ ] **Token counter** — Verify that the chat UI displays a token counter. (`2f75e90bf`)
+- [ ] **Optimize button** — Verify that the "optimize" button appears in the pipe dropdown menu. (`5dff9d21a`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -605,6 +626,27 @@ commits: `fc830b43`, `f54d3e0d`
 - [ ] **Reduced log noise** — Verify a significant reduction in log noise (~54%).
 - [ ] **PII scrubbing** — Ensure that PII (Personally Identifiable Information) is scrubbed from logs.
 - [ ] **Phone regex PII scrubbing** — After generating some PII-containing data (e.g., typing phone numbers), review logs to ensure that the phone regex correctly scrubs PII and does not over-match bare digit sequences.
+
+### 20. Vault Lock (Encryption at rest)
+
+commits: `274a968af`, `dc575e48e`, `81aabbf18`, `d5e071854`, `db08f8c06`, `f4225b580`
+
+- [ ] **Vault lock initialization** — Verify that the vault can be initialized and a password set.
+- [ ] **Encryption of database and data files** — Verify that screenpipe data is encrypted at rest when the vault is locked.
+- [ ] **Recording stop on lock** — Verify that recording stops immediately when the vault is locked.
+- [ ] **Recording resume on unlock** — Verify that recording restarts automatically when the vault is unlocked.
+- [ ] **Fast vault unlock** — Verify that the DB is decrypted quickly and data files are decrypted in the background. (`dc575e48e`)
+- [ ] **Vault lock shortcut** — Verify that the configurable vault lock shortcut works as expected. (`81aabbf18`)
+- [ ] **CLI vault commands** — Verify that `screenpipe vault` commands work without the server running. (`f4225b580`)
+- [ ] **Skip server start on locked vault** — Verify that the server does not start if the vault is locked. (`d5e071854`)
+
+### 21. Privacy & Incognito Detection
+
+commits: `ad431b513`, `d9722bccc`, `4df21e83d`
+
+- [ ] **Incognito window detection** — Verify that private browsing/incognito windows are correctly detected for major browsers (Chrome, Safari, Firefox, etc.). (`ad431b513`)
+- [ ] **Ignore incognito toggle** — Verify that the "Ignore Incognito Windows" toggle in settings correctly prevents recording of private windows. (`d9722bccc`)
+- [ ] **Incognito detection UI feedback** — Verify that the UI correctly reflects when an incognito window is being ignored.
 
 commits: `fc830b43`
 

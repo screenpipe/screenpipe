@@ -177,6 +177,7 @@ impl AudioManager {
                         let openai_config = opts.openai_compatible_config.clone();
                         let langs = opts.languages.clone();
                         let vocab = opts.vocabulary.clone();
+                        let batch_max_dur = opts.batch_max_duration_secs;
                         drop(opts);
 
                         // Get whisper context from transcription engine
@@ -195,6 +196,7 @@ impl AudioManager {
                             &vocab,
                             Some(seg_mgr.clone()),
                             data_dir,
+                            batch_max_dur,
                         )
                         .await;
                         if count > 0 {
@@ -431,6 +433,7 @@ impl AudioManager {
         let audio_transcription_engine = options.transcription_engine.clone();
         let vocabulary = options.vocabulary.clone();
         let is_batch_mode = options.transcription_mode == TranscriptionMode::Batch;
+        let batch_max_duration_secs = options.batch_max_duration_secs;
         let filter_music = options.filter_music;
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
@@ -583,6 +586,7 @@ impl AudioManager {
                                 &vocabulary,
                                 Some(segmentation_manager.clone()),
                                 data_dir,
+                                batch_max_duration_secs,
                             )
                             .await;
                             for _ in 0..count {

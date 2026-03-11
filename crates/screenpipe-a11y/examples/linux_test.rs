@@ -5,7 +5,7 @@
 //! Quick smoke test for the Linux AT-SPI2 tree walker.
 //! Run inside Docker: cargo run --example linux_test -p screenpipe-a11y
 
-use screenpipe_a11y::tree::{create_tree_walker, TreeWalkerConfig};
+use screenpipe_a11y::tree::{create_tree_walker, TreeWalkResult, TreeWalkerConfig};
 use std::time::Duration;
 
 fn main() {
@@ -23,7 +23,7 @@ fn main() {
     println!("Walking focused window's accessibility tree...\n");
 
     match walker.walk_focused_window() {
-        Ok(Some(snapshot)) => {
+        Ok(TreeWalkResult::Found(snapshot)) => {
             println!("SUCCESS! Got tree snapshot:");
             println!("  App:         {}", snapshot.app_name);
             println!("  Window:      {}", snapshot.window_name);
@@ -53,7 +53,10 @@ fn main() {
                 );
             }
         }
-        Ok(None) => {
+        Ok(TreeWalkResult::Skipped) => {
+            println!("Window skipped (incognito/private or filtered).");
+        }
+        Ok(TreeWalkResult::NotFound) => {
             println!("No focused window found (or no text content).");
             println!("Make sure a window is focused in the desktop.");
         }

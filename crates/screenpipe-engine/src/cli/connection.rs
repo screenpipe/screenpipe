@@ -16,17 +16,27 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
 
     match command {
         ConnectionCommand::List { json: use_json } => {
-            let mut list = cm.list();
+            let list = cm.list();
 
-            // Add WhatsApp — check session on disk
-            let wa_connected = screenpipe_dir
+            // Add WhatsApp — check session on disk AND whether gateway is actually reachable
+            let has_session = screenpipe_dir
                 .join("whatsapp-session")
                 .join("creds.json")
                 .exists();
+            let wa_connected = has_session
+                && reqwest::Client::new()
+                    .get("http://localhost:3035/status")
+                    .timeout(std::time::Duration::from_secs(2))
+                    .send()
+                    .await
+                    .is_ok();
             let wa_desc = if wa_connected {
-                "WhatsApp messaging. First GET http://localhost:3035/contacts to resolve names to phone numbers, then POST http://localhost:3035/send with {\"to\":\"+PHONE\",\"text\":\"MSG\"}".to_string()
+                "WhatsApp messaging gateway. Endpoints at http://localhost:3035: GET /contacts (list contacts), GET /chats (recent chats), GET /messages?phone=+PHONE&limit=50 (read messages), POST /send {\"to\":\"+PHONE\",\"text\":\"MSG\"} (send message), GET /status.".to_string()
+            } else if has_session {
+                "WhatsApp has a saved session but the gateway is not running. It should auto-reconnect on server restart.".to_string()
             } else {
-                "Not paired. User must pair via Settings > Connections in the desktop app first.".to_string()
+                "Not paired. User must pair via Settings > Connections in the desktop app first."
+                    .to_string()
             };
 
             if *use_json {
@@ -53,10 +63,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 println!("{}", "-".repeat(72));
                 for info in &list {
                     let status = if info.connected { "connected" } else { "-" };
-                    println!(
-                        "{:<20} {:<12} {:<40}",
-                        info.def.id, status, info.def.name
-                    );
+                    println!("{:<20} {:<12} {:<40}", info.def.id, status, info.def.name);
                 }
                 let wa_status = if wa_connected { "connected" } else { "-" };
                 println!("{:<20} {:<12} {:<40}", "whatsapp", wa_status, "WhatsApp");
@@ -65,15 +72,29 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
 
         ConnectionCommand::Get { id, json: use_json } => {
             if id == "whatsapp" {
-                let connected = screenpipe_dir
+                let has_session = screenpipe_dir
                     .join("whatsapp-session")
                     .join("creds.json")
                     .exists();
-                let info = if connected {
+                let gateway_reachable = has_session
+                    && reqwest::Client::new()
+                        .get("http://localhost:3035/status")
+                        .timeout(std::time::Duration::from_secs(2))
+                        .send()
+                        .await
+                        .is_ok();
+                let info = if gateway_reachable {
                     json!({
                         "id": "whatsapp",
                         "connected": true,
-                        "description": "WhatsApp messaging. First GET http://localhost:3035/contacts to resolve names to phone numbers, then POST http://localhost:3035/send with {\"to\":\"+PHONE\",\"text\":\"MSG\"}"
+                        "description": "WhatsApp messaging gateway. Endpoints at http://localhost:3035: GET /contacts (list contacts), GET /chats (recent chats), GET /messages?phone=+PHONE&limit=50 (read messages), POST /send {\"to\":\"+PHONE\",\"text\":\"MSG\"} (send message), GET /status."
+                    })
+                } else if has_session {
+                    json!({
+                        "id": "whatsapp",
+                        "connected": false,
+                        "has_session": true,
+                        "description": "WhatsApp has a saved session but the gateway is not running. It should auto-reconnect on server restart."
                     })
                 } else {
                     json!({
@@ -85,11 +106,17 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 if *use_json {
                     println!("{}", serde_json::to_string_pretty(&info)?);
                 } else {
-                    let status = if connected { "connected" } else { "not connected" };
+                    let status = if gateway_reachable {
+                        "connected"
+                    } else {
+                        "not connected"
+                    };
                     println!("whatsapp: {}", status);
                     println!(
                         "\n{}",
-                        info.get("description").and_then(|v| v.as_str()).unwrap_or("")
+                        info.get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
                     );
                 }
                 return Ok(());
@@ -98,7 +125,12 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             match cm.get_credentials(id)? {
                 Some(creds) => {
                     if *use_json {
-                        println!("{}", serde_json::to_string_pretty(&json!({ "id": id, "credentials": creds }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &json!({ "id": id, "credentials": creds })
+                            )?
+                        );
                     } else {
                         println!("{}", id);
                         for (key, value) in &creds {
@@ -131,24 +163,20 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             println!("saved credentials for {}", id);
         }
 
-        ConnectionCommand::Test { id } => {
-            match cm.get_credentials(id)? {
-                Some(creds) => {
-                    match cm.test(id, &creds).await {
-                        Ok(msg) => println!("ok: {}", msg),
-                        Err(e) => {
-                            eprintln!("error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                None => {
-                    eprintln!("{} has no saved credentials", id);
-                    eprintln!("\nhint: screenpipe connection set {} key=value ...", id);
+        ConnectionCommand::Test { id } => match cm.get_credentials(id)? {
+            Some(creds) => match cm.test(id, &creds).await {
+                Ok(msg) => println!("ok: {}", msg),
+                Err(e) => {
+                    eprintln!("error: {}", e);
                     std::process::exit(1);
                 }
+            },
+            None => {
+                eprintln!("{} has no saved credentials", id);
+                eprintln!("\nhint: screenpipe connection set {} key=value ...", id);
+                std::process::exit(1);
             }
-        }
+        },
 
         ConnectionCommand::Remove { id } => {
             cm.disconnect(id)?;

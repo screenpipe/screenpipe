@@ -38,7 +38,10 @@ impl MigrationProgress {
 /// Collect all files under a directory.
 fn collect_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_file() {
             // Skip temp files from interrupted operations
             let name = entry.file_name().to_string_lossy();
@@ -86,10 +89,7 @@ pub async fn encrypt_data_dir(
     let files = collect_files(data_dir);
     let done = load_journal(&journal_path);
 
-    let remaining: Vec<_> = files
-        .into_iter()
-        .filter(|f| !done.contains(f))
-        .collect();
+    let remaining: Vec<_> = files.into_iter().filter(|f| !done.contains(f)).collect();
 
     let total_bytes: u64 = remaining
         .iter()
@@ -174,10 +174,7 @@ pub async fn decrypt_data_dir(
     let files = collect_files(data_dir);
     let done = load_journal(&journal_path);
 
-    let remaining: Vec<_> = files
-        .into_iter()
-        .filter(|f| !done.contains(f))
-        .collect();
+    let remaining: Vec<_> = files.into_iter().filter(|f| !done.contains(f)).collect();
 
     let total_bytes: u64 = remaining
         .iter()

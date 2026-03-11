@@ -216,7 +216,10 @@ pub fn bring_to_front_and_activate(window: &WebviewWindow) -> Result<(), String>
         let result = SetWindowPos(
             hwnd,
             HWND_TOPMOST,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE,
         );
 

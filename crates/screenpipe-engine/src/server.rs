@@ -35,6 +35,10 @@ use crate::{
             vision_metrics_handler,
         },
         meetings::{get_meeting_handler, list_meetings_handler},
+        memories::{
+            create_memory_handler, delete_memory_handler, get_memory_handler,
+            list_memories_handler, update_memory_handler,
+        },
         search::{keyword_search_handler, search},
         speakers::{
             delete_speaker_handler, get_similar_speakers_handler, get_unnamed_speakers_handler,
@@ -465,6 +469,11 @@ impl SCServer {
             .post("/speakers/undo-reassign", undo_speaker_reassign_handler)
             .get("/meetings", list_meetings_handler)
             .get("/meetings/:id", get_meeting_handler)
+            .post("/memories", create_memory_handler)
+            .get("/memories", list_memories_handler)
+            .get("/memories/:id", get_memory_handler)
+            .put("/memories/:id", update_memory_handler)
+            .delete("/memories/:id", delete_memory_handler)
             .post("/experimental/frames/merge", merge_frames_handler)
             .get("/experimental/validate/media", validate_media_handler)
             .post("/audio/start", start_audio)
@@ -484,9 +493,18 @@ impl SCServer {
             .merge(server.into_router())
             // Vault lock/unlock routes
             .route("/vault/status", get(crate::routes::vault::vault_status))
-            .route("/vault/lock", axum::routing::post(crate::routes::vault::vault_lock))
-            .route("/vault/unlock", axum::routing::post(crate::routes::vault::vault_unlock))
-            .route("/vault/setup", axum::routing::post(crate::routes::vault::vault_setup))
+            .route(
+                "/vault/lock",
+                axum::routing::post(crate::routes::vault::vault_lock),
+            )
+            .route(
+                "/vault/unlock",
+                axum::routing::post(crate::routes::vault::vault_unlock),
+            )
+            .route(
+                "/vault/setup",
+                axum::routing::post(crate::routes::vault::vault_setup),
+            )
             // Cloud Sync API routes
             .route("/sync/init", axum::routing::post(sync_api::sync_init))
             .route("/sync/status", get(sync_api::sync_status))
@@ -592,15 +610,25 @@ impl SCServer {
 
         // Connections routes (pipe-facing integrations: Telegram, Slack, etc.)
         let cm: crate::connections_api::SharedConnectionManager = Arc::new(Mutex::new(
-            screenpipe_connect::connections::ConnectionManager::new(
-                self.screenpipe_dir.clone(),
-            ),
+            screenpipe_connect::connections::ConnectionManager::new(self.screenpipe_dir.clone()),
         ));
         let wa: crate::connections_api::SharedWhatsAppGateway = Arc::new(Mutex::new(
-            screenpipe_connect::whatsapp::WhatsAppGateway::new(
-                self.screenpipe_dir.clone(),
-            ),
+            screenpipe_connect::whatsapp::WhatsAppGateway::new(self.screenpipe_dir.clone()),
         ));
+
+        // Auto-reconnect WhatsApp if a previous session exists on disk
+        {
+            let wa_lock = wa.lock().await;
+            if wa_lock.has_session() {
+                tracing::info!("whatsapp: found existing session, auto-reconnecting...");
+                let bun_path =
+                    screenpipe_connect::whatsapp::which_bun().unwrap_or_else(|| "bun".to_string());
+                if let Err(e) = wa_lock.start_pairing(&bun_path).await {
+                    tracing::warn!("whatsapp: auto-reconnect failed: {:?}", e);
+                }
+            }
+        }
+
         let router = router.nest("/connections", crate::connections_api::router(cm, wa));
 
         // Power management routes (if power manager is available)

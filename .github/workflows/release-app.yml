@@ -37,7 +37,6 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
       # publish is now a separate workflow: publish-release.yml
       should_test: ${{ steps.check.outputs.should_test }}
-      should_beta: ${{ steps.check.outputs.should_beta }}
       macos_arm_runner: ${{ steps.check-runner.outputs.macos_arm_runner }}
       windows_runner: ${{ steps.check-runner.outputs.windows_runner }}
     steps:
@@ -57,14 +56,6 @@ jobs:
             echo "should_publish=true" >> $GITHUB_OUTPUT
           else
             echo "should_publish=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Beta: only build on explicit release triggers (same as stable)
-          # Beta is rebuilt from same compilation with different config — adds ~2-5 min, not a full rebuild
-          if echo "$COMMIT_MSG" | head -1 | grep -qE "^(Bump app|release-app)"; then
-            echo "should_beta=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_beta=false" >> $GITHUB_OUTPUT
           fi
 
           # Check for explicit testing or skip flags first
@@ -194,7 +185,7 @@ jobs:
 
   draft:
     needs: [check_commit]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true' || needs.check_commit.outputs.should_beta == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -215,7 +206,7 @@ jobs:
 
   publish-tauri:
     needs: [check_commit, draft]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true' || needs.check_commit.outputs.should_beta == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     permissions:
       contents: write
     strategy:
@@ -238,6 +229,13 @@ jobs:
             args: "--target x86_64-pc-windows-msvc"
             pre-build-args: ""
             tauri-args: "--target x86_64-pc-windows-msvc --features official-build"
+            target: x86_64-pc-windows-msvc
+            os_type: "windows"
+          - platform: windows-11-arm
+            args: "--target aarch64-pc-windows-msvc"
+            pre-build-args: ""
+            tauri-args: "--target aarch64-pc-windows-msvc --features official-build"
+            target: aarch64-pc-windows-msvc
             os_type: "windows"
           # Linux disabled - too many bundling issues
           # - platform: "ubuntu-22.04"
@@ -324,12 +322,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.7
+          bun-version: 1.3.10
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '22' || '20' }}
 
       - name: Set up Rust
         if: matrix.os_type != 'windows'
@@ -338,10 +336,18 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install Rust
-        if: matrix.os_type == 'windows'
+      - name: Install Rust (Windows x64)
+        if: matrix.os_type == 'windows' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: powershell
         run: |
           Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile rustup-init.exe
+          .\rustup-init.exe -y
+
+      - name: Install Rust (Windows ARM64 native)
+        if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
+        shell: powershell
+        run: |
+          Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
           .\rustup-init.exe -y
 
       - name: setup rust path
@@ -507,37 +513,20 @@ jobs:
         if: matrix.os_type == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install 7zip
-        if: matrix.os_type == 'windows'
+      - name: Install Ninja (ARM64)
+        if: matrix.os_type == 'windows' && matrix.target == 'aarch64-pc-windows-msvc'
         shell: powershell
         run: |
-          # Skip if already installed (self-hosted runners)
-          if (Test-Path "C:\Program Files\7-Zip\7z.exe") {
-            Write-Host "7-Zip already installed, skipping"
-          } else {
-            $7zipUrl = "https://7-zip.org/a/7z2301-x64.exe"
-            $7zipInstaller = "7z-installer.exe"
-            Invoke-WebRequest -Uri $7zipUrl -OutFile $7zipInstaller
-            Start-Process -FilePath .\$7zipInstaller -Args "/S" -Wait
-            Remove-Item $7zipInstaller
+          winget install Ninja-build.Ninja --accept-package-agreements --accept-source-agreements --silent
+          $paths = @("C:\Program Files\Ninja", "C:\Tools\Ninja")
+          foreach ($p in $paths) {
+            if (Test-Path "$p\ninja.exe") {
+              echo $p | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              break
+            }
           }
-          echo "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          & "C:\Program Files\7-Zip\7z.exe" i
-
-      - name: Persist MSVC cl.exe path
-        if: matrix.os_type == 'windows'
-        shell: powershell
-        run: |
-          $clPath = (Get-Command cl.exe -ErrorAction SilentlyContinue).Source
-          if ($clPath) {
-            $clDir = Split-Path $clPath
-            echo "$clDir" >> $env:GITHUB_PATH
-            echo "CC=$clPath" >> $env:GITHUB_ENV
-            echo "CXX=$clPath" >> $env:GITHUB_ENV
-            Write-Host "Set CC/CXX to $clPath"
-          } else {
-            Write-Host "WARNING: cl.exe not found on PATH"
-          }
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          ninja --version
 
       - name: Install wget on Windows
         if: matrix.os_type == 'windows'
@@ -572,43 +561,8 @@ jobs:
           & "$wgetDir\wget.exe" --version
 
       - name: Run pre_build.js
-        env:
-          SKIP_SCREENPIPE_SETUP: true
         run: bun ./scripts/pre_build.js ${{ matrix.pre-build-args }}
         working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
-
-      - name: Download ONNX Runtime (CPU) for Windows
-        if: matrix.os_type == 'windows'
-        shell: pwsh
-        run: |
-          # Pre-download CPU onnxruntime for both Tauri resources and ort linking.
-          # Extract to TWO separate directories to avoid file locking:
-          # - onnxruntime-win-x64-1.19.2/ → Tauri resources (tauri_build reads these)
-          # - ort-system-lib/ → ORT_LIB_LOCATION (ort-sys copy-dylibs reads these)
-          # These build scripts run concurrently (different dependency chains), so they
-          # MUST NOT share files or Windows will return os error 32 (file locked).
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-          $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
-          $ortDir = "ort-system-lib"
-          Invoke-WebRequest -Uri $url -OutFile $zipFile
-          if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
-          7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
-          Write-Host "ONNX Runtime extracted to $tauriDir (for Tauri resources)"
-          # Create separate copy for ort-sys linking
-          if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
-          Copy-Item -Path $tauriDir -Destination $ortDir -Recurse -Force
-          Write-Host "ONNX Runtime copied to $ortDir (for ORT_LIB_LOCATION)"
-          Get-ChildItem "$ortDir/lib" | ForEach-Object { Write-Host $_.Name }
-
-      - name: Set ORT env vars for Windows
-        if: matrix.os_type == 'windows'
-        shell: bash
-        run: |
-          echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-          echo "ORT_LIB_LOCATION=${{ github.workspace }}/ort-system-lib" >> $GITHUB_ENV
-          # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
-          echo "AWS_LC_SYS_PREBUILT_NASM=1" >> $GITHUB_ENV
 
       - name: Use production config for release
         shell: bash
@@ -735,6 +689,7 @@ jobs:
           echo "Build keychain ready at $BUILD_KC"
 
       - name: Compute Tauri build args
+        if: matrix.os_type == 'macos'
         id: tauri-args
         shell: bash
         run: |
@@ -765,8 +720,34 @@ jobs:
             security find-identity -v -p codesigning "$BUILD_KC" 2>&1 | tail -3
           fi
 
-      - name: Build
-        uses: tauri-apps/tauri-action@v0.5.17
+      - name: Build (Windows)
+        if: matrix.os_type == 'windows'
+        working-directory: apps/screenpipe-app-tauri
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+          # Optimize for build speed on Windows
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          # Enable incremental compilation for Windows
+          CARGO_INCREMENTAL: "true"
+          # Windows: keep symbols for Sentry upload, macOS: none
+          CARGO_PROFILE_RELEASE_STRIP: none
+          CARGO_PROFILE_RELEASE_PANIC: abort
+          CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+          RUSTFLAGS: -C link-arg=/LTCG
+          # Fix whisper.cpp crash on newer CPUs (Lunar Lake, etc.) that lack AVX-512
+          # GGML_NATIVE=ON compiles with -march=native, causing illegal instruction on CPUs without AVX-512
+          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
+        run: bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
+
+      - name: Build (with codesign retry)
+        if: matrix.os_type == 'macos'
+        shell: bash
         env:
           # for updater
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -785,42 +766,77 @@ jobs:
           # Fix std::filesystem availability - requires macOS 10.15+
           # whisper.cpp ggml uses std::filesystem::path which needs 10.15
           # All these vars needed to ensure cmake picks up the deployment target
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os_type == 'macos' && '10.15' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.os_type == 'macos' && '10.15' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
           # Fix i8mm build error - force M1 compatible architecture
           # -U__ARM_FEATURE_MATMUL_INT8 undefines i8mm macro
           # -mmacosx-version-min=10.15 ensures std::filesystem is available
           # See: https://github.com/ggml-org/whisper.cpp/issues/3427
-          CFLAGS: ${{ matrix.os_type == 'macos' && (matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15') || '' }}
-          CXXFLAGS: ${{ matrix.os_type == 'macos' && (matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15') || '' }}
-          CMAKE_C_FLAGS: ${{ matrix.os_type == 'macos' && '-mmacosx-version-min=10.15' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.os_type == 'macos' && '-mmacosx-version-min=10.15' || '' }}
+          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CMAKE_C_FLAGS: "-mmacosx-version-min=10.15"
+          CMAKE_CXX_FLAGS: "-mmacosx-version-min=10.15"
 
-          # Optimize for build speed on Windows
-          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.os_type == 'windows' && 'thin' || 'false' }}
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ matrix.os_type == 'windows' && '2' || '3' }}
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.os_type == 'windows' && '16' || '16' }}
-          # Enable incremental compilation for Windows
-          CARGO_INCREMENTAL: ${{ matrix.os_type == 'windows' && 'true' || 'false' }}
-          # Windows: keep symbols for Sentry upload, macOS: none
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          CARGO_INCREMENTAL: "false"
           CARGO_PROFILE_RELEASE_STRIP: none
-          CARGO_PROFILE_RELEASE_PANIC: ${{ matrix.os_type == 'windows' && 'abort' || 'unwind' }}
-          CARGO_PROFILE_RELEASE_INCREMENTAL: ${{ matrix.os_type == 'windows' && 'false' || 'true' }}
-          RUSTFLAGS: ${{ matrix.os_type == 'windows' && '-C link-arg=/LTCG' || '' }}
-          # ORT_STRATEGY and ORT_LIB_LOCATION set via GITHUB_ENV in Windows-only step above
-          # Fix whisper.cpp crash on newer CPUs (Lunar Lake, etc.) that lack AVX-512
-          # GitHub windows-2022 runners have Xeon CPUs with AVX-512, but GGML_NATIVE=ON
-          # compiles with -march=native, causing illegal instruction crashes on CPUs without AVX-512
-          CMAKE_ARGS: ${{ matrix.os_type == 'windows' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF' || '' }}
+          CARGO_PROFILE_RELEASE_PANIC: unwind
+          CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
           # Fix linuxdeploy crash on AppImage bundling
           NO_STRIP: ${{ matrix.os_type == 'linux' && '1' || '' }}
           LINUXDEPLOY_OUTPUT_VERSION: ${{ matrix.os_type == 'linux' && '1' || '' }}
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.os_type == 'linux' && '1' || '' }}
-        with:
-          args: ${{ steps.tauri-args.outputs.args || matrix.tauri-args }}
-          projectPath: "./apps/screenpipe-app-tauri"
-          tauriScript: bunx tauri -v
-          retryAttempts: 3
+        run: |
+          TAURI_ARGS="${{ steps.tauri-args.outputs.args || matrix.tauri-args }}"
+          MAX_ATTEMPTS=3
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "=== Build attempt $attempt/$MAX_ATTEMPTS ==="
+
+            # Re-unlock keychain before each attempt (macOS) — prevents transient codesign failures
+            if [[ "${{ matrix.os_type }}" == "macos" ]]; then
+              BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
+              if [ -f "$BUILD_KC" ]; then
+                security unlock-keychain -p "build_password" "$BUILD_KC"
+                security set-keychain-settings -t 3600 "$BUILD_KC"
+                security list-keychains -d user -s "$BUILD_KC" \
+                  "$HOME/Library/Keychains/login.keychain-db" \
+                  "/Library/Keychains/System.keychain" \
+                  "/System/Library/Keychains/SystemRootCertificates.keychain"
+                echo "Keychain unlocked for attempt $attempt"
+              fi
+            fi
+
+            cd apps/screenpipe-app-tauri
+            if bunx tauri build -v $TAURI_ARGS 2>&1 | tee /tmp/tauri-build-$attempt.log; then
+              echo "✅ Build succeeded on attempt $attempt"
+              cd ../..
+              break
+            fi
+            cd ../..
+
+            if [ $attempt -eq $MAX_ATTEMPTS ]; then
+              echo "❌ Build failed after $MAX_ATTEMPTS attempts"
+              cat /tmp/tauri-build-$attempt.log | tail -50
+              exit 1
+            fi
+
+            # Check if it's a transient signing/bundling failure (worth retrying)
+            if grep -qiE "failed to sign|codesign.*failed|errSecInternalComponent|failed to bundle|CSSMERR|SecKeychainOpen" /tmp/tauri-build-$attempt.log; then
+              echo "⚠️ Transient codesign/bundle failure detected, retrying..."
+              # Clean only bundle output — cargo cache is still warm
+              find "$BUNDLE_DIR" -type f -delete 2>/dev/null || true
+              sleep $((attempt * 30))
+            else
+              echo "❌ Non-transient build failure, aborting"
+              cat /tmp/tauri-build-$attempt.log | tail -50
+              exit 1
+            fi
+          done
 
       - name: Clean up signing cert from login keychain (macOS)
         if: matrix.os_type == 'macos' && always()
@@ -868,13 +884,14 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: mediar
+          SENTRY_ARCH: ${{ matrix.target == 'aarch64-pc-windows-msvc' && 'aarch64' || 'x86_64' }}
         run: |
-          # Install sentry-cli
-          Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=x86_64&platform=Windows&package=sentry-cli" -OutFile sentry-cli.exe
+          # Install sentry-cli (native arch on ARM64 runner)
+          Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=$env:SENTRY_ARCH&platform=Windows&package=sentry-cli" -OutFile sentry-cli.exe
 
           # Upload debug symbols (.pdb files) for the app
           Write-Host "Uploading debug symbols to Sentry..."
-          .\sentry-cli.exe debug-files upload --org $env:SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/release/
+          .\sentry-cli.exe debug-files upload --org $env:SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
 
       - name: Upload debug symbols to Sentry (macOS)
         if: matrix.os_type == 'macos'
@@ -895,7 +912,6 @@ jobs:
 
       - name: Upload to Cloudflare R2 (macOS)
         if: matrix.os_type == 'macos'
-        continue-on-error: true
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -945,22 +961,26 @@ jobs:
 
           echo "uploading ${TARGET} bundles for v${VERSION} to R2..."
           echo "aws cli: $(aws --version)"
+          UPLOAD_FAILED=0
 
           # Upload DMG
           for f in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$f" ] && upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")"
+            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
           done
 
           # Upload updater artifacts (.tar.gz + .sig)
           for f in "${BUNDLE_DIR}"/macos/*.tar.gz "${BUNDLE_DIR}"/macos/*.sig; do
-            [ -f "$f" ] && upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")"
+            [ -f "$f" ] && { upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")" || UPLOAD_FAILED=1; }
           done
 
+          if [ "$UPLOAD_FAILED" -eq 1 ]; then
+            echo "❌ Some uploads failed — marking step as failed"
+            exit 1
+          fi
           echo "R2 upload complete for ${TARGET}"
 
       - name: Upload to Cloudflare R2 (Windows)
         if: matrix.os_type == 'windows'
-        continue-on-error: true
         shell: powershell
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -975,9 +995,9 @@ jobs:
             $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
           }
           $version = (Select-String -Path apps/screenpipe-app-tauri/src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $bundleDir = "apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          $bundleDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
           $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/releases/$version/x86_64-pc-windows-msvc"
+          $r2Prefix = "s3://screenpipe-releases/releases/$version/${{ matrix.target }}"
 
           Write-Host "uploading Windows bundles for v$version to R2..."
 
@@ -993,141 +1013,6 @@ jobs:
 
           Write-Host "R2 upload complete for Windows"
 
-      - name: Rebuild and upload beta (Windows)
-        if: matrix.os_type == 'windows' && (needs.check_commit.outputs.should_beta == 'true' || github.event_name == 'workflow_dispatch')
-        continue-on-error: true
-        shell: powershell
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-        run: |
-          cd apps/screenpipe-app-tauri/src-tauri
-
-          Write-Host "=== Rebuilding with beta config ==="
-          Copy-Item "tauri.beta.conf.json" "tauri.conf.json" -Force
-          $bundleNsis = "target\x86_64-pc-windows-msvc\release\bundle\nsis"
-          if (Test-Path $bundleNsis) { Remove-Item -Recurse -Force $bundleNsis }
-          Push-Location ..
-          # Skip frontend rebuild (already built for stable) and vulkan
-          $env:TAURI_CLI_CONFIG = '{"build":{"beforeBuildCommand":""}}'
-          bunx tauri build --target x86_64-pc-windows-msvc --features official-build
-          Pop-Location
-          Write-Host "=== Beta rebuild complete ==="
-
-          # Upload beta to R2
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/beta/releases/$version/x86_64-pc-windows-msvc"
-
-          Write-Host "Uploading beta Windows bundles for v$version to R2..."
-
-          Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
-          }
-
-          Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip","target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  ✅ $($_.Name)"
-          }
-
-          Write-Host "R2 beta upload complete for Windows"
-
-      - name: Clean stale beta artifacts before stable upload
-        if: matrix.os_type != 'windows'
-        shell: bash
-        run: |
-          # Remove any leftover beta artifacts from previous builds (self-hosted runners persist)
-          find apps/screenpipe-app-tauri/src-tauri/target -name "*beta*" -type f -delete 2>/dev/null || true
-          echo "Cleaned stale beta artifacts"
-
-      - name: Rebuild with beta config (Non-Windows)
-        if: matrix.os_type != 'windows' && (needs.check_commit.outputs.should_beta == 'true' || github.event_name == 'workflow_dispatch')
-        continue-on-error: true
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          # Cert already in login keychain from earlier import step
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CI: true
-          MACOSX_DEPLOYMENT_TARGET: "10.15"
-        run: |
-          echo "=== Rebuilding with beta config ==="
-          # Swap to beta config
-          cp apps/screenpipe-app-tauri/src-tauri/tauri.beta.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
-          # Only remove bundle outputs (NOT cargo cache). Use parens to group -o conditions properly.
-          find apps/screenpipe-app-tauri/src-tauri/target -type d -name "bundle" -exec rm -rf {} + 2>/dev/null || true
-          find apps/screenpipe-app-tauri/src-tauri/target \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.sig" -o -name "*.nsis*" \) -type f -delete 2>/dev/null || true
-          # Skip frontend rebuild — already built for stable, beta uses same frontend
-          # Override beforeBuildCommand to no-op so tauri doesn't re-run bun run build
-          cd apps/screenpipe-app-tauri
-          TAURI_CLI_CONFIG='{"build":{"beforeBuildCommand":""}}' bunx tauri build ${{ steps.tauri-args.outputs.args || matrix.tauri-args }}
-          echo "=== Beta rebuild complete ==="
-          echo "Beta artifacts:"
-          find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.exe" 2>/dev/null
-
-      - name: Upload beta to R2 (macOS)
-        if: matrix.os_type == 'macos' && (needs.check_commit.outputs.should_beta == 'true' || github.event_name == 'workflow_dispatch')
-        continue-on-error: true
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-        run: |
-          upload_with_retry() {
-            local src="$1" dst="$2"
-            for attempt in 1 2; do
-              if aws s3 cp "$src" "$dst" --endpoint-url "$R2_ENDPOINT" 2>&1; then
-                echo "  ✅ $(basename "$src") (aws)"
-                return 0
-              fi
-              echo "  ⚠️ aws attempt $attempt failed for $(basename "$src")"
-              sleep 5
-            done
-            echo "  🔄 falling back to curl for $(basename "$src")..."
-            for attempt in 1 2 3; do
-              PRESIGNED=$(aws s3 presign "$dst" --endpoint-url "$R2_ENDPOINT" --expires-in 3600 2>/dev/null)
-              if [ -n "$PRESIGNED" ] && curl --retry 3 --retry-delay 5 -sf -T "$src" "$PRESIGNED" 2>&1; then
-                echo "  ✅ $(basename "$src") (curl)"
-                return 0
-              fi
-              echo "  ⚠️ curl attempt $attempt failed for $(basename "$src")"
-              sleep $((attempt * 10))
-            done
-            echo "  ❌ failed to upload $(basename "$src") after all attempts"
-            return 1
-          }
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          TARGET="${{ matrix.target }}"
-          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          R2_PREFIX="s3://screenpipe-releases/beta/releases/${VERSION}/${TARGET}"
-
-          echo "uploading beta ${TARGET} bundles for v${VERSION} to R2..."
-
-          for f in "${BUNDLE_DIR}"/dmg/*.dmg; do
-            [ -f "$f" ] && upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")"
-          done
-
-          for f in "${BUNDLE_DIR}"/macos/*.tar.gz "${BUNDLE_DIR}"/macos/*.sig; do
-            [ -f "$f" ] && upload_with_retry "$f" "${R2_PREFIX}/$(basename "$f")"
-          done
-
-          echo "R2 beta upload complete for ${TARGET}"
 
   generate-changelog:
     needs: [check_commit, publish-tauri]

@@ -576,7 +576,7 @@ export function AIProviderConfig({
                   id="model"
                   type="text"
                   list="ollama-models"
-                  placeholder={isLoadingModels ? "loading..." : "e.g. ministral-3:latest"}
+                  placeholder={isLoadingModels ? "loading..." : "e.g. qwen3.5:9b"}
                   value={formData.model || ""}
                   onChange={(e) =>
                     setFormData({ ...formData, model: e.target.value })
@@ -596,6 +596,9 @@ export function AIProviderConfig({
                   ollama not detected — type model name manually
                 </p>
               )}
+              <p className="text-[10px] text-muted-foreground">
+                recommended: qwen3.5:9b, glm-4.7:9b, qwen3.5:4b (tool calling). GPU required.
+              </p>
             </div>
           </div>
         )}
@@ -1160,7 +1163,7 @@ export const AIPresetsSelector = ({
                 size="sm"
                 className="shrink-0 h-7 text-xs border-amber-500/30 hover:bg-amber-500/10"
                 onClick={async () => {
-                  await commands.showWindow({ Settings: { page: "account" } });
+                  await commands.showWindow({ Home: { page: "account" } });
                 }}
               >
                 <LogIn className="h-3 w-3 mr-1" />

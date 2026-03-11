@@ -37,6 +37,7 @@ const providerIcons: Record<AIPreset["provider"], JSX.Element> = {
 	openai: <Image src="/images/openai.png" alt="OpenAI" width={16} height={16} />,
 	"openai-chatgpt": <Image src="/images/openai.png" alt="ChatGPT" width={16} height={16} />,
 	"native-ollama": <Image src="/images/ollama.png" alt="Ollama" width={16} height={16} />,
+	anthropic: <Image src="/images/anthropic.png" alt="Anthropic" width={16} height={16} />,
 	custom: <Image src="/images/custom.png" alt="Custom" width={16} height={16} />,
 	"screenpipe-cloud": <Image src="/images/screenpipe.png" alt="Screenpipe Cloud" width={16} height={16} />,
 	pi: <Image src="/images/screenpipe.png" alt="Pi" width={16} height={16} />,

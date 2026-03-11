@@ -13,8 +13,9 @@ use crate::store::IcsCalendarEntry;
 use crate::store::IcsCalendarSettingsStore;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use chrono_tz::Tz;
+use futures::StreamExt;
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Mutex;
 use tauri::AppHandle;
@@ -139,7 +140,10 @@ fn date_perhaps_time_to_utc(dpt: &DatePerhapsTime) -> Option<DateTime<Utc>> {
                         let mut guard = WARNED_TIMEZONES.lock().unwrap();
                         let set = guard.get_or_insert_with(HashSet::new);
                         if set.insert(tzid.to_string()) {
-                            warn!("ics_calendar: unknown timezone '{}', falling back to local", tzid);
+                            warn!(
+                                "ics_calendar: unknown timezone '{}', falling back to local",
+                                tzid
+                            );
                         }
                         let local = Local::now().timezone();
                         local
@@ -260,6 +264,7 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
             location,
             calendar_name: feed_name.to_string(),
             is_all_day: all_day,
+            source: "ics".to_string(),
         });
     }
 
@@ -316,11 +321,21 @@ pub async fn start_ics_calendar_poller(app: AppHandle) {
                 .collect();
 
             if !enabled_entries.is_empty() {
-                let mut all_events = Vec::new();
-                for entry in &enabled_entries {
-                    let events = fetch_and_parse_feed(&client, entry).await;
-                    all_events.extend(events);
+                let fetches = futures::stream::iter(enabled_entries.into_iter().map(|entry| {
+                    let client = client.clone();
+                    async move { fetch_and_parse_feed(&client, &entry).await }
+                }))
+                .buffer_unordered(10)
+                .collect::<Vec<_>>()
+                .await;
+
+                let mut unique_events = HashMap::new();
+                for events in fetches {
+                    for event in events {
+                        unique_events.insert(event.id.clone(), event);
+                    }
                 }
+                let all_events: Vec<_> = unique_events.into_values().collect();
 
                 if !all_events.is_empty() {
                     if let Err(e) = screenpipe_events::send_event("calendar_events", all_events) {
@@ -383,12 +398,21 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     }
 
     let client = reqwest::Client::new();
-    let mut all_events = Vec::new();
+    let fetches = futures::stream::iter(enabled.into_iter().map(|entry| {
+        let client = client.clone();
+        async move { fetch_and_parse_feed(&client, &entry).await }
+    }))
+    .buffer_unordered(10)
+    .collect::<Vec<_>>()
+    .await;
 
-    for entry in &enabled {
-        let events = fetch_and_parse_feed(&client, entry).await;
-        all_events.extend(events);
+    let mut unique_events = HashMap::new();
+    for events in fetches {
+        for event in events {
+            unique_events.insert(event.id.clone(), event);
+        }
     }
+    let mut all_events: Vec<_> = unique_events.into_values().collect();
 
     // Filter to next 8 hours only
     let now = Utc::now();
@@ -408,4 +432,41 @@ pub async fn ics_calendar_get_upcoming(app: AppHandle) -> Result<Vec<CalendarEve
     all_events.sort_by(|a, b| a.start.cmp(&b.start));
 
     Ok(all_events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deduplicate_events() {
+        let now = Utc::now();
+        let start = now + chrono::Duration::hours(2);
+        let end = now + chrono::Duration::hours(3);
+
+        // Format to basic ICS datetime string: YYYYMMDDTHHMMSSZ
+        let start_str = start.format("%Y%m%dT%H%M%SZ").to_string();
+        let end_str = end.format("%Y%m%dT%H%M%SZ").to_string();
+
+        let ics_data = format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Zimbra\r\nBEGIN:VEVENT\r\nUID:12345\r\nDTSTAMP:20241010T101010Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Test Event\r\nEND:VEVENT\r\nEND:VCALENDAR", start_str, end_str);
+
+        let events1 = parse_ics_to_events(&ics_data, "feed1");
+        let events2 = parse_ics_to_events(&ics_data, "feed2");
+
+        assert_eq!(events1.len(), 1);
+        assert_eq!(events2.len(), 1);
+
+        let fetches = vec![events1, events2];
+        let mut unique_events = HashMap::new();
+        for events in fetches {
+            for event in events {
+                unique_events.insert(event.id.clone(), event);
+            }
+        }
+        let all_events: Vec<_> = unique_events.into_values().collect();
+
+        assert_eq!(all_events.len(), 1);
+        assert_eq!(all_events[0].id, "ics-12345");
+        assert_eq!(all_events[0].title, "Test Event");
+    }
 }

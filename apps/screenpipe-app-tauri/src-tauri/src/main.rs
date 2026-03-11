@@ -20,7 +20,6 @@ use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::ShortcutState;
 #[allow(unused_imports)]
 use tauri_plugin_shell::process::CommandEvent;
-use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::prelude::*;
@@ -44,16 +43,21 @@ use crate::analytics::start_analytics;
 use crate::store::SettingsStore;
 
 mod calendar;
+mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
 mod embedded_server;
 mod hardware;
 mod ics_calendar;
+mod livetext;
+#[cfg(target_os = "macos")]
+mod livetext_ffi;
 mod permissions;
 mod pi;
 mod recording;
 mod reminders;
+mod remote_sync_commands;
 mod server;
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
@@ -68,11 +72,6 @@ mod voice_training;
 mod window_api;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
-mod chatgpt_oauth;
-#[cfg(target_os = "macos")]
-mod livetext_ffi;
-mod livetext;
-mod remote_sync_commands;
 
 pub use server::*;
 
@@ -139,7 +138,7 @@ fn setup_dock_menu(app_handle: AppHandle) {
                 if let Some(ref app) = DOCK_APP_HANDLE {
                     let app_for_closure = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        let _ = ShowRewindWindow::Settings { page: None }.show(&app_for_closure);
+                        let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
                     });
                 }
             }
@@ -441,9 +440,9 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             }
             #[cfg(not(target_os = "macos"))]
             {
-                // Windows uses the Settings window (embedded timeline) as main UI.
-                // Check "settings" label directly instead of overlay labels.
-                let label = "settings";
+                // Windows uses the Home window (embedded timeline) as main UI.
+                // Check "home" label directly instead of overlay labels.
+                let label = "home";
 
                 if let Some(window) = app.get_webview_window(label) {
                     info!("found {} window, checking visibility", label);
@@ -577,6 +576,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
             info!("search shortcut triggered");
+            let mut needed_show = false;
             // Always show the overlay, then emit search event to focus the search input
             #[cfg(target_os = "macos")]
             {
@@ -590,28 +590,41 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                 if let Some(window) = app.get_webview_window(label) {
                     if !window.is_visible().unwrap_or(false) {
                         show_main_window(app, false);
+                        needed_show = true;
                     }
                 } else {
                     show_main_window(app, false);
+                    needed_show = true;
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
-                // Windows uses "settings" window (embedded timeline)
-                let label = "settings";
+                // Windows uses "home" window (embedded timeline)
+                let label = "home";
                 if let Some(window) = app.get_webview_window(label) {
                     // On Windows, minimized windows still report is_visible()=true
                     let needs_show = !window.is_visible().unwrap_or(false)
                         || window.is_minimized().unwrap_or(false);
                     if needs_show {
                         show_main_window(app, false);
+                        needed_show = true;
                     }
                 } else {
                     show_main_window(app, false);
+                    needed_show = true;
                 }
             }
-            // Emit event so the frontend opens the search modal
-            let _ = app.emit("open-search", ());
+            if needed_show {
+                // Webview was just created/shown — the frontend listener hasn't
+                // mounted yet, so emit with a delay to let the page load.
+                let app_clone = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let _ = app_clone.emit("open-search", ());
+                });
+            } else {
+                let _ = app.emit("open-search", ());
+            }
         });
     })
     .await?;
@@ -665,7 +678,11 @@ async fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 async fn vault_status(app: AppHandle) -> Result<String, String> {
-    let data_dir = app.path().home_dir().map_err(|e| e.to_string())?.join(".screenpipe");
+    let data_dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| e.to_string())?
+        .join(".screenpipe");
     if !data_dir.join("vault.meta").exists() {
         return Ok("none".to_string());
     }
@@ -690,28 +707,39 @@ async fn vault_status(app: AppHandle) -> Result<String, String> {
 async fn vault_unlock(app: AppHandle, password: String) -> Result<(), String> {
     use screenpipe_vault::crypto;
 
-    let screenpipe_dir = app.path().home_dir().map_err(|e| e.to_string())?.join(".screenpipe");
+    let screenpipe_dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| e.to_string())?
+        .join(".screenpipe");
 
     // Read vault metadata and verify password
     let meta_path = screenpipe_dir.join("vault.meta");
     let meta_json = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
-    let meta: serde_json::Value = serde_json::from_str(&meta_json)
-        .map_err(|e| format!("corrupt vault.meta: {}", e))?;
+    let meta: serde_json::Value =
+        serde_json::from_str(&meta_json).map_err(|e| format!("corrupt vault.meta: {}", e))?;
 
-    let salt_arr: Vec<u8> = meta["salt"].as_array()
-        .ok_or("missing salt")?.iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+    let salt_arr: Vec<u8> = meta["salt"]
+        .as_array()
+        .ok_or("missing salt")?
+        .iter()
+        .map(|v| v.as_u64().unwrap_or(0) as u8)
+        .collect();
     let mut salt = [0u8; 32];
-    if salt_arr.len() != 32 { return Err("invalid salt length".into()); }
+    if salt_arr.len() != 32 {
+        return Err("invalid salt length".into());
+    }
     salt.copy_from_slice(&salt_arr);
 
-    let encrypted_master_key: Vec<u8> = meta["encrypted_master_key"].as_array()
-        .ok_or("missing encrypted_master_key")?.iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+    let encrypted_master_key: Vec<u8> = meta["encrypted_master_key"]
+        .as_array()
+        .ok_or("missing encrypted_master_key")?
+        .iter()
+        .map(|v| v.as_u64().unwrap_or(0) as u8)
+        .collect();
 
     // Derive key from password
-    let password_key = crypto::derive_key(&password, &salt)
-        .map_err(|e| e.to_string())?;
+    let password_key = crypto::derive_key(&password, &salt).map_err(|e| e.to_string())?;
 
     // Decrypt master key — fails if wrong password
     let master_key_bytes = crypto::decrypt_small(&encrypted_master_key, &password_key)
@@ -729,7 +757,9 @@ async fn vault_unlock(app: AppHandle, password: String) -> Result<(), String> {
         crypto::decrypt_file(&db_path, &key).map_err(|e| format!("decrypt db: {}", e))?;
         for ext in &["sqlite-wal", "sqlite-shm"] {
             let p = db_path.with_extension(ext);
-            if p.exists() { let _ = crypto::decrypt_file(&p, &key); }
+            if p.exists() {
+                let _ = crypto::decrypt_file(&p, &key);
+            }
         }
     }
 
@@ -740,12 +770,17 @@ async fn vault_unlock(app: AppHandle, password: String) -> Result<(), String> {
     let data_dir = screenpipe_dir.join("data");
     tokio::spawn(async move {
         if data_dir.exists() {
-            let (tx, _rx) = tokio::sync::watch::channel(screenpipe_vault::migration::MigrationProgress {
-                total_files: 0, processed_files: 0, total_bytes: 0, processed_bytes: 0,
-            });
-            if let Err(e) = screenpipe_vault::migration::decrypt_data_dir(
-                &screenpipe_dir, &data_dir, key, tx,
-            ).await {
+            let (tx, _rx) =
+                tokio::sync::watch::channel(screenpipe_vault::migration::MigrationProgress {
+                    total_files: 0,
+                    processed_files: 0,
+                    total_bytes: 0,
+                    processed_bytes: 0,
+                });
+            if let Err(e) =
+                screenpipe_vault::migration::decrypt_data_dir(&screenpipe_dir, &data_dir, key, tx)
+                    .await
+            {
                 tracing::error!("background data decrypt failed: {}", e);
             } else {
                 tracing::info!("background data decryption complete");
@@ -1516,7 +1551,7 @@ async fn main() {
                 // clicks X. For other windows, minimize or hide.
                 #[cfg(target_os = "windows")]
                 {
-                    if window.label() == "settings" {
+                    if window.label() == "home" {
                         // Let the close proceed (don't prevent it)
                         return;
                     } else if window.label() == "main-window" {
@@ -1711,6 +1746,7 @@ async fn main() {
             livetext::livetext_highlight,
             livetext::livetext_clear_highlights,
             livetext::livetext_hide,
+            livetext::livetext_set_guard_rect,
             // Voice training
             voice_training::train_voice,
             // Suggestions
@@ -1778,7 +1814,7 @@ async fn main() {
                             // Defer off event stack (same as tray: runs from tao::send_event).
                             let app_for_closure = app_handle.clone();
                             let _ = app_handle.run_on_main_thread(move || {
-                                let _ = ShowRewindWindow::Settings { page: None }.show(&app_for_closure);
+                                let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
                             });
                         }
                         "check_for_updates" => {
@@ -2032,7 +2068,7 @@ async fn main() {
             if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
             } else {
-                let _ = ShowRewindWindow::Settings { page: None }.show(&app.handle());
+                let _ = ShowRewindWindow::Home { page: None }.show(&app.handle());
             }
 
             // Pre-create chat panel (hidden) so the shortcut can show an
@@ -2461,10 +2497,19 @@ async fn main() {
                         }
                     });
 
-                    // Shutdown server
-                    if let Some(server_shutdown_tx) = app_handle.try_state::<mpsc::Sender<()>>() {
-                        drop(server_shutdown_tx.send(()));
-                    }
+                    // Shut down embedded server (incl. audio manager / ggml Metal cleanup)
+                    // MUST happen synchronously before exit() runs C++ static destructors,
+                    // otherwise the ggml Metal device destructor hits a freed resource → SIGABRT.
+                    let app_handle_shutdown = app_handle.app_handle().clone();
+                    let _ = tauri::async_runtime::block_on(async move {
+                        if let Some(recording_state) =
+                            app_handle_shutdown.try_state::<recording::RecordingState>()
+                        {
+                            if let Some(handle) = recording_state.handle.lock().await.take() {
+                                handle.shutdown_and_wait().await;
+                            }
+                        }
+                    });
 
                     // Cleanup Pi sidecar
                     let app_handle_pi = app_handle.app_handle().clone();
@@ -2482,7 +2527,7 @@ async fn main() {
                 } => {
                     if let Ok(window_id) = RewindWindowId::from_str(label.as_str()) {
                         match window_id {
-                            RewindWindowId::Settings => {
+                            RewindWindowId::Home => {
                                 // Closing Settings hides the Main panel (it's always a panel now).
                                 // Defer off the event stack: run handler must stay panic-free.
                                 let app = app_handle.app_handle().clone();
@@ -2501,7 +2546,7 @@ async fn main() {
                     // Open the settings/app window (not the timeline overlay).
                     let app = app_handle.app_handle().clone();
                     let _ = app_handle.app_handle().run_on_main_thread(move || {
-                        let _ = ShowRewindWindow::Settings { page: None }.show(&app);
+                        let _ = ShowRewindWindow::Home { page: None }.show(&app);
                     });
                 }
                 _ => {}

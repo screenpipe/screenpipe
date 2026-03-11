@@ -34,7 +34,7 @@ export const userSchema = z.object({
   credits_balance: z.number().nullable(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "pi"]);
+export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "pi", "anthropic"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(
@@ -280,6 +280,11 @@ export const validateApiKey = (apiKey: string, provider: AIProviderType): FieldV
     case "openai":
       if (!apiKey.startsWith("sk-")) {
         return { isValid: false, error: "OpenAI API keys should start with 'sk-'" };
+      }
+      break;
+    case "anthropic":
+      if (!apiKey.startsWith("sk-ant-")) {
+        return { isValid: false, error: "Anthropic API keys should start with 'sk-ant-'" };
       }
       break;
     case "custom":
