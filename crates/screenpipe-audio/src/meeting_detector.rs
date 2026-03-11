@@ -128,6 +128,7 @@ impl MeetingDetector {
             "zoom",
             "microsoft teams",
             "teams",
+            "ms-teams", // Windows new Teams exe: ms-teams.exe
             "facetime",
             "webex",
             "skype",
@@ -149,6 +150,10 @@ impl MeetingDetector {
             "chromium",
             "opera",
             "vivaldi",
+            // Windows executable names (without .exe, matched after stripping suffix)
+            "chrome",
+            "msedge",
+            "brave",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -509,6 +514,13 @@ impl MeetingDetector {
         if self.meeting_apps.contains(app_lower) {
             return true;
         }
+        // On Windows, app names come from the executable filename (e.g. "teams.exe").
+        // Strip the .exe suffix so "teams.exe" matches "teams".
+        if let Some(stripped) = app_lower.strip_suffix(".exe") {
+            if self.meeting_apps.contains(stripped) {
+                return true;
+            }
+        }
         self.matching_browser_pattern(app_lower, window_title)
             .is_some()
     }
@@ -518,7 +530,12 @@ impl MeetingDetector {
         app_lower: &str,
         window_title: Option<&str>,
     ) -> Option<&'a str> {
-        if !self.browser_apps.contains(app_lower) {
+        // Check both raw name and without .exe suffix (Windows executable names)
+        let is_browser = self.browser_apps.contains(app_lower)
+            || app_lower
+                .strip_suffix(".exe")
+                .map_or(false, |s| self.browser_apps.contains(s));
+        if !is_browser {
             return None;
         }
         let title = window_title?;

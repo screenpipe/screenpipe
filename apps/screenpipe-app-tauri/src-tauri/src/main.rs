@@ -411,7 +411,6 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             let app = &app_for_closure;
             info!("show shortcut triggered - attempting to show/hide main overlay");
             let _ = app.emit("shortcut-show", ());
-            #[cfg(target_os = "macos")]
             {
                 use crate::store::SettingsStore;
                 use crate::window_api::main_label_for_mode;
@@ -423,53 +422,22 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                 let label = main_label_for_mode(&mode);
 
                 if let Some(window) = app.get_webview_window(label) {
-                    match window.is_visible() {
-                        Ok(true) => {
-                            info!("window is visible, hiding main window");
-                            hide_main_window(app)
-                        }
-                        _ => {
-                            info!("window is not visible, showing main window");
-                            show_main_window(app, false)
-                        }
-                    }
-                } else {
-                    info!("main window not found for mode '{}', creating it", mode);
-                    show_main_window(app, false)
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                // Windows uses the Home window (embedded timeline) as main UI.
-                // Check "home" label directly instead of overlay labels.
-                let label = "home";
-
-                if let Some(window) = app.get_webview_window(label) {
-                    info!("found {} window, checking visibility", label);
                     // On Windows, close() minimizes the window, but is_visible()
                     // still returns true for minimized windows. Check is_minimized()
                     // to correctly detect "hidden" state.
                     let is_minimized = window.is_minimized().unwrap_or(false);
                     match window.is_visible() {
                         Ok(true) if !is_minimized => {
-                            info!("{} window is visible (not minimized), hiding it", label);
+                            info!("window '{}' is visible (not minimized), hiding it", label);
                             hide_main_window(app)
                         }
-                        Ok(true) if is_minimized => {
-                            info!("{} window is minimized, restoring it", label);
-                            show_main_window(app, false)
-                        }
-                        Ok(false) => {
-                            info!("{} window exists but not visible, showing it", label);
-                            show_main_window(app, false)
-                        }
                         _ => {
-                            info!("showing main window");
+                            info!("window '{}' not visible or minimized, showing it", label);
                             show_main_window(app, false)
                         }
                     }
                 } else {
-                    info!("{} window not found, creating it", label);
+                    info!("main window not found for mode '{}', creating it", mode);
                     show_main_window(app, false)
                 }
             }
@@ -578,7 +546,6 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             info!("search shortcut triggered");
             let mut needed_show = false;
             // Always show the overlay, then emit search event to focus the search input
-            #[cfg(target_os = "macos")]
             {
                 use crate::store::SettingsStore;
                 use crate::window_api::main_label_for_mode;
@@ -588,21 +555,6 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                     .overlay_mode;
                 let label = main_label_for_mode(&mode);
                 if let Some(window) = app.get_webview_window(label) {
-                    if !window.is_visible().unwrap_or(false) {
-                        show_main_window(app, false);
-                        needed_show = true;
-                    }
-                } else {
-                    show_main_window(app, false);
-                    needed_show = true;
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                // Windows uses "home" window (embedded timeline)
-                let label = "home";
-                if let Some(window) = app.get_webview_window(label) {
-                    // On Windows, minimized windows still report is_visible()=true
                     let needs_show = !window.is_visible().unwrap_or(false)
                         || window.is_minimized().unwrap_or(false);
                     if needs_show {

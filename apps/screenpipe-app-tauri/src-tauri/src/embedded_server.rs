@@ -9,7 +9,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use screenpipe_audio::audio_manager::builder::TranscriptionMode;
 use screenpipe_audio::core::device::{
     default_input_device, default_output_device, parse_audio_device,
 };
@@ -157,16 +156,13 @@ pub async fn start_embedded_server(
         }
     }
 
-    // Create meeting detector for smart transcription mode.
-    // Shared between audio manager (checks state) and UI recorder (feeds events).
-    let meeting_detector: Option<Arc<MeetingDetector>> =
-        if config.transcription_mode == TranscriptionMode::Batch {
-            let detector = Arc::new(MeetingDetector::new());
-            info!("batch mode: meeting detector enabled — used for metadata only");
-            Some(detector)
-        } else {
-            None
-        };
+    // Create meeting detector unconditionally — meetings should be detected and
+    // persisted to DB regardless of transcription mode (disabled, realtime, or batch).
+    let meeting_detector: Option<Arc<MeetingDetector>> = {
+        let detector = Arc::new(MeetingDetector::new());
+        info!("meeting detector enabled");
+        Some(detector)
+    };
 
     // Build audio manager
     use screenpipe_audio::core::engine::AudioTranscriptionEngine;
@@ -361,7 +357,7 @@ pub async fn start_embedded_server(
         let detector_clone = detector.clone();
         let _meeting_watcher = start_meeting_watcher(detector_clone);
         // Handle kept alive by the spawned task — no need to store it
-        info!("meeting watcher started for smart transcription mode");
+        info!("meeting watcher started");
 
         // Persist meeting state transitions to DB (was missing — meetings were never saved in desktop app)
         let _meeting_persister =

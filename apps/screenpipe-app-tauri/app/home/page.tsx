@@ -301,31 +301,6 @@ function SettingsPageContent() {
     };
   }, [setActiveSection]);
 
-  // On Windows the show/search shortcuts open this Home window.
-  // Ensure we switch to the timeline tab so the overlay is visible.
-  useEffect(() => {
-    const unlistenShow = listen("shortcut-show", () => {
-      if (activeSection !== "timeline") {
-        setActiveSection("timeline");
-      }
-    });
-    const unlistenSearch = listen("open-search", () => {
-      if (activeSection !== "timeline") {
-        // Switch to timeline first, then re-emit after the Timeline
-        // component has mounted so its listener can open the search modal.
-        setActiveSection("timeline");
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("open-search-delayed"));
-        }, 300);
-      }
-      // If already on timeline, the Timeline's own tauri listener handles it.
-    });
-    return () => {
-      unlistenShow.then((fn) => fn());
-      unlistenSearch.then((fn) => fn());
-    };
-  }, [activeSection, setActiveSection]);
-
   const isFullHeight = activeSection === "home" || activeSection === "timeline";
 
   return (

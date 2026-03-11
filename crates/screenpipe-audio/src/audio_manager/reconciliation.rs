@@ -83,6 +83,12 @@ pub async fn reconcile_untranscribed(
     data_dir: Option<&Path>,
     batch_max_duration_secs: Option<u64>,
 ) -> usize {
+    // Nothing to reconcile when transcription is disabled — skip entirely
+    // to avoid the silent-audio deletion path nuking audio files.
+    if *audio_engine == AudioTranscriptionEngine::Disabled {
+        return 0;
+    }
+
     // Prevent concurrent reconciliation runs — two Whisper sessions = 200%+ CPU
     if RECONCILIATION_RUNNING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
