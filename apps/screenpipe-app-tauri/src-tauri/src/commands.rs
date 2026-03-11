@@ -121,8 +121,8 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
 
     let window_to_close = ShowRewindWindow::Main;
 
-    if let Err(e) = (ShowRewindWindow::Settings { page: None }).close(app_handle) {
-        error!("failed to close settings window: {}", e);
+    if let Err(e) = (ShowRewindWindow::Main { page: None }).close(app_handle) {
+        error!("failed to close main window: {}", e);
     }
 }
 
