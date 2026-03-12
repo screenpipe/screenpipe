@@ -46,13 +46,14 @@ struct PendingTranscription {
 }
 
 /// Default maximum batch duration in seconds when no user override is set.
-/// Engine-aware: Deepgram can handle hours, local Whisper tops out around 10 min.
+/// Cloud transcription (Deepgram via api.screenpi.pe) is capped at 200s to stay
+/// well under Cloudflare's 100 MB edge upload limit (~48 kHz stereo f32 WAV).
 fn default_max_batch_duration_secs(engine: &AudioTranscriptionEngine) -> u64 {
     match engine {
-        // Cloud engines can handle long audio
-        AudioTranscriptionEngine::Deepgram => 3600, // 1 hour
-        // OpenAI-compatible has 25MB limit (~10 min at typical bitrates)
-        AudioTranscriptionEngine::OpenAICompatible => 600,
+        // Cloud: 200s ≈ 37 MB WAV (mono 48 kHz f32), safe for Cloudflare edge
+        AudioTranscriptionEngine::Deepgram => 200,
+        // OpenAI-compatible has 25 MB limit (~10 min at typical bitrates)
+        AudioTranscriptionEngine::OpenAICompatible => 200,
         // Local Whisper quality degrades past ~10 min
         _ => 600,
     }
