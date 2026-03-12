@@ -213,22 +213,26 @@ pub fn run_on_main_thread_safe<F: FnOnce() + Send + 'static>(app: &AppHandle, f:
     });
 }
 
-/// Execute `f` inside a scoped autorelease pool.
-/// Uses the modern `objc_autoreleasePoolPush/Pop` C API (what the compiler
-/// generates for `@autoreleasepool {}`) instead of the deprecated
-/// `NSAutoreleasePool` class.  This avoids creating an extra ObjC object
-/// and is the recommended API on modern macOS.
-#[cfg(target_os = "macos")]
+/// Execute `f` inside a scoped autorelease pool (macOS) or just call `f` (other platforms).
+/// On macOS, uses the modern `objc_autoreleasePoolPush/Pop` C API.
+/// On other platforms, this is a no-op wrapper so callers don't need `#[cfg]` guards.
 pub fn with_autorelease_pool<R, F: FnOnce() -> R>(f: F) -> R {
-    extern "C" {
-        fn objc_autoreleasePoolPush() -> *mut std::ffi::c_void;
-        fn objc_autoreleasePoolPop(pool: *mut std::ffi::c_void);
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn objc_autoreleasePoolPush() -> *mut std::ffi::c_void;
+            fn objc_autoreleasePoolPop(pool: *mut std::ffi::c_void);
+        }
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let result = f();
+            objc_autoreleasePoolPop(pool);
+            result
+        }
     }
-    unsafe {
-        let pool = objc_autoreleasePoolPush();
-        let result = f();
-        objc_autoreleasePoolPop(pool);
-        result
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
     }
 }
 

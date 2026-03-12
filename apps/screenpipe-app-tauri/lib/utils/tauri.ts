@@ -261,9 +261,9 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
  * Shows Main, emits the navigation event from the app handle (not a webview),
  * then closes the Search window.
  */
-async searchNavigateToTimeline(timestamp: string) : Promise<Result<null, string>> {
+async searchNavigateToTimeline(timestamp: string, frameId: bigint | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp }) };
+    return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp, frameId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
