@@ -88,6 +88,36 @@ async function findWget() {
 	process.exit(1);
 }
 
+async function find7z() {
+	const possiblePaths = [
+		'C:\\Program Files\\7-Zip\\7z.exe',
+		'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+		path.join(process.env.LOCALAPPDATA || '', 'Programs', '7-Zip', '7z.exe'),
+	];
+
+	for (const p of possiblePaths) {
+		if (p && (await fs.stat(p).catch(() => null))) {
+			console.log(`7z found at: ${p}`);
+			return p;
+		}
+	}
+
+	// Last resort: 7z in PATH (e.g. after restarting terminal post winget install)
+	try {
+		await $`7z`.quiet();
+	} catch {
+		try {
+			await $`7z --help`.quiet();
+		} catch {
+			console.error('7-Zip (7z) not found. Install it with: winget install -e --id 7zip.7zip');
+			console.error('Then restart your terminal so PATH is updated (see CONTRIBUTING.md Windows setup).');
+			process.exit(1);
+		}
+	}
+	console.log('7z found in PATH');
+	return '7z';
+}
+
 // Export for Github actions
 const exports = {
 	ffmpeg: path.join(cwd, config.ffmpegRealname),
@@ -394,12 +424,13 @@ async function copyVcredistDlls(arch = 'x64') {
 /* ########## Windows ########## */
 if (platform == 'windows') {
 	const wgetPath = await findWget();
+	const sevenZ = await find7z();
 
 	// Setup FFMPEG (x64: gyan.dev; arm64: tordona/ffmpeg-win-arm64)
 	if (!(await fs.exists(config.ffmpegRealname))) {
 		if (winArch === 'arm64') {
 			await $`${wgetPath} --no-config --tries=10 --retry-connrefused --waitretry=10 --secure-protocol=auto --no-check-certificate --show-progress ${config.windows.ffmpegUrlArm64} -O ${config.windows.ffmpegNameArm64}.7z`
-			await $`7z x ${config.windows.ffmpegNameArm64}.7z`
+			await $`${sevenZ} x ${config.windows.ffmpegNameArm64}.7z`
 			// tordona 7z extracts to a single folder; move its contents to ffmpeg (or rename if single top-level dir)
 			const entries = await fs.readdir(cwd, { withFileTypes: true })
 			const extractedDir = entries.find((d) => d.isDirectory() && d.name.startsWith('ffmpeg-') && d.name.includes('win-arm64'))
@@ -415,7 +446,7 @@ if (platform == 'windows') {
 			await fs.rm(path.join(cwd, `${config.windows.ffmpegNameArm64}.7z`), { force: true }).catch(() => {})
 		} else {
 			await $`${wgetPath} --no-config --tries=10 --retry-connrefused --waitretry=10 --secure-protocol=auto --no-check-certificate --show-progress ${config.windows.ffmpegUrl} -O ${config.windows.ffmpegName}.7z`
-			await $`7z x ${config.windows.ffmpegName}.7z`
+			await $`${sevenZ} x ${config.windows.ffmpegName}.7z`
 			await $`mv ${config.windows.ffmpegName} ${config.ffmpegRealname}`
 			await $`rm -rf ${config.windows.ffmpegName}.7z`
 		}
