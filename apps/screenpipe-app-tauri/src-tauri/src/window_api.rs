@@ -47,7 +47,7 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
         let superclass = Class::get("NSObject").unwrap();
         let mut decl = ClassDecl::new("ScreenpipeMagnifyHandler", superclass).unwrap();
         extern "C" fn handle_magnify(_this: &Object, _sel: Sel, recognizer: *mut Object) {
-            unsafe {
+            with_autorelease_pool(|| unsafe {
                 use objc::{msg_send, sel, sel_impl};
                 let magnification: f64 = msg_send![recognizer, magnification];
                 // Reset so next callback gives delta, not cumulative
@@ -55,7 +55,7 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
                 if let Some(app) = MAGNIFY_APP_HANDLE.get() {
                     let _ = app.emit("native-magnify", magnification);
                 }
-            }
+            });
         }
         unsafe {
             use objc::{sel, sel_impl};
@@ -81,7 +81,7 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
         > = std::sync::OnceLock::new();
 
         extern "C" fn swizzled_scroll_wheel(this: &Object, sel: Sel, event: *mut Object) {
-            unsafe {
+            with_autorelease_pool(|| unsafe {
                 use objc::{msg_send, sel, sel_impl};
                 // Emit Tauri event with scroll data
                 if let Some(app) = MAGNIFY_APP_HANDLE.get() {
@@ -108,7 +108,7 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
                 if let Some(original) = ORIGINAL_SCROLL_WHEEL.get() {
                     original(this, sel, event);
                 }
-            }
+            });
         }
 
         // Swizzle WKWebView scrollWheel:
@@ -151,57 +151,90 @@ pub fn init_magnify_handler(_app: tauri::AppHandle) {}
 /// Safe to call multiple times — skips if already attached.
 #[cfg(target_os = "macos")]
 unsafe fn attach_magnify_gesture_to_view(view: tauri_nspanel::cocoa::base::id) {
-    use objc::{class, msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::{id, nil};
-    use tauri_nspanel::cocoa::foundation::NSArray;
+    with_autorelease_pool(|| {
+        use objc::{class, msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+        use tauri_nspanel::cocoa::foundation::NSArray;
 
-    if view == nil {
-        return;
-    }
+        if view == nil {
+            return;
+        }
 
-    // Check if we already added our recognizer (look for ScreenpipeMagnifyHandler target)
-    let recognizers: id = msg_send![view, gestureRecognizers];
-    if recognizers != nil {
-        let count: u64 = NSArray::count(recognizers);
-        let handler_class = class!(ScreenpipeMagnifyHandler);
-        for i in 0..count {
-            let r: id = NSArray::objectAtIndex(recognizers, i);
-            let target: id = msg_send![r, target];
-            if target != nil {
-                let is_ours: bool = msg_send![target, isKindOfClass: handler_class];
-                if is_ours {
-                    return; // already attached
+        // Check if we already added our recognizer (look for ScreenpipeMagnifyHandler target)
+        let recognizers: id = msg_send![view, gestureRecognizers];
+        if recognizers != nil {
+            let count: u64 = NSArray::count(recognizers);
+            let handler_class = class!(ScreenpipeMagnifyHandler);
+            for i in 0..count {
+                let r: id = NSArray::objectAtIndex(recognizers, i);
+                let target: id = msg_send![r, target];
+                if target != nil {
+                    let is_ours: bool = msg_send![target, isKindOfClass: handler_class];
+                    if is_ours {
+                        return; // already attached
+                    }
                 }
             }
         }
-    }
 
-    // Create handler instance
-    let handler_class = class!(ScreenpipeMagnifyHandler);
-    let handler: id = msg_send![handler_class, new];
+        // Create handler instance
+        let handler_class = class!(ScreenpipeMagnifyHandler);
+        let handler: id = msg_send![handler_class, new];
 
-    // Create NSMagnificationGestureRecognizer
-    let recognizer: id = msg_send![class!(NSMagnificationGestureRecognizer), alloc];
-    let recognizer: id = msg_send![
-        recognizer,
-        initWithTarget: handler
-        action: sel!(handleMagnify:)
-    ];
+        // Create NSMagnificationGestureRecognizer
+        let recognizer: id = msg_send![class!(NSMagnificationGestureRecognizer), alloc];
+        let recognizer: id = msg_send![
+            recognizer,
+            initWithTarget: handler
+            action: sel!(handleMagnify:)
+        ];
 
-    // Add to view
-    let _: () = msg_send![view, addGestureRecognizer: recognizer];
+        // Add to view
+        let _: () = msg_send![view, addGestureRecognizer: recognizer];
+    });
 }
 
 /// Run a closure on the main thread, catching any panics so they don't abort
 /// the process (Rust panics inside `run_on_main_thread` cross the Obj-C FFI
 /// boundary in `tao::send_event`, which is `nounwind` → calls `abort()`).
+///
+/// The closure is wrapped in its own `NSAutoreleasePool` so that any
+/// autoreleased ObjC objects created inside are drained immediately,
+/// rather than accumulating in the main event-loop pool (where a
+/// use-after-free causes `objc_autoreleasePoolPop` to SIGSEGV).
 #[cfg(target_os = "macos")]
 pub fn run_on_main_thread_safe<F: FnOnce() + Send + 'static>(app: &AppHandle, f: F) {
     let _ = app.run_on_main_thread(move || {
-        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_autorelease_pool(f);
+        })) {
             error!("panic caught in run_on_main_thread: {:?}", e);
         }
     });
+}
+
+/// Execute `f` inside a scoped autorelease pool.
+/// Uses the modern `objc_autoreleasePoolPush/Pop` C API (what the compiler
+/// generates for `@autoreleasepool {}`) instead of the deprecated
+/// `NSAutoreleasePool` class.  This avoids creating an extra ObjC object
+/// and is the recommended API on modern macOS.
+#[cfg(target_os = "macos")]
+pub fn with_autorelease_pool<R, F: FnOnce() -> R>(f: F) -> R {
+    extern "C" {
+        fn objc_autoreleasePoolPush() -> *mut std::ffi::c_void;
+        fn objc_autoreleasePoolPop(pool: *mut std::ffi::c_void);
+    }
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let result = f();
+        objc_autoreleasePoolPop(pool);
+        result
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn with_autorelease_pool<R, F: FnOnce() -> R>(f: F) -> R {
+    f()
 }
 
 use crate::{
@@ -219,47 +252,51 @@ static PREVIOUS_FRONTMOST_APP: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
 /// Save the current frontmost app before activating our overlay.
 #[cfg(target_os = "macos")]
 fn save_frontmost_app() {
-    use objc::{class, msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::{id, nil};
-    unsafe {
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let frontmost: id = msg_send![workspace, frontmostApplication];
-        if frontmost != nil {
-            let _: () = msg_send![frontmost, retain];
-            let mut prev = PREVIOUS_FRONTMOST_APP
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if *prev != 0 {
-                let old = *prev as id;
-                let _: () = msg_send![old, release];
+    with_autorelease_pool(|| {
+        use objc::{class, msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+        unsafe {
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let frontmost: id = msg_send![workspace, frontmostApplication];
+            if frontmost != nil {
+                let _: () = msg_send![frontmost, retain];
+                let mut prev = PREVIOUS_FRONTMOST_APP
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *prev != 0 {
+                    let old = *prev as id;
+                    let _: () = msg_send![old, release];
+                }
+                *prev = frontmost as usize;
             }
-            *prev = frontmost as usize;
         }
-    }
+    });
 }
 
 /// Re-activate the previously frontmost app (saved on show).
 /// This keeps macOS in the same Space instead of switching.
 #[cfg(target_os = "macos")]
 pub fn restore_frontmost_app() {
-    use objc::{msg_send, sel, sel_impl};
-    let ptr = {
-        let mut prev = PREVIOUS_FRONTMOST_APP
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let p = *prev;
-        *prev = 0;
-        p
-    };
-    if ptr != 0 {
-        use tauri_nspanel::cocoa::base::id;
-        unsafe {
-            let app: id = ptr as id;
-            // NSApplicationActivateIgnoringOtherApps = 1 << 1 = 2
-            let _: bool = msg_send![app, activateWithOptions: 2u64];
-            let _: () = msg_send![app, release];
+    with_autorelease_pool(|| {
+        use objc::{msg_send, sel, sel_impl};
+        let ptr = {
+            let mut prev = PREVIOUS_FRONTMOST_APP
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let p = *prev;
+            *prev = 0;
+            p
+        };
+        if ptr != 0 {
+            use tauri_nspanel::cocoa::base::id;
+            unsafe {
+                let app: id = ptr as id;
+                // NSApplicationActivateIgnoringOtherApps = 1 << 1 = 2
+                let _: bool = msg_send![app, activateWithOptions: 2u64];
+                let _: () = msg_send![app, release];
+            }
         }
-    }
+    });
 }
 
 /// Clear the saved frontmost app without re-activating it.
@@ -267,22 +304,24 @@ pub fn restore_frontmost_app() {
 /// pull them back by re-activating the previous app.
 #[cfg(target_os = "macos")]
 pub fn clear_frontmost_app() {
-    use objc::{msg_send, sel, sel_impl};
-    let ptr = {
-        let mut prev = PREVIOUS_FRONTMOST_APP
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let p = *prev;
-        *prev = 0;
-        p
-    };
-    if ptr != 0 {
-        use tauri_nspanel::cocoa::base::id;
-        unsafe {
-            let app: id = ptr as id;
-            let _: () = msg_send![app, release];
+    with_autorelease_pool(|| {
+        use objc::{msg_send, sel, sel_impl};
+        let ptr = {
+            let mut prev = PREVIOUS_FRONTMOST_APP
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let p = *prev;
+            *prev = 0;
+            p
+        };
+        if ptr != 0 {
+            use tauri_nspanel::cocoa::base::id;
+            unsafe {
+                let app: id = ptr as id;
+                let _: () = msg_send![app, release];
+            }
         }
-    }
+    });
 }
 
 /// Check if our own app (screenpipe) is still the active macOS application.
@@ -292,13 +331,15 @@ pub fn clear_frontmost_app() {
 /// frontmost app or just clear it.
 #[cfg(target_os = "macos")]
 fn is_own_app_still_active() -> bool {
-    use objc::{msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::id;
-    unsafe {
-        let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-        let active: bool = msg_send![ns_app, isActive];
-        active
-    }
+    with_autorelease_pool(|| {
+        use objc::{msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::id;
+        unsafe {
+            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let active: bool = msg_send![ns_app, isActive];
+            active
+        }
+    })
 }
 
 /// Conditionally restore or clear the saved frontmost app.
@@ -347,6 +388,7 @@ fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>) {
 /// when re-showing an existing window.
 #[cfg(target_os = "macos")]
 pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa::base::id) {
+    with_autorelease_pool(|| {
     use objc::{class, msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::base::{id, nil};
     use tauri_nspanel::cocoa::foundation::NSArray;
@@ -389,41 +431,10 @@ pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa
         // Attach pinch-to-zoom gesture recognizer (same as NSPanel overlay)
         attach_magnify_gesture_to_view(wk_view);
 
-        // Set first responder immediately (handles the common case)
+        // Set first responder immediately
         let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
-
-        // Also schedule on the next run-loop tick to win the race against any
-        // deferred responder-chain reset triggered by makeKeyAndOrderFront.
-        // Same pattern as make_webview_first_responder for NSPanel.
-        let win_id = ns_win as usize;
-        let wk_id = wk_view as usize;
-        extern "C" {
-            static _dispatch_main_q: std::ffi::c_void;
-            fn dispatch_async_f(
-                queue: *const std::ffi::c_void,
-                context: *mut std::ffi::c_void,
-                work: extern "C" fn(*mut std::ffi::c_void),
-            );
-        }
-        struct Ctx {
-            win_id: usize,
-            wk_id: usize,
-        }
-        extern "C" fn set_responder(ctx: *mut std::ffi::c_void) {
-            unsafe {
-                let ctx = Box::from_raw(ctx as *mut Ctx);
-                let window: id = ctx.win_id as id;
-                let wk: id = ctx.wk_id as id;
-                let _: () = msg_send![window, makeFirstResponder: wk];
-            }
-        }
-        let ctx = Box::into_raw(Box::new(Ctx { win_id, wk_id }));
-        dispatch_async_f(
-            &_dispatch_main_q,
-            ctx as *mut std::ffi::c_void,
-            set_responder,
-        );
     }
+    }); // with_autorelease_pool
 }
 
 /// Find the WKWebView inside an NSPanel's content view and make it first responder.
@@ -436,6 +447,7 @@ pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa
 /// own responder-chain update to the end of the current event, overwriting our call.
 #[cfg(target_os = "macos")]
 pub unsafe fn make_webview_first_responder(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
+    with_autorelease_pool(|| {
     use objc::{class, msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::base::{id, nil};
     use tauri_nspanel::cocoa::foundation::NSArray;
@@ -472,44 +484,9 @@ pub unsafe fn make_webview_first_responder(panel: &tauri_nspanel::raw_nspanel::R
     // before WebKit's internal multi-process routing claims them.
     attach_magnify_gesture_to_view(wk_view);
 
-    // Set first responder immediately (handles the common case)
+    // Set first responder immediately
     panel.make_first_responder(Some(wk_view));
-
-    // Also schedule on the next run-loop tick to win the race against any
-    // deferred responder-chain reset triggered by make_key_window().
-    // We use dispatch_async(main_queue) so our call lands after AppKit's
-    // deferred responder chain updates from the current event.
-    let window: id = msg_send![panel.content_view(), window];
-    let panel_id = window as usize;
-    let wk_id = wk_view as usize;
-    extern "C" {
-        // dispatch_get_main_queue() is a C macro, not a real symbol.
-        // The actual global is _dispatch_main_q provided by libSystem.
-        static _dispatch_main_q: std::ffi::c_void;
-        fn dispatch_async_f(
-            queue: *const std::ffi::c_void,
-            context: *mut std::ffi::c_void,
-            work: extern "C" fn(*mut std::ffi::c_void),
-        );
-    }
-    struct Ctx {
-        panel_id: usize,
-        wk_id: usize,
-    }
-    extern "C" fn set_responder(ctx: *mut std::ffi::c_void) {
-        unsafe {
-            let ctx = Box::from_raw(ctx as *mut Ctx);
-            let window: id = ctx.panel_id as id;
-            let wk: id = ctx.wk_id as id;
-            let _: () = msg_send![window, makeFirstResponder: wk];
-        }
-    }
-    let ctx = Box::into_raw(Box::new(Ctx { panel_id, wk_id }));
-    dispatch_async_f(
-        &_dispatch_main_q,
-        ctx as *mut std::ffi::c_void,
-        set_responder,
-    );
+    }); // with_autorelease_pool
 }
 
 /// Shared panel visibility sequence — the single source of truth for making an
@@ -527,24 +504,26 @@ unsafe fn show_panel_visible(
     app: &AppHandle,
     activate_app: bool,
 ) {
-    use objc::{msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::id;
+    with_autorelease_pool(|| {
+        use objc::{msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::id;
 
-    save_frontmost_app();
+        save_frontmost_app();
 
-    let _: () = msg_send![&*panel, setAlphaValue: 1.0f64];
+        let _: () = msg_send![&*panel, setAlphaValue: 1.0f64];
 
-    if activate_app {
-        let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-        let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
-    }
+        if activate_app {
+            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+        }
 
-    panel.order_front_regardless();
-    panel.make_key_window();
-    make_webview_first_responder(panel);
+        panel.order_front_regardless();
+        panel.make_key_window();
+        make_webview_first_responder(panel);
 
-    MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-    let _ = app.emit("window-focused", true);
+        MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = app.emit("window-focused", true);
+    });
 }
 
 /// Logical visibility of the main panel. `true` means the panel is (or should
@@ -1430,7 +1409,7 @@ impl ShowRewindWindow {
                                     // Synchronous alpha=0 — no order_out (which
                                     // causes focus-fight loops when restored).
                                     #[cfg(target_os = "macos")]
-                                    {
+                                    with_autorelease_pool(|| {
                                         use objc::{msg_send, sel, sel_impl};
                                         if let Ok(panel) = app_clone.get_webview_panel("main-window") {
                                             unsafe {
@@ -1438,7 +1417,7 @@ impl ShowRewindWindow {
                                             }
                                         }
                                         MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    }
+                                    });
                                     focus_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
                                     let cancel = focus_cancel.clone();
                                     let app = app_clone.clone();
@@ -1453,16 +1432,18 @@ impl ShowRewindWindow {
                                         {
                                             let app2 = app.clone();
                                             let _ = app.run_on_main_thread(move || {
-                                                // Conditional restore: if focus moved to another
-                                                // screenpipe window (Settings, Chat), just clear.
-                                                // Only activate previous external app if our app
-                                                // is no longer active.
-                                                restore_frontmost_app_if_external_with_app(Some(&app2));
-                                                // order_out removes the invisible panel from
-                                                // the screen so it can't receive stray clicks.
-                                                if let Ok(panel) = app2.get_webview_panel("main-window") {
-                                                    panel.order_out(None);
-                                                }
+                                                with_autorelease_pool(|| {
+                                                    // Conditional restore: if focus moved to another
+                                                    // screenpipe window (Settings, Chat), just clear.
+                                                    // Only activate previous external app if our app
+                                                    // is no longer active.
+                                                    restore_frontmost_app_if_external_with_app(Some(&app2));
+                                                    // order_out removes the invisible panel from
+                                                    // the screen so it can't receive stray clicks.
+                                                    if let Ok(panel) = app2.get_webview_panel("main-window") {
+                                                        panel.order_out(None);
+                                                    }
+                                                });
                                             });
                                         }
                                         // Unregister window shortcuts on focus loss (#2219)
@@ -1475,7 +1456,7 @@ impl ShowRewindWindow {
                                 } else {
                                     focus_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                     #[cfg(target_os = "macos")]
-                                    {
+                                    with_autorelease_pool(|| {
                                         use objc::{msg_send, sel, sel_impl};
                                         use tauri_nspanel::cocoa::base::id;
                                         if let Ok(panel) = app_clone.get_webview_panel("main-window") {
@@ -1495,7 +1476,7 @@ impl ShowRewindWindow {
                                             unsafe { make_webview_first_responder(&panel); }
                                         }
                                         MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-                                    }
+                                    });
                                     // Re-register window shortcuts on focus gain
                                     let app_reg = app_clone.clone();
                                     std::thread::spawn(move || {
@@ -1766,7 +1747,7 @@ impl ShowRewindWindow {
                                 // Synchronous alpha=0 — panel stays in window list
                                 // but is invisible. No order_out (causes focus loops).
                                 #[cfg(target_os = "macos")]
-                                {
+                                with_autorelease_pool(|| {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
                                         let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1778,7 +1759,7 @@ impl ShowRewindWindow {
                                         }
                                     }
                                     MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
-                                }
+                                });
                                 focus_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
                                 let cancel = focus_cancel.clone();
                                 let app = app_clone.clone();
@@ -1799,15 +1780,17 @@ impl ShowRewindWindow {
                                             main_label_for_mode(&mode).to_string()
                                         };
                                         let _ = app.run_on_main_thread(move || {
-                                            // Conditional restore: if focus moved to another
-                                            // screenpipe window, just clear. Only activate
-                                            // previous external app if ours is inactive.
-                                            restore_frontmost_app_if_external_with_app(Some(&app2));
-                                            // order_out removes the invisible panel so it
-                                            // can't receive stray clicks at alpha=0.
-                                            if let Ok(panel) = app2.get_webview_panel(&lbl) {
-                                                panel.order_out(None);
-                                            }
+                                            with_autorelease_pool(|| {
+                                                // Conditional restore: if focus moved to another
+                                                // screenpipe window, just clear. Only activate
+                                                // previous external app if ours is inactive.
+                                                restore_frontmost_app_if_external_with_app(Some(&app2));
+                                                // order_out removes the invisible panel so it
+                                                // can't receive stray clicks at alpha=0.
+                                                if let Ok(panel) = app2.get_webview_panel(&lbl) {
+                                                    panel.order_out(None);
+                                                }
+                                            });
                                         });
                                     }
                                     // Unregister window-specific shortcuts (arrows, Escape)
@@ -1822,7 +1805,7 @@ impl ShowRewindWindow {
                                 // Cancel any pending hide, restore alpha
                                 focus_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                 #[cfg(target_os = "macos")]
-                                {
+                                with_autorelease_pool(|| {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
                                         let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1839,7 +1822,7 @@ impl ShowRewindWindow {
                                         unsafe { make_webview_first_responder(&panel); }
                                     }
                                     MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-                                }
+                                });
                                 // Re-register window-specific shortcuts on focus gain
                                 let app_reg = app_clone.clone();
                                 std::thread::spawn(move || {
@@ -2248,12 +2231,12 @@ impl ShowRewindWindow {
                 MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
                 let app_clone = app.clone();
                 run_on_main_thread_safe(app, move || {
-                    use objc::{msg_send, sel, sel_impl};
                     for label in &["main", "main-window"] {
                         if let Ok(panel) = app_clone.get_webview_panel(label) {
                             if panel.is_visible() {
                                 // Alpha=0 first for instant visual hide
                                 unsafe {
+                                    use objc::{msg_send, sel, sel_impl};
                                     let _: () = msg_send![&*panel, setAlphaValue: 0.0f64];
                                 }
                                 panel.order_out(None);

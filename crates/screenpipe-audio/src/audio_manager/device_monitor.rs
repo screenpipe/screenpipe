@@ -86,6 +86,13 @@ pub async fn start_device_monitor(
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
 
+        // One-time flag: on first loop iteration, verify running devices match
+        // system defaults. Handles the case where the app restarts while a USB
+        // headset (e.g. Jabra) is already the system default — since it's not a
+        // "change", check_output_changed() won't fire, and the builder may have
+        // started different devices from saved config.
+        let mut needs_initial_sync = true;
+
         loop {
             if audio_manager.status().await == AudioManagerStatus::Running {
                 let currently_available_devices = device_manager.devices().await;
@@ -96,6 +103,97 @@ pub async fn start_device_monitor(
 
                 // Handle "Follow System Default" mode
                 if audio_manager.use_system_default_audio().await {
+                    // Initial sync: verify running devices match system defaults.
+                    // This fires once on startup to catch mismatches where the
+                    // builder started devices from saved config that don't match
+                    // the current system default (e.g. USB headset was plugged in
+                    // before launch but saved config has built-in speakers).
+                    if needs_initial_sync {
+                        needs_initial_sync = false;
+
+                        // Sync input device
+                        if let Ok(default_input) = default_input_device() {
+                            let default_input_name = default_input.to_string();
+                            let current = audio_manager.enabled_devices().await;
+                            let has_correct_input = current.contains(&default_input_name);
+
+                            if !has_correct_input {
+                                info!(
+                                    "[DEVICE_RECOVERY] initial sync: default input '{}' not active, switching",
+                                    default_input_name
+                                );
+                                // Stop all current input devices
+                                for device_name in current.iter() {
+                                    if let Ok(device) = parse_audio_device(device_name) {
+                                        if device.device_type == DeviceType::Input {
+                                            let _ = audio_manager.stop_device(device_name).await;
+                                        }
+                                    }
+                                }
+                                // Start the system default input
+                                match audio_manager.start_device(&default_input).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[DEVICE_RECOVERY] initial sync: started default input: {}",
+                                            default_input_name
+                                        );
+                                        default_tracker.last_input = Some(default_input_name);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] initial sync: failed to start default input {}: {}",
+                                            default_input_name, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // Sync output device (atomic swap: start new first)
+                        if let Ok(default_output) = default_output_device().await {
+                            let default_output_name = default_output.to_string();
+                            let current = audio_manager.enabled_devices().await;
+                            let has_correct_output = current.contains(&default_output_name);
+
+                            if !has_correct_output {
+                                info!(
+                                    "[DEVICE_RECOVERY] initial sync: default output '{}' not active, switching",
+                                    default_output_name
+                                );
+                                match audio_manager.start_device(&default_output).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[DEVICE_RECOVERY] initial sync: started default output: {}",
+                                            default_output_name
+                                        );
+                                        // Stop other output devices
+                                        for device_name in current.iter() {
+                                            if *device_name == default_output_name {
+                                                continue;
+                                            }
+                                            if let Ok(device) = parse_audio_device(device_name) {
+                                                if device.device_type == DeviceType::Output {
+                                                    info!(
+                                                        "[DEVICE_RECOVERY] initial sync: stopping non-default output: {}",
+                                                        device_name
+                                                    );
+                                                    let _ = audio_manager.stop_device(device_name).await;
+                                                }
+                                            }
+                                        }
+                                        default_tracker.last_output = Some(default_output_name);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] initial sync: failed to start default output {}: {}",
+                                            default_output_name, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Check if system default input changed
                     if let Some(new_default_input) = default_tracker.check_input_changed() {
                         info!("system default input changed to: {}", new_default_input);

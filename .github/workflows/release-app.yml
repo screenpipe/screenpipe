@@ -488,7 +488,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             libwebkit2gtk-4.1-dev \
-            xdg-desktop-portal-gtk
+            xdg-desktop-portal-gtk \
+            libsecret-1-dev
 
       - name: Install frontend dependencies
         working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
@@ -729,7 +730,35 @@ jobs:
           exec /usr/bin/ldd.real "$@"
           WRAPPER
           sudo chmod +x /usr/bin/ldd
+
+          # Tell linuxdeploy to deploy GTK3 plugin dependencies (bundles libsecret etc.)
+          export DEPLOY_GTK_VERSION=3
+
           bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
+
+          # Fix GLib ABI mismatch: the AppImage bundles GLib from Ubuntu 24.04 but
+          # on distros like Fedora 43 with newer GLib, the system's libsecret expects
+          # symbols (e.g. g_variant_builder_init_static) missing from the bundled GLib.
+          # Remove bundled GLib/GIO/GObject/GModule so the system versions are used
+          # consistently. These are core system libraries present on all Linux desktops.
+          echo "Removing bundled GLib libraries to prevent ABI mismatch on newer distros..."
+          # Install appimagetool for repacking
+          curl -fsSL -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool
+          find src-tauri/target/${{ matrix.target }}/release/bundle/appimage/ -name "*.AppImage" -exec bash -c '
+            APPIMAGE="$1"
+            echo "Patching $APPIMAGE to remove bundled GLib"
+            chmod +x "$APPIMAGE"
+            "$APPIMAGE" --appimage-extract
+            rm -f squashfs-root/usr/lib/libglib-2.0.so* \
+                  squashfs-root/usr/lib/libgobject-2.0.so* \
+                  squashfs-root/usr/lib/libgio-2.0.so* \
+                  squashfs-root/usr/lib/libgmodule-2.0.so*
+            echo "Removed bundled GLib libs, repacking AppImage..."
+            ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
+            rm -rf squashfs-root
+            echo "AppImage repacked successfully"
+          ' _ {} \;
 
       - name: Build (Windows)
         if: matrix.os_type == 'windows'

@@ -10,9 +10,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { commands } from "@/lib/utils/tauri";
 
 export default function SearchPage() {
-	const handleNavigate = useCallback(async (timestamp: string) => {
+	const handleNavigate = useCallback(async (timestamp: string, frameId?: number) => {
 		// Rust command: shows Main, emits navigation event from app handle, closes Search
-		invoke("search_navigate_to_timeline", { timestamp }).catch(console.error);
+		invoke("search_navigate_to_timeline", { timestamp, frameId }).catch(console.error);
 	}, []);
 
 	const handleClose = useCallback(async () => {

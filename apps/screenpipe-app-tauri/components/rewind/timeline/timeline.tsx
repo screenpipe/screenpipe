@@ -463,12 +463,12 @@ export const TimelineSlider = ({
 	}, [zoomLevel]);
 
 
-	// Pre-compute frame index map for O(1) lookups instead of O(n) indexOf
-	// This reduces 2.68M comparisons per render to just 400 Map lookups
+	// Pre-compute frame index map for O(1) lookups instead of O(n) indexOf.
+	// Uses object identity (WeakMap) so duplicate timestamps don't collide.
 	const frameIndexMap = useMemo(() => {
-		const map = new Map<string, number>();
+		const map = new WeakMap<StreamTimeSeriesResponse, number>();
 		frames.forEach((frame, index) => {
-			map.set(frame.timestamp, index);
+			map.set(frame, index);
 		});
 		return map;
 	}, [frames]);
@@ -1489,8 +1489,8 @@ export const TimelineSlider = ({
 								)}
 
 								{group.frames.map((frame, frameIdx) => {
-									// O(1) lookup instead of O(n) indexOf
-									const frameIndex = frameIndexMap.get(frame.timestamp) ?? -1;
+									// O(1) lookup via object identity (WeakMap)
+									const frameIndex = frameIndexMap.get(frame) ?? -1;
 									const isSelected = selectedIndices.has(frameIndex);
 									const frameDate = new Date(frame.timestamp);
 									const isInRange =
@@ -1510,7 +1510,9 @@ export const TimelineSlider = ({
 									const frameIdForTag = frame.devices?.[0]?.frame_id || '';
 									const frameTagsForFilter = frameIdForTag ? (tags[frameIdForTag] || []) : [];
 									const matchesTag = selectedTag === "all" || frameTagsForFilter.includes(selectedTag);
-									const matchesFilter = matchesDevice && matchesApp && matchesDomain && matchesSpeaker && matchesTag;
+									const activeMeeting = selectedMeeting !== "all" ? meetings.find((m) => m.id === selectedMeeting) : null;
+									const matchesMeeting = !activeMeeting || (frameIndex >= activeMeeting.frameIndexRange.first && frameIndex <= activeMeeting.frameIndexRange.last);
+									const matchesFilter = matchesDevice && matchesApp && matchesDomain && matchesSpeaker && matchesTag && matchesMeeting;
 
 									// Show time marker on first frame of each hour
 									const showTimeMarker = timeMarkers.some(

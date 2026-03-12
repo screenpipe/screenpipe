@@ -300,11 +300,13 @@ impl UpdatesManager {
                 // TrayIcon must be accessed/dropped on the main thread
                 let app_clone = self.app.clone();
                 let _ = self.app.run_on_main_thread(move || {
-                    if let Some(tray) = app_clone.tray_by_id("screenpipe_main") {
-                        if let Err(e) = crate::safe_icon::safe_set_icon_as_template(&tray, image) {
-                            error!("failed to set tray update icon: {}", e);
+                    crate::window_api::with_autorelease_pool(|| {
+                        if let Some(tray) = app_clone.tray_by_id("screenpipe_main") {
+                            if let Err(e) = crate::safe_icon::safe_set_icon_as_template(&tray, image) {
+                                error!("failed to set tray update icon: {}", e);
+                            }
                         }
-                    }
+                    });
                 });
             }
 

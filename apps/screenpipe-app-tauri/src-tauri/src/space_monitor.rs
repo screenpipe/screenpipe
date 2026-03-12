@@ -83,8 +83,10 @@ pub fn setup_space_listener(app: AppHandle) {
                     let app = app_for_block.clone();
                     let app_inner = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        crate::window_api::clear_frontmost_app();
-                        hide_main_window(&app_inner);
+                        crate::window_api::with_autorelease_pool(|| {
+                            crate::window_api::clear_frontmost_app();
+                            hide_main_window(&app_inner);
+                        });
                     });
                 });
                 let block = block.copy();

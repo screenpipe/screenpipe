@@ -346,6 +346,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					// Pause any active playback
 					pausePlayback();
 
+					// Reset filters so stale selections don't persist across open/close
+					resetFilters();
+
 					// Reset position to latest (index 0 = newest frame)
 					// Window is hidden/shown not destroyed, so old position persists
 					setCurrentIndex(0);
@@ -367,7 +370,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame]);
+	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
@@ -907,8 +910,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// a fresh fetch and uses pendingNavigationRef to jump once frames arrive.
 	useEffect(() => {
 		let lastHandledTs = "";
-		const unlisten = listen<{ timestamp: string }>("search-navigate-to-timestamp", (event) => {
+		const unlisten = listen<{ timestamp: string; frame_id?: number }>("search-navigate-to-timestamp", (event) => {
 			const timestamp = event.payload.timestamp;
+			const frameId = event.payload.frame_id;
 			// Deduplicate — Rust emits multiple times to survive mount race
 			if (timestamp === lastHandledTs) return;
 			lastHandledTs = timestamp;
@@ -916,7 +920,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			lastSearchNavRef.current = Date.now();
 			setSeekingTimestamp(timestamp);
 			setSearchNavFrame(true);
-			navigateDirectToDate(targetDate);
+			navigateDirectToDate(targetDate, frameId);
 		});
 		return () => { unlisten.then(fn => fn()); };
 	}, [navigateDirectToDate]);
@@ -1417,12 +1421,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 								isOpen={true}
 								embedded
 								onClose={() => setShowSearchModal(false)}
-								onNavigateToTimestamp={(timestamp) => {
+								onNavigateToTimestamp={(timestamp, frameId) => {
 									setShowSearchModal(false);
 									const targetDate = new Date(timestamp);
 									setSeekingTimestamp(timestamp);
 									if (!isSameDay(targetDate, currentDate)) {
-										navigateDirectToDate(targetDate);
+										navigateDirectToDate(targetDate, frameId);
 									} else {
 										pendingNavigationRef.current = targetDate;
 										const hasTargetDayFrames = frames.some(f =>
@@ -1430,7 +1434,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 										);
 										if (hasTargetDayFrames) {
 											setSearchNavFrame(true);
-											jumpToTime(targetDate);
+											jumpToTime(targetDate, frameId);
 											pendingNavigationRef.current = null;
 											setSeekingTimestamp(null);
 										}

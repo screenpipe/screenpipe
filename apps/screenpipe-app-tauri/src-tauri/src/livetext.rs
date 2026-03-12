@@ -40,7 +40,7 @@ static ANALYZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub async fn livetext_is_available() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let result = unsafe { livetext_ffi::lt_is_available() };
+        let result = crate::window_api::with_autorelease_pool(|| unsafe { livetext_ffi::lt_is_available() });
         info!(
             "livetext_is_available: lt_is_available() returned {}",
             result
@@ -119,7 +119,9 @@ pub async fn livetext_analyze(
         // if called from a tokio worker thread)
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = (|| -> Result<String, String> {
+            // Wrap in autorelease pool — Swift FFI may create autoreleased
+            // ObjC objects internally, and this thread has no default pool.
+            let result = crate::window_api::with_autorelease_pool(|| -> Result<String, String> {
                 // Check if a newer request has already been issued
                 if ANALYZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != gen {
                     return Err("skipped: newer analyze request pending".to_string());
@@ -154,7 +156,7 @@ pub async fn livetext_analyze(
                     extract_and_free(out_error);
                     Ok(text)
                 }
-            })();
+            });
             let _ = tx.send(result);
         });
 
@@ -173,7 +175,9 @@ pub async fn livetext_analyze(
 pub async fn livetext_update_position(x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let status = unsafe { livetext_ffi::lt_update_position(x, y, w, h) };
+        let status = crate::window_api::with_autorelease_pool(|| unsafe {
+            livetext_ffi::lt_update_position(x, y, w, h)
+        });
         if status != 0 {
             return Err(format!("lt_update_position error: {}", status));
         }
@@ -192,7 +196,9 @@ pub async fn livetext_highlight(terms: Vec<String>) -> Result<i32, String> {
     {
         let json = serde_json::to_string(&terms).map_err(|e| format!("json error: {}", e))?;
         let json_c = CString::new(json).map_err(|e| format!("invalid json: {}", e))?;
-        let count = unsafe { livetext_ffi::lt_highlight_ranges(json_c.as_ptr()) };
+        let count = crate::window_api::with_autorelease_pool(|| unsafe {
+            livetext_ffi::lt_highlight_ranges(json_c.as_ptr())
+        });
         return Ok(count);
     }
     #[cfg(not(target_os = "macos"))]
@@ -206,7 +212,7 @@ pub async fn livetext_highlight(terms: Vec<String>) -> Result<i32, String> {
 pub async fn livetext_clear_highlights() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        unsafe { livetext_ffi::lt_clear_highlights() };
+        crate::window_api::with_autorelease_pool(|| unsafe { livetext_ffi::lt_clear_highlights() });
         return Ok(());
     }
     #[cfg(not(target_os = "macos"))]
@@ -217,7 +223,7 @@ pub async fn livetext_clear_highlights() -> Result<(), String> {
 pub async fn livetext_hide() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        unsafe { livetext_ffi::lt_hide() };
+        crate::window_api::with_autorelease_pool(|| unsafe { livetext_ffi::lt_hide() });
         return Ok(());
     }
     #[cfg(not(target_os = "macos"))]
@@ -239,7 +245,9 @@ pub async fn livetext_set_guard_rect(
     #[cfg(target_os = "macos")]
     {
         let key_c = CString::new(key).map_err(|e| format!("invalid key: {}", e))?;
-        let status = unsafe { livetext_ffi::lt_set_guard_rect(key_c.as_ptr(), x, y, w, h) };
+        let status = crate::window_api::with_autorelease_pool(|| unsafe {
+            livetext_ffi::lt_set_guard_rect(key_c.as_ptr(), x, y, w, h)
+        });
         if status != 0 {
             return Err(format!("lt_set_guard_rect error: {}", status));
         }

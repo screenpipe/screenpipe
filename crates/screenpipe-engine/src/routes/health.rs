@@ -9,7 +9,10 @@ use chrono::{TimeZone, Utc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -234,16 +237,33 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     // Check pipeline metrics for degradation beyond simple timestamp staleness.
     // High drop rate or DB latency indicates the pipeline is struggling even if
     // frames are still technically arriving.
+    //
+    // Rate-limit warnings to once per 60s to avoid flooding logs on every health
+    // poll (5s interval × multiple WebSocket clients = many calls/second).
+    static LAST_DEGRADATION_WARN: AtomicU64 = AtomicU64::new(0);
     let vision_degraded = if !state.vision_disabled && vision_snap.uptime_secs > 120.0 {
         let high_drop_rate = vision_snap.frame_drop_rate > 0.5;
         let high_db_latency = vision_snap.avg_db_latency_ms > 10_000.0;
-        if high_drop_rate {
+        let should_warn = {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let last = LAST_DEGRADATION_WARN.load(Ordering::Relaxed);
+            if now_secs.saturating_sub(last) >= 60 {
+                LAST_DEGRADATION_WARN.store(now_secs, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        };
+        if high_drop_rate && should_warn {
             warn!(
                 "health_check: vision drop rate {:.1}% exceeds 50% threshold",
                 vision_snap.frame_drop_rate * 100.0
             );
         }
-        if high_db_latency {
+        if high_db_latency && should_warn {
             warn!(
                 "health_check: vision avg DB latency {:.0}ms exceeds 10s threshold",
                 vision_snap.avg_db_latency_ms

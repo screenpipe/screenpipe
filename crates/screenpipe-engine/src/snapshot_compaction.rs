@@ -295,17 +295,35 @@ async fn compact_chunk(
         .insert_video_chunk_with_fps(&mp4_path_str, device_name, fps)
         .await?;
 
+    // Batch UPDATE using CASE expressions — single statement instead of N individual UPDATEs.
+    // Dramatically reduces write-lock hold time on slow/memory-constrained systems.
     let mut tx = db.begin_immediate_with_retry().await?;
-    for (offset, (frame_id, _, _)) in frames.iter().enumerate() {
-        sqlx::query(
-            "UPDATE frames SET video_chunk_id = ?1, offset_index = ?2, snapshot_path = NULL \
-             WHERE id = ?3 AND snapshot_path IS NOT NULL",
-        )
-        .bind(chunk_id)
-        .bind(offset as i64)
-        .bind(frame_id)
-        .execute(&mut **tx.conn())
-        .await?;
+    for batch in frames.chunks(100) {
+        let ids: Vec<i64> = batch.iter().map(|(id, _, _)| *id).collect();
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let case_clauses: Vec<String> = batch
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _, _))| {
+                let offset = frames.iter().position(|(fid, _, _)| fid == id).unwrap_or(i);
+                format!("WHEN {} THEN {}", id, offset)
+            })
+            .collect();
+
+        let sql = format!(
+            "UPDATE frames SET video_chunk_id = ?1, \
+             offset_index = CASE id {} END, \
+             snapshot_path = NULL \
+             WHERE id IN ({}) AND snapshot_path IS NOT NULL",
+            case_clauses.join(" "),
+            placeholders.join(",")
+        );
+
+        let mut query = sqlx::query(&sql).bind(chunk_id);
+        for id in &ids {
+            query = query.bind(id);
+        }
+        query.execute(&mut **tx.conn()).await?;
     }
     tx.commit().await?;
 

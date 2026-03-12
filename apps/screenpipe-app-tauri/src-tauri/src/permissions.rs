@@ -105,16 +105,18 @@ pub async fn request_permission(permission: OSPermission) {
 
 #[cfg(target_os = "macos")]
 fn request_av_permission(media_type: nokhwa_bindings_macos::AVMediaType) {
-    use objc::{runtime::*, *};
-    use tauri_nspanel::block::ConcreteBlock;
+    crate::window_api::with_autorelease_pool(|| {
+        use objc::{runtime::*, *};
+        use tauri_nspanel::block::ConcreteBlock;
 
-    let callback = move |_: BOOL| {};
-    let cls = class!(AVCaptureDevice);
-    let objc_fn_block: ConcreteBlock<(BOOL,), (), _> = ConcreteBlock::new(callback);
-    let objc_fn_pass = objc_fn_block.copy();
-    unsafe {
-        let _: () = msg_send![cls, requestAccessForMediaType:media_type.into_ns_str() completionHandler:objc_fn_pass];
-    };
+        let callback = move |_: BOOL| {};
+        let cls = class!(AVCaptureDevice);
+        let objc_fn_block: ConcreteBlock<(BOOL,), (), _> = ConcreteBlock::new(callback);
+        let objc_fn_pass = objc_fn_block.copy();
+        unsafe {
+            let _: () = msg_send![cls, requestAccessForMediaType:media_type.into_ns_str() completionHandler:objc_fn_pass];
+        };
+    });
 }
 
 // Accessibility permission APIs using ApplicationServices framework
@@ -206,15 +208,17 @@ pub fn check_microphone_permission() -> OSPermissionStatus {
         use nokhwa_bindings_macos::AVMediaType;
         use objc::*;
 
-        let cls = objc::class!(AVCaptureDevice);
-        let status: AVAuthorizationStatus = unsafe {
-            msg_send![cls, authorizationStatusForMediaType:AVMediaType::Audio.into_ns_str()]
-        };
-        match status {
-            AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
-            AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
-            _ => OSPermissionStatus::Denied,
-        }
+        crate::window_api::with_autorelease_pool(|| {
+            let cls = objc::class!(AVCaptureDevice);
+            let status: AVAuthorizationStatus = unsafe {
+                msg_send![cls, authorizationStatusForMediaType:AVMediaType::Audio.into_ns_str()]
+            };
+            match status {
+                AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
+                AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
+                _ => OSPermissionStatus::Denied,
+            }
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -352,17 +356,19 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
         use nokhwa_bindings_macos::AVMediaType;
 
         fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
-            use nokhwa_bindings_macos::AVAuthorizationStatus;
-            use objc::*;
+            crate::window_api::with_autorelease_pool(|| {
+                use nokhwa_bindings_macos::AVAuthorizationStatus;
+                use objc::*;
 
-            let cls = objc::class!(AVCaptureDevice);
-            let status: AVAuthorizationStatus =
-                unsafe { msg_send![cls, authorizationStatusForMediaType:media_type.into_ns_str()] };
-            match status {
-                AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
-                AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
-                _ => OSPermissionStatus::Denied,
-            }
+                let cls = objc::class!(AVCaptureDevice);
+                let status: AVAuthorizationStatus =
+                    unsafe { msg_send![cls, authorizationStatusForMediaType:media_type.into_ns_str()] };
+                match status {
+                    AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
+                    AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
+                    _ => OSPermissionStatus::Denied,
+                }
+            })
         }
 
         OSPermissionsCheck {

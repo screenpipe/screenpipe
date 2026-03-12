@@ -129,6 +129,7 @@ pub fn recreate_tray(app: &AppHandle) {
     // across the FFI boundary (nounwind → abort). catch_unwind prevents this.
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::window_api::with_autorelease_pool(|| {
             let app = app_for_thread;
             let update_item = match UPDATE_MENU_ITEM.lock() {
                 Ok(guard) => guard.clone(),
@@ -198,6 +199,7 @@ pub fn recreate_tray(app: &AppHandle) {
                     error!("failed to recreate tray icon: {}", e);
                 }
             }
+        }); // with_autorelease_pool
         })) {
             // The panic hook already sent the panic message + backtrace to Sentry
             // (as a Fatal-level capture_message). Log here for local diagnostics.
