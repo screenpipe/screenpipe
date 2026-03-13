@@ -38,11 +38,14 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **switch modes while overlay is visible** — change from fullscreen to window mode in settings while overlay is showing. should not crash (`b4eb2ab4`).
 - [ ] **keyboard focus in overlay** — show overlay, start typing. text input works immediately without clicking (`d74d0665`, `5a50aaad`).
 - [ ] **keyboard focus in chat** — show chat, start typing. text input works immediately.
+- [ ] **Keyboard focus & dropdowns** — Verify deferred first-responder for keyboard input and select dropdowns work correctly. (`08c0f7683`)
 - [ ] **escape closes overlay** — press Escape while overlay is visible. it hides.
 - [ ] **no space jump on show** — showing the overlay should NOT cause a space transition animation (`6d44af13`, `d74d0665`).
 - [ ] **no space jump on hide** — hiding the overlay should NOT switch you to a different space.
 - [ ] **screen recording visibility setting** — toggle "show in screen recording" in settings. overlay should appear/disappear from screen recordings accordingly (`206107ba`).
 - [ ] **search panel focus** — open search, keyboard focus is in search input immediately (`2315a39c`, `1f2681e3`).
+- [ ] **Search window stability (macOS)** — Verify search window stability after replacing `NSPanel to_panel()` with manual class swizzle. (`251811ac4`)
+- [ ] **Search panel hide/show behavior (macOS)** — Verify search panel hides with alpha=0 instead of being destroyed to prevent SIGBUS. (`df1f731a2`, `cafd73cc0`)
 - [ ] **ghost clicks after hide** — hide overlay via `order_out`. clicking where overlay was should NOT trigger overlay buttons (`32e1a962`).
 - [ ] **pinch-to-zoom works** — pinch gesture on trackpad zooms timeline without needing to click first (`d99444a7`, `523a629e`).
 - [ ] **shortcut reminder on all Spaces** — switch between 3+ Spaces (including fullscreen apps). reminder pill stays visible on every Space simultaneously.
@@ -65,6 +68,7 @@ commits that broke this area: `0752ea59`, `7562ec62`, `2a2bd9b5`, `f2f7f770`, `5
 
 - [ ] **dock icon visible on launch** — app icon appears in dock immediately on startup.
 - [ ] **tray icon visible on launch** — tray icon appears in menu bar on startup.
+- [ ] **Tray shows only recording monitors** — Verify the tray icon only shows monitors that are currently being recorded. (`aeff3ba4b`)
 - [ ] **dock icon persists after overlay show/hide** — show and hide overlay 5 times. dock icon must remain visible every time. was broken by Accessory mode switches.
 - [ ] **tray icon persists after overlay show/hide** — same test. tray icon must remain visible.
 - [ ] **dock right-click menu works** — right-click dock icon. "Show screenpipe", "Settings", "Check for updates" all work (`d794176a`).
@@ -120,6 +124,9 @@ commits: `28e5c247`
 - [ ] **Audio start/stop shortcuts** — Verify that designated audio start/stop shortcuts reliably toggle audio capture on and off. Check logs for corresponding start/stop events.
 - [ ] **Filter music toggle UI** — Verify that a "filter music" toggle exists in recording settings and correctly enables/disables music filtering.
 - [ ] **Music detection thresholds** — With "filter music" enabled, play various types of music. Verify that music is correctly detected and filtered, and that non-music speech is still captured.
+- [ ] **Windows audio device property access** — Verify audio device properties are correctly accessed using `STGM(0)` for `OpenPropertyStore` on Windows. (`a3e77cae9`)
+- [ ] **Windows communications default output device** — Verify that the Windows communications default output device is correctly recorded. (`217e457f0`)
+- [ ] **Audio model cache auto-recovery** — Verify auto-recovery from a corrupt ONNX model cache. (`a03fa7a5e`)
 - [ ] **Audio reconciliation FK constraint loop** — Verify that audio reconciliation does not enter an infinite retry loop on foreign key constraints. (`e9e2dc252`)
 - [ ] **Skip reconciliation when transcription disabled** — Disable audio transcription in settings. Verify that audio reconciliation is skipped. (`ceb77559d`)
 
@@ -159,6 +166,7 @@ commits: `6dd5d98e`, `831ad258`
 - [ ] **static screen = low CPU** — leave a static image on screen for 60s. CPU should drop below 5% (release build). hash early exit should kick in.
 - [ ] **active screen = OCR runs** — actively browse/type. OCR results appear in search within 5 seconds of screen change.
 - [ ] **identical frames skipped** — check logs for hash match frequency on idle monitors. should be >80% skip rate.
+- [ ] **Silent capture-skip logs** — Verify that "silent capture-skip" logs are upgraded from debug to info/warn level. (`575d5feab`)
 - [ ] **ultrawide monitor (3440x1440+)** — OCR works correctly. no distortion in change detection. text at edges is captured.
 - [ ] **4K monitor** — OCR works. frame comparison doesn't timeout or spike CPU.
 - [ ] **high refresh rate (120Hz+)** — app respects its own FPS setting (0.5 default), not the display refresh rate.
@@ -223,6 +231,7 @@ commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`,
 - [ ] **force quit recovery** — force quit app. relaunch. database is intact. recording resumes.
 - [ ] **sleep/wake** — close laptop lid, wait 10s, open. recording resumes within 5s. no crash (`9070639c`).
 - [ ] **restart app** — quit and relaunch. all settings preserved. recording starts automatically.
+- [ ] **Linux bundle cleanup** — Verify that Linux bundle cleanup works correctly. (`a3e77cae9`)
 - [ ] **Cross-platform autorelease pool** — Verify that Windows and Linux builds compile and run without issues related to macOS-specific autorelease pool calls. (`851b3037c`)
 - [ ] **Main thread safety (macOS)** — Verify that tray icon operations, space monitoring, and frontmost app restoration are dispatched to the main thread to prevent crashes. (`ac46aa437`, `418826dfa`, `274826dfa`)
 - [ ] **ObjC memory management (macOS)** — Verify that all ObjC operations are wrapped in scoped autorelease pools and objects are retained in async callbacks to prevent use-after-free or SIGSEGV crashes. (`4cb9850f7`, `c49350df0`, `139500d52`)
@@ -335,8 +344,10 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **window-focused refresh** — opening app via shortcut/tray refreshes timeline data immediately (`0b057046`).
 - [ ] **frame deep link navigation** — `screenpipe://frame/N` or `screenpipe://frames/N` opens main window and jumps to frame N. works from cold start; invalid IDs show clear error.
 - [ ] **Search result exact navigation** — Click a search result. Verify it navigates exactly to the associated `frame_id`. (`a98fa2991`)
+- [ ] **Exact frame_id navigation snapping** — Verify that exact `frame_id` search navigation does not snap to device. (`c96e8db5b`)
 - [ ] **Search navigation persistence** — Navigate to a frame from search results. Shift focus away from the app and back. Verify the navigation is not reset. (`71dee4ca3`)
 - [ ] **Search navigation race condition** — Verify that search navigation works reliably even if the webview is still mounting (retries should handle it). (`2015137a1`)
+- [ ] **Search modal query persistence** — Verify the search modal uses the correct local query variable. (`fa6cfbac9`)
 - [ ] **Consolidated text search** — Perform keyword searches. Verify results are correctly pulled from the consolidated `frames.full_text` and `frames_fts`. (`adbbb8f84`)
 - [ ] **Keyword search accessibility** — Keyword search should find content within accessibility-only frames and utilize `frames_fts` for comprehensive accessibility text searching.
 - [ ] **Keyword search logic** — Verify that keyword search SQL correctly uses `OR` instead of `UNION` within `IN()`.
@@ -587,7 +598,10 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Pipe token handling** — Ensure that Pi configuration for pipes uses the actual token value, not the environment variable name.
 - [ ] **Pipe user_token passthrough** — Verify that the `user_token` is correctly passed to Pi pre-configuration so pipes use the screenpipe provider.
 - [ ] **Default AI model ID** — Verify that the default AI model ID does not contain outdated date suffixes.
+- [ ] **Default Pi model (Gemini 1.5 Pro)** — Verify the default Pi model is correctly set to `gemini-1.5-pro` (or as updated). (`aeff3ba4b`)
 - [ ] **Move provider/model flags** — `--provider` and `--model` flags should be correctly moved before `-p prompt` in `pi spawn` commands.
+- [ ] **Automate-my-work template** — Verify the "automate-my-work" template is available in the pipes section. (`acbac3308`)
+- [ ] **Batch duration slider limit** — Verify the max batch duration slider is capped at 10min with the updated tooltip. (`3148fb8c9`)
 - [ ] **Pi restart on preset switch** — Switch between different AI presets. Verify that the Pi agent restarts if required by the new preset.
 - [ ] **Faster Pipes page loading** — Verify that the "Pipes" page loads significantly faster, especially when there are a large number of pipes configured.
 - [ ] **Instant pipe enable toggle UI update** — Toggle a pipe's enable status. Verify that the UI updates instantly due to optimistic updates, even if the backend operation takes a moment.
