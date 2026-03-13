@@ -17,6 +17,9 @@ use crate::{
     device::device_manager::DeviceManager,
 };
 
+#[cfg(target_os = "windows")]
+use crate::core::device::default_communications_output_device;
+
 /// Check if a device name is a legacy per-display output device name
 /// (e.g., "Display 1 (output)", "Display 3 (output)") that should be
 /// migrated to the canonical "System Audio (output)" name.
@@ -35,6 +38,9 @@ lazy_static::lazy_static! {
 struct SystemDefaultTracker {
     last_input: Option<String>,
     last_output: Option<String>,
+    /// Windows only: the eCommunications default output (e.g. USB headset for Teams/Zoom)
+    #[cfg(target_os = "windows")]
+    last_communications_output: Option<String>,
 }
 
 impl SystemDefaultTracker {
@@ -42,6 +48,8 @@ impl SystemDefaultTracker {
         Self {
             last_input: None,
             last_output: None,
+            #[cfg(target_os = "windows")]
+            last_communications_output: None,
         }
     }
 
@@ -63,6 +71,21 @@ impl SystemDefaultTracker {
         if current != self.last_output {
             let changed = current.clone();
             self.last_output = current;
+            changed
+        } else {
+            None
+        }
+    }
+
+    /// Windows: check if the eCommunications default output changed.
+    /// Returns Some(name) when the communications device differs from the
+    /// multimedia default AND has changed since last check.
+    #[cfg(target_os = "windows")]
+    fn check_communications_output_changed(&mut self) -> Option<String> {
+        let current = default_communications_output_device().map(|d| d.to_string());
+        if current != self.last_communications_output {
+            let changed = current.clone();
+            self.last_communications_output = current;
             changed
         } else {
             None
@@ -93,6 +116,8 @@ pub async fn start_device_monitor(
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
         let _ = default_tracker.check_output_changed().await;
+        #[cfg(target_os = "windows")]
+        let _ = default_tracker.check_communications_output_changed();
 
         // One-time flag: on first loop iteration, verify running devices match
         // system defaults. Handles the case where the app restarts while a USB
@@ -232,6 +257,33 @@ pub async fn start_device_monitor(
                                 }
                             }
                         }
+
+                        // Windows: also start the eCommunications output device if it
+                        // differs from the multimedia default. MS Teams/Zoom route call
+                        // audio to this endpoint (often a USB headset) while the
+                        // multimedia default might be a monitor or speakers.
+                        #[cfg(target_os = "windows")]
+                        if let Some(comm_device) = default_communications_output_device() {
+                            let comm_name = comm_device.to_string();
+                            let current = audio_manager.enabled_devices().await;
+                            if !current.contains(&comm_name) {
+                                match audio_manager.start_device(&comm_device).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[DEVICE_RECOVERY] initial sync: started communications output: {}",
+                                            comm_name
+                                        );
+                                        default_tracker.last_communications_output = Some(comm_name);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] initial sync: failed to start communications output {}: {}",
+                                            comm_name, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Check if system default input changed
@@ -308,9 +360,16 @@ pub async fn start_device_monitor(
 
                         // Only stop old output devices if the new one started successfully
                         if new_started {
+                            // Don't stop the communications output device during swap
+                            #[cfg(target_os = "windows")]
+                            let comm_name = default_tracker.last_communications_output.clone();
                             for device_name in audio_manager.enabled_devices().await.iter() {
                                 if *device_name == new_default_output {
                                     continue; // don't stop the one we just started
+                                }
+                                #[cfg(target_os = "windows")]
+                                if comm_name.as_deref() == Some(device_name.as_str()) {
+                                    continue; // don't stop the communications device
                                 }
                                 if let Ok(device) = parse_audio_device(device_name) {
                                     if device.device_type == DeviceType::Output {
@@ -319,6 +378,46 @@ pub async fn start_device_monitor(
                                             device_name
                                         );
                                         let _ = audio_manager.stop_device(device_name).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Windows: check if the eCommunications output device changed.
+                    // This captures call audio from Teams/Zoom/etc. that routes to
+                    // the communications endpoint (often a USB headset).
+                    #[cfg(target_os = "windows")]
+                    {
+                        let old_comm = default_tracker.last_communications_output.clone();
+                        if let Some(new_comm_output) = default_tracker.check_communications_output_changed() {
+                            info!(
+                                "[DEVICE_RECOVERY] communications output changed to: {}",
+                                new_comm_output
+                            );
+
+                            // Stop the previous communications device if it's not the multimedia default
+                            if let Some(ref old_name) = old_comm {
+                                if default_tracker.last_output.as_deref() != Some(old_name.as_str()) {
+                                    let _ = audio_manager.stop_device(old_name).await;
+                                }
+                            }
+
+                            // Start the new communications device
+                            if let Ok(new_device) = parse_audio_device(&new_comm_output) {
+                                failed_devices.remove(&new_comm_output);
+                                match audio_manager.start_device(&new_device).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[DEVICE_RECOVERY] started new communications output: {}",
+                                            new_comm_output
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] failed to start communications output {}: {}",
+                                            new_comm_output, e
+                                        );
                                     }
                                 }
                             }

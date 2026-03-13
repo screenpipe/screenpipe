@@ -9329,7 +9329,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.2.121"
+version = "2.2.123"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9478,6 +9478,7 @@ dependencies = [
  "webrtc-vad",
  "which 7.0.3",
  "whisper-rs",
+ "windows 0.58.0",
 ]
 
 [[package]]

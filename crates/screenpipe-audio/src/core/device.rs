@@ -210,59 +210,70 @@ pub async fn get_cpal_device_and_config(
         }
     } else {
         #[cfg(target_os = "macos")]
-        if is_output_device && device_name == MACOS_OUTPUT_AUDIO_DEVICE_NAME {
-            // "System Audio" is a virtual device — try ALL available SCK displays.
-            // The audio content is identical regardless of which display anchors
-            // the SCK stream, so pick the first one that's available.
-            let found = match get_screen_capture_host().await {
-                Ok(screen_capture_host) => {
-                    let mut result = None;
-                    for candidate in screen_capture_host.input_devices()? {
-                        if let Ok(name) = candidate.name() {
-                            tracing::debug!(
-                                "System Audio: trying SCK display '{}' as anchor",
-                                name
-                            );
-                            // Verify the device actually has valid configs
-                            if candidate.supported_input_configs().is_ok() {
-                                result = Some(candidate);
-                                break;
+        {
+            if is_output_device && device_name == MACOS_OUTPUT_AUDIO_DEVICE_NAME {
+                // "System Audio" is a virtual device — try ALL available SCK displays.
+                // The audio content is identical regardless of which display anchors
+                // the SCK stream, so pick the first one that's available.
+                let found = match get_screen_capture_host().await {
+                    Ok(screen_capture_host) => {
+                        let mut result = None;
+                        for candidate in screen_capture_host.input_devices()? {
+                            if let Ok(name) = candidate.name() {
+                                tracing::debug!(
+                                    "System Audio: trying SCK display '{}' as anchor",
+                                    name
+                                );
+                                // Verify the device actually has valid configs
+                                if candidate.supported_input_configs().is_ok() {
+                                    result = Some(candidate);
+                                    break;
+                                }
                             }
                         }
+                        result
                     }
-                    result
+                    Err(e) => {
+                        tracing::warn!(
+                            "ScreenCaptureKit unavailable for System Audio: {}",
+                            e
+                        );
+                        None
+                    }
+                };
+                found
+            } else {
+                let mut devices = match audio_device.device_type {
+                    DeviceType::Input => host.input_devices()?,
+                    DeviceType::Output => host.output_devices()?,
+                };
+
+                if is_output_device {
+                    match get_screen_capture_host().await {
+                        Ok(screen_capture_host) => {
+                            devices = screen_capture_host.input_devices()?;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "ScreenCaptureKit unavailable for output device '{}': {} — \
+                                 device lookup may fail",
+                                device_name,
+                                e
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "ScreenCaptureKit unavailable for System Audio: {}",
-                        e
-                    );
-                    None
-                }
-            };
-            found
-        } else {
+
+                devices.find(|x| x.name().map(|y| y == device_name).unwrap_or(false))
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
             let mut devices = match audio_device.device_type {
                 DeviceType::Input => host.input_devices()?,
                 DeviceType::Output => host.output_devices()?,
             };
-
-            #[cfg(target_os = "macos")]
-            if is_output_device {
-                match get_screen_capture_host().await {
-                    Ok(screen_capture_host) => {
-                        devices = screen_capture_host.input_devices()?;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "ScreenCaptureKit unavailable for output device '{}': {} — \
-                             device lookup may fail",
-                            device_name,
-                            e
-                        );
-                    }
-                }
-            }
 
             devices.find(|x| x.name().map(|y| y == device_name).unwrap_or(false))
         }
@@ -561,5 +572,89 @@ pub async fn default_output_device() -> Result<AudioDevice> {
             .default_output_device()
             .ok_or_else(|| anyhow!("No default output device found"))?;
         Ok(AudioDevice::new(device.name()?, DeviceType::Output))
+    }
+}
+
+/// Returns the Windows "Default Communications Device" (output) if it differs
+/// from the multimedia/console default. MS Teams, Zoom, etc. route call audio
+/// to the eCommunications endpoint, which is often a USB headset while the
+/// multimedia default is a monitor or speakers.
+///
+/// Returns `None` if:
+/// - Not on Windows
+/// - The communications and multimedia defaults are the same device
+/// - Any COM/API error occurs (fail-open: don't block startup)
+#[cfg(target_os = "windows")]
+pub fn default_communications_output_device() -> Option<AudioDevice> {
+    match unsafe { windows_com_audio::get_communications_output_name() } {
+        Ok(Some(name)) => Some(AudioDevice::new(name, DeviceType::Output)),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::debug!(
+                "failed to query Windows communications output device: {}",
+                e
+            );
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_com_audio {
+    use anyhow::{anyhow, Result};
+
+    /// Query the Windows eCommunications default output endpoint.
+    /// Returns the friendly name if it differs from the eConsole default,
+    /// or None if they are the same device.
+    pub unsafe fn get_communications_output_name() -> Result<Option<String>> {
+        use windows::Win32::Media::Audio::{
+            eCommunications, eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+        };
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+
+        // COM init (idempotent per thread — returns S_FALSE if already initialized)
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+
+        // Get both default endpoints
+        let comm = enumerator
+            .GetDefaultAudioEndpoint(eRender, eCommunications)
+            .map_err(|e| anyhow!("no communications output endpoint: {}", e))?;
+        let console = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| anyhow!("no console output endpoint: {}", e))?;
+
+        // Compare endpoint IDs — if identical, the user's communications and
+        // multimedia defaults point to the same physical device.
+        let comm_id = comm.GetId()?;
+        let console_id = console.GetId()?;
+
+        let comm_id_str = comm_id.to_string()?;
+        let console_id_str = console_id.to_string()?;
+
+        CoTaskMemFree(Some(comm_id.as_ptr() as _));
+        CoTaskMemFree(Some(console_id.as_ptr() as _));
+
+        if comm_id_str == console_id_str {
+            return Ok(None); // same device, nothing extra to record
+        }
+
+        // They differ — get the friendly name of the communications device
+        // STGM_READ = 0
+        let store = comm.OpenPropertyStore(0)?;
+        let prop = store.GetValue(&PKEY_Device_FriendlyName)?;
+
+        // windows-core 0.58 PROPVARIANT implements Display via BSTR conversion
+        let name = prop.to_string();
+        if name.is_empty() {
+            return Err(anyhow!("device friendly name is empty"));
+        }
+
+        Ok(Some(name))
     }
 }

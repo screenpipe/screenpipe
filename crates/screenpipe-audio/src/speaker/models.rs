@@ -14,6 +14,33 @@ static EMBEDDING_MODEL_PATH: Mutex<Option<PathBuf>> = Mutex::const_new(None);
 static SEGMENTATION_DOWNLOADING: AtomicBool = AtomicBool::new(false);
 static EMBEDDING_DOWNLOADING: AtomicBool = AtomicBool::new(false);
 
+/// Invalidate a cached model, forcing re-download on next call to get_or_download_model.
+/// Use this when a cached model file is corrupt (e.g. protobuf parsing failed).
+pub async fn invalidate_cached_model(model_type: &PyannoteModel) -> Result<()> {
+    let (model_path_lock, _) = match model_type {
+        PyannoteModel::Segmentation => (&SEGMENTATION_MODEL_PATH, &SEGMENTATION_DOWNLOADING),
+        PyannoteModel::Embedding => (&EMBEDDING_MODEL_PATH, &EMBEDDING_DOWNLOADING),
+    };
+
+    let filename = match model_type {
+        PyannoteModel::Segmentation => "segmentation-3.0.onnx",
+        PyannoteModel::Embedding => "wespeaker_en_voxceleb_CAM++.onnx",
+    };
+
+    let cache_dir = get_cache_dir()?;
+    let path = cache_dir.join(filename);
+
+    if path.exists() {
+        warn!("removing corrupt model file: {:?}", path);
+        tokio::fs::remove_file(&path).await?;
+    }
+
+    let mut cached = model_path_lock.lock().await;
+    *cached = None;
+
+    Ok(())
+}
+
 pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<PathBuf> {
     let (model_path_lock, downloading_flag) = match model_type {
         PyannoteModel::Segmentation => (&SEGMENTATION_MODEL_PATH, &SEGMENTATION_DOWNLOADING),

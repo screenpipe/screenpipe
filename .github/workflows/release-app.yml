@@ -837,6 +837,11 @@ jobs:
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
+          # Clean stale bundle artifacts from cache — prevents old .deb/.AppImage
+          # files from accumulating and being uploaded alongside the current version
+          echo "Cleaning stale bundle artifacts..."
+          rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
+
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "=== Build attempt $attempt/$MAX_ATTEMPTS ==="
 
@@ -1004,6 +1009,11 @@ jobs:
 
           echo "uploading ${TARGET} bundles for v${VERSION} to R2..."
           echo "aws cli: $(aws --version)"
+
+          # Clean any stale artifacts from previous (failed) runs for this version+target
+          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
+          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" 2>/dev/null || true
+
           UPLOAD_FAILED=0
 
           # Upload DMG
@@ -1044,6 +1054,10 @@ jobs:
 
           Write-Host "uploading Windows bundles for v$version to R2..."
 
+          # Clean any stale artifacts from previous (failed) runs for this version+target
+          Write-Host "cleaning stale R2 artifacts at $r2Prefix/ ..."
+          aws s3 rm "$r2Prefix/" --recursive --endpoint-url $r2Endpoint 2>$null
+
           # Upload ALL bundle artifacts (.exe, .nsis.zip, .sig files)
           Write-Host "Files in nsis bundle dir:"
           Get-ChildItem "$bundleDir/nsis" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -1071,6 +1085,11 @@ jobs:
           R2_PREFIX="s3://screenpipe-releases/releases/${VERSION}/${TARGET}"
 
           echo "uploading Linux bundles for v${VERSION} to R2..."
+
+          # Clean any stale artifacts from previous (failed) runs for this version+target
+          echo "cleaning stale R2 artifacts at ${R2_PREFIX}/ ..."
+          aws s3 rm "${R2_PREFIX}/" --recursive --endpoint-url "$R2_ENDPOINT" 2>/dev/null || true
+
           echo "bundle dir contents:"
           find "${BUNDLE_DIR}" -type f 2>/dev/null || echo "  (bundle dir not found)"
 

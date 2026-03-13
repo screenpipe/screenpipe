@@ -6552,6 +6552,7 @@ dependencies = [
  "webrtc-vad",
  "which 7.0.3",
  "whisper-rs",
+ "windows 0.58.0",
 ]
 
 [[package]]

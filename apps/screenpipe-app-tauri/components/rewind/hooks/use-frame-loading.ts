@@ -461,34 +461,44 @@ export function useFrameLoading(opts: {
 	}, [adjacentFrames, debouncedFrame?.filePath, getVideoUrl]);
 
 	// Update rendered dimensions on resize (needed for TextOverlay positioning)
+	// Debounce via rAF to avoid stale intermediate values from rapid
+	// ResizeObserver callbacks during layout stabilization
 	useEffect(() => {
+		let rafId: number | null = null;
 		const updateDimensions = () => {
-			if (containerRef.current && naturalDimensions) {
-				const containerRect = containerRef.current.getBoundingClientRect();
-				const containerAspect = containerRect.width / containerRect.height;
-				const imageAspect = naturalDimensions.width / naturalDimensions.height;
-				let renderedWidth: number, renderedHeight: number;
-				if (containerAspect > imageAspect) {
-					renderedHeight = containerRect.height;
-					renderedWidth = containerRect.height * imageAspect;
-				} else {
-					renderedWidth = containerRect.width;
-					renderedHeight = containerRect.width / imageAspect;
+			if (rafId !== null) cancelAnimationFrame(rafId);
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				if (containerRef.current && naturalDimensions) {
+					const containerRect = containerRef.current.getBoundingClientRect();
+					const containerAspect = containerRect.width / containerRect.height;
+					const imageAspect = naturalDimensions.width / naturalDimensions.height;
+					let renderedWidth: number, renderedHeight: number;
+					if (containerAspect > imageAspect) {
+						renderedHeight = containerRect.height;
+						renderedWidth = containerRect.height * imageAspect;
+					} else {
+						renderedWidth = containerRect.width;
+						renderedHeight = containerRect.width / imageAspect;
+					}
+					setRenderedImageInfo({
+						width: renderedWidth,
+						height: renderedHeight,
+						offsetX: (containerRect.width - renderedWidth) / 2,
+						offsetY: (containerRect.height - renderedHeight) / 2,
+					});
 				}
-				setRenderedImageInfo({
-					width: renderedWidth,
-					height: renderedHeight,
-					offsetX: (containerRect.width - renderedWidth) / 2,
-					offsetY: (containerRect.height - renderedHeight) / 2,
-				});
-			}
+			});
 		};
 		updateDimensions();
 		const el = containerRef.current;
 		if (!el) return;
 		const observer = new ResizeObserver(updateDimensions);
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => {
+			observer.disconnect();
+			if (rafId !== null) cancelAnimationFrame(rafId);
+		};
 	}, [naturalDimensions]);
 
 	return {

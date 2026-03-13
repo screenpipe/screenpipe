@@ -1375,12 +1375,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							currentIndex={currentIndex}
 							onFrameChange={(index) => {
 								pausePlayback();
-								let snapped = snapToDevice(index);
-								snapped = snapToApp(snapped);
-								snapped = snapToFiltered(snapped);
-								setCurrentIndex(snapped);
-								if (frames[snapped]) {
-									setCurrentFrame(frames[snapped]);
+								// Use clicked index directly — don't snap, since the
+								// user explicitly clicked this specific thumbnail
+								setCurrentIndex(index);
+								if (frames[index]) {
+									setCurrentFrame(frames[index]);
 								}
 							}}
 							fetchNextDayData={fetchNextDayData}

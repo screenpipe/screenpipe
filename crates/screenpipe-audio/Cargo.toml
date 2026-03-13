@@ -90,6 +90,17 @@ rand = "0.9.0"
 libpulse-binding = { version = "2.28", optional = true }
 libpulse-simple-binding = { version = "2.28", optional = true }
 
+# Windows COM API for querying the "Default Communications Device" role.
+# MS Teams/Zoom route audio to the eCommunications endpoint, which may
+# differ from the multimedia/console default that cpal returns.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 ort = { version = "=2.0.0-rc.6", features = [
   "download-binaries",
