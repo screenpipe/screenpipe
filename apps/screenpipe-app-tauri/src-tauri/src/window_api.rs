@@ -4,12 +4,11 @@
 
 use std::{path::PathBuf, str::FromStr, sync::Mutex};
 
-use axum::{extract::State, http::StatusCode, Json};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, Size, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, Wry,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Wry,
 };
 #[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
@@ -198,16 +197,16 @@ unsafe fn attach_magnify_gesture_to_view(view: tauri_nspanel::cocoa::base::id) {
 /// the process (Rust panics inside `run_on_main_thread` cross the Obj-C FFI
 /// boundary in `tao::send_event`, which is `nounwind` → calls `abort()`).
 ///
-/// The closure is wrapped in its own `NSAutoreleasePool` so that any
-/// autoreleased ObjC objects created inside are drained immediately,
-/// rather than accumulating in the main event-loop pool (where a
-/// use-after-free causes `objc_autoreleasePoolPop` to SIGSEGV).
+/// Runs `f` on the main thread with panic safety. Does NOT create a
+/// manual autorelease pool — `[NSApplication run]` already drains its
+/// own pool each event-loop iteration. Wrapping in an extra pool caused
+/// objects to be released prematurely (before AppKit was done with them),
+/// leading to SIGSEGV in `objc_autoreleasePoolPop` when the outer pool
+/// tried to drain already-freed objects.
 #[cfg(target_os = "macos")]
 pub fn run_on_main_thread_safe<F: FnOnce() + Send + 'static>(app: &AppHandle, f: F) {
     let _ = app.run_on_main_thread(move || {
-        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            with_autorelease_pool(f);
-        })) {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
             error!("panic caught in run_on_main_thread: {:?}", e);
         }
     });
@@ -234,11 +233,6 @@ pub fn with_autorelease_pool<R, F: FnOnce() -> R>(f: F) -> R {
     {
         f()
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn with_autorelease_pool<R, F: FnOnce() -> R>(f: F) -> R {
-    f()
 }
 
 use crate::{
@@ -393,51 +387,60 @@ fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>) {
 #[cfg(target_os = "macos")]
 pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa::base::id) {
     with_autorelease_pool(|| {
-    use objc::{class, msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::{id, nil};
-    use tauri_nspanel::cocoa::foundation::NSArray;
+        use objc::{class, msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+        use tauri_nspanel::cocoa::foundation::NSArray;
 
-    let content_view: id = msg_send![ns_win, contentView];
-    let wk_class: *const objc::runtime::Class = class!(WKWebView);
+        let content_view: id = msg_send![ns_win, contentView];
+        let wk_class: *const objc::runtime::Class = class!(WKWebView);
 
-    // BFS through subview tree to find WKWebView
-    let mut wk_view: id = nil;
-    let mut queue: Vec<id> = vec![content_view];
-    while let Some(view) = queue.pop() {
-        let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
-        if is_wk {
-            wk_view = view;
-            break;
-        }
-        let subviews: id = msg_send![view, subviews];
-        if subviews != nil {
-            let count: u64 = NSArray::count(subviews);
-            for i in 0..count {
-                let child: id = NSArray::objectAtIndex(subviews, i);
-                queue.push(child);
+        // BFS through subview tree to find WKWebView
+        let mut wk_view: id = nil;
+        let mut queue: Vec<id> = vec![content_view];
+        while let Some(view) = queue.pop() {
+            let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
+            if is_wk {
+                wk_view = view;
+                break;
+            }
+            let subviews: id = msg_send![view, subviews];
+            if subviews != nil {
+                let count: u64 = NSArray::count(subviews);
+                for i in 0..count {
+                    let child: id = NSArray::objectAtIndex(subviews, i);
+                    queue.push(child);
+                }
             }
         }
-    }
 
-    if wk_view != nil {
-        // Disable native scroll on any enclosing NSScrollView wrapping the WKWebView.
-        // Without this, macOS trackpad wheel events are consumed at the AppKit level
-        // and never reach JavaScript — breaking embedded timeline scroll gestures.
-        let scroll_view: id = msg_send![wk_view, enclosingScrollView];
-        if scroll_view != nil {
-            // NSScrollElasticityNone = 1 — prevents bounce scrolling
-            let _: () = msg_send![scroll_view, setVerticalScrollElasticity: 1i64];
-            let _: () = msg_send![scroll_view, setHorizontalScrollElasticity: 1i64];
-            let _: () = msg_send![scroll_view, setHasVerticalScroller: false];
-            let _: () = msg_send![scroll_view, setHasHorizontalScroller: false];
+        if wk_view != nil {
+            // Disable native scroll on any enclosing NSScrollView wrapping the WKWebView.
+            // Without this, macOS trackpad wheel events are consumed at the AppKit level
+            // and never reach JavaScript — breaking embedded timeline scroll gestures.
+            let scroll_view: id = msg_send![wk_view, enclosingScrollView];
+            if scroll_view != nil {
+                // NSScrollElasticityNone = 1 — prevents bounce scrolling
+                let _: () = msg_send![scroll_view, setVerticalScrollElasticity: 1i64];
+                let _: () = msg_send![scroll_view, setHorizontalScrollElasticity: 1i64];
+                let _: () = msg_send![scroll_view, setHasVerticalScroller: false];
+                let _: () = msg_send![scroll_view, setHasHorizontalScroller: false];
+            }
+
+            // Attach pinch-to-zoom gesture recognizer (same as NSPanel overlay)
+            attach_magnify_gesture_to_view(wk_view);
+
+            // Set first responder immediately (handles the common case)
+            let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
+
+            // Also schedule on the next run-loop tick to win the race against any
+            // deferred responder-chain reset triggered by makeKeyAndOrderFront.
+            // Uses performSelector:withObject:afterDelay: which automatically retains
+            // both receiver and argument — no manual retain/release needed, so no
+            // risk of SIGBUS from zombie objects if the window closes in between.
+            let _: () = msg_send![ns_win, performSelector: sel!(makeFirstResponder:)
+                                           withObject: wk_view
+                                           afterDelay: 0.0f64];
         }
-
-        // Attach pinch-to-zoom gesture recognizer (same as NSPanel overlay)
-        attach_magnify_gesture_to_view(wk_view);
-
-        // Set first responder immediately
-        let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
-    }
     }); // with_autorelease_pool
 }
 
@@ -452,44 +455,54 @@ pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa
 #[cfg(target_os = "macos")]
 pub unsafe fn make_webview_first_responder(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
     with_autorelease_pool(|| {
-    use objc::{class, msg_send, sel, sel_impl};
-    use tauri_nspanel::cocoa::base::{id, nil};
-    use tauri_nspanel::cocoa::foundation::NSArray;
+        use objc::{class, msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+        use tauri_nspanel::cocoa::foundation::NSArray;
 
-    let content_view: id = panel.content_view();
-    let wk_class: *const objc::runtime::Class = class!(WKWebView);
+        let content_view: id = panel.content_view();
+        let wk_class: *const objc::runtime::Class = class!(WKWebView);
 
-    // BFS through subview tree to find WKWebView
-    let mut wk_view: id = nil;
-    let mut queue: Vec<id> = vec![content_view];
-    while let Some(view) = queue.pop() {
-        let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
-        if is_wk {
-            wk_view = view;
-            break;
-        }
-        let subviews: id = msg_send![view, subviews];
-        if subviews != nil {
-            let count: u64 = NSArray::count(subviews);
-            for i in 0..count {
-                let child: id = NSArray::objectAtIndex(subviews, i);
-                queue.push(child);
+        // BFS through subview tree to find WKWebView
+        let mut wk_view: id = nil;
+        let mut queue: Vec<id> = vec![content_view];
+        while let Some(view) = queue.pop() {
+            let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
+            if is_wk {
+                wk_view = view;
+                break;
+            }
+            let subviews: id = msg_send![view, subviews];
+            if subviews != nil {
+                let count: u64 = NSArray::count(subviews);
+                for i in 0..count {
+                    let child: id = NSArray::objectAtIndex(subviews, i);
+                    queue.push(child);
+                }
             }
         }
-    }
 
-    // Fallback: if no WKWebView found, use content_view (shouldn't happen)
-    if wk_view == nil {
-        wk_view = content_view;
-    }
+        // Fallback: if no WKWebView found, use content_view (shouldn't happen)
+        if wk_view == nil {
+            wk_view = content_view;
+        }
 
-    // Attach pinch-to-zoom gesture recognizer directly to the WKWebView.
-    // Must be on the WKWebView (not content_view) so it intercepts gestures
-    // before WebKit's internal multi-process routing claims them.
-    attach_magnify_gesture_to_view(wk_view);
+        // Attach pinch-to-zoom gesture recognizer directly to the WKWebView.
+        // Must be on the WKWebView (not content_view) so it intercepts gestures
+        // before WebKit's internal multi-process routing claims them.
+        attach_magnify_gesture_to_view(wk_view);
 
-    // Set first responder immediately
-    panel.make_first_responder(Some(wk_view));
+        // Set first responder immediately (handles the common case)
+        panel.make_first_responder(Some(wk_view));
+
+        // Also schedule on the next run-loop tick to win the race against any
+        // deferred responder-chain reset triggered by make_key_window().
+        // Uses performSelector:withObject:afterDelay: which automatically retains
+        // both receiver and argument — no manual retain/release needed, so no
+        // risk of SIGBUS from zombie objects if the panel closes in between.
+        let window: id = msg_send![panel.content_view(), window];
+        let _: () = msg_send![window, performSelector: sel!(makeFirstResponder:)
+                                       withObject: wk_view
+                                       afterDelay: 0.0f64];
     }); // with_autorelease_pool
 }
 
@@ -558,136 +571,6 @@ pub fn main_label_for_mode(mode: &str) -> &'static str {
 pub fn reset_to_regular_and_refresh_tray(app: &AppHandle) {
     info!("Resetting activation policy to Regular (dock+tray visible)");
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-}
-
-#[derive(Deserialize, Debug)]
-pub struct OpenLocalPathPayload {
-    path: String,
-    port: u16,
-    title: String,
-    width: f64,
-    height: f64,
-    x: Option<i32>,
-    y: Option<i32>,
-    always_on_top: Option<bool>,
-    transparent: Option<bool>,
-    decorations: Option<bool>,
-    #[allow(dead_code)] // read only on macOS
-    hidden_title: Option<bool>,
-    is_focused: Option<bool>,
-    visible_on_all_workspaces: Option<bool>,
-}
-
-#[derive(Serialize)]
-pub struct ApiResponse {
-    success: bool,
-    message: String,
-}
-
-pub async fn show_specific_window(
-    State(state): State<ServerState>,
-    Json(payload): Json<OpenLocalPathPayload>,
-) -> Result<Json<ApiResponse>, (StatusCode, String)> {
-    info!("opening local path: {}", payload.path);
-
-    // Close existing window if it exists
-    if let Some(existing_window) = state.app_handle.get_webview_window(&payload.title) {
-        if let Err(e) = existing_window.destroy() {
-            error!("failed to close existing window: {}", e);
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-    // NOTE: Accessory mode removed — it hides dock icon and tray on notched MacBooks
-    let url = format!("http://localhost:{}{}", payload.port, payload.path);
-    #[allow(unused_mut)]
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        &state.app_handle,
-        &payload.title,
-        tauri::WebviewUrl::External(url.parse().unwrap()),
-    )
-    .title(&payload.title)
-    .transparent(payload.transparent.unwrap_or(true))
-    .decorations(payload.decorations.unwrap_or(false))
-    .focused(payload.is_focused.unwrap_or(true))
-    .inner_size(payload.width, payload.height)
-    .always_on_top(payload.always_on_top.unwrap_or(true))
-    .visible_on_all_workspaces(payload.visible_on_all_workspaces.unwrap_or(true));
-
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.hidden_title(payload.hidden_title.unwrap_or(true));
-    }
-
-    let window = builder.build();
-
-    match window {
-        Ok(window) => {
-            // Set position if provided
-            if let (Some(x), Some(y)) = (payload.x, payload.y) {
-                let _ = window
-                    .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-            }
-
-            // Add event handler to reset activation policy when window closes
-            #[cfg(target_os = "macos")]
-            {
-                // No longer toggling activation policy — panel uses nonactivating mask
-            }
-
-            if let Err(e) = window.show() {
-                error!("failed to show window: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to show window: {}", e),
-                ));
-            }
-
-            Ok(Json(ApiResponse {
-                success: true,
-                message: "window opened successfully".to_string(),
-            }))
-        }
-        Err(e) => {
-            error!("failed to create window: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create window: {}", e),
-            ))
-        }
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct CloseWindowPayload {
-    title: String,
-}
-
-pub async fn close_window(
-    State(state): State<ServerState>,
-    Json(payload): Json<CloseWindowPayload>,
-) -> Result<Json<ApiResponse>, (StatusCode, String)> {
-    info!("received window close request: {:?}", payload);
-
-    if let Some(window) = state.app_handle.get_webview_window(&payload.title) {
-        match window.destroy() {
-            Ok(_) => Ok(Json(ApiResponse {
-                success: true,
-                message: "window closed successfully".to_string(),
-            })),
-            Err(e) => {
-                error!("failed to close window: {}", e);
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to close window: {}", e),
-                ))
-            }
-        }
-    } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            format!("window with title '{}' not found", payload.title),
-        ))
-    }
 }
 
 #[derive(PartialEq)]
@@ -1083,31 +966,57 @@ impl ShowRewindWindow {
             }
 
             if id.label() == RewindWindowId::Search.label() {
-                if let Some(query) = self.metadata() {
-                    let _ = window
-                        .eval(&format!("window.location.replace(`/search/{}`);", query))
+                // Navigate to /search to reset state (clear previous results)
+                let nav_url = if let Some(query) = self.metadata() {
+                    format!("/search/{}", query)
+                } else {
+                    "/search".to_string()
+                };
+                let _ = window
+                    .eval(&format!("window.location.replace(`{}`);", nav_url))
+                    .ok();
+
+                // Reposition to center of primary monitor
+                if let Ok(Some(monitor)) = app.primary_monitor() {
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
+                    let pos = monitor.position();
+                    let scale = monitor.scale_factor();
+                    let origin_x = pos.x as f64 / scale;
+                    let origin_y = pos.y as f64 / scale;
+                    let bar_w = 680.0_f64.min(logical.width - 40.0);
+                    let bar_h = 80.0;
+                    let x = origin_x + (logical.width - bar_w) / 2.0;
+                    let y = origin_y + logical.height * 0.22;
+                    window
+                        .set_size(Size::Logical(LogicalSize::new(bar_w, bar_h)))
+                        .ok();
+                    window
+                        .set_position(Position::Logical(LogicalPosition::new(x, y)))
                         .ok();
                 }
-                // Bring Search panel to front above Main (level 1002)
+
+                // Bring to front with high level (already class-swizzled to NSPanel)
                 #[cfg(target_os = "macos")]
                 {
                     let window_clone = window.clone();
                     run_on_main_thread_safe(app, move || {
                         use objc::{msg_send, sel, sel_impl};
-                        if let Ok(panel) = window_clone.to_panel() {
-                            panel.set_level(1002);
-                            panel.order_front_regardless();
+                        use tauri_nspanel::cocoa::base::id;
+                        if let Ok(ns_win) = window_clone.ns_window() {
+                            let ns_win = ns_win as id;
                             unsafe {
-                                let _: () = msg_send![&*panel, makeKeyWindow];
+                                let _: () = msg_send![ns_win, setLevel: 1002_i64];
+                                let _: () = msg_send![ns_win, orderFrontRegardless];
+                                let _: () = msg_send![ns_win, makeKeyWindow];
                             }
-                        } else {
-                            let _ = window_clone.show();
                         }
                     });
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
                     window.show().ok();
+                    window.set_focus().ok();
                 }
                 return Ok(window);
             }
@@ -1250,7 +1159,8 @@ impl ShowRewindWindow {
                         use objc::{msg_send, sel, sel_impl};
                         use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
 
-                        if let Ok(panel) = app_clone.get_webview_panel(RewindWindowId::Dictation.label())
+                        if let Ok(panel) =
+                            app_clone.get_webview_panel(RewindWindowId::Dictation.label())
                         {
                             // Level 1001 to appear above fullscreen apps
                             panel.set_level(1001);
@@ -1413,7 +1323,7 @@ impl ShowRewindWindow {
                                     // Synchronous alpha=0 — no order_out (which
                                     // causes focus-fight loops when restored).
                                     #[cfg(target_os = "macos")]
-                                    with_autorelease_pool(|| {
+                                    {
                                         use objc::{msg_send, sel, sel_impl};
                                         if let Ok(panel) = app_clone.get_webview_panel("main-window") {
                                             unsafe {
@@ -1421,7 +1331,7 @@ impl ShowRewindWindow {
                                             }
                                         }
                                         MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    });
+                                    }
                                     focus_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
                                     let cancel = focus_cancel.clone();
                                     let app = app_clone.clone();
@@ -1436,18 +1346,16 @@ impl ShowRewindWindow {
                                         {
                                             let app2 = app.clone();
                                             let _ = app.run_on_main_thread(move || {
-                                                with_autorelease_pool(|| {
-                                                    // Conditional restore: if focus moved to another
-                                                    // screenpipe window (Settings, Chat), just clear.
-                                                    // Only activate previous external app if our app
-                                                    // is no longer active.
-                                                    restore_frontmost_app_if_external_with_app(Some(&app2));
-                                                    // order_out removes the invisible panel from
-                                                    // the screen so it can't receive stray clicks.
-                                                    if let Ok(panel) = app2.get_webview_panel("main-window") {
-                                                        panel.order_out(None);
-                                                    }
-                                                });
+                                                // Conditional restore: if focus moved to another
+                                                // screenpipe window (Settings, Chat), just clear.
+                                                // Only activate previous external app if our app
+                                                // is no longer active.
+                                                restore_frontmost_app_if_external_with_app(Some(&app2));
+                                                // order_out removes the invisible panel from
+                                                // the screen so it can't receive stray clicks.
+                                                if let Ok(panel) = app2.get_webview_panel("main-window") {
+                                                    panel.order_out(None);
+                                                }
                                             });
                                         }
                                         // Unregister window shortcuts on focus loss (#2219)
@@ -1460,7 +1368,7 @@ impl ShowRewindWindow {
                                 } else {
                                     focus_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                     #[cfg(target_os = "macos")]
-                                    with_autorelease_pool(|| {
+                                    {
                                         use objc::{msg_send, sel, sel_impl};
                                         use tauri_nspanel::cocoa::base::id;
                                         if let Ok(panel) = app_clone.get_webview_panel("main-window") {
@@ -1480,7 +1388,7 @@ impl ShowRewindWindow {
                                             unsafe { make_webview_first_responder(&panel); }
                                         }
                                         MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-                                    });
+                                    }
                                     // Re-register window shortcuts on focus gain
                                     let app_reg = app_clone.clone();
                                     std::thread::spawn(move || {
@@ -1751,7 +1659,7 @@ impl ShowRewindWindow {
                                 // Synchronous alpha=0 — panel stays in window list
                                 // but is invisible. No order_out (causes focus loops).
                                 #[cfg(target_os = "macos")]
-                                with_autorelease_pool(|| {
+                                {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
                                         let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1763,7 +1671,7 @@ impl ShowRewindWindow {
                                         }
                                     }
                                     MAIN_PANEL_SHOWN.store(false, std::sync::atomic::Ordering::SeqCst);
-                                });
+                                }
                                 focus_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
                                 let cancel = focus_cancel.clone();
                                 let app = app_clone.clone();
@@ -1784,17 +1692,15 @@ impl ShowRewindWindow {
                                             main_label_for_mode(&mode).to_string()
                                         };
                                         let _ = app.run_on_main_thread(move || {
-                                            with_autorelease_pool(|| {
-                                                // Conditional restore: if focus moved to another
-                                                // screenpipe window, just clear. Only activate
-                                                // previous external app if ours is inactive.
-                                                restore_frontmost_app_if_external_with_app(Some(&app2));
-                                                // order_out removes the invisible panel so it
-                                                // can't receive stray clicks at alpha=0.
-                                                if let Ok(panel) = app2.get_webview_panel(&lbl) {
-                                                    panel.order_out(None);
-                                                }
-                                            });
+                                            // Conditional restore: if focus moved to another
+                                            // screenpipe window, just clear. Only activate
+                                            // previous external app if ours is inactive.
+                                            restore_frontmost_app_if_external_with_app(Some(&app2));
+                                            // order_out removes the invisible panel so it
+                                            // can't receive stray clicks at alpha=0.
+                                            if let Ok(panel) = app2.get_webview_panel(&lbl) {
+                                                panel.order_out(None);
+                                            }
                                         });
                                     }
                                     // Unregister window-specific shortcuts (arrows, Escape)
@@ -1809,7 +1715,7 @@ impl ShowRewindWindow {
                                 // Cancel any pending hide, restore alpha
                                 focus_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                 #[cfg(target_os = "macos")]
-                                with_autorelease_pool(|| {
+                                {
                                     use objc::{msg_send, sel, sel_impl};
                                     let lbl = {
                                         let mode = MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1826,7 +1732,7 @@ impl ShowRewindWindow {
                                         unsafe { make_webview_first_responder(&panel); }
                                     }
                                     MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-                                });
+                                }
                                 // Re-register window-specific shortcuts on focus gain
                                 let app_reg = app_clone.clone();
                                 std::thread::spawn(move || {
@@ -1894,7 +1800,8 @@ impl ShowRewindWindow {
                 let bar_w = 680.0_f64;
                 let bar_h = 80.0; // input row + footer
                 let (x, y) = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
                     let pos = monitor.position();
                     let scale = monitor.scale_factor();
                     let origin_x = pos.x as f64 / scale;
@@ -1907,78 +1814,76 @@ impl ShowRewindWindow {
                     (200.0, 140.0)
                 };
                 let bar_w = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
                     bar_w.min(logical.width - 40.0)
                 } else {
                     bar_w
                 };
 
-                let builder = WebviewWindow::builder(
-                    app,
-                    self.id().label(),
-                    WebviewUrl::App(url.into()),
-                )
-                .title("")
-                .visible(false) // show after panel conversion
-                .accept_first_mouse(true)
-                .shadow(true)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .inner_size(bar_w, bar_h)
-                .min_inner_size(400.0, 56.0)
-                .position(x, y)
-                .focused(true)
-                .resizable(true);
+                let builder =
+                    WebviewWindow::builder(app, self.id().label(), WebviewUrl::App(url.into()))
+                        .title("")
+                        .visible(false) // show after panel conversion
+                        .accept_first_mouse(true)
+                        .shadow(true)
+                        .decorations(false)
+                        .transparent(true)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .inner_size(bar_w, bar_h)
+                        .min_inner_size(400.0, 56.0)
+                        .position(x, y)
+                        .focused(true)
+                        .resizable(true);
 
                 let window = builder.build()?;
 
-                // Convert to NSPanel at level 1002 so it floats above Main (1001)
+                // Skip NSPanel conversion for search — it causes SIGSEGV crashes
+                // in objc_autoreleasePoolPop on macOS 26. Use raw NSWindow level
+                // instead to float above fullscreen apps without NSPanel.
                 #[cfg(target_os = "macos")]
                 {
-                    if let Ok(_panel) = window.to_panel() {
-                        info!("search window converted to panel");
-                    }
                     let window_clone = window.clone();
                     run_on_main_thread_safe(app, move || {
-                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                         use objc::{msg_send, sel, sel_impl};
-
-                        if let Ok(panel) = window_clone.to_panel() {
-                            // Level 1002 — above Main timeline (1001)
-                            panel.set_level(1002);
-
-                            // NSNonactivatingPanelMask (128) — critical for appearing
-                            // over fullscreen apps without triggering Space switch
+                        use tauri_nspanel::cocoa::base::id;
+                        use tauri_nspanel::objc_foundation::INSObject;
+                        use tauri_nspanel::raw_nspanel::object_setClass;
+                        if let Ok(ns_win) = window_clone.ns_window() {
+                            let ns_win = ns_win as id;
                             unsafe {
-                                let current: i32 = msg_send![&*panel, styleMask];
-                                panel.set_style_mask(current | 128);
+                                // Swizzle NSWindow → NSPanel class for non-activating behavior
+                                // Do NOT use to_panel() — its Id::from_retained_ptr causes
+                                // use-after-free on window.close() → SIGSEGV
+                                let nspanel_class: id = msg_send![
+                                    tauri_nspanel::raw_nspanel::RawNSPanel::class(),
+                                    class
+                                ];
+                                object_setClass(ns_win, nspanel_class);
+
+                                // Level 1002 — above fullscreen (CGShieldingWindowLevel+2)
+                                let _: () = msg_send![ns_win, setLevel: 1002_i64];
+
+                                // NSNonactivatingPanelMask (128) — appear over fullscreen
+                                // without triggering Space switch
+                                let current: i32 = msg_send![ns_win, styleMask];
+                                let _: () = msg_send![ns_win, setStyleMask: current | 128];
+
+                                // CanJoinAllSpaces (1) + FullScreenAuxiliary (256)
+                                let _: () = msg_send![ns_win, setCollectionBehavior: 257_u64];
+
+                                let _: () = msg_send![ns_win, setHidesOnDeactivate: false];
+                                let _: () = msg_send![ns_win, orderFrontRegardless];
+                                let _: () = msg_send![ns_win, makeKeyWindow];
                             }
-
-                            panel.set_hides_on_deactivate(false);
-
-                            // Full-screen + move-to-active-space behaviors
-                            panel.set_collection_behaviour(
-                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
-                            );
-
-                            panel.order_front_regardless();
-
-                            // Make the panel key so the search input receives keyboard focus
-                            unsafe {
-                                let _: () = msg_send![&*panel, makeKeyWindow];
-                            }
-                        } else {
-                            info!("search panel conversion failed, showing as regular window");
-                            let _ = window_clone.show();
                         }
                     });
                 }
-
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = window.show();
+                    window.set_focus().ok();
                 }
 
                 window
@@ -2083,10 +1988,10 @@ impl ShowRewindWindow {
                                 // MoveToActiveSpace so show_existing can pull
                                 // it to any Space (including fullscreen).
                                 panel.set_collection_behaviour(
-                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
-                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
-                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-                                );
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            );
                             }
                         });
                     }
@@ -2293,6 +2198,7 @@ impl ShowRewindWindow {
                 window.minimize().ok();
                 return Ok(());
             }
+
             window.close().ok();
         }
         Ok(())

@@ -10,6 +10,14 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use oasgen::OaSchema;
 use serde::{Deserialize, Serialize};
 
+/// Canonical device name for macOS output audio capture.
+/// On macOS, system audio is captured via ScreenCaptureKit display devices.
+/// The audio content is identical regardless of which display is used as the
+/// anchor — it's system-wide audio. Using a single canonical name avoids
+/// gaps when displays change (KVM switch, monitor disconnect/reconnect).
+#[cfg(target_os = "macos")]
+pub const MACOS_OUTPUT_AUDIO_DEVICE_NAME: &str = "System Audio";
+
 #[derive(OaSchema, Clone, Debug)]
 pub struct DeviceControl {
     pub is_running: bool,
@@ -176,6 +184,10 @@ pub async fn get_cpal_device_and_config(
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
     let host = cpal::default_host();
     let is_output_device = audio_device.device_type == DeviceType::Output;
+    #[cfg(target_os = "macos")]
+    let is_display = audio_device.to_string().contains("Display")
+        || audio_device.name == MACOS_OUTPUT_AUDIO_DEVICE_NAME;
+    #[cfg(not(target_os = "macos"))]
     let is_display = audio_device.to_string().contains("Display");
     let device_name = audio_device
         .to_string()
@@ -197,36 +209,71 @@ pub async fn get_cpal_device_and_config(
             DeviceType::Output => host.default_output_device(),
         }
     } else {
-        let mut devices = match audio_device.device_type {
-            DeviceType::Input => host.input_devices()?,
-            DeviceType::Output => host.output_devices()?,
-        };
-
         #[cfg(target_os = "macos")]
-        if is_output_device {
-            match get_screen_capture_host().await {
+        if is_output_device && device_name == MACOS_OUTPUT_AUDIO_DEVICE_NAME {
+            // "System Audio" is a virtual device — try ALL available SCK displays.
+            // The audio content is identical regardless of which display anchors
+            // the SCK stream, so pick the first one that's available.
+            let found = match get_screen_capture_host().await {
                 Ok(screen_capture_host) => {
-                    devices = screen_capture_host.input_devices()?;
+                    let mut result = None;
+                    for candidate in screen_capture_host.input_devices()? {
+                        if let Ok(name) = candidate.name() {
+                            tracing::debug!(
+                                "System Audio: trying SCK display '{}' as anchor",
+                                name
+                            );
+                            // Verify the device actually has valid configs
+                            if candidate.supported_input_configs().is_ok() {
+                                result = Some(candidate);
+                                break;
+                            }
+                        }
+                    }
+                    result
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "ScreenCaptureKit unavailable for output device '{}': {} — \
-                         device lookup may fail",
-                        device_name,
+                        "ScreenCaptureKit unavailable for System Audio: {}",
                         e
                     );
+                    None
+                }
+            };
+            found
+        } else {
+            let mut devices = match audio_device.device_type {
+                DeviceType::Input => host.input_devices()?,
+                DeviceType::Output => host.output_devices()?,
+            };
+
+            #[cfg(target_os = "macos")]
+            if is_output_device {
+                match get_screen_capture_host().await {
+                    Ok(screen_capture_host) => {
+                        devices = screen_capture_host.input_devices()?;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "ScreenCaptureKit unavailable for output device '{}': {} — \
+                             device lookup may fail",
+                            device_name,
+                            e
+                        );
+                    }
                 }
             }
-        }
 
-        devices.find(|x| x.name().map(|y| y == device_name).unwrap_or(false))
+            devices.find(|x| x.name().map(|y| y == device_name).unwrap_or(false))
+        }
     }
     .ok_or_else(|| anyhow!("Audio device not found: {}", device_name))?;
 
     // Get the highest quality configuration based on device type
     let config = if is_output_device && !is_display {
-        let configs = cpal_audio_device.supported_output_configs()?;
+        let configs: Vec<_> = cpal_audio_device.supported_output_configs()?.collect();
         let best_config = configs
+            .iter()
             .max_by(|a, b| {
                 a.max_sample_rate()
                     .0
@@ -235,10 +282,11 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
-        best_config.with_sample_rate(best_config.max_sample_rate())
+        best_config.clone().with_sample_rate(best_config.max_sample_rate())
     } else {
-        let configs = cpal_audio_device.supported_input_configs()?;
+        let configs: Vec<_> = cpal_audio_device.supported_input_configs()?.collect();
         let best_config = configs
+            .iter()
             .max_by(|a, b| {
                 a.max_sample_rate()
                     .0
@@ -247,7 +295,7 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported input configurations found"))?;
 
-        best_config.with_sample_rate(best_config.max_sample_rate())
+        best_config.clone().with_sample_rate(best_config.max_sample_rate())
     };
 
     Ok((cpal_audio_device, config))
@@ -270,34 +318,26 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
             }
         }
 
-        // Filter function to exclude macOS speakers and AirPods for output devices
-        fn should_include_output_device(name: &str) -> bool {
-            #[cfg(target_os = "macos")]
-            {
-                !name.to_lowercase().contains("speakers")
-                    && !name.to_lowercase().contains("airpods")
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                // Avoid "unused variable" warning in non-macOS systems
-                let _ = name;
-                true
-            }
-        }
-
-        // macos hack using screen capture kit for output devices - does not work well
+        // macOS: expose a single canonical "System Audio" output device instead
+        // of individual display devices (Display 1, Display 3, etc.).
+        // The audio content is identical across all displays — SCK captures
+        // system-wide audio. Using a canonical name prevents gaps when displays
+        // change (KVM switch, monitor disconnect) because the device identity
+        // remains stable regardless of which physical display anchors the stream.
         #[cfg(target_os = "macos")]
         {
-            // !HACK macos is supposed to use special macos feature "display capture"
-            // ! see https://github.com/RustAudio/cpal/pull/894
             match get_screen_capture_host().await {
                 Ok(screen_capture_host) => {
-                    for device in screen_capture_host.input_devices()? {
-                        if let Ok(name) = device.name() {
-                            if should_include_output_device(&name) {
-                                devices.push(AudioDevice::new(name, DeviceType::Output));
-                            }
-                        }
+                    // Check if ANY display is available — that's all we need
+                    let has_display = screen_capture_host
+                        .input_devices()
+                        .map(|mut d| d.next().is_some())
+                        .unwrap_or(false);
+                    if has_display {
+                        devices.push(AudioDevice::new(
+                            MACOS_OUTPUT_AUDIO_DEVICE_NAME.to_string(),
+                            DeviceType::Output,
+                        ));
                     }
                 }
                 Err(e) => {
@@ -314,6 +354,12 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         // devices can actually be recorded from. Physical output devices (headphones,
         // speakers) appear recordable in the UI but always fail with "device not found"
         // in get_cpal_device_and_config because SCK's input_devices() doesn't include them.
+        #[cfg(not(target_os = "macos"))]
+        fn should_include_output_device(name: &str) -> bool {
+            let _ = name;
+            true
+        }
+
         #[cfg(not(target_os = "macos"))]
         for device in host.output_devices()? {
             if let Ok(name) = device.name() {
@@ -470,17 +516,22 @@ pub async fn default_output_device() -> Result<AudioDevice> {
 
     #[cfg(target_os = "macos")]
     {
-        // On macOS, output audio capture ONLY works via ScreenCaptureKit display
-        // audio. Physical output devices (headphones, speakers) cannot be recorded
-        // from — they always fail with "Audio device not found" in
-        // get_cpal_device_and_config because SCK input_devices() doesn't include them.
-        // See https://github.com/RustAudio/cpal/pull/894
+        // On macOS, output audio capture works via ScreenCaptureKit display devices.
+        // The audio content is system-wide and identical across all displays.
+        // Return a canonical "System Audio" device — get_cpal_device_and_config()
+        // will resolve it to whichever display is currently available.
         match get_screen_capture_host().await {
             Ok(host) => {
-                if let Some(device) = host.default_input_device() {
-                    if let Ok(name) = device.name() {
-                        return Ok(AudioDevice::new(name, DeviceType::Output));
-                    }
+                // Verify at least one display exists
+                let has_display = host
+                    .input_devices()
+                    .map(|mut d| d.next().is_some())
+                    .unwrap_or(false);
+                if has_display {
+                    return Ok(AudioDevice::new(
+                        MACOS_OUTPUT_AUDIO_DEVICE_NAME.to_string(),
+                        DeviceType::Output,
+                    ));
                 }
                 Err(anyhow!(
                     "ScreenCaptureKit available but no display audio device found — \

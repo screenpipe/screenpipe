@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
 use std::fs;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, error};
 
@@ -53,9 +53,10 @@ impl SnapshotWriter {
         let path = date_dir.join(&filename);
 
         let file = fs::File::create(&path)?;
-        let writer = BufWriter::new(file);
-        let mut encoder = JpegEncoder::new_with_quality(writer, self.quality);
+        let mut writer = BufWriter::new(file);
+        let mut encoder = JpegEncoder::new_with_quality(&mut writer, self.quality);
         encoder.encode_image(image)?;
+        writer.flush()?;
 
         debug!(
             "snapshot written: {} ({}x{}, q={})",

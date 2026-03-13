@@ -214,6 +214,18 @@
     @apply bg-background text-foreground !pointer-events-auto !overscroll-none;
   }
 
+  /* Prevent intermittent scrollbars on Windows overlay — html/body should never scroll,
+     inner containers handle their own scrolling with scrollbar-hide */
+  html, body {
+    overflow: hidden;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+  }
+
   *,
   a,
   button {

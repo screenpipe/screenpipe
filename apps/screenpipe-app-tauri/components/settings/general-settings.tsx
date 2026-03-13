@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare, Lightbulb } from "lucide-react";
@@ -203,11 +204,10 @@ export default function GeneralSettings() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <select
-                  className="text-xs border rounded px-2 py-1 bg-background"
-                  value={settings?.pipeSuggestionFrequencyHours ?? 24}
-                  onChange={(e) => {
-                    const freq = parseInt(e.target.value, 10);
+                <Select
+                  value={String(settings?.pipeSuggestionFrequencyHours ?? 24)}
+                  onValueChange={(value) => {
+                    const freq = parseInt(value, 10);
                     handleSettingsChange({ pipeSuggestionFrequencyHours: freq });
                     commands.pipeSuggestionsUpdateSettings(
                       settings?.pipeSuggestionsEnabled !== false,
@@ -216,15 +216,20 @@ export default function GeneralSettings() {
                   }}
                   disabled={settings?.pipeSuggestionsEnabled === false}
                 >
-                  <option value={1}>every 1h</option>
-                  <option value={2}>every 2h</option>
-                  <option value={3}>every 3h</option>
-                  <option value={6}>every 6h</option>
-                  <option value={12}>every 12h</option>
-                  <option value={24}>daily</option>
-                  <option value={72}>every 3 days</option>
-                  <option value={168}>weekly</option>
-                </select>
+                  <SelectTrigger className="h-7 w-[110px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">every 1h</SelectItem>
+                    <SelectItem value="2">every 2h</SelectItem>
+                    <SelectItem value="3">every 3h</SelectItem>
+                    <SelectItem value="6">every 6h</SelectItem>
+                    <SelectItem value="12">every 12h</SelectItem>
+                    <SelectItem value="24">daily</SelectItem>
+                    <SelectItem value="72">every 3 days</SelectItem>
+                    <SelectItem value="168">weekly</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Switch
                   checked={settings?.pipeSuggestionsEnabled !== false}
                   onCheckedChange={(checked) => {

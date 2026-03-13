@@ -453,9 +453,9 @@ pub async fn event_driven_capture_loop(
                                 result.duration_ms
                             );
                         } else {
-                            // Content dedup — capture skipped, still record heartbeat
-                            debug!(
-                                "content dedup: skipped DB write for monitor {} (trigger={})",
+                            // Content dedup or window filter — capture skipped
+                            info!(
+                                "capture skipped DB write for monitor {} (trigger={})",
                                 monitor_id,
                                 trigger.as_str()
                             );
@@ -632,7 +632,7 @@ async fn do_capture(
     let tree_snapshot = match tree_walk_result {
         TreeWalkResult::Found(snap) => Some(snap),
         TreeWalkResult::Skipped => {
-            debug!(
+            warn!(
                 "skipping capture: window filtered (incognito/private) on monitor {}",
                 monitor_id
             );
@@ -656,7 +656,7 @@ async fn do_capture(
                 let new_hash = snap.content_hash as i64;
                 if let Some(prev) = previous_content_hash {
                     if prev == new_hash && new_hash != 0 {
-                        debug!(
+                        info!(
                             "content dedup: skipping capture for monitor {} (hash={}, trigger={})",
                             monitor_id,
                             new_hash,
@@ -686,7 +686,7 @@ async fn do_capture(
             || app_lower == "screensaverengine"
             || app_lower == "lockscreen"
         {
-            debug!(
+            warn!(
                 "skipping capture: lock screen app '{}' on monitor {}",
                 app, monitor_id
             );
@@ -707,7 +707,7 @@ async fn do_capture(
         // No app name detected (accessibility tree failed) AND screen is locked.
         // This is the common case when locked via Cmd+Ctrl+Q — the tree walker
         // can't read loginwindow's UI so app_name comes back None/"Unknown".
-        debug!(
+        warn!(
             "skipping capture: no app detected and screen is locked on monitor {}",
             monitor_id
         );

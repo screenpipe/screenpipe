@@ -1014,15 +1014,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         const fullMessage = `${context}\n\n${prompt}`;
         // Start a new conversation then send
         (async () => {
-          if (piInfo?.running) {
-            try {
-              // Abort + new_session now await completion — no sleeps needed
-              await commands.piAbort(PI_CHAT_SESSION);
-              await commands.piNewSession(PI_CHAT_SESSION);
-            } catch (e) {
-              console.warn("[Pi] Failed to reset session:", e);
-            }
-          }
           // Clear all streaming state so sendPiMessage doesn't think a message is in-flight
           piStreamingTextRef.current = "";
           piMessageIdRef.current = null;
@@ -1052,6 +1043,16 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           };
           const ready = piInfo?.running || await waitForPi(10000);
           if (ready) {
+            // Reset Pi session AFTER confirming it's running to clear any
+            // stale isStreaming state from a previous conversation.
+            // This must happen here, not earlier — on fresh page loads
+            // (e.g. navigateHomeAndPrefill), piInfo is null at mount time
+            // so gating on piInfo?.running would skip this entirely.
+            try {
+              await commands.piNewSession(PI_CHAT_SESSION);
+            } catch (e) {
+              console.warn("[Pi] Failed to reset session before auto-send:", e);
+            }
             // Signal that the next sendPiMessage call should bypass the piInfo guard
             // (we just confirmed Pi is running via waitForPi but React state may be stale)
             autoSendBypassRef.current = true;

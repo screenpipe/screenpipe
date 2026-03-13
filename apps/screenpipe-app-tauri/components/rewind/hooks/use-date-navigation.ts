@@ -92,10 +92,11 @@ export function useDateNavigation(opts: {
 				f.devices.some((d) => String(d.frame_id) === String(frameId))
 			);
 			if (exactIdx >= 0) {
-				const snapped = snapToDevice(exactIdx);
-				setCurrentIndex(snapped);
-				if (frames[snapped]) {
-					setCurrentFrame(frames[snapped]);
+				// Use exact match directly — don't snapToDevice() which would
+				// override with a nearby frame from the filtered device
+				setCurrentIndex(exactIdx);
+				if (frames[exactIdx]) {
+					setCurrentFrame(frames[exactIdx]);
 				}
 				return;
 			}
@@ -377,9 +378,14 @@ export function useDateNavigation(opts: {
 				}
 
 				resetFilters();
-				const snapped = snapToDevice(closestIndex);
-				setCurrentIndex(snapped);
-				setCurrentFrame(frames[snapped]);
+				// If we matched by exact frame_id, use that index directly
+				// (don't snapToDevice which overrides with a nearby frame)
+				const finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
+					frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
+					? closestIndex
+					: snapToDevice(closestIndex);
+				setCurrentIndex(finalIndex);
+				setCurrentFrame(frames[finalIndex]);
 				// Use HTTP JPEG fallback for this first frame (skip slow video seek)
 				setSearchNavFrame(true);
 

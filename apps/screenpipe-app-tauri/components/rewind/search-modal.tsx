@@ -47,7 +47,7 @@ interface TaggedFrame {
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onNavigateToTimestamp: (timestamp: string, frameId?: number) => void;
+  onNavigateToTimestamp: (timestamp: string, frameId?: number, searchTerms?: string[], searchResultsJson?: string, searchQuery?: string) => void;
   embedded?: boolean;
   /** When true, this is rendered in its own Tauri window (no backdrop, always open) */
   standalone?: boolean;
@@ -1064,9 +1064,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     // Track which result was selected so timeline arrow keys can cycle from here
     const idx = searchResults.findIndex((r) => r.frame_id === result.frame_id);
     if (idx >= 0) setCurrentResultIndex(idx);
-    onNavigateToTimestamp(result.timestamp, result.frame_id);
+    const resultsJson = JSON.stringify(searchResults);
+    onNavigateToTimestamp(result.timestamp, result.frame_id, queryTokens, resultsJson, query);
     onClose();
-  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, setCurrentResultIndex]);
+  }, [onNavigateToTimestamp, onClose, queryTokens, setHighlight, searchResults, query, setCurrentResultIndex]);
 
   // Keyboard navigation — uses refs for data arrays to avoid re-mounting when results change
   useEffect(() => {
@@ -1397,7 +1398,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 <div
                   key={frame.frame_id}
                   onClick={() => {
-                    onNavigateToTimestamp(frame.timestamp, frame.frame_id);
+                    const resultsJson = JSON.stringify(searchResults);
+                    onNavigateToTimestamp(frame.timestamp, frame.frame_id, queryTokens, resultsJson, query);
                     if (!embedded) onClose();
                   }}
                   className="cursor-pointer rounded overflow-hidden border border-border hover:border-foreground/50 transition-all duration-150"

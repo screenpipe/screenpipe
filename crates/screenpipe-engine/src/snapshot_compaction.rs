@@ -245,8 +245,12 @@ async fn compact_chunk(
         .take()
         .ok_or_else(|| anyhow::anyhow!("ffmpeg stdin not available"))?;
 
-    let mut encoded_count = 0u32;
-    for (_, snapshot_path, _) in frames {
+    // Track which frames were actually encoded into the video and their
+    // position in the video stream. Frames may be skipped (missing file,
+    // read error) so the video position can differ from the array index.
+    let mut encoded_frames: Vec<(i64, u32)> = Vec::new(); // (frame_id, video_position)
+    let mut video_position = 0u32;
+    for (frame_id, snapshot_path, _) in frames {
         let jpeg_path = Path::new(snapshot_path);
         if !jpeg_path.exists() {
             warn!("snapshot file missing, skipping: {}", snapshot_path);
@@ -260,7 +264,8 @@ async fn compact_chunk(
                     error!("failed to write frame to ffmpeg: {}", e);
                     break;
                 }
-                encoded_count += 1;
+                encoded_frames.push((*frame_id, video_position));
+                video_position += 1;
                 // Pace writes to avoid CPU spikes — spread encoding over time
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
@@ -273,7 +278,7 @@ async fn compact_chunk(
 
     finish_ffmpeg_process(child, Some(stdin)).await;
 
-    if encoded_count == 0 {
+    if encoded_frames.is_empty() {
         let _ = tokio::fs::remove_file(&mp4_path).await;
         return Ok(None);
     }
@@ -295,19 +300,15 @@ async fn compact_chunk(
         .insert_video_chunk_with_fps(&mp4_path_str, device_name, fps)
         .await?;
 
-    // Batch UPDATE using CASE expressions — single statement instead of N individual UPDATEs.
-    // Dramatically reduces write-lock hold time on slow/memory-constrained systems.
+    // Only update frames that were actually encoded into the video.
+    // Use their real video position as offset_index (not array index).
     let mut tx = db.begin_immediate_with_retry().await?;
-    for batch in frames.chunks(100) {
-        let ids: Vec<i64> = batch.iter().map(|(id, _, _)| *id).collect();
+    for batch in encoded_frames.chunks(100) {
+        let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let case_clauses: Vec<String> = batch
             .iter()
-            .enumerate()
-            .map(|(i, (id, _, _))| {
-                let offset = frames.iter().position(|(fid, _, _)| fid == id).unwrap_or(i);
-                format!("WHEN {} THEN {}", id, offset)
-            })
+            .map(|(id, pos)| format!("WHEN {} THEN {}", id, pos))
             .collect();
 
         let sql = format!(
@@ -347,7 +348,7 @@ async fn compact_chunk(
 
     info!(
         "snapshot compaction: {} frames, {:.1}MB → {:.1}MB ({:.1}x), {} JPEGs deleted",
-        encoded_count,
+        encoded_frames.len(),
         jpeg_total_bytes as f64 / 1_048_576.0,
         mp4_size as f64 / 1_048_576.0,
         ratio,
@@ -355,10 +356,10 @@ async fn compact_chunk(
     );
 
     // Return cache update info so hot_frame_cache can be patched
-    let cache_updates: Vec<(i64, String, i64, f64)> = frames
+    // Only include frames that were actually encoded, with correct video positions
+    let cache_updates: Vec<(i64, String, i64, f64)> = encoded_frames
         .iter()
-        .enumerate()
-        .map(|(offset, (frame_id, _, _))| (*frame_id, mp4_path_str.clone(), offset as i64, fps))
+        .map(|(frame_id, pos)| (*frame_id, mp4_path_str.clone(), *pos as i64, fps))
         .collect();
 
     Ok(Some(cache_updates))

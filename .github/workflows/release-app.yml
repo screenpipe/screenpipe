@@ -736,12 +736,12 @@ jobs:
 
           bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
 
-          # Fix GLib ABI mismatch: the AppImage bundles GLib from Ubuntu 24.04 but
-          # on distros like Fedora 43 with newer GLib, the system's libsecret expects
-          # symbols (e.g. g_variant_builder_init_static) missing from the bundled GLib.
-          # Remove bundled GLib/GIO/GObject/GModule so the system versions are used
-          # consistently. These are core system libraries present on all Linux desktops.
-          echo "Removing bundled GLib libraries to prevent ABI mismatch on newer distros..."
+          # Fix ABI mismatch: the AppImage bundles libs from Ubuntu 24.04 but
+          # on distros like Fedora 43 with newer system libs, symbols are missing
+          # (e.g. g_variant_builder_init_static in GLib, MOUNT_2_40 in libmount).
+          # Remove bundled GLib/GIO/GObject/GModule/libmount/libblkid/libpcre2
+          # so system versions are used. These are core libs on all Linux desktops.
+          echo "Removing bundled system libraries to prevent ABI mismatch on newer distros..."
           # Install appimagetool for repacking
           curl -fsSL -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x /tmp/appimagetool
@@ -753,7 +753,10 @@ jobs:
             rm -f squashfs-root/usr/lib/libglib-2.0.so* \
                   squashfs-root/usr/lib/libgobject-2.0.so* \
                   squashfs-root/usr/lib/libgio-2.0.so* \
-                  squashfs-root/usr/lib/libgmodule-2.0.so*
+                  squashfs-root/usr/lib/libgmodule-2.0.so* \
+                  squashfs-root/usr/lib/libmount.so* \
+                  squashfs-root/usr/lib/libblkid.so* \
+                  squashfs-root/usr/lib/libpcre2-8.so*
             echo "Removed bundled GLib libs, repacking AppImage..."
             ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
             rm -rf squashfs-root

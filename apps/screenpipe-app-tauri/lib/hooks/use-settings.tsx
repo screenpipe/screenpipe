@@ -201,8 +201,8 @@ const DEFAULT_PI_PRESET: AIPreset = {
 	id: "pi-agent",
 	provider: "pi",
 	url: "",
-	model: "claude-haiku-4-5",
-	maxContextChars: 200000,
+	model: "gemini-3.1-pro",
+	maxContextChars: 1000000,
 	defaultPreset: true,
 	prompt: "",
 };
@@ -398,6 +398,16 @@ function createSettingsStore() {
 			if (settings.aiPresets.length === 0) {
 				settings.aiPresets = [DEFAULT_PI_PRESET as any];
 			}
+			needsUpdate = true;
+		}
+
+		// Migration: Switch default pi-agent preset from claude-haiku to gemini-3.1-pro
+		const piPresetToMigrate = settings.aiPresets?.find(
+			(p: any) => p.id === "pi-agent" && p.provider === "pi" && p.model === "claude-haiku-4-5"
+		);
+		if (piPresetToMigrate) {
+			(piPresetToMigrate as any).model = "gemini-3.1-pro";
+			(piPresetToMigrate as any).maxContextChars = 1000000;
 			needsUpdate = true;
 		}
 

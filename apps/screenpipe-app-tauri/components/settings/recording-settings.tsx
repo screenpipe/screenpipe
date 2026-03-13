@@ -1565,7 +1565,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                       Max batch duration
-                      <HelpTooltip text="Maximum duration of audio to batch before transcribing. Longer batches give better context for transcription quality. 0 = auto (engine default: Deepgram 1h, Whisper/OpenAI 10min)." />
+                      <HelpTooltip text="Maximum duration of audio to batch before transcribing. Longer batches give better context. 0 = auto (recommended). Audio is compressed to MP3 before upload." />
                     </span>
                     <span className="text-xs font-mono text-foreground">
                       {(settings.batchMaxDurationSecs ?? 0) === 0
@@ -1579,13 +1579,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       handleSettingsChange({ batchMaxDurationSecs: value }, true)
                     }
                     min={0}
-                    max={3600}
-                    step={60}
+                    max={1800}
+                    step={30}
                     className="w-full"
                   />
                   <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
                     <span>auto</span>
-                    <span>60min</span>
+                    <span>30min</span>
                   </div>
                 </div>
               )}

@@ -543,6 +543,9 @@ pub async fn search_navigate_to_timeline(
     app_handle: tauri::AppHandle,
     timestamp: String,
     frame_id: Option<i64>,
+    search_terms: Option<Vec<String>>,
+    search_results_json: Option<String>,
+    search_query: Option<String>,
 ) -> Result<(), String> {
     // Show the Main timeline
     ShowRewindWindow::Main.show(&app_handle).map_err(|e| e.to_string())?;
@@ -554,7 +557,13 @@ pub async fn search_navigate_to_timeline(
     tokio::spawn(async move {
         for i in 0..5 {
             tokio::time::sleep(tokio::time::Duration::from_millis(if i == 0 { 200 } else { 200 })).await;
-            let _ = app.emit("search-navigate-to-timestamp", serde_json::json!({ "timestamp": timestamp, "frame_id": frame_id }));
+            let _ = app.emit("search-navigate-to-timestamp", serde_json::json!({
+                "timestamp": timestamp,
+                "frame_id": frame_id,
+                "search_terms": search_terms,
+                "search_results_json": search_results_json,
+                "search_query": search_query,
+            }));
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         let _ = ShowRewindWindow::Search { query: None }.close(&app);

@@ -33,6 +33,9 @@ async function handleDeepgramTranscription(request: Request, env: Env): Promise<
     const languages = request.headers.get('detect_language')?.split(',') || [];
     const sampleRate = request.headers.get('sample_rate') || '16000';
 
+    // Forward the original Content-Type (e.g. audio/mpeg for MP3, audio/wav for WAV)
+    const incomingContentType = request.headers.get('Content-Type') || 'audio/wav';
+
     const deepgramResponse = await fetch(
       'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&sample_rate=' +
         sampleRate +
@@ -41,7 +44,7 @@ async function handleDeepgramTranscription(request: Request, env: Env): Promise<
         method: 'POST',
         headers: {
           Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
-          'Content-Type': 'audio/wav',
+          'Content-Type': incomingContentType,
         },
         body: audioBuffer,
       }

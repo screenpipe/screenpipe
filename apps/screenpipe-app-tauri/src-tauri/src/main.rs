@@ -8,7 +8,6 @@ use analytics::AnalyticsManager;
 use commands::show_main_window;
 use serde_json::json;
 use std::env;
-use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
@@ -1849,14 +1848,9 @@ async fn main() {
             let posthog_api_key = "phc_Bt8GoTBPgkCpDrbaIZzJIEYt0CrJjhBiuLaBck1clce".to_string();
             let interval_hours = 6;
 
-            let path = base_dir.join("store.bin");
-            if !path.exists() {
-                if let Err(e) = File::create(path.clone()) {
-                    error!("Failed to create store.bin: {}", e);
-                }
-            }
-
             // Store setup and initialization - must be done first
+            // Note: StoreBuilder handles file creation internally — pre-creating
+            // store.bin here caused TOCTOU race conditions ("File exists" os error 17).
             // Use unwrap_or_default to prevent crashes from corrupted stores
             let store = store::init_store(&app.handle()).unwrap_or_else(|e| {
                 error!("Failed to init settings store, using defaults: {}", e);

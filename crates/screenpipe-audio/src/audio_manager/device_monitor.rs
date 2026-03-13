@@ -17,6 +17,14 @@ use crate::{
     device::device_manager::DeviceManager,
 };
 
+/// Check if a device name is a legacy per-display output device name
+/// (e.g., "Display 1 (output)", "Display 3 (output)") that should be
+/// migrated to the canonical "System Audio (output)" name.
+#[cfg(target_os = "macos")]
+fn is_legacy_display_output(device_name: &str) -> bool {
+    device_name.contains("Display") && device_name.contains("(output)")
+}
+
 use super::{AudioManager, AudioManagerStatus};
 
 lazy_static::lazy_static! {
@@ -93,6 +101,10 @@ pub async fn start_device_monitor(
         // started different devices from saved config.
         let mut needs_initial_sync = true;
 
+        // One-time migration flag for legacy "Display N (output)" device names
+        #[cfg(target_os = "macos")]
+        let mut legacy_migrated = false;
+
         loop {
             if audio_manager.status().await == AudioManagerStatus::Running {
                 let currently_available_devices = device_manager.devices().await;
@@ -100,6 +112,34 @@ pub async fn start_device_monitor(
                     warn!("[DEVICE_RECOVERY] device list returned empty (transient SCK failure?), skipping availability checks this cycle");
                 }
                 let enabled_devices = audio_manager.enabled_devices().await;
+
+                // Migrate legacy "Display N (output)" device names to "System Audio (output)".
+                // This handles upgrades from versions that tracked per-display output devices.
+                #[cfg(target_os = "macos")]
+                if !legacy_migrated {
+                    legacy_migrated = true;
+                    let legacy_outputs: Vec<String> = enabled_devices
+                        .iter()
+                        .filter(|name| is_legacy_display_output(name))
+                        .cloned()
+                        .collect();
+                    if !legacy_outputs.is_empty() {
+                        let canonical = format!(
+                            "{} (output)",
+                            crate::core::device::MACOS_OUTPUT_AUDIO_DEVICE_NAME
+                        );
+                        info!(
+                            "[DEVICE_RECOVERY] migrating legacy output devices {:?} → {}",
+                            legacy_outputs, canonical
+                        );
+                        for legacy_name in &legacy_outputs {
+                            let _ = audio_manager.stop_device(legacy_name).await;
+                        }
+                        if let Ok(device) = parse_audio_device(&canonical) {
+                            let _ = audio_manager.start_device(&device).await;
+                        }
+                    }
+                }
 
                 // Handle "Follow System Default" mode
                 if audio_manager.use_system_default_audio().await {

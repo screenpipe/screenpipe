@@ -247,6 +247,63 @@ async function start() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Load existing chats/contacts on initial sync (Baileys sends history on connect)
+  sock.ev.on("messaging-history.set", ({ chats, contacts, messages }) => {
+    if (contacts) {
+      for (const contact of contacts) {
+        if (contact.id) {
+          contactStore[contact.id] = { ...contactStore[contact.id], ...contact };
+        }
+      }
+    }
+    if (chats) {
+      for (const chat of chats) {
+        if (chat.id) {
+          chatStore[chat.id] = chatStore[chat.id] || { updatedAt: 0, count: 0 };
+          chatStore[chat.id].updatedAt = Math.max(
+            chatStore[chat.id].updatedAt,
+            chat.conversationTimestamp ? Number(chat.conversationTimestamp) : 0
+          );
+          if (chat.unreadCount) {
+            chatStore[chat.id].count += chat.unreadCount;
+          }
+        }
+      }
+    }
+    if (messages) {
+      for (const { messages: msgs } of messages) {
+        for (const msg of msgs) {
+          if (!msg.message) continue;
+          const jid = msg.key.remoteJid;
+          if (!jid || jid === "status@broadcast") continue;
+          const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            msg.message.imageMessage?.caption ||
+            msg.message.videoMessage?.caption ||
+            null;
+          const mediaType =
+            msg.message.imageMessage ? "image" :
+            msg.message.videoMessage ? "video" :
+            msg.message.audioMessage ? "audio" :
+            msg.message.documentMessage ? "document" :
+            msg.message.stickerMessage ? "sticker" :
+            null;
+          storeMessage(jid, {
+            id: msg.key.id,
+            fromMe: !!msg.key.fromMe,
+            from: msg.key.fromMe ? "me" : (contactName(jid) || jid.split("@")[0]),
+            text,
+            mediaType,
+            timestamp: msg.messageTimestamp ? Number(msg.messageTimestamp) : Math.floor(Date.now() / 1000),
+            pushName: msg.pushName || null,
+          });
+        }
+      }
+    }
+    emit({ type: "history-sync", contacts: Object.keys(contactStore).length, chats: Object.keys(chatStore).length });
+  });
+
   // Sync contacts into our in-memory store
   sock.ev.on("contacts.update", (updates) => {
     for (const contact of updates) {

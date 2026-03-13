@@ -103,6 +103,7 @@ commits: `28e5c247`
 - [ ] **disable audio setting** — toggling "disable audio" stops all audio recording. re-enabling restarts it.
 - [ ] **Metal GPU for whisper** — transcription uses GPU acceleration on macOS (`f882caef`). verify with Activity Monitor GPU tab.
 - [ ] **Batch transcription mode** — Verify that batch transcription mode works correctly with both cloud and Deepgram engines.
+- [ ] **Cloud transcription batch capping** — Send large audio chunks (>200s) to cloud transcription. Verify they are correctly capped/split and do not trigger Cloudflare 413 errors. (`792145ac6`)
 - [ ] **Lower RMS threshold for batch mode output devices** — In batch transcription mode, verify that output devices correctly use a lower RMS threshold.
 - [ ] **OpenAI-compatible STT connection test** — Configure OpenAI-compatible STT, then use the connection test feature. Verify it accurately reports connection status.
 - [ ] **OpenAI-compatible STT editable model input** — When using OpenAI-compatible STT, verify that the model input fields are editable.
@@ -119,6 +120,8 @@ commits: `28e5c247`
 - [ ] **Audio start/stop shortcuts** — Verify that designated audio start/stop shortcuts reliably toggle audio capture on and off. Check logs for corresponding start/stop events.
 - [ ] **Filter music toggle UI** — Verify that a "filter music" toggle exists in recording settings and correctly enables/disables music filtering.
 - [ ] **Music detection thresholds** — With "filter music" enabled, play various types of music. Verify that music is correctly detected and filtered, and that non-music speech is still captured.
+- [ ] **Audio reconciliation FK constraint loop** — Verify that audio reconciliation does not enter an infinite retry loop on foreign key constraints. (`e9e2dc252`)
+- [ ] **Skip reconciliation when transcription disabled** — Disable audio transcription in settings. Verify that audio reconciliation is skipped. (`ceb77559d`)
 
 
 #### Audio device recovery (monitor unplug / device switch)
@@ -145,6 +148,7 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **speaker names survive restart** — speaker named pre-restart stays named post-restart. verify: `sqlite3 ~/.screenpipe/db.sqlite "SELECT id, name FROM speakers WHERE name != ''"` shows same speakers before and after restart.
 - [ ] **no duplicate speaker naming on restart** — restart during meeting, speakers already named aren't overwritten or duplicated. verify: no duplicate names in speakers table.
 - [ ] **meeting detection stability** — Verify that meeting detection does not drop when alt-tabbing during long calls. (`7684f1d47`)
+- [ ] **meeting detection regardless of transcription mode** — Verify that meeting detection works even when transcription is disabled. (`ef39e728d`)
 
 ### 5. frame comparison & OCR pipeline
 
@@ -219,6 +223,9 @@ commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`,
 - [ ] **force quit recovery** — force quit app. relaunch. database is intact. recording resumes.
 - [ ] **sleep/wake** — close laptop lid, wait 10s, open. recording resumes within 5s. no crash (`9070639c`).
 - [ ] **restart app** — quit and relaunch. all settings preserved. recording starts automatically.
+- [ ] **Cross-platform autorelease pool** — Verify that Windows and Linux builds compile and run without issues related to macOS-specific autorelease pool calls. (`851b3037c`)
+- [ ] **Main thread safety (macOS)** — Verify that tray icon operations, space monitoring, and frontmost app restoration are dispatched to the main thread to prevent crashes. (`ac46aa437`, `418826dfa`, `274826dfa`)
+- [ ] **ObjC memory management (macOS)** — Verify that all ObjC operations are wrapped in scoped autorelease pools and objects are retained in async callbacks to prevent use-after-free or SIGSEGV crashes. (`4cb9850f7`, `c49350df0`, `139500d52`)
 - [ ] **auto-update** — when update available, UpdateBanner shows in main window. clicking it downloads and installs.
 - [ ] **update without tray** — user can update via dock menu "Check for updates" or Apple menu "Check for Updates..." (`d794176a`, `94531265`).
 - [ ] **update banner in main window** — when update available, banner appears at top of main window.
@@ -314,16 +321,23 @@ commits: `87abb00d`, `9464fdc9`, `0f9e43aa`, `7ea15f32`
 
 ### 12. timeline & search
 
-commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`, `50ff4f4c`, `91cc4371`
+commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`, `50ff4f4c`, `91cc4371`, `bcce42796`, `a98fa2991`, `0ff93b167`, `adbbb8f84`
 
 - [ ] **arrow key navigation** — left/right arrow keys navigate timeline frames (`f1255eac`).
 - [ ] **search results sorted by time** — search results appear in chronological order (`25cbdc6b`).
 - [ ] **no frame clearing during navigation** — navigating timeline doesn't cause frames to disappear and reload (`2529367d`).
 - [ ] **URL detection in frames** — URLs visible in screenshots are extracted and shown as clickable pills (`50ef52d1`, `aa992146`).
 - [ ] **app context popover** — clicking app icon in timeline shows context (time, windows, urls, audio) (`be3ecffb`).
+- [ ] **Timeline single "current" bar** — Verify that the timeline only shows one "current time" bar, even during rapid updates. (`bcce42796`)
+- [ ] **Timeline "Calls" filter** — Verify the "Calls" filter on the timeline correctly filters for call-related events. (`0ff93b167`)
+- [ ] **Collapsible timeline filters** — Verify that timeline filters can be collapsed and expanded correctly. (`0ff93b167`)
 - [ ] **daily summary in timeline** — Apple Intelligence summary shows in timeline, compact when no summary (`d9821624`).
 - [ ] **window-focused refresh** — opening app via shortcut/tray refreshes timeline data immediately (`0b057046`).
 - [ ] **frame deep link navigation** — `screenpipe://frame/N` or `screenpipe://frames/N` opens main window and jumps to frame N. works from cold start; invalid IDs show clear error.
+- [ ] **Search result exact navigation** — Click a search result. Verify it navigates exactly to the associated `frame_id`. (`a98fa2991`)
+- [ ] **Search navigation persistence** — Navigate to a frame from search results. Shift focus away from the app and back. Verify the navigation is not reset. (`71dee4ca3`)
+- [ ] **Search navigation race condition** — Verify that search navigation works reliably even if the webview is still mounting (retries should handle it). (`2015137a1`)
+- [ ] **Consolidated text search** — Perform keyword searches. Verify results are correctly pulled from the consolidated `frames.full_text` and `frames_fts`. (`adbbb8f84`)
 - [ ] **Keyword search accessibility** — Keyword search should find content within accessibility-only frames and utilize `frames_fts` for comprehensive accessibility text searching.
 - [ ] **Keyword search logic** — Verify that keyword search SQL correctly uses `OR` instead of `UNION` within `IN()`.
 - [ ] **Search prompt accuracy** — Verify that search prompts are improved to prevent false negatives from over-filtering.
@@ -394,6 +408,8 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **Windows taskbar icon** — The app should display a taskbar icon on Windows.
 - [ ] **Windows audio transcription accuracy** — On Windows, verify improved audio transcription accuracy due to native Silero VAD frame size and lower speech threshold.
 - [ ] **Windows multi-line pipe prompts** — Multi-line pipe prompts should be preserved on Windows.
+- [ ] **Windows ARM64 support** — On a Windows ARM64 device, verify the app installs and runs correctly. (`d62360bc4`)
+- [ ] **Windows app matching for meetings** — On Windows, verify that meeting detection correctly matches active applications. (`ef39e728d`)
 - [ ] **Alt+S shortcut activates overlay with keyboard focus** — On Windows, press `Alt+S`. Verify that the overlay window appears and immediately receives keyboard focus, allowing immediate typing.
 - [ ] **OcrTextBlock deserialization handles Windows OCR format** — On Windows, verify that `OcrTextBlock` deserialization correctly handles the specific Windows OCR format. (`c49ccb55`)
 - [ ] **populate accessibility tree bounds for text overlay on Windows** — On Windows, verify that accessibility tree bounds are correctly populated for text overlay, ensuring accurate positioning and interaction. (`4d20803a`)
@@ -587,6 +603,9 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Pi crash loop fix (Windows)** — Verify that the Pi agent doesn't enter a crash loop on Windows due to lru-cache interop issues. (`de56176e5`)
 - [ ] **Token counter** — Verify that the chat UI displays a token counter. (`2f75e90bf`)
 - [ ] **Optimize button** — Verify that the "optimize" button appears in the pipe dropdown menu. (`5dff9d21a`)
+- [ ] **In-app Notification Panel** — Use the `/notify` API (e.g., via a pipe). Verify an in-app notification panel appears instead of a system notification. (`34937b2dc`)
+- [ ] **Pipe Suggestions Scheduler** — Verify that pipe suggestions are displayed according to the scheduled intervals. (`41c8b8085`)
+- [ ] **Pi agent & search timeouts** — Run a long-running search or Pi agent task. Verify it doesn't timeout prematurely at 60s (should allow up to 120s for search). (`f01213cf5`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -720,3 +739,12 @@ grep -E "FoundationModels|apple.intelligence|fm_generate" ~/.screenpipe/screenpi
 ### 12. mainland china / great firewall
 
 - [ ] **full app functionality behind GFW** — download, onboarding, AI chat, cloud features, and update checks must all work (or degrade gracefully) on networks subject to the Great Firewall.
+
+### 22. WhatsApp Gateway
+
+commits: `cf2dcd5f8`, `ad1d00d8f`, `6f623b30a`, `aaf031169`
+
+- [ ] **WhatsApp gateway auto-restart** — Manually terminate the WhatsApp gateway process. Verify the watchdog restarts it automatically. (`cf2dcd5f8`)
+- [ ] **WhatsApp gateway self-termination** — Kill the main screenpipe process. Verify the WhatsApp gateway process also terminates. (`ad1d00d8f`)
+- [ ] **WhatsApp history & contacts sync** — Verify that WhatsApp chat history and contacts are correctly synchronized. (`aaf031169`)
+- [ ] **WhatsApp auto-reconnect** — Verify the WhatsApp gateway automatically reconnects on server start. (`6f623b30a`)

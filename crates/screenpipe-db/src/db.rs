@@ -869,6 +869,11 @@ impl DatabaseManager {
         .await?;
         tx.commit().await?;
 
+        info!(
+            "created new speaker id={} (no existing match within threshold)",
+            id
+        );
+
         Ok(Speaker {
             id,
             name: String::new(),
@@ -946,7 +951,7 @@ impl DatabaseManager {
 
     /// Add an embedding to a speaker's stored embeddings (up to max_stored).
     /// If at capacity, replaces the most redundant embedding (closest to centroid)
-    /// with the new one if it's more diverse.
+    /// to maintain diversity and adapt to changing voice conditions.
     pub async fn add_embedding_to_speaker(
         &self,
         speaker_id: i64,
@@ -960,9 +965,10 @@ impl DatabaseManager {
                 .fetch_one(&self.pool)
                 .await?;
 
+        let bytes: &[u8] = embedding.as_bytes();
+
         if (count as usize) < max_stored {
             // Under capacity — just insert
-            let bytes: &[u8] = embedding.as_bytes();
             sqlx::query(
                 "INSERT INTO speaker_embeddings (embedding, speaker_id) VALUES (vec_f32(?1), ?2)",
             )
@@ -970,18 +976,63 @@ impl DatabaseManager {
             .bind(speaker_id)
             .execute(&self.pool)
             .await?;
+        } else {
+            // At capacity — replace the most redundant embedding (closest to centroid)
+            // to keep the collection diverse and adapting to voice drift.
+            // The centroid already represents the average, so the embedding nearest to it
+            // carries the least unique information.
+            let centroid_blob: Option<(Option<Vec<u8>>,)> =
+                sqlx::query_as("SELECT centroid FROM speakers WHERE id = ?1")
+                    .bind(speaker_id)
+                    .fetch_optional(&self.pool)
+                    .await?;
+
+            if let Some((Some(centroid_bytes),)) = centroid_blob {
+                // Find the stored embedding closest to the centroid (most redundant)
+                let most_redundant: Option<(i64,)> = sqlx::query_as(
+                    "SELECT id FROM speaker_embeddings \
+                     WHERE speaker_id = ?1 \
+                     ORDER BY vec_distance_cosine(embedding, vec_f32(?2)) ASC \
+                     LIMIT 1",
+                )
+                .bind(speaker_id)
+                .bind(&centroid_bytes[..])
+                .fetch_optional(&self.pool)
+                .await?;
+
+                if let Some((redundant_id,)) = most_redundant {
+                    // Replace it with the new embedding
+                    sqlx::query(
+                        "UPDATE speaker_embeddings SET embedding = vec_f32(?1) WHERE id = ?2",
+                    )
+                    .bind(bytes)
+                    .bind(redundant_id)
+                    .execute(&self.pool)
+                    .await?;
+                    debug!(
+                        "speaker {}: rotated embedding {} (closest to centroid) with new sample",
+                        speaker_id, redundant_id
+                    );
+                }
+            }
         }
-        // At capacity — skip (diversity replacement is complex in SQL, centroid handles drift)
 
         Ok(())
     }
 
-    /// Update a speaker's running centroid: new = (old * count + embedding) / (count + 1)
+    /// Update a speaker's running centroid with exponential decay.
+    /// Uses capped effective count (max 50) so new embeddings always contribute
+    /// at least ~2%, preventing centroid stagnation after many samples.
     pub async fn update_speaker_centroid(
         &self,
         speaker_id: i64,
         embedding: &[f32],
     ) -> Result<(), SqlxError> {
+        // Cap for the running average denominator. After this many samples,
+        // each new embedding contributes ~1/MAX_EFFECTIVE_COUNT to the centroid,
+        // keeping it responsive to voice drift over time.
+        const MAX_EFFECTIVE_COUNT: i64 = 50;
+
         // Get current centroid and count
         let row: Option<(Option<Vec<u8>>, i64)> =
             sqlx::query_as("SELECT centroid, embedding_count FROM speakers WHERE id = ?1")
@@ -991,16 +1042,16 @@ impl DatabaseManager {
 
         let (new_centroid, new_count) = match row {
             Some((Some(blob), count)) if blob.len() == 512 * 4 => {
-                // Update running average
+                // Update running average with capped effective count
                 let old: Vec<f32> = blob
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
-                let n = count as f32;
+                let effective_n = count.min(MAX_EFFECTIVE_COUNT) as f32;
                 let new: Vec<f32> = old
                     .iter()
                     .zip(embedding.iter())
-                    .map(|(o, e)| (o * n + e) / (n + 1.0))
+                    .map(|(o, e)| (o * effective_n + e) / (effective_n + 1.0))
                     .collect();
                 (new, count + 1)
             }

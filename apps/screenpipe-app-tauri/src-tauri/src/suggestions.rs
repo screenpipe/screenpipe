@@ -1018,16 +1018,21 @@ fn parse_ai_response(content: &str) -> Option<AiResult> {
     // Fallback: try parsing as a plain JSON array of strings (old format)
     if let Some(start) = content.find('[') {
         if let Some(end) = content.rfind(']') {
-            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&content[start..=end]) {
-                if !arr.is_empty() {
-                    return Some(AiResult {
-                        suggestions: arr
-                            .into_iter()
-                            .take(4)
-                            .map(|text| Suggestion { text })
-                            .collect(),
-                        tags: vec![],
-                    });
+            if start <= end
+                && content.is_char_boundary(start)
+                && content.is_char_boundary(end + 1)
+            {
+                if let Ok(arr) = serde_json::from_str::<Vec<String>>(&content[start..=end]) {
+                    if !arr.is_empty() {
+                        return Some(AiResult {
+                            suggestions: arr
+                                .into_iter()
+                                .take(4)
+                                .map(|text| Suggestion { text })
+                                .collect(),
+                            tags: vec![],
+                        });
+                    }
                 }
             }
         }
@@ -1052,7 +1057,7 @@ fn extract_json_object(content: &str) -> Option<String> {
 
     let start = cleaned.find('{')?;
     let end = cleaned.rfind('}')?;
-    if end >= start {
+    if end >= start && cleaned.is_char_boundary(start) && cleaned.is_char_boundary(end + 1) {
         Some(cleaned[start..=end].to_string())
     } else {
         None
@@ -1411,7 +1416,7 @@ mod tests {
                 println!(
                     "    [{}] {}...",
                     a.app_name,
-                    &a.snippet[..a.snippet.len().min(80)]
+                    &a.snippet[..a.snippet.floor_char_boundary(a.snippet.len().min(80))]
                 );
             }
         }
@@ -1422,7 +1427,7 @@ mod tests {
                 println!(
                     "    [{}] {}...",
                     speaker,
-                    &a.transcription[..a.transcription.len().min(80)]
+                    &a.transcription[..a.transcription.floor_char_boundary(a.transcription.len().min(80))]
                 );
             }
         }

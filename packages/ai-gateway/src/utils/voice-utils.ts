@@ -71,8 +71,8 @@ export async function validateAudioInput(request: Request): Promise<{
 			};
 		}
 
-		// check file size (limit to 10MB)
-		if (audioBuffer.byteLength > 10 * 1024 * 1024) {
+		// check file size (limit to 100MB — Cloudflare Workers hard limit)
+		if (audioBuffer.byteLength > 100 * 1024 * 1024) {
 			return {
 				valid: false,
 				error: 'Audio file too large. Maximum size is 100MB.',

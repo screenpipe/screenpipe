@@ -25,6 +25,9 @@ cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
 # Wav encoding
 hound = "3.5"
 
+# MP3 encoding for compressed cloud uploads
+mp3lame-encoder = "0.2.2"
+
 # Cli ! shouldn't be required if using as lib
 clap = { version = "4.3", features = ["derive"] }
 

@@ -74,6 +74,15 @@ pub fn screenpipe_cloud_models() -> serde_json::Value {
             "cost": {"input": 1.25, "output": 10.00, "cacheRead": 0, "cacheWrite": 0},
             "contextWindow": 1000000,
             "maxTokens": 65536
+        },
+        {
+            "id": "gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {"input": 1.25, "output": 10.00, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": 1000000,
+            "maxTokens": 65536
         }
     ])
 }

@@ -276,8 +276,30 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 current_status,
             );
 
-            // Parse device info from health response
-            let devices = parse_devices_from_health(&health_result);
+            // Parse device info from health response, filtered by monitor settings
+            let mut devices = parse_devices_from_health(&health_result);
+
+            // Filter monitors to only show actively recording ones
+            if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
+                if !store.use_all_monitors && !store.monitor_ids.is_empty()
+                    && store.monitor_ids != vec!["default".to_string()]
+                {
+                    devices.retain(|d| {
+                        if d.kind != DeviceKind::Monitor { return true; }
+                        store.monitor_ids.iter().any(|allowed| {
+                            // Stable ID format: "Display 3_1920x1080_0,0"
+                            // Extract name prefix before last '_' (position coords)
+                            let allowed_name = allowed.rsplitn(2, '_').last().unwrap_or(allowed);
+                            // Health monitor format: "Display 3 (1920x1080)"
+                            // Extract just the display name
+                            let health_name = d.name.split(" (").next().unwrap_or(&d.name);
+                            let allowed_short = allowed_name.split('_').next().unwrap_or(allowed_name);
+                            health_name == allowed_short
+                        })
+                    });
+                }
+            }
+
             set_recording_info(status, devices);
 
             let current_status = status_to_icon_key(status);
