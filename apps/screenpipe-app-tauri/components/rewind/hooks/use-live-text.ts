@@ -110,18 +110,21 @@ export function useLiveText(opts: {
 		// rapid arrow key presses. The 80ms frame-loading debounce already handles
 		// fast scrolling; generation counter in Swift cancels stale requests.
 		let cancelled = false;
+		const currentFrameId = debouncedFrame.frameId;
 		const timer = setTimeout(() => {
 			if (cancelled) return;
 			invoke("livetext_analyze", {
 				imagePath,
+				frameId: currentFrameId,
 				x: 0, y: 0, w: 0, h: 0,
 			}).then(() => {
 				analyzeFailCountRef.current = 0;
 				// Analysis is stored as pending in Swift — send position update
 				// to apply it with correct geometry for hit-region computation.
+				// Pass frameId so Swift validates the pending analysis matches.
 				if (!cancelled && renderedImageInfo) {
 					const pos = getAbsolutePosition(renderedImageInfo);
-					invoke("livetext_update_position", pos).catch(() => {});
+					invoke("livetext_update_position", { frameId: currentFrameId, ...pos }).catch(() => {});
 				}
 			}).catch((e: unknown) => {
 				if (cancelled) return;
@@ -177,10 +180,10 @@ export function useLiveText(opts: {
 
 	// Update overlay position on resize or when renderedImageInfo first becomes available
 	useEffect(() => {
-		if (!nativeLiveTextActive || !renderedImageInfo) return;
+		if (!nativeLiveTextActive || !renderedImageInfo || !debouncedFrame?.frameId) return;
 		const pos = getAbsolutePosition(renderedImageInfo);
-		invoke("livetext_update_position", pos).catch(() => {});
-	}, [nativeLiveTextActive, renderedImageInfo?.offsetX, renderedImageInfo?.offsetY, renderedImageInfo?.width, renderedImageInfo?.height]);
+		invoke("livetext_update_position", { frameId: debouncedFrame.frameId, ...pos }).catch(() => {});
+	}, [nativeLiveTextActive, debouncedFrame?.frameId, renderedImageInfo?.offsetX, renderedImageInfo?.offsetY, renderedImageInfo?.width, renderedImageInfo?.height]);
 
 	// Place click guards over UI elements so VisionKit hit regions
 	// don't intercept clicks on navigation controls, filters, scrubber, etc.
@@ -251,13 +254,15 @@ export function useLiveText(opts: {
 			const imagePath = isSnapshotFrame && debouncedFrame.filePath
 				? debouncedFrame.filePath
 				: `http://localhost:3030/frames/${debouncedFrame.frameId}`;
+			const fid = debouncedFrame.frameId;
 			invoke("livetext_analyze", {
 				imagePath,
+				frameId: fid,
 				x: 0, y: 0, w: 0, h: 0,
 			}).then(() => {
 				if (renderedImageInfo) {
 					const pos = getAbsolutePosition(renderedImageInfo);
-					invoke("livetext_update_position", pos).catch(() => {});
+					invoke("livetext_update_position", { frameId: fid, ...pos }).catch(() => {});
 				}
 			}).catch(() => {});
 		}

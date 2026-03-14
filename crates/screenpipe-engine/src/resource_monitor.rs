@@ -93,12 +93,20 @@ fn detect_gpus_platform() -> Vec<String> {
 /// Run a command with a timeout to avoid blocking startup if a tool hangs.
 fn run_cmd_with_timeout(cmd: &str, args: &[&str], timeout_secs: u64) -> Option<String> {
     use std::process::{Command, Stdio};
-    let mut child = Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+
+    // On Windows, prevent a console window from flashing on screen
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = command.spawn().ok()?;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {

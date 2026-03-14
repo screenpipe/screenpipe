@@ -1040,10 +1040,17 @@ pub(crate) async fn serve_file(path: &str) -> Result<Response, (StatusCode, Json
 
             Ok(response)
         }
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": format!("Failed to open file: {}", e)})),
-        )),
+        Err(e) => {
+            let status = if e.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((
+                status,
+                JsonResponse(json!({"error": format!("Failed to open file: {}", e)})),
+            ))
+        }
     }
 }
 

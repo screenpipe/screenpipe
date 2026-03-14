@@ -98,10 +98,22 @@ export function TeamSection() {
               const teamId = parsed.searchParams.get("team_id");
               const inviteToken = parsed.searchParams.get("invite_token");
               const claimToken = parsed.searchParams.get("claim");
-              const legacyKey = parsed.searchParams.get("key");
+              const base64Key = parsed.searchParams.get("key");
 
-              if (teamId && claimToken) {
-                // new secure flow: need passphrase from user
+              if (teamId && base64Key && !claimToken) {
+                // new direct key flow (from web invite link)
+                setJoining(true);
+                await team.joinTeam(teamId, {
+                  base64Key: decodeURIComponent(base64Key),
+                  inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+                });
+                posthog.capture("team_joined", { source: "web_invite" });
+                toast({
+                  title: "joined team!",
+                  description: "you are now a team member",
+                });
+              } else if (teamId && claimToken) {
+                // passphrase flow (backwards compat)
                 setPendingJoin({
                   teamId,
                   claimToken: decodeURIComponent(claimToken),
@@ -111,11 +123,11 @@ export function TeamSection() {
                   title: "enter passphrase to join team",
                   description: "ask the admin for the passphrase they received when creating the invite",
                 });
-              } else if (teamId && legacyKey) {
+              } else if (teamId && base64Key) {
                 // legacy flow: raw key in URL (old invite links)
                 setJoining(true);
                 await team.joinTeam(teamId, {
-                  legacyBase64Key: decodeURIComponent(legacyKey),
+                  legacyBase64Key: decodeURIComponent(base64Key),
                   inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
                 });
                 posthog.capture("team_joined", { source: "deep_link_legacy" });
@@ -171,12 +183,23 @@ export function TeamSection() {
       const teamId = parsed.searchParams.get("team_id");
       const inviteToken = parsed.searchParams.get("invite_token");
       const claimToken = parsed.searchParams.get("claim");
-      const legacyKey = parsed.searchParams.get("key");
+      const base64Key = parsed.searchParams.get("key");
 
       if (!teamId) throw new Error("invalid invite link — missing team_id");
 
-      if (claimToken) {
-        // new secure flow: prompt for passphrase
+      if (base64Key && !claimToken) {
+        // new direct key flow
+        setJoining(true);
+        await team.joinTeam(teamId, {
+          base64Key: decodeURIComponent(base64Key),
+          inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
+        });
+        posthog.capture("team_joined", { source: "web_invite_pasted" });
+        setInviteInput("");
+        setShowJoinInput(false);
+        toast({ title: "joined team!" });
+      } else if (claimToken) {
+        // passphrase flow (backwards compat)
         setPendingJoin({
           teamId,
           claimToken: decodeURIComponent(claimToken),
@@ -184,19 +207,8 @@ export function TeamSection() {
         });
         setInviteInput("");
         setShowJoinInput(false);
-      } else if (legacyKey) {
-        // legacy flow: raw key in URL
-        setJoining(true);
-        await team.joinTeam(teamId, {
-          legacyBase64Key: decodeURIComponent(legacyKey),
-          inviteToken: inviteToken ? decodeURIComponent(inviteToken) : undefined,
-        });
-        posthog.capture("team_joined", { source: "invite_link_legacy" });
-        setInviteInput("");
-        setShowJoinInput(false);
-        toast({ title: "joined team!" });
       } else {
-        throw new Error("invalid invite link — missing claim or key parameter");
+        throw new Error("invalid invite link — missing key or claim parameter");
       }
     } catch (err: any) {
       toast({
@@ -464,7 +476,7 @@ export function TeamSection() {
           {showJoinInput ? (
             <div className="flex gap-2">
               <Input
-                placeholder="screenpipe://join-team?team_id=...&claim=..."
+                placeholder="screenpipe://join-team?team_id=...&key=..."
                 value={inviteInput}
                 onChange={(e) => setInviteInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleJoinFromLink()}
@@ -548,7 +560,7 @@ export function TeamSection() {
             </h3>
           </div>
           <p className="text-xs text-muted-foreground mb-2">
-            share this link with your teammate — it does not contain the encryption key
+            share this link with your teammate — the encryption key is embedded in the URL fragment and never reaches the server
           </p>
           <div className="flex gap-2 items-stretch">
             <Input
@@ -564,33 +576,6 @@ export function TeamSection() {
               )}
             </Button>
           </div>
-          {team.invitePassphrase && (
-            <div className="mt-3 p-3 rounded-md bg-muted/50 border">
-              <p className="text-xs font-medium mb-1 flex items-center gap-1">
-                <Lock className="h-3 w-3" />
-                passphrase (share separately — verbally or via secure channel)
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="text-lg font-bold tracking-widest select-all">
-                  {team.invitePassphrase}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7"
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(team.invitePassphrase!);
-                    toast({ title: "passphrase copied" });
-                  }}
-                >
-                  <Copy className="h-3 w-3" />
-                </Button>
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-1">
-                your teammate will need this to decrypt the team encryption key
-              </p>
-            </div>
-          )}
         </Card>
       )}
 

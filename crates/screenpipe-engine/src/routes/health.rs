@@ -53,6 +53,16 @@ pub struct HealthCheckResponse {
     pub audio_pipeline: Option<AudioPipelineHealthInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility: Option<TreeWalkerSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_stats: Option<PoolHealthInfo>,
+}
+
+#[derive(Serialize, OaSchema, Deserialize)]
+pub struct PoolHealthInfo {
+    pub read_pool_size: u32,
+    pub read_pool_idle: u32,
+    pub write_pool_size: u32,
+    pub write_pool_idle: u32,
 }
 
 #[derive(Serialize, OaSchema, Deserialize)]
@@ -186,9 +196,51 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     let last_audio_ts = audio_snap.last_db_write_ts;
 
     let now = Utc::now();
+    let now_ts = now.timestamp() as u64;
     // 60 seconds — tight enough to detect real stalls, loose enough to
     // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
     let threshold_secs = 60u64;
+
+    // Detect DB write stalls: capture loop is alive (heartbeat fresh) but DB
+    // writes have stopped. This indicates pool exhaustion or DB lock contention
+    // — data is being captured but silently lost.
+    let vision_db_write_stalled = if !state.vision_disabled
+        && vision_snap.last_capture_attempt_ts > 0
+        && vision_snap.uptime_secs > 120.0
+    {
+        let capture_fresh = now_ts.saturating_sub(vision_snap.last_capture_attempt_ts)
+            < threshold_secs;
+        let db_stale = vision_snap.last_db_write_ts == 0
+            || now_ts.saturating_sub(vision_snap.last_db_write_ts) > threshold_secs;
+        let stalled = capture_fresh && db_stale;
+        if stalled {
+            warn!(
+                "health_check: vision DB writes stalled — capture heartbeat {}s ago but last DB write {}s ago (pool exhaustion likely)",
+                now_ts.saturating_sub(vision_snap.last_capture_attempt_ts),
+                if vision_snap.last_db_write_ts > 0 { now_ts.saturating_sub(vision_snap.last_db_write_ts) } else { 0 },
+            );
+        }
+        stalled
+    } else {
+        false
+    };
+
+    let audio_db_write_stalled = if !state.audio_disabled
+        && global_audio_active
+        && audio_snap.uptime_secs > 120.0
+    {
+        let db_stale = audio_snap.last_db_write_ts == 0
+            || now_ts.saturating_sub(audio_snap.last_db_write_ts) > threshold_secs;
+        if db_stale {
+            warn!(
+                "health_check: audio DB writes stalled — devices active but last DB write {}s ago (pool exhaustion likely)",
+                if audio_snap.last_db_write_ts > 0 { now_ts.saturating_sub(audio_snap.last_db_write_ts) } else { 0 },
+            );
+        }
+        db_stale
+    } else {
+        false
+    };
 
     let frame_status = if state.vision_disabled {
         "disabled"
@@ -202,8 +254,17 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         "stale"
     };
 
+    // Cross-check: if audio is enabled, uptime > 2 min, but zero chunks were ever
+    // sent, the audio pipeline never started capturing (e.g. device retry loop).
+    // The per-device timestamp fallback would mask this as "ok", so override here.
+    let audio_never_captured = !state.audio_disabled
+        && audio_snap.uptime_secs > 120.0
+        && audio_snap.chunks_sent == 0;
+
     let audio_status = if state.audio_disabled {
         "disabled".to_string()
+    } else if audio_never_captured {
+        "not_started".to_string()
     } else if global_audio_active {
         "ok".to_string()
     } else if last_audio_ts == 0 {
@@ -269,7 +330,7 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                 vision_snap.avg_db_latency_ms
             );
         }
-        high_drop_rate || high_db_latency
+        high_drop_rate || high_db_latency || vision_db_write_stalled
     } else {
         false
     };
@@ -277,15 +338,14 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     // Audio degradation: chunks_channel_full > 0 means the Whisper consumer
     // couldn't keep up and audio was dropped even after a 30s backpressure wait.
     let audio_degraded = if !state.audio_disabled && audio_snap.uptime_secs > 120.0 {
-        if audio_snap.chunks_channel_full > 0 {
+        let channel_full = audio_snap.chunks_channel_full > 0;
+        if channel_full {
             warn!(
                 "health_check: {} audio chunk(s) dropped (transcription engine too slow)",
                 audio_snap.chunks_channel_full
             );
-            true
-        } else {
-            false
         }
+        channel_full || audio_db_write_stalled
     } else {
         false
     };
@@ -331,12 +391,26 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
                     vision_snap.avg_db_latency_ms
                 ));
             }
+            if vision_db_write_stalled {
+                detail_parts.push(format!(
+                    "vision DB writes stalled for {}s — capture running but data not saved (restart recommended)",
+                    now_ts.saturating_sub(vision_snap.last_db_write_ts)
+                ));
+            }
         }
         if audio_degraded {
-            detail_parts.push(format!(
-                "{} audio chunk(s) dropped — transcription too slow",
-                audio_snap.chunks_channel_full
-            ));
+            if audio_snap.chunks_channel_full > 0 {
+                detail_parts.push(format!(
+                    "{} audio chunk(s) dropped — transcription too slow",
+                    audio_snap.chunks_channel_full
+                ));
+            }
+            if audio_db_write_stalled {
+                detail_parts.push(format!(
+                    "audio DB writes stalled for {}s — devices active but data not saved (restart recommended)",
+                    now_ts.saturating_sub(audio_snap.last_db_write_ts)
+                ));
+            }
         }
 
         let systems_str = unhealthy_systems.join(", ");
@@ -506,6 +580,15 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
             })
         } else {
             None
+        },
+        pool_stats: {
+            let (rs, ri, ws, wi) = state.db.pool_stats();
+            Some(PoolHealthInfo {
+                read_pool_size: rs,
+                read_pool_idle: ri,
+                write_pool_size: ws,
+                write_pool_idle: wi,
+            })
         },
     })
 }

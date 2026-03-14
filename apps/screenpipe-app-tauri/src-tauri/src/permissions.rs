@@ -105,7 +105,7 @@ pub async fn request_permission(permission: OSPermission) {
 
 #[cfg(target_os = "macos")]
 fn request_av_permission(media_type: nokhwa_bindings_macos::AVMediaType) {
-    crate::window_api::with_autorelease_pool(|| {
+    crate::window::with_autorelease_pool(|| {
         use objc::{runtime::*, *};
         use tauri_nspanel::block::ConcreteBlock;
 
@@ -208,7 +208,7 @@ pub fn check_microphone_permission() -> OSPermissionStatus {
         use nokhwa_bindings_macos::AVMediaType;
         use objc::*;
 
-        crate::window_api::with_autorelease_pool(|| {
+        crate::window::with_autorelease_pool(|| {
             let cls = objc::class!(AVCaptureDevice);
             let status: AVAuthorizationStatus = unsafe {
                 msg_send![cls, authorizationStatusForMediaType:AVMediaType::Audio.into_ns_str()]
@@ -356,7 +356,7 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
         use nokhwa_bindings_macos::AVMediaType;
 
         fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
-            crate::window_api::with_autorelease_pool(|| {
+            crate::window::with_autorelease_pool(|| {
                 use nokhwa_bindings_macos::AVAuthorizationStatus;
                 use objc::*;
 

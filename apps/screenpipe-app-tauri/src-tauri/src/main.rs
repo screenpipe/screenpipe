@@ -8,7 +8,6 @@ use analytics::AnalyticsManager;
 use commands::show_main_window;
 use serde_json::json;
 use std::env;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
@@ -16,7 +15,6 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
-use tauri_plugin_global_shortcut::ShortcutState;
 #[allow(unused_imports)]
 use tauri_plugin_shell::process::CommandEvent;
 use tracing::{debug, error, info, warn};
@@ -27,7 +25,7 @@ use tracing_subscriber::EnvFilter;
 #[cfg(target_os = "macos")]
 use tracing_oslog::OsLogger;
 use updates::start_update_check;
-use window_api::ShowRewindWindow;
+use window::ShowRewindWindow;
 
 // TypeScript bindings generation imports (only in debug builds)
 #[cfg(debug_assertions)]
@@ -39,8 +37,6 @@ mod analytics;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;
-use crate::store::SettingsStore;
-
 mod calendar;
 mod chatgpt_oauth;
 #[allow(deprecated)]
@@ -67,8 +63,7 @@ mod sync;
 mod tray;
 mod updates;
 mod voice_training;
-#[allow(deprecated)]
-mod window_api;
+mod window;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
 
@@ -91,748 +86,32 @@ pub use recording::stop_screenpipe;
 pub use server::spawn_server;
 // Removed: pub use store::get_profiles_store; // Profile functionality has been removed
 
-use crate::commands::hide_main_window;
 pub use permissions::do_permissions_check;
 pub use permissions::open_permission_settings;
 pub use permissions::request_permission;
 use sentry;
-use std::collections::HashMap;
 use tauri::AppHandle;
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+#[cfg(target_os = "macos")]
+mod dock_menu;
 mod health;
+mod log_files;
 mod safe_icon;
+mod shortcuts;
+mod vault;
 use base64::Engine;
 use health::start_health_check;
-use window_api::RewindWindowId;
-
-/// Setup macOS dock right-click menu as fallback for when tray icon is
-/// hidden behind the MacBook Pro notch.
-#[cfg(target_os = "macos")]
-#[allow(deprecated)]
-fn setup_dock_menu(app_handle: AppHandle) {
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::NSString;
-    use objc::runtime::{Object, Sel};
-    use objc::{class, msg_send, sel, sel_impl};
-
-    unsafe {
-        // Store app handle in a global so the dock menu callbacks can use it
-        static mut DOCK_APP_HANDLE: Option<AppHandle> = None;
-        DOCK_APP_HANDLE = Some(app_handle);
-
-        // Callback functions for dock menu items
-        extern "C" fn show_screenpipe(_this: &Object, _sel: Sel, _sender: id) {
-            unsafe {
-                if let Some(ref app) = DOCK_APP_HANDLE {
-                    let app_for_closure = app.clone();
-                    let _ = app.run_on_main_thread(move || {
-                        show_main_window(&app_for_closure, false);
-                    });
-                }
-            }
-        }
-        extern "C" fn open_settings(_this: &Object, _sel: Sel, _sender: id) {
-            unsafe {
-                if let Some(ref app) = DOCK_APP_HANDLE {
-                    let app_for_closure = app.clone();
-                    let _ = app.run_on_main_thread(move || {
-                        let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
-                    });
-                }
-            }
-        }
-        extern "C" fn check_updates(_this: &Object, _sel: Sel, _sender: id) {
-            unsafe {
-                if let Some(ref app) = DOCK_APP_HANDLE {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let state = app.state::<std::sync::Arc<crate::updates::UpdatesManager>>();
-                        if let Err(e) = state.check_for_updates(true).await {
-                            tracing::error!("dock menu: check for updates failed: {}", e);
-                        }
-                    });
-                }
-            }
-        }
-        extern "C" fn dock_menu(_this: &Object, _sel: Sel, _sender: id) -> id {
-            unsafe {
-                let menu: id = msg_send![class!(NSMenu), new];
-
-                // "Show screenpipe"
-                let title = NSString::alloc(nil).init_str("Show screenpipe");
-                let action = sel!(showScreenpipe:);
-                let key = NSString::alloc(nil).init_str("");
-                let item: id = msg_send![class!(NSMenuItem), alloc];
-                let item: id = msg_send![item, initWithTitle:title action:action keyEquivalent:key];
-                let _: () = msg_send![item, setTarget: _this];
-                let _: () = msg_send![menu, addItem: item];
-
-                // "Settings"
-                let title = NSString::alloc(nil).init_str("Settings");
-                let action = sel!(openSettings:);
-                let key = NSString::alloc(nil).init_str("");
-                let item: id = msg_send![class!(NSMenuItem), alloc];
-                let item: id = msg_send![item, initWithTitle:title action:action keyEquivalent:key];
-                let _: () = msg_send![item, setTarget: _this];
-                let _: () = msg_send![menu, addItem: item];
-
-                // "Check for updates"
-                let title = NSString::alloc(nil).init_str("Check for updates");
-                let action = sel!(checkUpdates:);
-                let key = NSString::alloc(nil).init_str("");
-                let item: id = msg_send![class!(NSMenuItem), alloc];
-                let item: id = msg_send![item, initWithTitle:title action:action keyEquivalent:key];
-                let _: () = msg_send![item, setTarget: _this];
-                let _: () = msg_send![menu, addItem: item];
-
-                // Note: macOS adds native "Quit" to dock menu automatically
-                menu
-            }
-        }
-
-        // Register a custom class that handles dock menu
-        let superclass = class!(NSObject);
-        let mut decl =
-            objc::declare::ClassDecl::new("ScreenpipeDockMenuDelegate", superclass).unwrap();
-        decl.add_method(
-            sel!(showScreenpipe:),
-            show_screenpipe as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(openSettings:),
-            open_settings as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(checkUpdates:),
-            check_updates as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(applicationDockMenu:),
-            dock_menu as extern "C" fn(&Object, Sel, id) -> id,
-        );
-        let delegate_class = decl.register();
-
-        let delegate: id = msg_send![delegate_class, new];
-
-        // Get NSApplication and set our delegate for dock menu
-        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
-        let current_delegate: id = msg_send![ns_app, delegate];
-
-        // Swizzle applicationDockMenu: onto the existing app delegate
-        let dock_menu_sel = sel!(applicationDockMenu:);
-        let method = objc::runtime::class_getInstanceMethod(
-            object_getClass(delegate) as *const _,
-            dock_menu_sel,
-        );
-        if !method.is_null() {
-            let imp = objc::runtime::method_getImplementation(method);
-            let encoding = b"@:@\0".as_ptr() as *const std::ffi::c_char;
-            let delegate_class = object_getClass(current_delegate);
-            objc::runtime::class_addMethod(delegate_class as *mut _, dock_menu_sel, imp, encoding);
-            // Also add the action methods
-            let void_encoding = b"v:@\0".as_ptr() as *const std::ffi::c_char;
-            for sel_name in &[sel!(showScreenpipe:), sel!(openSettings:)] {
-                let m = objc::runtime::class_getInstanceMethod(
-                    object_getClass(delegate) as *const _,
-                    *sel_name,
-                );
-                if !m.is_null() {
-                    let imp = objc::runtime::method_getImplementation(m);
-                    objc::runtime::class_addMethod(
-                        delegate_class as *mut _,
-                        *sel_name,
-                        imp,
-                        void_encoding,
-                    );
-                }
-            }
-        }
-
-        info!("macOS dock menu set up");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[allow(non_snake_case, deprecated)]
-    unsafe fn object_getClass(obj: id) -> *const objc::runtime::Class {
-        msg_send![obj, class]
-    }
-}
-
-// New struct to hold shortcut configuration
-#[derive(Debug, Default)]
-struct ShortcutConfig {
-    show: String,
-    start: String,
-    stop: String,
-    start_audio: String,
-    stop_audio: String,
-    show_chat: String,
-    search: String,
-    lock_vault: String,
-    dictation: String,
-    disabled: Vec<String>,
-}
-
-impl ShortcutConfig {
-    async fn from_store(app: &AppHandle) -> Result<Self, String> {
-        let store = SettingsStore::get(app)
-            .unwrap_or_default()
-            .unwrap_or_default();
-
-        let default_start_audio = if cfg!(target_os = "windows") {
-            "Alt+Shift+A"
-        } else {
-            "Super+Ctrl+A"
-        };
-        let default_stop_audio = if cfg!(target_os = "windows") {
-            "Alt+Shift+Z"
-        } else {
-            "Super+Ctrl+Z"
-        };
-
-        Ok(Self {
-            show: store.show_screenpipe_shortcut,
-            start: store.start_recording_shortcut,
-            stop: store.stop_recording_shortcut,
-            start_audio: if store.start_audio_shortcut.trim().is_empty() {
-                default_start_audio.to_string()
-            } else {
-                store.start_audio_shortcut
-            },
-            stop_audio: if store.stop_audio_shortcut.trim().is_empty() {
-                default_stop_audio.to_string()
-            } else {
-                store.stop_audio_shortcut
-            },
-            show_chat: store.show_chat_shortcut,
-            search: store.search_shortcut,
-            lock_vault: store.lock_vault_shortcut,
-            dictation: store.dictation_shortcut,
-            disabled: store.disabled_shortcuts,
-        })
-    }
-
-    fn is_disabled(&self, shortcut_type: &str) -> bool {
-        // The Rust side uses short keys like "show", "start_recording", etc.
-        // but the frontend stores camelCase names like "showScreenpipeShortcut",
-        // "startRecordingShortcut", etc. Check both forms.
-        let frontend_key = match shortcut_type {
-            "show" => "showScreenpipeShortcut",
-            "start_recording" => "startRecordingShortcut",
-            "stop_recording" => "stopRecordingShortcut",
-            "start_audio" => "startAudioShortcut",
-            "stop_audio" => "stopAudioShortcut",
-            "show_chat" => "showChatShortcut",
-            "search" => "searchShortcut",
-            "lock_vault" => "lockVaultShortcut",
-            "dictation" => "dictationShortcut",
-            _ => shortcut_type,
-        };
-        self.disabled.contains(&shortcut_type.to_string())
-            || self.disabled.contains(&frontend_key.to_string())
-    }
-}
-
-// Helper to register a single shortcut
-async fn register_shortcut(
-    app: &AppHandle,
-    shortcut_str: &str,
-    is_disabled: bool,
-    handler: impl Fn(&AppHandle) + Send + Sync + 'static,
-) -> Result<(), String> {
-    if shortcut_str.is_empty() || is_disabled {
-        return Ok(());
-    }
-
-    let shortcut = parse_shortcut(shortcut_str)?;
-
-    let global_shortcut = app.global_shortcut();
-
-    global_shortcut
-        .on_shortcut(shortcut, move |app, _shortcut, event| {
-            // Only trigger on key press, not release.
-            // Shortcut handlers are called from tao::send_event (Obj-C FFI, nounwind).
-            // Handler must defer heavy work itself (clone + run_on_main_thread) so sync path stays minimal.
-            if matches!(event.state, ShortcutState::Pressed) {
-                if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    handler(app);
-                })) {
-                    error!("panic in shortcut handler: {:?}", e);
-                }
-            }
-        })
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn update_global_shortcuts(
-    app: AppHandle,
-    show_shortcut: String,
-    start_shortcut: String,
-    stop_shortcut: String,
-    start_audio_shortcut: String,
-    stop_audio_shortcut: String,
-    profile_shortcuts: HashMap<String, String>,
-) -> Result<(), String> {
-    let store_config = ShortcutConfig::from_store(&app).await?;
-    let config = ShortcutConfig {
-        show: show_shortcut,
-        start: start_shortcut,
-        stop: stop_shortcut,
-        start_audio: start_audio_shortcut,
-        stop_audio: stop_audio_shortcut,
-        show_chat: store_config.show_chat,
-        search: store_config.search,
-        lock_vault: store_config.lock_vault,
-        dictation: profile_shortcuts.get("dictationShortcut").cloned().unwrap_or(store_config.dictation),
-        disabled: store_config.disabled,
-    };
-    apply_shortcuts(&app, &config).await
-}
-
-async fn initialize_global_shortcuts(app: &AppHandle) -> Result<(), String> {
-    let config = ShortcutConfig::from_store(app).await?;
-    apply_shortcuts(app, &config).await
-}
-
-async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(), String> {
-    let global_shortcut = app.global_shortcut();
-    if let Err(e) = global_shortcut.unregister_all() {
-        error!("failed to unregister all shortcuts: {}", e);
-    }
-
-    // Register show shortcut (defer off event stack: handler runs from tao::send_event)
-    register_shortcut(app, &config.show, config.is_disabled("show"), |app| {
-        let app_for_closure = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let app = &app_for_closure;
-            info!("show shortcut triggered - attempting to show/hide main overlay");
-            let _ = app.emit("shortcut-show", ());
-            {
-                use crate::store::SettingsStore;
-                use crate::window_api::main_label_for_mode;
-                // Get current mode to find the right window label
-                let mode = SettingsStore::get(app)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-                    .overlay_mode;
-                let label = main_label_for_mode(&mode);
-
-                if let Some(window) = app.get_webview_window(label) {
-                    // On Windows, close() minimizes the window, but is_visible()
-                    // still returns true for minimized windows. Check is_minimized()
-                    // to correctly detect "hidden" state.
-                    let is_minimized = window.is_minimized().unwrap_or(false);
-                    match window.is_visible() {
-                        Ok(true) if !is_minimized => {
-                            info!("window '{}' is visible (not minimized), hiding it", label);
-                            hide_main_window(app)
-                        }
-                        _ => {
-                            info!("window '{}' not visible or minimized, showing it", label);
-                            show_main_window(app, false)
-                        }
-                    }
-                } else {
-                    info!("main window not found for mode '{}', creating it", mode);
-                    show_main_window(app, false)
-                }
-            }
-        });
-    })
-    .await?;
-
-    // Register start shortcut
-    register_shortcut(
-        app,
-        &config.start,
-        config.is_disabled("start_recording"),
-        |app| {
-            let _ = app.emit("shortcut-start-recording", ());
-        },
-    )
-    .await?;
-
-    // Register stop shortcut
-    register_shortcut(
-        app,
-        &config.stop,
-        config.is_disabled("stop_recording"),
-        |app| {
-            let _ = app.emit("shortcut-stop-recording", ());
-        },
-    )
-    .await?;
-
-    // Register start audio shortcut
-    register_shortcut(
-        app,
-        &config.start_audio,
-        config.is_disabled("start_audio"),
-        |app| {
-            if let Ok(store) = get_store(app, None) {
-                store.set("disableAudio", false);
-                let _ = store.save();
-            }
-            let _ = app.emit("shortcut-start-audio", ());
-            info!("start audio shortcut triggered");
-        },
-    )
-    .await?;
-
-    // Register stop audio shortcut
-    register_shortcut(
-        app,
-        &config.stop_audio,
-        config.is_disabled("stop_audio"),
-        |app| {
-            if let Ok(store) = get_store(app, None) {
-                store.set("disableAudio", true);
-                let _ = store.save();
-            }
-            let _ = app.emit("shortcut-stop-audio", ());
-            info!("stop audio shortcut triggered");
-        },
-    )
-    .await?;
-
-    // Register show chat shortcut (global - toggles standalone AI chat window) (defer off event stack)
-    register_shortcut(
-        app,
-        &config.show_chat,
-        config.is_disabled("show_chat"),
-        |app| {
-            let app_for_closure = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                let app = &app_for_closure;
-                info!("show chat shortcut triggered");
-                let _ = app.emit("shortcut-show-chat", ());
-                // Toggle the chat window - hide if visible, show if not.
-                // Use order_out (not close) to preserve the pre-created panel
-                // so it can reappear on fullscreen Spaces without re-creation.
-                if let Some(_window) = app.get_webview_window("chat") {
-                    #[cfg(target_os = "macos")]
-                    {
-                        use tauri_nspanel::ManagerExt;
-                        if let Ok(panel) = app.get_webview_panel("chat") {
-                            if panel.is_visible() {
-                                panel.order_out(None);
-                                return;
-                            }
-                        }
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        if _window.is_visible().unwrap_or(false) {
-                            let _ = _window.hide();
-                            return;
-                        }
-                    }
-                }
-                let _ = ShowRewindWindow::Chat.show(app);
-            });
-        },
-    )
-    .await?;
-
-    // Register search shortcut (global - opens floating Search bar only, hides timeline)
-    register_shortcut(app, &config.search, config.is_disabled("search"), |app| {
-        let app_for_closure = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let app = &app_for_closure;
-            info!("search shortcut triggered");
-            // Hide Main timeline if visible so only the search bar shows
-            hide_main_window(app);
-            let _ = ShowRewindWindow::Search { query: None }.show(app);
-        });
-    })
-    .await?;
-
-    // TODO: vault lock shortcut disabled — CLI-only for now
-    // register_shortcut(app, &config.lock_vault, config.is_disabled("lock_vault"), |app| {
-    //     let app_for_closure = app.clone();
-    //     let _ = app.run_on_main_thread(move || {
-    //         info!("vault lock shortcut triggered");
-    //         let _ = app_for_closure.emit("vault-lock-requested", ());
-    //     });
-    // })
-    // .await?;
-
-    // Register dictation shortcut (global - toggles voice dictation)
-    register_shortcut(app, &config.dictation, config.is_disabled("dictation"), |app| {
-        let app_for_closure = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let app = &app_for_closure;
-            info!("dictation shortcut triggered");
-            
-            // Emit event to frontend to toggle dictation (handles showing window and starting/stopping)
-            let _ = app.emit("shortcut-dictation", ());
-        });
-    })
-    .await?;
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn suspend_global_shortcuts(app: AppHandle) -> Result<(), String> {
-    let global_shortcut = app.global_shortcut();
-    global_shortcut
-        .unregister_all()
-        .map_err(|e| format!("failed to suspend shortcuts: {}", e))?;
-    info!("global shortcuts suspended for recording");
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
-    initialize_global_shortcuts(&app).await?;
-    info!("global shortcuts resumed after recording");
-    Ok(())
-}
-
-/// Check vault lock state from filesystem (no server needed).
-#[tauri::command]
-#[specta::specta]
-async fn vault_status(app: AppHandle) -> Result<String, String> {
-    let data_dir = app
-        .path()
-        .home_dir()
-        .map_err(|e| e.to_string())?
-        .join(".screenpipe");
-    if !data_dir.join("vault.meta").exists() {
-        return Ok("none".to_string());
-    }
-    if data_dir.join(".vault_locked").exists() {
-        return Ok("locked".to_string());
-    }
-    // Fallback: if vault.meta exists but no sentinel, check if DB is actually encrypted
-    // (handles crash during lock where sentinel wasn't written yet)
-    let db_path = data_dir.join("db.sqlite");
-    if db_path.exists() {
-        if let Ok(true) = screenpipe_vault::crypto::is_encrypted_file(&db_path) {
-            return Ok("locked".to_string());
-        }
-    }
-    Ok("unlocked".to_string())
-}
-
-/// Fast unlock: verify password, decrypt DB only, remove sentinel.
-/// Data files are decrypted in background — server can start immediately.
-#[tauri::command]
-#[specta::specta]
-async fn vault_unlock(app: AppHandle, password: String) -> Result<(), String> {
-    use screenpipe_vault::crypto;
-
-    let screenpipe_dir = app
-        .path()
-        .home_dir()
-        .map_err(|e| e.to_string())?
-        .join(".screenpipe");
-
-    // Read vault metadata and verify password
-    let meta_path = screenpipe_dir.join("vault.meta");
-    let meta_json = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
-    let meta: serde_json::Value =
-        serde_json::from_str(&meta_json).map_err(|e| format!("corrupt vault.meta: {}", e))?;
-
-    let salt_arr: Vec<u8> = meta["salt"]
-        .as_array()
-        .ok_or("missing salt")?
-        .iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8)
-        .collect();
-    let mut salt = [0u8; 32];
-    if salt_arr.len() != 32 {
-        return Err("invalid salt length".into());
-    }
-    salt.copy_from_slice(&salt_arr);
-
-    let encrypted_master_key: Vec<u8> = meta["encrypted_master_key"]
-        .as_array()
-        .ok_or("missing encrypted_master_key")?
-        .iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8)
-        .collect();
-
-    // Derive key from password
-    let password_key = crypto::derive_key(&password, &salt).map_err(|e| e.to_string())?;
-
-    // Decrypt master key — fails if wrong password
-    let master_key_bytes = crypto::decrypt_small(&encrypted_master_key, &password_key)
-        .map_err(|_| "wrong password".to_string())?;
-
-    if master_key_bytes.len() != 32 {
-        return Err("invalid master key".into());
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&master_key_bytes);
-
-    // Decrypt DB file (fast — typically <10s even for 7GB)
-    let db_path = screenpipe_dir.join("db.sqlite");
-    if db_path.exists() {
-        crypto::decrypt_file(&db_path, &key).map_err(|e| format!("decrypt db: {}", e))?;
-        for ext in &["sqlite-wal", "sqlite-shm"] {
-            let p = db_path.with_extension(ext);
-            if p.exists() {
-                let _ = crypto::decrypt_file(&p, &key);
-            }
-        }
-    }
-
-    // Remove sentinel so server can start
-    let _ = std::fs::remove_file(screenpipe_dir.join(".vault_locked"));
-
-    // Spawn background task to decrypt data files (screenshots/audio)
-    let data_dir = screenpipe_dir.join("data");
-    tokio::spawn(async move {
-        if data_dir.exists() {
-            let (tx, _rx) =
-                tokio::sync::watch::channel(screenpipe_vault::migration::MigrationProgress {
-                    total_files: 0,
-                    processed_files: 0,
-                    total_bytes: 0,
-                    processed_bytes: 0,
-                });
-            if let Err(e) =
-                screenpipe_vault::migration::decrypt_data_dir(&screenpipe_dir, &data_dir, key, tx)
-                    .await
-            {
-                tracing::error!("background data decrypt failed: {}", e);
-            } else {
-                tracing::info!("background data decryption complete");
-            }
-        }
-        key.fill(0); // zeroize
-    });
-
-    Ok(())
-}
+use log_files::{get_log_files, get_screenpipe_data_dir};
+use shortcuts::{
+    initialize_global_shortcuts, resume_global_shortcuts,
+    suspend_global_shortcuts, update_global_shortcuts,
+};
+use vault::{vault_status, vault_unlock};
+use window::RewindWindowId;
 
 #[tauri::command]
 #[specta::specta]
 fn get_env(name: &str) -> String {
     std::env::var(String::from(name)).unwrap_or(String::from(""))
-}
-
-#[derive(Debug, serde::Serialize, specta::Type)]
-pub struct LogFile {
-    name: String,
-    path: String,
-    modified_at: u64,
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn get_log_files(app: AppHandle) -> Result<Vec<LogFile>, String> {
-    let data_dir = get_screenpipe_data_dir(&app).map_err(|e| e.to_string())?;
-    let screenpipe_data_dir = get_data_dir(&app).map_err(|e| e.to_string())?;
-    let mut log_files = Vec::new();
-
-    // Collect all entries first
-    let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(&data_dir)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut screenpipe_dir = tokio::fs::read_dir(&screenpipe_data_dir)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
-        // Get metadata immediately for each entry
-        if let Ok(metadata) = entry.metadata().await {
-            entries.push((entry, metadata));
-        }
-    }
-
-    while let Some(entry) = screenpipe_dir
-        .next_entry()
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        // Get metadata immediately for each entry
-        if let Ok(metadata) = entry.metadata().await {
-            entries.push((entry, metadata));
-        }
-    }
-
-    // Sort by modified time descending (newest first)
-    entries.sort_by_key(|(_, metadata)| {
-        std::cmp::Reverse(
-            metadata
-                .modified()
-                .ok()
-                .and_then(|m| m.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        )
-    });
-
-    // Process sorted entries
-    for (entry, metadata) in entries {
-        let path = entry.path();
-        if let Some(extension) = path.extension() {
-            if extension == "log" {
-                let modified = metadata
-                    .modified()
-                    .map_err(|e| e.to_string())?
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map_err(|e| e.to_string())?
-                    .as_secs();
-
-                log_files.push(LogFile {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                    path: path.to_string_lossy().to_string(),
-                    modified_at: modified,
-                });
-            }
-        }
-    }
-
-    Ok(log_files)
-}
-
-fn get_data_dir(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
-    let default_path = app.path().home_dir().unwrap().join(".screenpipe");
-
-    // Try to get dataDir from settings in store
-    // The store structure is: { "settings": { "dataDir": "default", ... }, ... }
-    let data_dir = match get_store(app, None) {
-        Ok(store) => {
-            if let Some(settings) = store.get("settings") {
-                settings
-                    .get("dataDir")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| "default".to_string())
-            } else {
-                "default".to_string()
-            }
-        }
-        Err(e) => {
-            warn!("Failed to get store for data dir, using default: {}", e);
-            "default".to_string()
-        }
-    };
-
-    if data_dir == "default" || data_dir.is_empty() {
-        Ok(default_path)
-    } else {
-        get_base_dir(app, Some(data_dir))
-    }
-}
-
-fn get_screenpipe_data_dir(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
-    let default_path = app.path().home_dir().unwrap().join(".screenpipe");
-    Ok(default_path)
 }
 
 use tokio::time::{sleep, Duration};
@@ -991,94 +270,6 @@ async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, St
         "Upload failed after {} attempts. Last error: {}",
         max_retries, last_error
     ))
-}
-
-// Helper function to parse shortcut string
-pub fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
-    let parts: Vec<&str> = shortcut_str.split('+').collect();
-    let key = parts.last().ok_or("Invalid shortcut format")?;
-
-    let mut modifiers = Modifiers::empty();
-    for modifier in &parts[..parts.len() - 1] {
-        match modifier.to_uppercase().as_str() {
-            "SUPER" | "CMD" | "COMMAND" => modifiers |= Modifiers::META,
-            "CTRL" | "CONTROL" => modifiers |= Modifiers::CONTROL,
-            "ALT" | "OPTION" => modifiers |= Modifiers::ALT,
-            "SHIFT" => modifiers |= Modifiers::SHIFT,
-            _ => return Err(format!("Unknown modifier: {}", modifier)),
-        }
-    }
-
-    // Parse the key code - make case insensitive
-    let code = match key.to_uppercase().as_str() {
-        // Letters
-        "A" => Code::KeyA,
-        "B" => Code::KeyB,
-        "C" => Code::KeyC,
-        "D" => Code::KeyD,
-        "E" => Code::KeyE,
-        "F" => Code::KeyF,
-        "G" => Code::KeyG,
-        "H" => Code::KeyH,
-        "I" => Code::KeyI,
-        "J" => Code::KeyJ,
-        "K" => Code::KeyK,
-        "L" => Code::KeyL,
-        "M" => Code::KeyM,
-        "N" => Code::KeyN,
-        "O" => Code::KeyO,
-        "P" => Code::KeyP,
-        "Q" => Code::KeyQ,
-        "R" => Code::KeyR,
-        "S" => Code::KeyS,
-        "T" => Code::KeyT,
-        "U" => Code::KeyU,
-        "V" => Code::KeyV,
-        "W" => Code::KeyW,
-        "X" => Code::KeyX,
-        "Y" => Code::KeyY,
-        "Z" => Code::KeyZ,
-
-        // Numbers
-        "0" => Code::Digit0,
-        "1" => Code::Digit1,
-        "2" => Code::Digit2,
-        "3" => Code::Digit3,
-        "4" => Code::Digit4,
-        "5" => Code::Digit5,
-        "6" => Code::Digit6,
-        "7" => Code::Digit7,
-        "8" => Code::Digit8,
-        "9" => Code::Digit9,
-
-        // Function keys
-        "F1" => Code::F1,
-        "F2" => Code::F2,
-        "F3" => Code::F3,
-        "F4" => Code::F4,
-        "F5" => Code::F5,
-        "F6" => Code::F6,
-        "F7" => Code::F7,
-        "F8" => Code::F8,
-        "F9" => Code::F9,
-        "F10" => Code::F10,
-        "F11" => Code::F11,
-        "F12" => Code::F12,
-
-        // Special keys
-        "SPACE" => Code::Space,
-        "TAB" => Code::Tab,
-        "ENTER" => Code::Enter,
-        "ESCAPE" | "ESC" => Code::Escape,
-        "UP" => Code::ArrowUp,
-        "DOWN" => Code::ArrowDown,
-        "LEFT" => Code::ArrowLeft,
-        "RIGHT" => Code::ArrowRight,
-
-        _ => return Err(format!("Unsupported key: {}", key)),
-    };
-
-    Ok(Shortcut::new(Some(modifiers), code))
 }
 
 // check if the server is running
@@ -1459,7 +650,7 @@ async fn main() {
                 let _ = window.set_visible_on_all_workspaces(false);
 
                 #[cfg(target_os = "macos")]
-                crate::window_api::reset_to_regular_and_refresh_tray(window.app_handle());
+                crate::window::reset_to_regular_and_refresh_tray(window.app_handle());
                 // On Windows, let the settings window close normally when user
                 // clicks X. For other windows, minimize or hide.
                 #[cfg(target_os = "windows")]
@@ -1743,8 +934,8 @@ async fn main() {
                 space_monitor::setup_space_listener(app.handle().clone());
 
                 // Set up pinch-to-zoom: store the app handle so the gesture
-                // recognizer callback (in window_api.rs) can emit Tauri events.
-                crate::window_api::init_magnify_handler(app.handle().clone());
+                // recognizer callback (in window/gesture.rs) can emit Tauri events.
+                crate::window::init_magnify_handler(app.handle().clone());
 
             }
 
@@ -1992,16 +1183,6 @@ async fn main() {
                         info!("Pre-creating chat panel for fullscreen Space support");
                         match ShowRewindWindow::Chat.show(&app_handle_chat) {
                             Ok(_window) => {
-                                // The show() call dispatches panel config to the main
-                                // thread. We must also hide on the main thread, AND
-                                // wait for the show() config to complete first.
-                                let app_for_hide = app_handle_chat.clone();
-                                let _ = app_handle_chat.run_on_main_thread(move || {
-                                    use tauri_nspanel::ManagerExt;
-                                    if let Ok(panel) = app_for_hide.get_webview_panel("chat") {
-                                        panel.order_out(None);
-                                    }
-                                });
                                 info!("Chat panel pre-created (hidden, panel configured)");
                             }
                             Err(e) => {
@@ -2267,7 +1448,7 @@ async fn main() {
             });
 
             #[cfg(target_os = "macos")]
-            crate::window_api::reset_to_regular_and_refresh_tray(&app_handle);
+            crate::window::reset_to_regular_and_refresh_tray(&app_handle);
 
             // NOTE: Accessory mode watchdog removed — we no longer toggle activation policy
             // The app stays in Regular mode permanently so dock+tray are always visible.
@@ -2351,7 +1532,7 @@ async fn main() {
     #[cfg(target_os = "macos")]
     {
         let app_handle_dock = app.app_handle().clone();
-        setup_dock_menu(app_handle_dock);
+        dock_menu::setup_dock_menu(app_handle_dock);
     }
 
     app.run(|app_handle, event| {

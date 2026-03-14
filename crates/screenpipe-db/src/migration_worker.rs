@@ -73,7 +73,7 @@ pub struct MigrationConfig {
 impl Default for MigrationConfig {
     fn default() -> Self {
         Self {
-            batch_size: 1000,
+            batch_size: 200,
             batch_delay_ms: 100,
             continue_on_error: true,
         }

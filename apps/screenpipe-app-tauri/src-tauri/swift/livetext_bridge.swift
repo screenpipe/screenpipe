@@ -62,6 +62,9 @@ private class LiveTextManager {
     /// lt_update_position provides correct geometry. This prevents
     /// VisionKit from computing hit regions against a zero/stale frame.
     var pendingAnalysis: ImageAnalysis?
+    /// Frame ID associated with pendingAnalysis — used to validate that the
+    /// analysis matches the currently displayed frame before applying it.
+    var pendingFrameId: String?
     var hostContentView: NSView?
     /// Named guard views that sit above the overlay, preventing VisionKit
     /// from intercepting clicks on UI controls (nav bar, filters, scrubber, etc.).
@@ -249,6 +252,7 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
 @_cdecl("lt_analyze_image")
 public func ltAnalyzeImage(
     _ path: UnsafePointer<CChar>?,
+    _ frameId: UnsafePointer<CChar>?,
     _ x: Double,
     _ y: Double,
     _ w: Double,
@@ -276,10 +280,13 @@ public func ltAnalyzeImage(
             return -3
         }
 
+        let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
+
         // Check analysis cache first — revisited or prefetched frames are instant
         if let cached = mgr.getCachedAnalysis(pathStr) {
             mgr.currentAnalysis = cached
             mgr.pendingAnalysis = cached
+            mgr.pendingFrameId = frameIdStr
             outText.pointee = makeCString(cached.transcript)
             return 0
         }
@@ -301,6 +308,7 @@ public func ltAnalyzeImage(
         // Don't apply to overlay yet — store as pending. The analysis will be
         // applied in lt_update_position once the correct frame geometry is set.
         mgr.pendingAnalysis = analysis
+        mgr.pendingFrameId = frameIdStr
 
         outText.pointee = makeCString(analysis.transcript)
         return 0
@@ -354,7 +362,7 @@ public func ltPrefetch(_ pathsJson: UnsafePointer<CChar>?) -> Int32 {
 // MARK: - Update Position
 
 @_cdecl("lt_update_position")
-public func ltUpdatePosition(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
+public func ltUpdatePosition(_ frameId: UnsafePointer<CChar>?, _ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
         let mgr = LiveTextManager.shared
@@ -363,10 +371,22 @@ public func ltUpdatePosition(_ x: Double, _ y: Double, _ w: Double, _ h: Double)
         let contentHeight = contentView.frame.height
         let appKitY = contentHeight - (y + h)
 
+        let requestedFrameId = frameId != nil ? String(cString: frameId!) : ""
+
         // Apply pending analysis AFTER setting the frame so VisionKit
         // computes hit regions against the correct geometry.
-        let pending = mgr.pendingAnalysis
-        mgr.pendingAnalysis = nil
+        // Only apply if the pending analysis belongs to the requested frame —
+        // prevents stale analysis from an adjacent frame being applied.
+        var pending: ImageAnalysis? = nil
+        if let pendingId = mgr.pendingFrameId, pendingId == requestedFrameId {
+            pending = mgr.pendingAnalysis
+            mgr.pendingAnalysis = nil
+            mgr.pendingFrameId = nil
+        } else if mgr.pendingAnalysis != nil {
+            // Stale pending analysis — discard it
+            mgr.pendingAnalysis = nil
+            mgr.pendingFrameId = nil
+        }
 
         mainThreadPreservingFocus(contentView) {
             MainActor.assumeIsolated {

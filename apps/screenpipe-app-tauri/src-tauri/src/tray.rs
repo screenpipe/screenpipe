@@ -7,7 +7,7 @@ use crate::health::{get_recording_info, get_recording_status, DeviceKind, Record
 use crate::recording::RecordingState;
 use crate::store::{get_store, OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
-use crate::window_api::ShowRewindWindow;
+use crate::window::ShowRewindWindow;
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -129,7 +129,7 @@ pub fn recreate_tray(app: &AppHandle) {
     // across the FFI boundary (nounwind → abort). catch_unwind prevents this.
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::window_api::with_autorelease_pool(|| {
+            crate::window::with_autorelease_pool(|| {
             let app = app_for_thread;
             let update_item = match UPDATE_MENU_ITEM.lock() {
                 Ok(guard) => guard.clone(),

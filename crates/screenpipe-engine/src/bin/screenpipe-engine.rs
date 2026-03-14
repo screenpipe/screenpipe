@@ -668,6 +668,11 @@ async fn main() -> anyhow::Result<()> {
 
     let local_data_dir_clone_2 = local_data_dir_clone.clone();
 
+    // Shared manual meeting lock — bridges the HTTP meeting routes and the meeting persister
+    // so a manually-started meeting suppresses auto-detection transitions.
+    let manual_meeting: std::sync::Arc<tokio::sync::RwLock<Option<i64>>> =
+        std::sync::Arc::new(tokio::sync::RwLock::new(None));
+
     let mut server = SCServer::new(
         db_server,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
@@ -682,6 +687,7 @@ async fn main() -> anyhow::Result<()> {
     server.audio_metrics = audio_manager.metrics.clone();
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
+    server.manual_meeting = Some(manual_meeting.clone());
 
     // Attach sync handle if sync is enabled
     let server = if let Some(ref handle) = sync_service_handle {
@@ -1009,7 +1015,7 @@ async fn main() -> anyhow::Result<()> {
     // Persist meeting state transitions to DB (smart mode only)
     let _meeting_persister_handle = meeting_detector
         .as_ref()
-        .map(|detector| start_meeting_persister(detector.clone(), db.clone()));
+        .map(|detector| start_meeting_persister(detector.clone(), db.clone(), manual_meeting.clone()));
 
     // Bridge calendar events from event bus into meeting detector
     let _calendar_bridge_handle = meeting_detector

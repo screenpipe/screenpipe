@@ -57,6 +57,7 @@ impl SnapshotWriter {
         let mut encoder = JpegEncoder::new_with_quality(&mut writer, self.quality);
         encoder.encode_image(image)?;
         writer.flush()?;
+        writer.get_ref().sync_all()?;
 
         debug!(
             "snapshot written: {} ({}x{}, q={})",

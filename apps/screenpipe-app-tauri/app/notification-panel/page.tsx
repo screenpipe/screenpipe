@@ -68,6 +68,15 @@ export default function NotificationPanelPage() {
           await invoke("show_window", { window: "Chat" });
         } else if (action === "open_pipe_suggestions") {
           await emit("open-pipe-suggestions", {});
+        } else if (action === "restart_recording") {
+          try {
+            await invoke("stop_screenpipe");
+          } catch {
+            // may already be stopped
+          }
+          // wait for port release + cooldown
+          await new Promise((r) => setTimeout(r, 2000));
+          await invoke("spawn_screenpipe");
         }
       } catch {
         // ignore

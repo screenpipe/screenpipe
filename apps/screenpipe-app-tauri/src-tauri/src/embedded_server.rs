@@ -359,6 +359,9 @@ pub async fn start_embedded_server(
         None
     };
 
+    // Shared manual meeting lock — used by both the HTTP API and the meeting persister
+    let manual_meeting = std::sync::Arc::new(tokio::sync::RwLock::new(None::<i64>));
+
     // Start meeting watcher (standalone accessibility listener for smart mode)
     // Independent of enable_input_capture/enable_accessibility toggles — only needs accessibility permission
     if let Some(ref detector) = meeting_detector {
@@ -369,7 +372,7 @@ pub async fn start_embedded_server(
 
         // Persist meeting state transitions to DB (was missing — meetings were never saved in desktop app)
         let _meeting_persister =
-            screenpipe_engine::start_meeting_persister(detector.clone(), db.clone());
+            screenpipe_engine::start_meeting_persister(detector.clone(), db.clone(), manual_meeting.clone());
         info!("meeting persister started");
 
         // Bridge calendar events from event bus into meeting detector
@@ -413,6 +416,7 @@ pub async fn start_embedded_server(
     server.audio_metrics = audio_manager.metrics.clone();
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
+    server.manual_meeting = Some(manual_meeting);
 
     // Initialize pipe manager
     let pipes_dir = config.data_dir.join("pipes");

@@ -17,6 +17,7 @@ use tracing::{debug, error, info, warn};
 pub fn start_meeting_persister(
     detector: Arc<MeetingDetector>,
     db: Arc<DatabaseManager>,
+    manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Close any orphaned meetings from a prior crash
@@ -39,11 +40,55 @@ pub fn start_meeting_persister(
 
             match (was_in_meeting, in_meeting) {
                 (false, true) => {
+                    // Check if a manual meeting is active — skip auto-detection entirely
+                    {
+                        let manual = manual_meeting.read().await;
+                        if manual.is_some() {
+                            debug!(
+                                "meeting persister: manual meeting active (id={:?}), skipping auto-detection",
+                                *manual
+                            );
+                            was_in_meeting = in_meeting;
+                            continue;
+                        }
+                    }
+
                     // Transition: not_in_meeting → in_meeting
                     let app = detector
                         .current_meeting_app()
                         .await
                         .unwrap_or_else(|| "unknown".to_string());
+
+                    // Try to merge with a recently-ended meeting for the same app (within 2 minutes)
+                    match db.find_recent_meeting_for_app(&app, 120).await {
+                        Ok(Some(recent)) => {
+                            // Reopen the recent meeting instead of creating a new one
+                            match db.reopen_meeting(recent.id).await {
+                                Ok(()) => {
+                                    info!(
+                                        "meeting persister: reopened recent meeting (id={}, app={})",
+                                        recent.id, app
+                                    );
+                                    current_meeting_id = Some(recent.id);
+                                    was_in_meeting = in_meeting;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "meeting persister: failed to reopen meeting {}: {}, inserting new",
+                                        recent.id, e
+                                    );
+                                }
+                            }
+                        }
+                        Ok(None) => {} // No recent meeting, fall through to insert new
+                        Err(e) => {
+                            warn!(
+                                "meeting persister: failed to find recent meeting: {}, inserting new",
+                                e
+                            );
+                        }
+                    }
 
                     // Check if calendar context is available
                     let cal_ctx = detector.calendar_context().await;
@@ -74,6 +119,19 @@ pub fn start_meeting_persister(
                     }
                 }
                 (true, false) => {
+                    // Check if a manual meeting is active — skip auto-end
+                    {
+                        let manual = manual_meeting.read().await;
+                        if manual.is_some() {
+                            debug!(
+                                "meeting persister: manual meeting active (id={:?}), skipping auto-end",
+                                *manual
+                            );
+                            was_in_meeting = in_meeting;
+                            continue;
+                        }
+                    }
+
                     // Transition: in_meeting → not_in_meeting
                     if let Some(id) = current_meeting_id.take() {
                         let now = chrono::Utc::now()

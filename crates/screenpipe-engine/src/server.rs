@@ -34,7 +34,11 @@ use crate::{
             api_list_monitors, api_vision_status, audio_metrics_handler, health_check,
             vision_metrics_handler,
         },
-        meetings::{get_meeting_handler, list_meetings_handler},
+        meetings::{
+            delete_meeting_handler, get_meeting_handler, list_meetings_handler,
+            merge_meetings_handler, start_meeting_handler, stop_meeting_handler,
+            update_meeting_handler,
+        },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
             list_memories_handler, update_memory_handler,
@@ -152,6 +156,8 @@ pub struct AppState {
     pub archive_state: crate::archive::ArchiveState,
     /// Vault lock manager — encrypts data at rest when locked
     pub vault: screenpipe_vault::VaultManager,
+    /// Active manually-started meeting id (set via POST /meetings/start, cleared via POST /meetings/stop)
+    pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
 }
 
 pub struct SCServer {
@@ -174,6 +180,8 @@ pub struct SCServer {
     /// Shared pipe permission token registry — set before starting so PipeManager can use it.
     pub pipe_permissions:
         Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
+    /// Shared manual meeting lock — pass in from binary so persister and server share the same state.
+    pub manual_meeting: Option<Arc<tokio::sync::RwLock<Option<i64>>>>,
 }
 
 impl SCServer {
@@ -205,6 +213,7 @@ impl SCServer {
             hot_frame_cache: None,
             power_manager: None,
             pipe_permissions: Arc::new(DashMap::new()),
+            manual_meeting: None,
         }
     }
 
@@ -432,6 +441,10 @@ impl SCServer {
             archive_state: crate::archive::ArchiveState::new(),
             pipe_permissions: self.pipe_permissions.clone(),
             vault: screenpipe_vault::VaultManager::new(self.screenpipe_dir.clone()),
+            manual_meeting: self
+                .manual_meeting
+                .clone()
+                .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(None))),
         });
 
         let cors = CorsLayer::new()
@@ -470,7 +483,12 @@ impl SCServer {
             .post("/speakers/reassign", reassign_speaker_handler)
             .post("/speakers/undo-reassign", undo_speaker_reassign_handler)
             .get("/meetings", list_meetings_handler)
+            .post("/meetings/merge", merge_meetings_handler)
+            .post("/meetings/start", start_meeting_handler)
+            .post("/meetings/stop", stop_meeting_handler)
             .get("/meetings/:id", get_meeting_handler)
+            .delete("/meetings/:id", delete_meeting_handler)
+            .put("/meetings/:id", update_meeting_handler)
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
             .get("/memories/:id", get_memory_handler)

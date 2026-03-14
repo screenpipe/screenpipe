@@ -12,6 +12,7 @@ extern "C" {
 
     pub fn lt_analyze_image(
         path: *const c_char,
+        frame_id: *const c_char,
         x: f64,
         y: f64,
         w: f64,
@@ -22,7 +23,7 @@ extern "C" {
 
     pub fn lt_prefetch(paths_json: *const c_char) -> i32;
 
-    pub fn lt_update_position(x: f64, y: f64, w: f64, h: f64) -> i32;
+    pub fn lt_update_position(frame_id: *const c_char, x: f64, y: f64, w: f64, h: f64) -> i32;
 
     pub fn lt_highlight_ranges(search_terms_json: *const c_char) -> i32;
 

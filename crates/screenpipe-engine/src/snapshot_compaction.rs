@@ -32,7 +32,7 @@ const MIN_AGE_SECS: i64 = 600; // 10 minutes
 const POLL_INTERVAL_SECS: u64 = 300; // 5 minutes
 
 /// Maximum frames per MP4 chunk at normal thermal load.
-const MAX_FRAMES_PER_CHUNK: usize = 500;
+const MAX_FRAMES_PER_CHUNK: usize = 100;
 
 /// Smaller batch size when system is thermally stressed.
 const THROTTLED_FRAMES_PER_CHUNK: usize = 50;
@@ -541,7 +541,7 @@ mod tests {
             ThermalState::Serious => (THROTTLED_FRAMES_PER_CHUNK, 30),
             ThermalState::Critical => (THROTTLED_FRAMES_PER_CHUNK, 120),
         };
-        assert_eq!(chunk_size, 500);
+        assert_eq!(chunk_size, 100);
         assert_eq!(delay, 0);
     }
 
