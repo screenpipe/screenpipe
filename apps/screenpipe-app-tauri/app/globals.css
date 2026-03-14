@@ -325,6 +325,29 @@
     display: none;  /* Chrome, Safari and Opera */
   }
 
+  /* Minimal scrollbar: visible track + thumb, no up/down arrow buttons (like reference) */
+  .scrollbar-minimal {
+    scrollbar-width: thin;  /* Firefox: thin scrollbar, no arrows */
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+  .scrollbar-minimal::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.4);
+    border-radius: 4px;
+  }
+  .scrollbar-minimal::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.6);
+  }
+  .scrollbar-minimal::-webkit-scrollbar-button {
+    display: none;  /* No arrow buttons */
+  }
+
   @keyframes shimmer {
     0% {
       background-position: -200% 0;

@@ -1188,8 +1188,8 @@ export const AIPresetsSelector = ({
                   )}
                 >
                   {selectedPreset ? (
-                    <div className="flex w-full items-center justify-between gap-2 overflow-hidden">
-                      <div className="flex items-center gap-2 min-w-[80px] max-w-[30%]">
+                    <div className="flex w-full items-center justify-between gap-2 overflow-hidden min-w-0">
+                      <div className="flex items-center gap-2 min-w-0 flex-shrink overflow-hidden">
                         {selectedPresetRequiresLogin && (
                           <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
                         )}
@@ -1201,15 +1201,15 @@ export const AIPresetsSelector = ({
                           )}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground overflow-hidden">
-                        <span className="rounded bg-muted px-1.5 py-0.5 whitespace-nowrap">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0 flex-1 justify-end overflow-hidden">
+                        <span className="rounded bg-muted px-1.5 py-0.5 whitespace-nowrap shrink-0">
                           {
                             aiPresets.find(
                               (preset) => preset.id === selectedPreset,
                             )?.provider
                           }
                         </span>
-                        <span className="hidden sm:block truncate max-w-[30%]">
+                        <span className="hidden sm:block truncate min-w-0" title={aiPresets.find((p) => p.id === selectedPreset)?.model}>
                           {
                             aiPresets.find(
                               (preset) => preset.id === selectedPreset,
@@ -1243,7 +1243,7 @@ export const AIPresetsSelector = ({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <PopoverContent className="min-w-[500px] w-[--radix-popover-trigger-width] p-0">
+          <PopoverContent side="top" sideOffset={6} className="min-w-[500px] w-[--radix-popover-trigger-width] p-0">
             <Command>
               <CommandInput placeholder="search presets..." />
               <CommandList>
