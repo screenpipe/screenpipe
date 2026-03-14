@@ -30,14 +30,14 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 const HealthStatus = ({ className }: { className?: string }) => {
   const { health, isServerDown } = useHealthCheck();
   const { isOpen, open, close } = useStatusDialog();
-  const { settings, getDataDir } = useSettings();
+  const { settings, getCurrentDataDir } = useSettings();
   const [localDataDir, setLocalDataDir] = useState("");
   const [isRestarting, setIsRestarting] = useState(false);
   const { isMac } = usePlatform();
 
   const handleOpenDataDir = async () => {
     try {
-      const dataDir = await getDataDir();
+      const dataDir = await getCurrentDataDir();
       await openUrl(dataDir);
     } catch (error) {
       console.error("failed to open data directory:", error);
@@ -143,7 +143,7 @@ const HealthStatus = ({ className }: { className?: string }) => {
 
   const handleOpenStatusDialog = async () => {
     try {
-      const dir = await getDataDir();
+      const dir = await getCurrentDataDir();
       setLocalDataDir(dir);
       open();
     } catch (error) {

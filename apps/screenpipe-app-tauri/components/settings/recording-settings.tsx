@@ -96,6 +96,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
+import { DataDirectoryCard } from "./data-directory-card";
 import { ValidatedInput } from "../ui/validated-input";
 import {
   validateField,
@@ -480,7 +481,7 @@ function TranscriptionDictionary({
 }
 
 export function RecordingSettings() {
-  const { settings, updateSettings, getDataDir, loadUser } = useSettings();
+  const { settings, updateSettings, getCurrentDataDir, loadUser } = useSettings();
   const [openLanguages, setOpenLanguages] = React.useState(false);
 
   // Add validation state
@@ -947,7 +948,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
   const handleDataDirChange = async () => {
     try {
-      const dataDir = await getDataDir();
+      const dataDir = await getCurrentDataDir();
       const selected = await open({
         directory: true,
         multiple: false,
@@ -1137,50 +1138,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
       {/* Data Directory */}
       <div className="space-y-2">
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Folder className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Data directory
-                  </h3>
-                  <p className="text-xs text-muted-foreground truncate max-w-[250px]">
-                    {!settings.dataDir || settings.dataDir === "default"
-                      ? "~/.screenpipe (default)"
-                      : settings.dataDir}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                    changing directory starts fresh recordings
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {settings.dataDir &&
-                  settings.dataDir !== "default" &&
-                  settings.dataDir !== "" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleDataDirReset}
-                      className="h-7 text-xs shrink-0"
-                    >
-                      Reset
-                    </Button>
-                  )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDataDirChange}
-                  className="h-7 text-xs shrink-0"
-                >
-                  Change
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <DataDirectoryCard
+          onChange={(path) => handleSettingsChange({ dataDir: path }, true)}
+          onReset={() => handleSettingsChange({ dataDir: "default" }, true)}
+        />
       </div>
 
       

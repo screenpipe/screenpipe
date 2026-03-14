@@ -1,6 +1,7 @@
 use chrono;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,12 @@ pub struct DiskUsage {
     pub total_data_bytes: u64,
     /// Raw available space bytes for frontend calculations.
     pub available_space_bytes: u64,
+    /// Actual cache directory path (from dirs::cache_dir + screenpipe). Platform-specific.
+    #[serde(default)]
+    pub cache_dir_path: Option<String>,
+    /// Mount point of the disk containing this directory. For frontend same-disk detection.
+    #[serde(default)]
+    pub disk_mount_point: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -52,6 +59,18 @@ pub struct CachedDiskUsage {
 pub fn get_cache_dir() -> Result<Option<PathBuf>, String> {
     let proj_dirs = dirs::cache_dir().ok_or_else(|| "failed to get cache dir".to_string())?;
     Ok(Some(proj_dirs.join("screenpipe")))
+}
+
+/// Path-specific cache filename so custom data dirs don't get ~/.screenpipe's cached usage.
+/// Fixes #2458: Disk Usage showed wrong data when user had custom data directory —
+/// cache was global; querying custom dir returned default dir's cached stats.
+fn cache_filename_for_path(screenpipe_dir: &Path) -> String {
+    let normalized = screenpipe_dir
+        .to_string_lossy()
+        .trim_end_matches(['/', '\\'])
+        .to_string();
+    let hash = Sha256::digest(normalized.as_bytes());
+    format!("disk_usage_{:x}.json", hash)
 }
 
 pub fn directory_size(path: &Path) -> io::Result<Option<u64>> {
@@ -111,7 +130,7 @@ pub async fn disk_usage(
     };
 
     fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
-    let cache_file = cache_dir.join("disk_usage.json");
+    let cache_file = cache_dir.join(cache_filename_for_path(screenpipe_dir));
 
     // Skip cache if force_refresh is requested
     if !force_refresh {
@@ -288,18 +307,20 @@ pub async fn disk_usage(
 
     // Calculate available space
     info!("Calculating available disk space");
-    let available_space = {
+    let (available_space, disk_mount_point) = {
         let mut sys = System::new();
         sys.refresh_disks_list();
         let path_obj = Path::new(&screenpipe_dir);
-        let available = sys
-            .disks()
-            .iter()
-            .find(|disk| path_obj.starts_with(disk.mount_point()))
-            .map(|disk| disk.available_space())
-            .unwrap_or(0);
+        let disk_info = sys.disks().iter().find(|disk| path_obj.starts_with(disk.mount_point()));
+        let (available, mount) = match disk_info {
+            Some(d) => (
+                d.available_space(),
+                Some(d.mount_point().to_string_lossy().to_string()),
+            ),
+            None => (0u64, None),
+        };
         info!("Available disk space: {} bytes", available);
-        available
+        (available, mount)
     };
 
     // Find oldest recording date by parsing filenames (*_YYYY-MM-DD_HH-MM-SS.mp4)
@@ -352,6 +373,8 @@ pub async fn disk_usage(
         recording_since,
         total_data_bytes: total_data_size_bytes,
         available_space_bytes: available_space,
+        cache_dir_path: Some(cache_dir.to_string_lossy().to_string()),
+        disk_mount_point,
     };
 
     info!("Disk usage calculation completed: {:?}", disk_usage);

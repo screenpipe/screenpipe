@@ -31,27 +31,48 @@ export interface DiskUsage {
   recording_since: string | null;
   total_data_bytes: number;
   available_space_bytes: number;
+  /** Actual cache directory path from dirs::cache_dir. Platform-specific (Linux/macOS/Windows). */
+  cache_dir_path?: string | null;
+  /** Mount point of disk containing this dir. For same-disk detection when custom dir set. */
+  disk_mount_point?: string | null;
 }
 
+export type DirUsage = { path: string; usage: DiskUsage };
+
 export function useDiskUsage() {
-  const { getDataDir } = useSettings();
-  const [diskUsage, setDiskUsage] = useState<DiskUsage | null>(null);
+  const { getCurrentDataDir, getDefaultDataDir, isSettingsLoaded, settings } = useSettings();
+  const [defaultUsage, setDefaultUsage] = useState<DirUsage | null>(null);
+  const [customUsage, setCustomUsage] = useState<DirUsage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const hasCustomDir =
+    settings.dataDir && settings.dataDir !== "default" && settings.dataDir !== "";
 
   const fetchDiskUsage = async (forceRefresh: boolean = false) => {
     try {
       setIsLoading(true);
       setError(null);
 
-      const dataDir = await getDataDir();
-      // Add a small delay to show loading state for very fast calculations
-      const [result] = await Promise.all([
-        invoke<DiskUsage>("get_disk_usage", { forceRefresh, dataDir }),
-        new Promise(resolve => setTimeout(resolve, forceRefresh ? 300 : 500)) // Shorter delay on force refresh
-      ]);
-      
-      setDiskUsage(result);
+      const defaultPath = await getDefaultDataDir();
+
+      if (hasCustomDir) {
+        const customPath = await getCurrentDataDir();
+        const [defaultResult, customResult] = await Promise.all([
+          invoke<DiskUsage>("get_disk_usage", { forceRefresh, dataDir: defaultPath }),
+          invoke<DiskUsage>("get_disk_usage", { forceRefresh, dataDir: customPath }),
+          new Promise(resolve => setTimeout(resolve, forceRefresh ? 300 : 500))
+        ]);
+        setDefaultUsage({ path: defaultPath, usage: defaultResult });
+        setCustomUsage({ path: customPath, usage: customResult });
+      } else {
+        const [result] = await Promise.all([
+          invoke<DiskUsage>("get_disk_usage", { forceRefresh, dataDir: defaultPath }),
+          new Promise(resolve => setTimeout(resolve, forceRefresh ? 300 : 500))
+        ]);
+        setDefaultUsage({ path: defaultPath, usage: result });
+        setCustomUsage(null);
+      }
     } catch (err) {
       console.error("Failed to fetch disk usage:", err);
       
@@ -80,14 +101,18 @@ export function useDiskUsage() {
     }
   };
 
+  // Refetch when settings load (dataDir may have been custom) or when dataDir changes
   useEffect(() => {
+    if (!isSettingsLoaded) return;
     fetchDiskUsage();
-  }, []);
+  }, [isSettingsLoaded, settings.dataDir]);
 
   return {
-    diskUsage,
+    defaultUsage,
+    customUsage,
+    hasCustomDir,
     isLoading,
     error,
-    refetch: () => fetchDiskUsage(true), // Force refresh when user clicks refresh
+    refetch: () => fetchDiskUsage(true),
   };
 } 

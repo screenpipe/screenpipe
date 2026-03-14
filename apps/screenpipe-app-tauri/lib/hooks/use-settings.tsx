@@ -531,7 +531,8 @@ interface SettingsContextType {
 	resetSetting: <K extends keyof Settings>(key: K) => Promise<void>;
 	reloadStore: () => Promise<void>;
 	loadUser: (token: string, forceReload?: boolean) => Promise<void>;
-	getDataDir: () => Promise<string>;
+	getCurrentDataDir: () => Promise<string>;
+	getDefaultDataDir: () => Promise<string>;
 	isSettingsLoaded: boolean;
 	loadingError: string | null;
 }
@@ -655,16 +656,24 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		setSettings(freshSettings);
 	};
 
-	const getDataDir = async () => {
+	const getCurrentDataDir = async () => {
 		const homeDirPath = await homeDir();
+		// Read from store to avoid React state timing — ensures correct path
+		// when DiskUsageSection loads before settings hydrate or after dataDir change
+		const s = await settingsStore.get();
 
 		if (
-			settings.dataDir !== "default" &&
-			settings.dataDir &&
-			settings.dataDir !== ""
+			s.dataDir !== "default" &&
+			s.dataDir &&
+			s.dataDir !== ""
 		)
-			return settings.dataDir;
+			return s.dataDir;
 
+		return `${homeDirPath}/.screenpipe`;
+	};
+
+	const getDefaultDataDir = async () => {
+		const homeDirPath = await homeDir();
 		return `${homeDirPath}/.screenpipe`;
 	};
 
@@ -741,7 +750,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		resetSetting,
 		reloadStore,
 		loadUser,
-		getDataDir,
+		getCurrentDataDir,
+		getDefaultDataDir,
 		isSettingsLoaded,
 		loadingError,
 	};

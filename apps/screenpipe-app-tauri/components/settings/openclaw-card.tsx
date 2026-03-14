@@ -88,7 +88,7 @@ function toRustConfig(config: SyncConfig) {
 }
 
 export function OpenClawCard() {
-  const { getDataDir } = useSettings();
+  const { getCurrentDataDir } = useSettings();
   const [config, setConfig] = useState<SyncConfig>(DEFAULT_CONFIG);
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -146,7 +146,7 @@ export function OpenClawCard() {
     setIsSyncing(true);
     setSyncError(null);
     try {
-      const dataDir = await getDataDir();
+      const dataDir = await getCurrentDataDir();
       const result = await invoke<SyncResult>("remote_sync_now", {
         config: toRustConfig(config),
         dataDir,
