@@ -163,6 +163,22 @@ function CursorLogo({ className }: { className?: string }) {
   );
 }
 
+function MstyLogo({ className }: { className?: string }) {
+  const gradientId = React.useId();
+  return (
+    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" className={className ?? "w-5 h-5"}>
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#a855f7" />
+          <stop offset="100%" stopColor="#7c3aed" />
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="20" fill={`url(#${gradientId})`} />
+      <text x="50" y="65" textAnchor="middle" fontSize="50" fontWeight="bold" fontFamily="system-ui, sans-serif" fill="white">M</text>
+    </svg>
+  );
+}
+
 function IntegrationIcon({ icon }: { icon: string }) {
   const icons: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
@@ -207,6 +223,7 @@ function IntegrationIcon({ icon }: { icon: string }) {
       </svg>
     ),
     anythingllm: <img src="/images/anythingllm.png" alt="AnythingLLM" className="w-5 h-5 rounded" />,
+    msty: <MstyLogo />,
     ollama: <img src="/images/ollama.png" alt="Ollama" className="w-5 h-5 rounded" />,
     lmstudio: <img src="/images/lmstudio.png" alt="LM Studio" className="w-5 h-5 rounded" />,
     whatsapp: <img src="/images/whatsapp.svg" alt="WhatsApp" className="w-5 h-5" />,
@@ -459,6 +476,47 @@ function AnythingLLMPanel() {
       <p className="text-xs text-muted-foreground">
         3. Click <strong>Refresh</strong> in Agent Skills to load the server.
       </p>
+    </div>
+  );
+}
+
+function MstyPanel() {
+  const [copied, setCopied] = useState(false);
+  const config = JSON.stringify({
+    command: "npx",
+    args: ["-y", "screenpipe-mcp"],
+  }, null, 2);
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }, [config]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Give Msty access to your screen &amp; audio history via MCP.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        1. Open Msty and go to <strong>Settings</strong> &gt; <strong>Toolbox</strong>
+      </p>
+      <p className="text-xs text-muted-foreground">
+        2. Click <strong>Add New Tool</strong>, select <strong>STDIO / JSON</strong>, and paste this config:
+      </p>
+      <div className="relative group">
+        <pre className="bg-muted border border-border rounded-lg p-3 pr-10 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{config}</pre>
+        <Button variant="ghost" size="sm" onClick={handleCopy} className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        3. Give the tool a name (e.g. <strong>screenpipe</strong>) and click <strong>Add</strong>
+      </p>
+      <Button variant="outline" onClick={() => openUrl("https://msty.app")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+        <ExternalLink className="h-3 w-3" />open msty
+      </Button>
     </div>
   );
 }
@@ -966,6 +1024,7 @@ export function ConnectionsSection() {
       { id: "anythingllm", name: "AnythingLLM", icon: "anythingllm", connected: false },
       { id: "ollama", name: "Ollama", icon: "ollama", connected: false },
       { id: "lmstudio", name: "LM Studio", icon: "lmstudio", connected: false },
+      { id: "msty", name: "Msty", icon: "msty", connected: false },
       { id: "obsidian", name: "Obsidian", icon: "obsidian", connected: false },
       { id: "notion", name: "Notion", icon: "notion", connected: false },
       { id: "linear", name: "Linear", icon: "linear", connected: false },
@@ -1008,6 +1067,7 @@ export function ConnectionsSection() {
       case "anythingllm": return <AnythingLLMPanel />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
+      case "msty": return <MstyPanel />;
       default:
         if (selectedIntegration) {
           return <ApiIntegrationPanel integration={selectedIntegration} onRefresh={fetchIntegrations} />;
