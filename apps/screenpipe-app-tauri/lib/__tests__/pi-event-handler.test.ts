@@ -340,8 +340,7 @@ describe("formatPiMessage", () => {
     };
     const formatted = formatPiMessage(state);
     expect(formatted).toContain("⏳");
-    expect(formatted).toContain("**read**");
-    expect(formatted).toContain("`file.txt`");
+    expect(formatted).toContain("Read file.txt");
   });
 
   it("includes done tool with check icon", () => {
@@ -406,7 +405,7 @@ describe("formatPiMessage", () => {
       done: true,
     };
     const formatted = formatPiMessage(state);
-    expect(formatted).toContain("`out.txt`");
+    expect(formatted).toContain("Wrote out.txt");
   });
 
   it("handles multiple tool calls in sequence", () => {
@@ -420,9 +419,9 @@ describe("formatPiMessage", () => {
       done: false,
     };
     const formatted = formatPiMessage(state);
-    expect(formatted).toContain("✅ **read**");
-    expect(formatted).toContain("✅ **write**");
-    expect(formatted).toContain("⏳ **bash**");
+    expect(formatted).toContain("✅ Read a.txt");
+    expect(formatted).toContain("✅ Wrote b.txt");
+    expect(formatted).toContain("⏳ Ran `echo hi`");
   });
 });
 

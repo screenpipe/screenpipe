@@ -631,10 +631,10 @@ async fn do_capture(
     use screenpipe_a11y::tree::TreeWalkResult;
     let tree_snapshot = match tree_walk_result {
         TreeWalkResult::Found(snap) => Some(snap),
-        TreeWalkResult::Skipped => {
+        TreeWalkResult::Skipped(reason) => {
             warn!(
-                "skipping capture: window filtered (incognito/private) on monitor {}",
-                monitor_id
+                "skipping capture: window filtered ({}) on monitor {}",
+                reason, monitor_id
             );
             return Ok(CaptureOutput {
                 result: None,

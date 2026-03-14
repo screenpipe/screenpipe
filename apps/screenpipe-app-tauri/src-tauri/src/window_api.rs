@@ -429,8 +429,10 @@ pub unsafe fn make_nswindow_webview_first_responder(ns_win: tauri_nspanel::cocoa
             // Attach pinch-to-zoom gesture recognizer (same as NSPanel overlay)
             attach_magnify_gesture_to_view(wk_view);
 
-            // Set first responder immediately (handles the common case)
-            let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
+        // Set first responder immediately (handles the common case).
+        // The deferred retry is handled globally by NSWindowDidBecomeKeyNotification
+        // (see `register_become_key_observer`).
+        let _: () = msg_send![ns_win, makeFirstResponder: wk_view];
 
             // Also schedule on the next run-loop tick to win the race against any
             // deferred responder-chain reset triggered by makeKeyAndOrderFront.
@@ -491,8 +493,11 @@ pub unsafe fn make_webview_first_responder(panel: &tauri_nspanel::raw_nspanel::R
         // before WebKit's internal multi-process routing claims them.
         attach_magnify_gesture_to_view(wk_view);
 
-        // Set first responder immediately (handles the common case)
-        panel.make_first_responder(Some(wk_view));
+    // Set first responder immediately (handles the common case).
+    // The deferred retry is handled globally by the NSWindowDidBecomeKeyNotification
+    // observer (see `register_become_key_observer`) which fires AFTER AppKit finishes
+    // its own responder-chain setup — no performSelector:afterDelay: needed.
+    panel.make_first_responder(Some(wk_view));
 
         // Also schedule on the next run-loop tick to win the race against any
         // deferred responder-chain reset triggered by make_key_window().

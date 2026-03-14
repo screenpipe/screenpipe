@@ -116,15 +116,16 @@ mod tests {
     }
 
     #[test]
-    fn test_password_and_secret_windows() {
-        assert!(is_title_private("Enter Password - Chrome"));
-        assert!(is_title_private("Secret Notes"));
+    fn test_no_false_positives_on_normal_windows() {
+        assert!(!is_title_private("Enter Password - Chrome"));
+        assert!(!is_title_private("Secret Notes"));
+        assert!(!is_title_private("Private API docs - Chrome"));
     }
 
     #[test]
     fn test_case_insensitivity() {
         assert!(is_title_private("INCOGNITO - Chrome"));
-        assert!(is_title_private("PRIVATE BROWSING"));
+        assert!(is_title_private("PRIVATE BROWSING - Firefox"));
         assert!(is_title_private("inprivate - Edge"));
     }
 

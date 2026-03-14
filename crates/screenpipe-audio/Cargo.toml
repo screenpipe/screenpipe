@@ -77,18 +77,23 @@ sysinfo = "0.29.0"
 lazy_static = { version = "1.4.0" }
 realfft = "3.4.0"
 ndarray = "0.16"
-ort = "=2.0.0-rc.6"
-ort-sys = "=2.0.0-rc.6"
+# Base ort dep — each platform overrides with specific features below
+ort = { version = "=2.0.0-rc.6", default-features = false, features = ["ndarray", "half"] }
+ort-sys = { version = "=2.0.0-rc.6", default-features = false }
 knf-rs = "0.3.2"
 futures = "0.3.31"
 deepgram = "0.6.4"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "1785a66884a6a9a42826b1a0fbf5a17f7b5c53f4", default-features = false, features = ["qwen3-asr-ggml"], optional = true }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "4ceceb0", default-features = false, features = ["qwen3-asr-ggml"], optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libpulse-binding = { version = "2.28", optional = true }
 libpulse-simple-binding = { version = "2.28", optional = true }
+# Use load-dynamic on Linux so we don't bundle ONNX Runtime (or its CUDA providers) into the AppImage.
+# The user's system onnxruntime lib is loaded at runtime instead.
+ort = { version = "=2.0.0-rc.6", default-features = false, features = ["ndarray", "half", "load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
 
 # Windows COM API for querying the "Default Communications Device" role.
 # MS Teams/Zoom route audio to the eCommunications endpoint, which may

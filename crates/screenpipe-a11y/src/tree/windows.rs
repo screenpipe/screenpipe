@@ -8,7 +8,7 @@
 //! the focused window's tree and extract all visible text — matching macOS behavior.
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    AccessibilityTreeNode, NodeBounds, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
     TreeWalkerPlatform,
 };
 use crate::events::AccessibilityNode;
@@ -186,7 +186,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Skip excluded apps
         let app_lower = app_name.to_lowercase();
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
         // Get window title
@@ -199,7 +199,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Skip incognito / private browsing windows (localized title check)
         if self.config.ignore_incognito_windows && crate::incognito::is_title_private(&window_name)
         {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::Incognito));
         }
 
         // Apply user-configured ignored windows (check app name and window title)
@@ -208,7 +208,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             let p = pattern.to_lowercase();
             app_lower.contains(&p) || window_lower.contains(&p)
         }) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Apply user-configured included windows (whitelist mode)
@@ -218,7 +218,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
                 app_lower.contains(&p) || window_lower.contains(&p)
             });
             if !matches {
-                return Ok(TreeWalkResult::Skipped);
+                return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
             }
         }
 

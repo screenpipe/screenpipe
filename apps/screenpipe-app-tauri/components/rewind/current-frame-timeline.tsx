@@ -4,7 +4,7 @@
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import React, { FC, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useFrameContext } from "@/lib/hooks/use-frame-context";
-import { useFrameOcrData } from "@/lib/hooks/use-frame-ocr-data";
+import { useFrameTextData } from "@/lib/hooks/use-frame-text-data";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { TextOverlay, extractUrlsFromText, isUrl, normalizeUrl } from "@/components/text-overlay";
@@ -142,7 +142,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	);
 
 	// OCR data for TextOverlay — always fetch so clickable text works on all frames
-	const { textPositions: ocrTextPositions, isLoading: ocrLoading } = useFrameOcrData(
+	const { textPositions: ocrTextPositions, isLoading: ocrLoading } = useFrameTextData(
 		debouncedFrame ? parseInt(debouncedFrame.frameId, 10) : null
 	);
 
@@ -277,6 +277,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		windowLabel: liveTextWindowLabel,
 		navBarRef,
 		guardRefs,
+		adjacentFrames,
 	});
 
 	if (!frameId) {

@@ -13,7 +13,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 
-const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.53.0";
+const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.57.1";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
 
 /// Returns the screenpipe cloud models array as a serde_json::Value.
@@ -63,15 +63,6 @@ pub fn screenpipe_cloud_models() -> serde_json::Value {
             "reasoning": false,
             "input": ["text", "image"],
             "cost": {"input": 0.10, "output": 0.40, "cacheRead": 0, "cacheWrite": 0},
-            "contextWindow": 1000000,
-            "maxTokens": 65536
-        },
-        {
-            "id": "gemini-3-pro",
-            "name": "Gemini 3 Pro",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "cost": {"input": 1.25, "output": 10.00, "cacheRead": 0, "cacheWrite": 0},
             "contextWindow": 1000000,
             "maxTokens": 65536
         },
@@ -229,6 +220,18 @@ impl PiExecutor {
         } else {
             Self::ensure_screenpipe_skill(project_dir)
         }
+    }
+
+    /// Install the context-pruning extension that truncates large tool results
+    /// to prevent unbounded context growth in --continue sessions.
+    pub fn ensure_context_pruning_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/context-pruning.ts");
+        let ext_path = ext_dir.join("context-pruning.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!("context-pruning extension installed at {:?}", ext_path);
+        Ok(())
     }
 
     /// Install or remove the web-search extension based on provider.
@@ -755,6 +758,7 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_context_pruning_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -840,6 +844,7 @@ impl AgentExecutor for PiExecutor {
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
+        Self::ensure_context_pruning_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -910,8 +915,14 @@ impl AgentExecutor for PiExecutor {
 
     async fn ensure_installed(&self) -> Result<()> {
         if find_pi_executable().is_some() {
-            debug!("pi already installed");
-            return Ok(());
+            // Check if local install matches expected version; upgrade if stale
+            if !is_local_pi_version_current() {
+                info!("pi version mismatch — upgrading to {}", PI_PACKAGE);
+                // Fall through to install
+            } else {
+                debug!("pi already installed");
+                return Ok(());
+            }
         }
 
         let bun = find_bun_executable()
@@ -1000,6 +1011,41 @@ pub fn find_bun_executable() -> Option<String> {
 /// Returns the screenpipe-managed pi install directory (`~/.screenpipe/pi-agent/`).
 fn pi_local_install_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".screenpipe").join("pi-agent"))
+}
+
+/// Check whether the locally-installed Pi version matches `PI_PACKAGE`.
+fn is_local_pi_version_current() -> bool {
+    let dir = match pi_local_install_dir() {
+        Some(d) => d,
+        None => return false,
+    };
+    let pkg_json = dir
+        .join("node_modules")
+        .join("@mariozechner")
+        .join("pi-coding-agent")
+        .join("package.json");
+    let contents = match std::fs::read_to_string(&pkg_json) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let installed = match parsed.get("version").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return false,
+    };
+    // PI_PACKAGE is "@mariozechner/pi-coding-agent@0.57.1" — extract version after last '@'
+    let expected = PI_PACKAGE.rsplit('@').next().unwrap_or("");
+    if installed != expected {
+        info!(
+            "local pi version {} differs from expected {}",
+            installed, expected
+        );
+        return false;
+    }
+    true
 }
 
 /// Seed the pi-agent package.json with overrides to fix dependency resolution.

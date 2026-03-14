@@ -5,7 +5,8 @@
 //! macOS accessibility tree walker using cidre AX APIs.
 
 use super::{
-    AccessibilityTreeNode, TreeSnapshot, TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform,
+    AccessibilityTreeNode, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    TreeWalkerPlatform,
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -222,7 +223,7 @@ impl MacosTreeWalker {
             "loginwindow",
         ];
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
         // Apply user-configured ignored windows (check app name)
@@ -230,7 +231,7 @@ impl MacosTreeWalker {
             let p = pattern.to_lowercase();
             app_lower.contains(&p)
         }) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // 2. Get the focused window via AX API
@@ -267,7 +268,7 @@ impl MacosTreeWalker {
                 .incognito_detector
                 .is_incognito(&app_name, 0, &window_name)
         {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::Incognito));
         }
 
         // Apply user-configured ignored windows (also check window title)
@@ -276,7 +277,7 @@ impl MacosTreeWalker {
             let p = pattern.to_lowercase();
             window_lower.contains(&p)
         }) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Apply user-configured included windows (also check window title)
@@ -290,7 +291,7 @@ impl MacosTreeWalker {
                 window_lower.contains(&p)
             });
             if !matches_app && !matches_window {
-                return Ok(TreeWalkResult::Skipped);
+                return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
             }
         }
 

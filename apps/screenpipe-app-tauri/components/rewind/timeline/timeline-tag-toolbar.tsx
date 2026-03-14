@@ -9,7 +9,7 @@ import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui/use-toast";
 import { clearTimelineCache } from "@/lib/hooks/use-timeline-cache";
-import { clearOcrCache } from "@/lib/hooks/use-frame-ocr-data";
+import { clearTextCache } from "@/lib/hooks/use-frame-text-data";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -188,7 +188,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			});
 			setSelectionRange(null);
 			setShowDeleteConfirm(false);
-			clearOcrCache();
+			clearTextCache();
 			await clearTimelineCache();
 			window.location.reload();
 		} catch (e) {

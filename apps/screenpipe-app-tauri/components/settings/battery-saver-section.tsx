@@ -6,6 +6,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSettings } from "@/lib/hooks/use-settings";
 
 interface PowerState {
   battery_pct: number | null;
@@ -41,6 +42,7 @@ const PROFILE_INFO = {
 } as const;
 
 export function BatterySaverSection() {
+  const { updateSettings } = useSettings();
   const [status, setStatus] = useState<PowerStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -77,6 +79,8 @@ export function BatterySaverSection() {
       if (res.ok) {
         const data: PowerStatus = await res.json();
         setStatus(data);
+        // Persist to settings store so it survives app restarts
+        await updateSettings({ powerMode: mode });
       }
     } catch {
       // ignore

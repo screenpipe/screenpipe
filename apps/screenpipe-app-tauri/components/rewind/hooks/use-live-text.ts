@@ -23,6 +23,8 @@ export function useLiveText(opts: {
 	/** Named guard refs — each entry becomes a transparent click guard above the
 	 *  Live Text overlay, keyed by name (e.g. "filters", "scrubber"). */
 	guardRefs?: Record<string, React.RefObject<HTMLDivElement | null>>;
+	/** Adjacent frames for prefetching VisionKit analysis */
+	adjacentFrames?: Array<{ devices?: Array<{ frame_id?: string; metadata?: { file_path?: string } }> } | null>;
 }) {
 	const {
 		debouncedFrame,
@@ -36,6 +38,7 @@ export function useLiveText(opts: {
 		containerRef,
 		navBarRef,
 		guardRefs,
+		adjacentFrames,
 	} = opts;
 
 	// Native macOS Live Text overlay (VisionKit ImageAnalysisOverlayView)
@@ -103,9 +106,9 @@ export function useLiveText(opts: {
 
 		// Position is managed exclusively by livetext_update_position.
 		// The analyze call only sets the analysis + shows the overlay.
-		// Debounce: 150ms — short enough to feel responsive, long enough to skip
-		// intermediate frames during fast scroll. Generation counter in Swift
-		// handles cancellation of stale in-flight requests.
+		// Debounce: 50ms — short enough to feel near-instant, long enough to skip
+		// rapid arrow key presses. The 80ms frame-loading debounce already handles
+		// fast scrolling; generation counter in Swift cancels stale requests.
 		let cancelled = false;
 		const timer = setTimeout(() => {
 			if (cancelled) return;
@@ -137,9 +140,40 @@ export function useLiveText(opts: {
 				}
 				console.warn("live text analyze failed:", e);
 			});
-		}, 150);
+		}, 50);
 		return () => { cancelled = true; clearTimeout(timer); };
 	}, [nativeLiveTextActive, debouncedFrame?.frameId, isSnapshotFrame]);
+
+	// Prefetch VisionKit analysis for adjacent frames so scrolling is instant.
+	// Fire-and-forget: Swift caches results in an LRU for future hits.
+	useEffect(() => {
+		if (!nativeLiveTextActive || !adjacentFrames?.length) return;
+
+		const paths: string[] = [];
+		const seen = new Set<string>();
+		if (debouncedFrame?.filePath) seen.add(debouncedFrame.filePath);
+
+		for (const frame of adjacentFrames) {
+			const dev = frame?.devices?.[0];
+			if (!dev?.frame_id) continue;
+			const filePath = dev.metadata?.file_path;
+			const lower = filePath?.toLowerCase() ?? "";
+			const isSnapshot = lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png");
+
+			// Use local file for snapshots, HTTP for video chunks
+			const imagePath = isSnapshot && filePath
+				? filePath
+				: `http://localhost:3030/frames/${dev.frame_id}`;
+
+			if (seen.has(imagePath)) continue;
+			seen.add(imagePath);
+			paths.push(imagePath);
+		}
+
+		if (paths.length > 0) {
+			invoke("livetext_prefetch", { paths }).catch(() => {});
+		}
+	}, [nativeLiveTextActive, debouncedFrame?.frameId, adjacentFrames]);
 
 	// Update overlay position on resize or when renderedImageInfo first becomes available
 	useEffect(() => {

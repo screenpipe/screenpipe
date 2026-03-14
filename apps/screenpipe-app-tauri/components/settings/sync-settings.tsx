@@ -441,6 +441,7 @@ function ActiveSyncSettings({
   onToggleSync,
   onTriggerSync,
   onRemoveDevice,
+  onDeleteDeviceLocalData,
   onDeleteCloudData,
   isSyncing,
 }: {
@@ -449,6 +450,7 @@ function ActiveSyncSettings({
   onToggleSync: (enabled: boolean) => void;
   onTriggerSync: () => void;
   onRemoveDevice: (deviceId: string) => void;
+  onDeleteDeviceLocalData: (deviceId: string) => void;
   onDeleteCloudData: () => void;
   isSyncing: boolean;
 }) {
@@ -602,13 +604,24 @@ function ActiveSyncSettings({
                       </div>
                     </div>
                     {!device.isCurrent && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onRemoveDevice(device.deviceId)}
-                      >
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onDeleteDeviceLocalData(device.deviceId)}
+                          title="delete synced data from this device"
+                        >
+                          <span className="text-xs text-muted-foreground">clean local data</span>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onRemoveDevice(device.deviceId)}
+                          title="unlink device from sync"
+                        >
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      </div>
                     )}
                   </Card>
                 ))}
@@ -1134,6 +1147,31 @@ export function SyncSettings() {
     }
   };
 
+  const handleDeleteDeviceLocalData = async (deviceId: string) => {
+    const confirmed = window.confirm(
+      "this will delete all data synced from this device on your local machine.\n\n" +
+      "to re-sync, disable and re-enable cloud sync.\n\n" +
+      "continue?"
+    );
+    if (!confirmed) return;
+
+    try {
+      const result = await invoke("delete_device_local_data", { machineId: deviceId });
+      const parsed = typeof result === "string" ? JSON.parse(result) : result;
+      const total = (parsed.frames_deleted || 0) + (parsed.ocr_deleted || 0) + (parsed.audio_transcriptions_deleted || 0) + (parsed.ui_events_deleted || 0);
+      toast({
+        title: "local data cleaned",
+        description: `removed ${total} records synced from this device`,
+      });
+    } catch (error) {
+      toast({
+        title: "failed to delete device data",
+        description: String(error),
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleDeleteCloudData = async () => {
     try {
       await invoke("delete_cloud_data");
@@ -1199,6 +1237,7 @@ export function SyncSettings() {
         onToggleSync={handleToggleSync}
         onTriggerSync={handleTriggerSync}
         onRemoveDevice={handleRemoveDevice}
+        onDeleteDeviceLocalData={handleDeleteDeviceLocalData}
         onDeleteCloudData={handleDeleteCloudData}
         isSyncing={isSyncing}
       />

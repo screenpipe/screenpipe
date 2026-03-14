@@ -24,10 +24,10 @@ use crate::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
             remove_tags, validate_media_handler,
         },
-        data::delete_time_range_handler,
+        data::{delete_device_data_handler, delete_time_range_handler},
         elements::{get_frame_elements, search_elements},
         frames::{
-            get_frame_context, get_frame_data, get_frame_metadata, get_frame_ocr_data,
+            get_frame_context, get_frame_data, get_frame_metadata, get_frame_text_data,
             get_next_valid_frame, run_frame_ocr,
         },
         health::{
@@ -450,8 +450,10 @@ impl SCServer {
             .post("/tags/:content_type/:id", add_tags)
             .delete("/tags/:content_type/:id", remove_tags)
             .get("/frames/:frame_id", get_frame_data)
-            .get("/frames/:frame_id/ocr", get_frame_ocr_data)
-            .post("/frames/:frame_id/ocr", run_frame_ocr)
+            .get("/frames/:frame_id/text", get_frame_text_data)
+            .get("/frames/:frame_id/ocr", get_frame_text_data) // deprecated alias
+            .post("/frames/:frame_id/text", run_frame_ocr)
+            .post("/frames/:frame_id/ocr", run_frame_ocr) // deprecated alias
             .get("/frames/:frame_id/context", get_frame_context)
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
@@ -547,6 +549,10 @@ impl SCServer {
                 axum::routing::post(delete_time_range_handler),
             )
             .route(
+                "/data/delete-device",
+                axum::routing::post(delete_device_data_handler),
+            )
+            .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
             )
@@ -601,6 +607,27 @@ impl SCServer {
                 .route(
                     "/:id/history",
                     axum::routing::delete(crate::pipes_api::clear_pipe_history),
+                )
+                // Store/registry routes (nested under /pipes/store)
+                .route(
+                    "/store",
+                    axum::routing::get(crate::routes::pipe_store::pipe_store_search),
+                )
+                .route(
+                    "/store/publish",
+                    axum::routing::post(crate::routes::pipe_store::pipe_store_publish),
+                )
+                .route(
+                    "/store/install",
+                    axum::routing::post(crate::routes::pipe_store::pipe_store_install),
+                )
+                .route(
+                    "/store/:slug",
+                    axum::routing::get(crate::routes::pipe_store::pipe_store_detail),
+                )
+                .route(
+                    "/store/:slug/review",
+                    axum::routing::post(crate::routes::pipe_store::pipe_store_review),
                 )
                 .with_state(pm.clone());
             router.nest("/pipes", pipe_routes)

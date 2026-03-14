@@ -142,14 +142,13 @@ impl Default for UiCaptureConfig {
                 "Credential Manager".to_string(),
             ],
             excluded_window_patterns: Vec::new(),
-            // Note: incognito / private browsing detection is now handled by
-            // the `crate::incognito` module with comprehensive localized
-            // matching and platform-native APIs (macOS AppleScript).
-            // Only generic sensitive-content patterns remain here.
-            excluded_window_pattern_strings: vec![
-                r"(?i).*password.*".to_string(),
-                r"(?i).*secret.*".to_string(),
-            ],
+            // Incognito / private browsing detection is handled by the
+            // `crate::incognito` module with comprehensive localized matching
+            // and platform-native APIs (macOS AppleScript).
+            // Bare "password"/"secret" patterns removed — too many false
+            // positives on normal windows (e.g. password manager settings,
+            // "Secret Santa Planning", AWS Secrets Manager, etc.).
+            excluded_window_pattern_strings: vec![],
 
             // Retention
             retention_days: 30,

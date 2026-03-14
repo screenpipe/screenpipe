@@ -18,7 +18,7 @@ use screenpipe_engine::{
     analytics,
     hot_frame_cache::HotFrameCache,
     server::bind_listener,
-    start_meeting_watcher, start_power_manager, start_sleep_monitor, start_ui_recording,
+    start_meeting_watcher, start_power_manager_with_pref, start_sleep_monitor, start_ui_recording,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
     RecordingConfig, ResourceMonitor, SCServer,
 };
@@ -261,8 +261,16 @@ pub async fn start_embedded_server(
     // Create shared pipeline metrics (used by recording + health endpoint + PostHog)
     let vision_metrics = Arc::new(screenpipe_screen::PipelineMetrics::new());
 
-    // Start power manager — polls battery/thermal state and broadcasts profile changes
-    let power_manager = start_power_manager();
+    // Start power manager — polls battery/thermal state and broadcasts profile changes.
+    // Restore user's persisted power mode preference so it survives app restarts.
+    let initial_power_pref = config
+        .power_mode
+        .as_deref()
+        .and_then(|s| serde_json::from_value::<screenpipe_engine::power::PowerMode>(
+            serde_json::Value::String(s.to_string()),
+        ).ok())
+        .unwrap_or_default();
+    let power_manager = start_power_manager_with_pref(initial_power_pref);
 
     // Capture trigger sender — set by VisionManager when vision is enabled.
     // Passed to start_ui_recording so UI events (clicks, app switches) trigger captures.

@@ -142,6 +142,8 @@ export type Settings = SettingsStore & {
 	pipeSuggestionsEnabled?: boolean;
 	/** Hours between pipe suggestion notifications (default: 24) */
 	pipeSuggestionFrequencyHours?: number;
+	/** User's power mode preference — persisted so it survives app restarts */
+	powerMode?: "auto" | "performance" | "battery_saver";
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -398,16 +400,6 @@ function createSettingsStore() {
 			if (settings.aiPresets.length === 0) {
 				settings.aiPresets = [DEFAULT_PI_PRESET as any];
 			}
-			needsUpdate = true;
-		}
-
-		// Migration: Switch default pi-agent preset from claude-haiku to gemini-3.1-pro
-		const piPresetToMigrate = settings.aiPresets?.find(
-			(p: any) => p.id === "pi-agent" && p.provider === "pi" && p.model === "claude-haiku-4-5"
-		);
-		if (piPresetToMigrate) {
-			(piPresetToMigrate as any).model = "gemini-3.1-pro";
-			(piPresetToMigrate as any).maxContextChars = 1000000;
 			needsUpdate = true;
 		}
 

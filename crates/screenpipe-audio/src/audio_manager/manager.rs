@@ -527,8 +527,26 @@ impl AudioManager {
                         // even if transcription is deferred. No transcription yet — just the chunk.
                         // Use the original capture timestamp so audio appears at the correct
                         // position on the timeline, not when processing happened.
-                        if let Err(e) = db.insert_audio_chunk(&path, capture_dt).await {
-                            error!("failed to insert audio chunk into db: {:?}", e);
+                        // Retry DB insertion with backoff to survive transient pool saturation.
+                        // Without this, audio files are written to disk but orphaned from the DB,
+                        // causing silent data loss on the timeline.
+                        let mut inserted = false;
+                        for retry in 0..3u32 {
+                            match db.insert_audio_chunk(&path, capture_dt).await {
+                                Ok(_) => { inserted = true; break; }
+                                Err(e) => {
+                                    warn!(
+                                        "failed to insert audio chunk into db (attempt {}/3): {:?}",
+                                        retry + 1, e
+                                    );
+                                    if retry < 2 {
+                                        tokio::time::sleep(std::time::Duration::from_millis(500 * (retry as u64 + 1))).await;
+                                    }
+                                }
+                            }
+                        }
+                        if !inserted {
+                            error!("audio chunk DB insert failed after 3 retries, data may be missing from timeline: {}", path);
                         }
                         Some(path)
                     }

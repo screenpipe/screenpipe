@@ -7,7 +7,7 @@ import {
 	normalizeUrl,
 	extractUrlsFromText,
 } from "../text-overlay";
-import type { TextPosition } from "@/lib/hooks/use-frame-ocr-data";
+import type { TextPosition } from "@/lib/hooks/use-frame-text-data";
 
 // Mock @tauri-apps/plugin-shell
 vi.mock("@tauri-apps/plugin-shell", () => ({

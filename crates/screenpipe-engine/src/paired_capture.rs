@@ -326,9 +326,9 @@ pub fn walk_accessibility_tree(config: &TreeWalkerConfig) -> screenpipe_a11y::tr
             );
             TreeWalkResult::Found(snapshot)
         }
-        Ok(TreeWalkResult::Skipped) => {
-            debug!("tree walk: window skipped (incognito/filtered)");
-            TreeWalkResult::Skipped
+        Ok(TreeWalkResult::Skipped(reason)) => {
+            debug!("tree walk: window skipped ({})", reason);
+            TreeWalkResult::Skipped(reason)
         }
         Ok(TreeWalkResult::NotFound) => {
             debug!("tree walk: no focused window found");

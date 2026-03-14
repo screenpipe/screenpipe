@@ -20,8 +20,8 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
     ]);
 
     const geminiModels = [
-      { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', provider: 'google' },
-      { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'google' },
+      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', provider: 'google' },
+      { id: 'gemini-3-flash', name: 'Gemini 3 Flash', provider: 'google' },
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google' },
     ];
 

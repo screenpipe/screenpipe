@@ -959,19 +959,9 @@ export function PipesSection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-medium">Pipes</h3>
+          <h3 className="text-lg font-medium">My Pipes</h3>
           <p className="text-sm text-muted-foreground">
             scheduled agents that run on your screen data
-            {" · "}
-            <a
-              href="https://screenpi.pe/pipes"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground transition-colors"
-            >
-              pipe store
-              <ExternalLink className="h-3 w-3" />
-            </a>
             {" · "}
             <a
               href="https://docs.screenpi.pe/pipes"
@@ -1753,6 +1743,7 @@ export function PipesSection() {
         reason="daily_limit"
         source="pipes"
       />
+
     </div>
   );
 }

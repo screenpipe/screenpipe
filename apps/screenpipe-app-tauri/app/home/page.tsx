@@ -39,7 +39,7 @@ import { DictationSection } from "@/components/settings/dictation-section";
 import GeneralSettings from "@/components/settings/general-settings";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
-import { PipesSection } from "@/components/settings/pipes-section";
+import { PipeStoreView } from "@/components/pipe-store";
 import { TeamSection } from "@/components/settings/team-section";
 import { DisplaySection } from "@/components/settings/display-section";
 import { PrivacySection } from "@/components/settings/privacy-section";
@@ -219,7 +219,7 @@ function SettingsPageContent() {
       case "timeline":
         return <Timeline embedded />;
       case "pipes":
-        return <PipesSection />;
+        return <PipeStoreView />;
       case "help":
         return <FeedbackSection />;
       default:

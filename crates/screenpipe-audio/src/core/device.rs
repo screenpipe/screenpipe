@@ -612,6 +612,7 @@ mod windows_com_audio {
         };
         use windows::Win32::System::Com::{
             CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+            STGM,
         };
         use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 
@@ -646,7 +647,7 @@ mod windows_com_audio {
 
         // They differ — get the friendly name of the communications device
         // STGM_READ = 0
-        let store = comm.OpenPropertyStore(0)?;
+        let store = comm.OpenPropertyStore(STGM(0))?;
         let prop = store.GetValue(&PKEY_Device_FriendlyName)?;
 
         // windows-core 0.58 PROPVARIANT implements Display via BSTR conversion

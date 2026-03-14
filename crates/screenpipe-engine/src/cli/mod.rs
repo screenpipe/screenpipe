@@ -361,6 +361,7 @@ impl RecordArgs {
             vocabulary: vec![],
             ignore_incognito_windows: true,
             batch_max_duration_secs: None,
+            power_mode: None,
         }
     }
 }
@@ -414,6 +415,26 @@ pub enum PipeCommand {
     Models {
         #[command(subcommand)]
         subcommand: ModelCommand,
+    },
+    /// Publish a local pipe to the registry
+    Publish {
+        /// Pipe name (directory name under ~/.screenpipe/pipes/)
+        name: String,
+    },
+    /// Search the pipe registry
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// Show pipe detail from the registry
+    Info {
+        /// Pipe slug (registry identifier)
+        slug: String,
+    },
+    /// Check publish/review status of a pipe you own
+    Status {
+        /// Pipe slug (registry identifier)
+        slug: String,
     },
 }
 

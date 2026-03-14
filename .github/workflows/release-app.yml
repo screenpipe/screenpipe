@@ -734,6 +734,12 @@ jobs:
           # Tell linuxdeploy to deploy GTK3 plugin dependencies (bundles libsecret etc.)
           export DEPLOY_GTK_VERSION=3
 
+          # Clean stale bundle artifacts from cache — prevents old .deb/.AppImage
+          # files from accumulating and being uploaded alongside the current version
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          echo "Cleaning stale bundle artifacts from ${BUNDLE_DIR}..."
+          rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
+
           bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
 
           # Fix ABI mismatch: the AppImage bundles libs from Ubuntu 24.04 but

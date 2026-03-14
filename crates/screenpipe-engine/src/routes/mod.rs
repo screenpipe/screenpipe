@@ -20,4 +20,5 @@ pub mod streaming;
 pub mod time;
 pub mod timezone;
 pub mod vault;
+pub mod pipe_store;
 pub mod websocket;

@@ -171,6 +171,28 @@ pub async fn livetext_analyze(
     }
 }
 
+/// Prefetch VisionKit analysis for adjacent frames in the background.
+/// Fire-and-forget — results are cached in Swift for instant hits later.
+#[tauri::command]
+pub async fn livetext_prefetch(paths: Vec<String>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let json = serde_json::to_string(&paths).map_err(|e| format!("json error: {}", e))?;
+        let json_c = CString::new(json).map_err(|e| format!("invalid json: {}", e))?;
+        // Fire-and-forget: lt_prefetch dispatches work to a background queue
+        // and returns immediately. We don't need to spawn a thread here.
+        crate::window_api::with_autorelease_pool(|| unsafe {
+            livetext_ffi::lt_prefetch(json_c.as_ptr());
+        });
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = paths;
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn livetext_update_position(x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     #[cfg(target_os = "macos")]

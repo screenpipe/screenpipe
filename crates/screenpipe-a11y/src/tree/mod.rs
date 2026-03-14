@@ -190,10 +190,34 @@ impl Default for TreeWalkerConfig {
 pub enum TreeWalkResult {
     /// Successfully walked the tree and captured a snapshot.
     Found(TreeSnapshot),
-    /// Window was skipped due to incognito/private browsing or user filters.
-    Skipped,
+    /// Window was skipped due to incognito/private browsing, excluded apps, or user filters.
+    Skipped(SkipReason),
     /// No focused window found or tree walk produced no text.
     NotFound,
+}
+
+/// Reason a window was skipped during tree walk.
+#[derive(Debug, Clone)]
+pub enum SkipReason {
+    /// Incognito or private browsing window detected.
+    Incognito,
+    /// App is in the hardcoded exclusion list (e.g. screenpipe, keychain access).
+    ExcludedApp,
+    /// User-configured ignored window pattern matched.
+    UserIgnored,
+    /// User-configured included window whitelist didn't match.
+    NotInIncludeList,
+}
+
+impl std::fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkipReason::Incognito => write!(f, "incognito/private browsing"),
+            SkipReason::ExcludedApp => write!(f, "excluded app"),
+            SkipReason::UserIgnored => write!(f, "user-configured ignored window"),
+            SkipReason::NotInIncludeList => write!(f, "not in included windows list"),
+        }
+    }
 }
 
 /// Platform-specific tree walker trait.

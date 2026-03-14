@@ -198,6 +198,7 @@ export class GeminiProvider implements AIProvider {
 			'gemini-pro': 'gemini-2.5-pro',
 			'gemini-3-flash': 'gemini-3-flash-preview',
 			'gemini-3-pro': 'gemini-3.1-pro-preview',
+			'gemini-3.1-pro': 'gemini-3.1-pro-preview',
 		};
 		const mapped = modelMap[model] || model;
 		console.log('[Gemini Vertex] Model mapping:', model, '->', mapped);
@@ -927,7 +928,7 @@ export class GeminiProvider implements AIProvider {
 			{ id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google' },
 			{ id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro', provider: 'google' },
 			{ id: 'gemini-3-flash', name: 'Gemini 3 Flash', provider: 'google' },
-			{ id: 'gemini-3-pro', name: 'Gemini 3 Pro', provider: 'google' },
+			{ id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', provider: 'google' },
 		];
 	}
 }

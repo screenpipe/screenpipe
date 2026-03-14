@@ -496,6 +496,9 @@ pub(crate) async fn keyword_search_handler(
         let filtered: Vec<_> = matches
             .into_iter()
             .filter(|m| !m.app_name.to_lowercase().contains("screenpipe"))
+            // Drop results with no text_positions — the user can't see where
+            // the match is on the screenshot, so showing them is misleading
+            .filter(|m| !m.text_positions.is_empty() || query.query.is_empty())
             .collect();
 
         Ok(JsonResponse(json!(filtered)))

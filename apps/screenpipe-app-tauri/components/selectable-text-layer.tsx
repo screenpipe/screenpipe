@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useMemo, useRef, useEffect, useCallback } from "react";
-import type { TextPosition } from "@/lib/hooks/use-frame-ocr-data";
+import type { TextPosition } from "@/lib/hooks/use-frame-text-data";
 
 interface SelectableTextLayerProps {
   textPositions: TextPosition[];

@@ -116,6 +116,7 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'claude-sonnet': 3,
   'claude-haiku': 1,
   'gemini-3-pro': 3,
+  'gemini-3.1-pro': 3,
   'gemini-2.5-pro': 3,
   'gemini-3-flash': 1,
   'gemini-2.5-flash': 1,
@@ -160,6 +161,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'gemini-3-flash',
       'gemini-2.5-flash',
       'gemini-3-pro',
+      'gemini-3.1-pro',
     ],
   },
   subscribed: {

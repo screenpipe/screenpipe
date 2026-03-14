@@ -3953,6 +3953,89 @@ impl DatabaseManager {
         })
     }
 
+    /// Delete all locally-stored data that was synced from a specific remote device.
+    /// Uses JOINs to find related OCR/transcription records since those tables
+    /// lack a direct machine_id column.
+    pub async fn delete_by_machine_id(
+        &self,
+        machine_id: &str,
+    ) -> Result<DeleteTimeRangeResult, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        // 1. Delete ocr_text for frames from this machine
+        let ocr_result = sqlx::query(
+            "DELETE FROM ocr_text WHERE frame_id IN (SELECT id FROM frames WHERE machine_id = ?1)",
+        )
+        .bind(machine_id)
+        .execute(&mut **tx.conn())
+        .await?;
+        let ocr_deleted = ocr_result.rows_affected();
+
+        // 2. Delete frames from this machine (vision_tags CASCADE automatically)
+        let frames_result = sqlx::query("DELETE FROM frames WHERE machine_id = ?1")
+            .bind(machine_id)
+            .execute(&mut **tx.conn())
+            .await?;
+        let frames_deleted = frames_result.rows_affected();
+
+        // 3. Delete orphaned video_chunks (cloud:// placeholders from sync)
+        let video_chunks_result = sqlx::query(
+            "DELETE FROM video_chunks WHERE machine_id = ?1 AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames)",
+        )
+        .bind(machine_id)
+        .execute(&mut **tx.conn())
+        .await?;
+        let video_chunks_deleted = video_chunks_result.rows_affected();
+
+        // 4. Delete audio_transcriptions for audio_chunks from this machine
+        let audio_transcriptions_result = sqlx::query(
+            "DELETE FROM audio_transcriptions WHERE audio_chunk_id IN (SELECT id FROM audio_chunks WHERE machine_id = ?1)",
+        )
+        .bind(machine_id)
+        .execute(&mut **tx.conn())
+        .await?;
+        let audio_transcriptions_deleted = audio_transcriptions_result.rows_affected();
+
+        // 5. Delete orphaned audio_chunks from this machine (audio_tags CASCADE automatically)
+        let audio_chunks_result = sqlx::query(
+            "DELETE FROM audio_chunks WHERE machine_id = ?1 AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions)",
+        )
+        .bind(machine_id)
+        .execute(&mut **tx.conn())
+        .await?;
+        let audio_chunks_deleted = audio_chunks_result.rows_affected();
+
+        // 6. Delete ui_events from this machine
+        let ui_events_result = sqlx::query("DELETE FROM ui_events WHERE machine_id = ?1")
+            .bind(machine_id)
+            .execute(&mut **tx.conn())
+            .await?;
+        let ui_events_deleted = ui_events_result.rows_affected();
+
+        tx.commit().await.map_err(|e| {
+            error!("failed to commit delete_by_machine_id transaction: {}", e);
+            e
+        })?;
+
+        debug!(
+            "delete_by_machine_id({}) committed: frames={}, ocr={}, audio_transcriptions={}, audio_chunks={}, video_chunks={}, ui_events={}",
+            machine_id, frames_deleted, ocr_deleted, audio_transcriptions_deleted, audio_chunks_deleted, video_chunks_deleted, ui_events_deleted
+        );
+
+        Ok(DeleteTimeRangeResult {
+            frames_deleted,
+            ocr_deleted,
+            audio_transcriptions_deleted,
+            audio_chunks_deleted,
+            video_chunks_deleted,
+            accessibility_deleted: 0,
+            ui_events_deleted,
+            video_files: vec![],
+            audio_files: vec![],
+            snapshot_files: vec![],
+        })
+    }
+
     // =========================================================================
     // Cloud archive media upload tracking
     // =========================================================================
@@ -4362,7 +4445,7 @@ impl DatabaseManager {
             // the entire result set, hiding results from other apps.
             format!(
                 r#"
-SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json FROM (
+SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibility_tree_json FROM (
     SELECT
         f.id,
         f.timestamp,
@@ -4371,6 +4454,7 @@ SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json FROM (
         COALESCE(f.window_name, o.window_name, '') as window_name,
         COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
         o.text_json,
+        f.accessibility_tree_json,
         ROW_NUMBER() OVER (
             PARTITION BY COALESCE(f.app_name, o.app_name, '')
             ORDER BY f.timestamp {order_dir}, {relevance} DESC
@@ -4398,7 +4482,8 @@ SELECT
     COALESCE(f.app_name, o.app_name) as app_name,
     COALESCE(f.window_name, o.window_name) as window_name,
     COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
-    o.text_json
+    o.text_json,
+    f.accessibility_tree_json
 FROM frames f
 LEFT JOIN ocr_text o ON f.id = o.frame_id
 WHERE {}
@@ -4441,13 +4526,21 @@ LIMIT ? OFFSET ?
         Ok(rows
             .iter()
             .map(|row| {
-                let positions = if !query.is_empty() {
+                let mut positions = if !query.is_empty() {
                     let ocr_blocks: Vec<OcrTextBlock> =
                         serde_json::from_str(&row.text_json).unwrap_or_default();
                     find_matching_positions(&ocr_blocks, query)
                 } else {
                     Vec::new()
                 };
+
+                // Fallback: when OCR yields no positions, search accessibility
+                // tree nodes for the query and use their bounding boxes
+                if positions.is_empty() && !query.is_empty() {
+                    if let Some(tree_json) = &row.accessibility_tree_json {
+                        positions = find_matching_a11y_positions(tree_json, query);
+                    }
+                }
 
                 SearchMatch {
                     frame_id: row.id,
@@ -5814,6 +5907,63 @@ pub fn find_matching_positions(blocks: &[OcrTextBlock], query: &str) -> Vec<Text
             }
         })
         .collect()
+}
+
+/// Search accessibility tree JSON nodes for a query and return matching positions.
+/// Used as fallback when OCR text_json has no bounding boxes for a frame.
+pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPosition> {
+    let nodes: Vec<serde_json::Value> = match serde_json::from_str(tree_json) {
+        Ok(n) => n,
+        Err(_) => return Vec::new(),
+    };
+
+    let query_lower = query.to_lowercase();
+    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+
+    let mut matches: Vec<TextPosition> = nodes
+        .iter()
+        .filter_map(|n| {
+            let text = n.get("text")?.as_str()?;
+            if text.trim().is_empty() {
+                return None;
+            }
+            let text_lower = text.to_lowercase();
+            let is_match = text_lower.contains(&query_lower)
+                || query_words.iter().any(|&word| text_lower.contains(word));
+            if !is_match {
+                return None;
+            }
+            let b = n.get("bounds")?;
+            let left = b.get("left")?.as_f64()? as f32;
+            let top = b.get("top")?.as_f64()? as f32;
+            let width = b.get("width")?.as_f64()? as f32;
+            let height = b.get("height")?.as_f64()? as f32;
+            // Skip nodes with zero/negative bounds or unreasonably tiny bounds
+            if width <= 0.001 || height <= 0.001 {
+                return None;
+            }
+            Some(TextPosition {
+                text: text.to_string(),
+                confidence: 1.0,
+                bounds: TextBounds {
+                    left,
+                    top,
+                    width,
+                    height,
+                },
+            })
+        })
+        .collect();
+
+    // Deduplicate: if multiple nodes have the same text, keep the one with the largest area
+    matches.sort_by(|a, b| {
+        let area_a = a.bounds.width * a.bounds.height;
+        let area_b = b.bounds.width * b.bounds.height;
+        area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    matches.dedup_by(|a, b| a.text == b.text);
+
+    matches
 }
 
 fn calculate_confidence(positions: &[TextPosition]) -> f32 {

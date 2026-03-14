@@ -53,8 +53,8 @@ fn main() {
                 );
             }
         }
-        Ok(TreeWalkResult::Skipped) => {
-            println!("Window skipped (incognito/private or filtered).");
+        Ok(TreeWalkResult::Skipped(reason)) => {
+            println!("Window skipped ({}).", reason);
         }
         Ok(TreeWalkResult::NotFound) => {
             println!("No focused window found (or no text content).");

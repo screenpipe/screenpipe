@@ -197,12 +197,27 @@ export const ShareLogsButton = ({
       const file = e.target.files?.[0];
       if (!file) return;
 
-      // Convert to data URL for preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setScreenshot(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+      // Resize and compress to JPEG so Discord can render it (max ~1920px wide)
+      const img = new Image();
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(ev.target?.result as string);
+        reader.readAsDataURL(file);
+      });
+
+      img.src = dataUrl;
+      await new Promise<void>((resolve) => { img.onload = () => resolve(); });
+
+      const MAX_WIDTH = 1920;
+      const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const compressed = canvas.toDataURL("image/jpeg", 0.8);
+      setScreenshot(compressed);
     } catch (err) {
       console.error("Failed to select screenshot:", err);
     }
@@ -340,8 +355,8 @@ export const ShareLogsButton = ({
           os_version,
           app_version,
           feedback_text: feedbackText,
-          screenshot_url: screenshotPath,
-          video_url: videoPath,
+          screenshot_url: screenshot ? screenshotPath : undefined,
+          video_url: mergedVideoPath ? videoPath : undefined,
           screenpipe_id: settings.analyticsId,
         }),
       });

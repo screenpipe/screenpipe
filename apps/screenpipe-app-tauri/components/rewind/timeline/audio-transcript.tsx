@@ -12,6 +12,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { toast } from "@/components/ui/use-toast";
 import {
 	ConversationBubble,
 	TimeGapDivider,
@@ -475,7 +476,10 @@ export function AudioTranscript({
 
 	const handleSendToChat = useCallback(async () => {
 		const data = !!activeMeeting ? meetingConversationData : conversationData;
-		if (!data.items.length) return;
+		if (!data.items.length) {
+			toast({ title: "no transcript data to send", variant: "destructive" });
+			return;
+		}
 
 		const lines = data.items.map((item) => {
 			const { speakerName } = getSpeakerInfo(item.audio);

@@ -81,10 +81,18 @@ pub struct PowerStatus {
 /// Returns a handle that subsystems use to subscribe to profile changes.
 /// The background task runs until the returned handle is dropped.
 pub fn start_power_manager() -> Arc<PowerManagerHandle> {
+    start_power_manager_with_pref(PowerMode::default())
+}
+
+/// Start the power manager with a persisted user preference.
+///
+/// Use this when restoring the user's saved power mode from settings
+/// so it survives app restarts.
+pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManagerHandle> {
     let initial_profile = PowerProfile::performance(); // assume AC until first poll
     let (profile_tx, profile_rx) = watch::channel(initial_profile);
     let state = Arc::new(RwLock::new(PowerState::default()));
-    let user_pref = Arc::new(RwLock::new(PowerMode::default()));
+    let user_pref = Arc::new(RwLock::new(initial_pref));
 
     let handle = Arc::new(PowerManagerHandle {
         profile_tx,

@@ -58,6 +58,7 @@ fn extract_pipe_token(req: &Request<Body>) -> Option<String> {
 /// Paths that pipes should never be able to call (data mutation).
 const MUTATION_PATHS: &[&str] = &[
     "/data/delete-range",
+    "/data/delete-device",
     "/audio/retranscribe",
     "/speakers/merge",
     "/speakers/reassign",

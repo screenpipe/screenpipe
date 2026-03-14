@@ -67,7 +67,6 @@ export default function NotificationPanelPage() {
         } else if (action === "open_chat") {
           await invoke("show_window", { window: "Chat" });
         } else if (action === "open_pipe_suggestions") {
-          await invoke("show_window", { window: "Main" });
           await emit("open-pipe-suggestions", {});
         }
       } catch {

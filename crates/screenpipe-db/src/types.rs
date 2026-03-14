@@ -376,6 +376,8 @@ pub struct FrameRow {
     pub window_name: String,
     pub ocr_text: String,
     pub text_json: String,
+    /// Accessibility tree JSON — used as fallback for bounding boxes when OCR text_json is empty
+    pub accessibility_tree_json: Option<String>,
 }
 
 /// Lightweight frame row for grouped search — skips text/text_json columns.

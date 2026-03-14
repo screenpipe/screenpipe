@@ -7,17 +7,23 @@ use crate::embedded_server::{start_embedded_server, EmbeddedServerHandle};
 use crate::permissions::do_permissions_check;
 use crate::store::SettingsStore;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+/// Minimum seconds between consecutive stop→spawn cycles.
+/// Prevents restart spam from cascading permission recovery or settings changes.
+const RESTART_COOLDOWN_SECS: u64 = 30;
 
 /// State holding the embedded server handle
 pub struct RecordingState {
     pub handle: Arc<Mutex<Option<EmbeddedServerHandle>>>,
     /// True while a server start is in progress (prevents race between main.rs boot and frontend)
     pub is_starting: Arc<AtomicBool>,
+    /// Epoch seconds of last successful spawn — enforces cooldown between restarts
+    pub last_spawn_epoch: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, specta::Type)]
@@ -141,6 +147,22 @@ pub async fn spawn_screenpipe(
     _override_args: Option<Vec<String>>,
 ) -> Result<(), String> {
     info!("Starting screenpipe server");
+
+    // Enforce cooldown between restarts to prevent cascading restart spam.
+    // Permission recovery and settings changes can trigger rapid stop→spawn cycles
+    // that starve the DB pool and cause data loss.
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let last_spawn = state.last_spawn_epoch.load(Ordering::SeqCst);
+    if last_spawn > 0 && now_epoch.saturating_sub(last_spawn) < RESTART_COOLDOWN_SECS {
+        let remaining = RESTART_COOLDOWN_SECS - now_epoch.saturating_sub(last_spawn);
+        warn!(
+            "Restart cooldown active ({remaining}s remaining). Skipping spawn to prevent restart spam."
+        );
+        return Ok(());
+    }
 
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
     let port = store.port;
@@ -370,6 +392,12 @@ pub async fn spawn_screenpipe(
     match result_rx.await {
         Ok(Ok(())) => {
             info!("Screenpipe server started successfully");
+            // Record spawn time for cooldown enforcement
+            let spawn_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            state.last_spawn_epoch.store(spawn_epoch, Ordering::SeqCst);
             // is_starting stays true — it's cleared when stop_screenpipe() is called
             // This prevents another spawn_screenpipe from racing with the running server
             Ok(())

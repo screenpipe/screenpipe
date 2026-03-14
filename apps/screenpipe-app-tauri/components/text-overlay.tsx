@@ -7,7 +7,7 @@ import { useCallback, useMemo, memo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
-import type { TextPosition } from "@/lib/hooks/use-frame-ocr-data";
+import type { TextPosition } from "@/lib/hooks/use-frame-text-data";
 
 /**
  * Check if a string looks like a URL.

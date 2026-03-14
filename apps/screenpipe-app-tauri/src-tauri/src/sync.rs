@@ -228,20 +228,29 @@ pub async fn trigger_sync(state: State<'_, SyncState>) -> Result<(), String> {
 /// Get sync configuration.
 #[tauri::command]
 #[specta::specta]
-pub async fn get_sync_config() -> Result<SyncConfig, String> {
-    // TODO: Read from persistent storage
-    Ok(SyncConfig::default())
+pub async fn get_sync_config(app: AppHandle) -> Result<SyncConfig, String> {
+    let store = crate::store::get_store(&app, None).map_err(|e| e.to_string())?;
+    let config = store.get("sync_config").unwrap_or(serde_json::Value::Null);
+    match serde_json::from_value::<SyncConfig>(config) {
+        Ok(c) => Ok(c),
+        Err(_) => Ok(SyncConfig::default()),
+    }
 }
 
 /// Update sync configuration.
 #[tauri::command]
 #[specta::specta]
 pub async fn update_sync_config(
+    app: AppHandle,
     state: State<'_, SyncState>,
     config: SyncConfig,
 ) -> Result<(), String> {
     *state.enabled.write().await = config.enabled;
-    // TODO: Persist config and update sync service
+
+    let store = crate::store::get_store(&app, None).map_err(|e| e.to_string())?;
+    store.set("sync_config", serde_json::json!(config));
+    store.save().map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -290,6 +299,36 @@ pub async fn remove_sync_device(
             .map_err(|e| format!("failed to remove device: {}", e))?;
     }
     Ok(())
+}
+
+/// Delete all locally-stored data that was synced from a specific remote device.
+/// This calls the local screenpipe server's /data/delete-device endpoint.
+/// Refuses to delete data for the current device as a safety guard.
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_device_local_data(
+    state: State<'_, SyncState>,
+    machine_id: String,
+) -> Result<String, String> {
+    if machine_id == state.machine_id {
+        return Err("cannot delete your own device's local data".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://localhost:3030/data/delete-device")
+        .json(&serde_json::json!({ "machine_id": machine_id }))
+        .send()
+        .await
+        .map_err(|e| format!("failed to call delete-device: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("delete-device failed: {}", body));
+    }
+
+    let body = resp.text().await.unwrap_or_default();
+    Ok(body)
 }
 
 /// Initialize sync with password.

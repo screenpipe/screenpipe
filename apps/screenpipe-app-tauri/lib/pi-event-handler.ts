@@ -169,7 +169,7 @@ export function formatPiMessage(state: PiMessageState): string {
 
     const argsStr = formatToolArgs(tc.name, tc.args);
 
-    content += `\n\n${statusIcon} **${tc.name}** ${argsStr}`;
+    content += `\n\n${statusIcon} ${argsStr}`;
 
     if (tc.result) {
       // Truncate long results
@@ -192,17 +192,25 @@ export function formatToolArgs(
   toolName: string,
   args: Record<string, unknown>
 ): string {
+  const fileName = (p: unknown) => {
+    const s = String(p ?? "");
+    return s.split("/").pop() || s;
+  };
   switch (toolName) {
     case "read":
-      return `\`${args.path ?? ""}\``;
+      return `Read ${fileName(args.path)}`;
     case "write":
-      return `\`${args.path ?? ""}\``;
+      return `Wrote ${fileName(args.path)}`;
     case "edit":
-      return `\`${args.path ?? ""}\``;
-    case "bash":
-      return `\`${args.command ?? ""}\``;
+      return `Edited ${fileName(args.path)}`;
+    case "bash": {
+      const cmd = String(args.command ?? "");
+      return `Ran \`${cmd.length > 60 ? cmd.slice(0, 60) + "…" : cmd}\``;
+    }
+    case "grep":
+      return `Searched for \`${args.pattern ?? "pattern"}\``;
     default:
-      return JSON.stringify(args);
+      return Object.keys(args).length > 0 ? Object.keys(args).join(", ") : "";
   }
 }
 

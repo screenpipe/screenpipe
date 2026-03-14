@@ -10,7 +10,7 @@ use serde_json::json;
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
@@ -56,7 +56,6 @@ mod permissions;
 mod pi;
 mod pipe_suggestions_scheduler;
 mod recording;
-mod reminders;
 mod remote_sync_commands;
 mod server;
 #[cfg(target_os = "macos")]
@@ -1373,6 +1372,7 @@ async fn main() {
                 sync::update_sync_config,
                 sync::get_sync_devices,
                 sync::remove_sync_device,
+                sync::delete_device_local_data,
                 sync::init_sync,
                 sync::lock_sync,
                 sync::delete_cloud_data,
@@ -1392,18 +1392,6 @@ async fn main() {
                 chatgpt_oauth::chatgpt_oauth_get_token,
                 chatgpt_oauth::chatgpt_oauth_logout,
                 chatgpt_oauth::chatgpt_oauth_models,
-                // Reminders commands
-                reminders::reminders_status,
-                reminders::reminders_authorize,
-                reminders::reminders_list,
-                reminders::reminders_create,
-                reminders::reminders_scan,
-                reminders::reminders_start_scheduler,
-                reminders::reminders_stop_scheduler,
-                reminders::reminders_get_custom_prompt,
-                reminders::reminders_set_custom_prompt,
-                reminders::reminders_get_audio_only,
-                reminders::reminders_set_audio_only,
                 // Pipe suggestions scheduler commands
                 pipe_suggestions_scheduler::pipe_suggestions_get_settings,
                 pipe_suggestions_scheduler::pipe_suggestions_update_settings,
@@ -1432,9 +1420,6 @@ async fn main() {
             .typ::<sync::SyncStatusResponse>()
             .typ::<sync::SyncDeviceInfo>()
             .typ::<sync::SyncConfig>()
-            .typ::<reminders::RemindersStatus>()
-            .typ::<reminders::ReminderItem>()
-            .typ::<reminders::ScanResult>()
             .typ::<calendar::CalendarStatus>()
             .typ::<calendar::CalendarEventItem>()
             .typ::<store::IcsCalendarEntry>()
@@ -1454,9 +1439,9 @@ async fn main() {
     let recording_state = RecordingState {
         handle: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
+        last_spawn_epoch: Arc::new(AtomicU64::new(0)),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
-    let reminders_state = reminders::RemindersState::new();
     let suggestions_state = suggestions::SuggestionsState::new();
     let pipe_suggestions_state = pipe_suggestions_scheduler::PipeSuggestionsState::new();
     #[allow(clippy::single_match)]
@@ -1546,7 +1531,6 @@ async fn main() {
 
     let app = app.manage(recording_state)
         .manage(pi_state)
-        .manage(reminders_state)
         .manage(suggestions_state)
         .manage(pipe_suggestions_state)
         .invoke_handler(tauri::generate_handler![
@@ -1643,18 +1627,6 @@ async fn main() {
             chatgpt_oauth::chatgpt_oauth_get_token,
             chatgpt_oauth::chatgpt_oauth_logout,
             chatgpt_oauth::chatgpt_oauth_models,
-            // Reminders commands
-            reminders::reminders_status,
-            reminders::reminders_authorize,
-            reminders::reminders_list,
-            reminders::reminders_create,
-            reminders::reminders_scan,
-            reminders::reminders_start_scheduler,
-            reminders::reminders_stop_scheduler,
-            reminders::reminders_get_custom_prompt,
-            reminders::reminders_set_custom_prompt,
-            reminders::reminders_get_audio_only,
-            reminders::reminders_set_audio_only,
             // Pipe suggestions scheduler commands
             pipe_suggestions_scheduler::pipe_suggestions_get_settings,
             pipe_suggestions_scheduler::pipe_suggestions_update_settings,
@@ -1676,6 +1648,7 @@ async fn main() {
             livetext::livetext_is_available,
             livetext::livetext_init,
             livetext::livetext_analyze,
+            livetext::livetext_prefetch,
             livetext::livetext_update_position,
             livetext::livetext_highlight,
             livetext::livetext_clear_highlights,
@@ -1772,6 +1745,7 @@ async fn main() {
                 // Set up pinch-to-zoom: store the app handle so the gesture
                 // recognizer callback (in window_api.rs) can emit Tauri events.
                 crate::window_api::init_magnify_handler(app.handle().clone());
+
             }
 
             // Logging setup
@@ -2018,6 +1992,16 @@ async fn main() {
                         info!("Pre-creating chat panel for fullscreen Space support");
                         match ShowRewindWindow::Chat.show(&app_handle_chat) {
                             Ok(_window) => {
+                                // The show() call dispatches panel config to the main
+                                // thread. We must also hide on the main thread, AND
+                                // wait for the show() config to complete first.
+                                let app_for_hide = app_handle_chat.clone();
+                                let _ = app_handle_chat.run_on_main_thread(move || {
+                                    use tauri_nspanel::ManagerExt;
+                                    if let Ok(panel) = app_for_hide.get_webview_panel("chat") {
+                                        panel.order_out(None);
+                                    }
+                                });
                                 info!("Chat panel pre-created (hidden, panel configured)");
                             }
                             Err(e) => {
@@ -2308,17 +2292,6 @@ async fn main() {
             };
             tauri::async_runtime::spawn(async move {
                 suggestions::auto_start_scheduler(&suggestions_state_clone).await;
-            });
-
-            // Auto-start reminders scheduler if it was enabled
-            let app_handle_clone = app_handle.clone();
-            let reminders_state = app_handle.state::<reminders::RemindersState>();
-            let reminders_state_clone = reminders::RemindersState {
-                scheduler_handle: reminders_state.scheduler_handle.clone(),
-            };
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
-                reminders::auto_start_scheduler(app_handle_clone, &reminders_state_clone).await;
             });
 
             // Auto-start pipe suggestions scheduler if enabled

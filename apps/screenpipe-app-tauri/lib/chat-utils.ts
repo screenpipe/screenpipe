@@ -6,7 +6,7 @@
 // Shared chat utilities - mention parsing, shortcut formatting, app suggestions
 // ============================================================================
 
-import { emit, once } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 
 // ============================================================================
@@ -31,15 +31,23 @@ export interface ChatPrefillData {
  */
 export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> {
   await commands.showWindow("Chat");
-  // Wait for the chat component to signal readiness
+  // Wait for the chat component to signal readiness.
+  // Use `listen` (not `once`) so we don't miss events that fire before the
+  // listener is registered — we unlisten manually after the first event.
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, 5000);
-    once("chat-ready", () => {
+    let resolved = false;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
       clearTimeout(timeout);
+      unlistenPromise.then((fn) => fn());
       resolve();
-    });
-    // Ping in case chat is already mounted (won't re-emit "chat-ready" on its own)
-    emit("chat-ping", {});
+    };
+    const timeout = setTimeout(done, 5000);
+    const unlistenPromise = listen("chat-ready", done);
+    // Ping in case chat is already mounted (won't re-emit "chat-ready" on its own).
+    // Small delay to ensure the listen call above has registered first.
+    setTimeout(() => emit("chat-ping", {}), 50);
   });
   await emit("chat-prefill", { ...data, targetWindow: "chat" });
 }

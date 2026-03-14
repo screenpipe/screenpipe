@@ -305,64 +305,141 @@ function GridDissolveLoader({
   );
 }
 
-function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-  const icon = TOOL_ICONS[toolCall.toolName] || "🔧";
+// Human-friendly label for a tool call (no JSON, no raw paths)
+function friendlyToolLabel(toolCall: ToolCall): string {
+  const fileName = (p: string) => p.split("/").pop() || p;
+  switch (toolCall.toolName) {
+    case "bash":
+      return `Ran ${toolCall.args.command ? `\`${String(toolCall.args.command).slice(0, 60)}${String(toolCall.args.command).length > 60 ? "…" : ""}\`` : "command"}`;
+    case "read":
+      return `Read ${fileName(toolCall.args.path || "")}`;
+    case "edit":
+      return `Edited ${fileName(toolCall.args.path || "")}`;
+    case "write":
+      return `Wrote ${fileName(toolCall.args.path || "")}`;
+    case "grep":
+      return `Searched for \`${toolCall.args.pattern || "pattern"}\``;
+    case "find":
+    case "ls":
+      return `Listed files`;
+    default:
+      return `${toolCall.toolName}`;
+  }
+}
 
-  // Format args for display
-  const argsPreview = toolCall.toolName === "bash"
-    ? toolCall.args.command || ""
-    : toolCall.toolName === "read"
-      ? toolCall.args.path || ""
-      : toolCall.toolName === "edit"
-        ? toolCall.args.path || ""
-        : toolCall.toolName === "write"
-          ? toolCall.args.path || ""
-          : JSON.stringify(toolCall.args).slice(0, 100);
+// Render friendly expanded details instead of raw JSON
+function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
+  if (toolCall.toolName === "edit" && toolCall.args.old_string && toolCall.args.new_string) {
+    return (
+      <div className="py-1.5 text-xs font-mono space-y-0">
+        {String(toolCall.args.old_string).split("\n").map((line: string, i: number) => (
+          <div key={`old-${i}`} className="text-foreground/40">- {line}</div>
+        ))}
+        {String(toolCall.args.new_string).split("\n").map((line: string, i: number) => (
+          <div key={`new-${i}`} className="text-foreground/80">+ {line}</div>
+        ))}
+      </div>
+    );
+  }
+  if (toolCall.toolName === "bash" && toolCall.args.command) {
+    return (
+      <div className="py-1.5">
+        <pre className="whitespace-pre-wrap break-words text-foreground/70 text-xs font-mono max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full">
+          {toolCall.args.command}
+        </pre>
+      </div>
+    );
+  }
+  const entries = Object.entries(toolCall.args).filter(([k]) => k !== "path" && k !== "command");
+  if (entries.length === 0) return null;
+  return (
+    <div className="py-1.5 text-xs font-mono text-muted-foreground space-y-0">
+      {entries.map(([key, val]) => (
+        <div key={key} className="truncate">
+          <span className="text-foreground/40">{key}:</span>{" "}
+          <span className="text-foreground/70">{typeof val === "string" ? val.slice(0, 200) : JSON.stringify(val).slice(0, 200)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Single tool call row in the progress rail
+function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = friendlyToolLabel(toolCall);
 
   return (
-    <div className="rounded-lg border border-border/50 bg-background/50 text-xs font-mono overflow-hidden w-full min-w-0">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted/50 transition-colors text-left min-w-0"
-      >
-        {toolCall.isRunning ? (
-          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground flex-shrink-0" />
-        ) : toolCall.isError ? (
-          <span className="text-destructive flex-shrink-0">✗</span>
-        ) : (
-          <span className="text-green-500 flex-shrink-0">✓</span>
-        )}
-        <span className="text-muted-foreground flex-shrink-0">{icon}</span>
-        <span className="font-semibold flex-shrink-0">{toolCall.toolName}</span>
-        <span className="text-muted-foreground truncate flex-1">{argsPreview}</span>
-        <span className="text-muted-foreground flex-shrink-0">{expanded ? "▾" : "▸"}</span>
-      </button>
-      {expanded && (
-        <div className="border-t border-border/50">
-          {/* Args */}
-          <div className="px-3 py-2 bg-neutral-900 dark:bg-neutral-950 text-neutral-300">
-            <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">input</div>
-            <pre className="whitespace-pre-wrap break-words text-neutral-100 max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full">
-              {toolCall.toolName === "bash" ? toolCall.args.command : JSON.stringify(toolCall.args, null, 2)}
-            </pre>
-          </div>
-          {/* Result */}
-          {toolCall.result !== undefined && (
-            <div className="px-3 py-2 bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-300 border-t border-neutral-800">
-              <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
-                {toolCall.isError ? "error" : "output"}
-              </div>
-              <pre className={cn(
-                "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full",
-                toolCall.isError ? "text-red-400" : "text-neutral-100"
-              )}>
-                {toolCall.result}
-              </pre>
-            </div>
+    <div className="relative flex min-w-0">
+      {/* Vertical rail line */}
+      <div className="flex flex-col items-center flex-shrink-0 w-5">
+        {/* Dot */}
+        <div className="relative flex items-center justify-center w-5 h-5">
+          {toolCall.isRunning ? (
+            // Pulsing hollow dot for running
+            <motion.div
+              className="w-2 h-2 border border-foreground"
+              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+            />
+          ) : toolCall.isError ? (
+            // X mark for error
+            <span className="text-[10px] font-mono font-bold text-foreground leading-none">✗</span>
+          ) : (
+            // Solid dot for success
+            <motion.div
+              className="w-2 h-2 bg-foreground"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
+            />
           )}
         </div>
-      )}
+        {/* Connecting line */}
+        {!isLast && (
+          <div className="w-px flex-1 bg-border" />
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0 pb-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-1.5 text-left min-w-0 group py-0.5"
+        >
+          <span className="truncate flex-1 text-xs font-mono text-foreground/70 group-hover:text-foreground transition-colors duration-150">
+            {label}
+          </span>
+          <span className="text-foreground/30 flex-shrink-0 text-[10px] font-mono group-hover:text-foreground/60 transition-colors duration-150">
+            {expanded ? "−" : "+"}
+          </span>
+        </button>
+        <AnimatePresence>
+          {expanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
+                <FriendlyToolDetails toolCall={toolCall} />
+                {toolCall.result !== undefined && (
+                  <div className="mt-1 pt-1 border-t border-border/50">
+                    <pre className={cn(
+                      "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono",
+                      toolCall.isError ? "text-foreground/50" : "text-foreground/60"
+                    )}>
+                      {toolCall.result}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
@@ -472,7 +549,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
         pre({ children, ...props }) {
           return (
-            <pre className="overflow-x-auto rounded-lg bg-neutral-900 dark:bg-neutral-950 text-neutral-100 p-3 my-2 text-xs max-w-full" {...props}>
+            <pre className="overflow-x-auto rounded-lg bg-muted text-foreground p-3 my-2 text-xs max-w-full" {...props}>
               {children}
             </pre>
           );
@@ -545,66 +622,104 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   return result;
 }
 
-function ToolCallGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
-  const [expanded, setExpanded] = useState(false);
-
-  // For 1-2 tool calls, render individually (not worth collapsing)
-  if (toolCalls.length <= 2) {
-    return (
-      <>
-        {toolCalls.map((tc) => (
-          <ToolCallBlock key={tc.id} toolCall={tc} />
-        ))}
-      </>
-    );
+// Build natural-language summary of completed tool calls
+function buildToolSummary(toolCalls: ToolCall[]): string {
+  const counts: Record<string, number> = {};
+  for (const tc of toolCalls) {
+    const action = tc.toolName === "bash" ? "ran" : tc.toolName === "read" ? "read" : tc.toolName === "edit" ? "edited" : tc.toolName === "write" ? "wrote" : tc.toolName === "grep" ? "searched" : tc.toolName;
+    counts[action] = (counts[action] || 0) + 1;
   }
+  const parts = Object.entries(counts).map(([action, count]) => {
+    if (action === "read") return `read ${count} file${count > 1 ? "s" : ""}`;
+    if (action === "edited") return `edited ${count} file${count > 1 ? "s" : ""}`;
+    if (action === "wrote") return `wrote ${count} file${count > 1 ? "s" : ""}`;
+    if (action === "ran") return `ran ${count} command${count > 1 ? "s" : ""}`;
+    if (action === "searched") return `${count} search${count > 1 ? "es" : ""}`;
+    return `${count} ${action}`;
+  });
+  return parts.join(", ");
+}
 
-  const doneCount = toolCalls.filter((tc) => !tc.isRunning).length;
-  const total = toolCalls.length;
+function ToolCallGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
+  const [manualExpand, setManualExpand] = useState<boolean | null>(null);
+
   const hasRunning = toolCalls.some((tc) => tc.isRunning);
   const hasError = toolCalls.some((tc) => tc.isError);
-  const activeCall = toolCalls.find((tc) => tc.isRunning);
+  const allDone = !hasRunning;
+  const doneCount = toolCalls.filter((tc) => !tc.isRunning).length;
+  const total = toolCalls.length;
+  const summary = allDone ? buildToolSummary(toolCalls) : "";
 
-  // Build a short preview of the active tool call
-  const activePreview = activeCall
-    ? `${activeCall.toolName} ${
-        activeCall.toolName === "bash"
-          ? activeCall.args.command || ""
-          : activeCall.toolName === "read" || activeCall.toolName === "edit" || activeCall.toolName === "write"
-            ? activeCall.args.path || ""
-            : ""
-      }`.trim()
-    : "";
+  // Auto-expand while running, auto-collapse when done (user can override)
+  const isExpanded = manualExpand !== null ? manualExpand : hasRunning;
 
   return (
-    <div className="rounded-lg border border-border/50 bg-background/50 text-xs font-mono overflow-hidden w-full min-w-0">
+    <div className="w-full min-w-0">
+      {/* Header bar — clickable to toggle */}
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-muted/50 transition-colors text-left min-w-0"
+        onClick={() => setManualExpand(isExpanded ? false : true)}
+        className="w-full flex items-center gap-2 py-1 text-left min-w-0 group"
       >
-        {hasRunning ? (
-          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground flex-shrink-0" />
-        ) : hasError ? (
-          <span className="text-destructive flex-shrink-0">✗</span>
-        ) : (
-          <span className="text-green-500 flex-shrink-0">✓</span>
-        )}
-        <span className="font-semibold flex-shrink-0">
-          {total} steps{hasRunning ? ` (${doneCount}/${total})` : ""}
+        {/* Status indicator */}
+        <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
+          {hasRunning ? (
+            <motion.span
+              className="inline-block"
+              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+            >
+              [{doneCount}/{total}]
+            </motion.span>
+          ) : (
+            <span>[{total}]</span>
+          )}
         </span>
-        {!expanded && activePreview && (
-          <span className="text-muted-foreground truncate flex-1">{activePreview}</span>
-        )}
-        {!activePreview && <span className="flex-1" />}
-        <span className="text-muted-foreground flex-shrink-0">{expanded ? "▾" : "▸"}</span>
+
+        {/* Summary text */}
+        <span className="truncate flex-1 text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+          {hasRunning
+            ? friendlyToolLabel(toolCalls.find((tc) => tc.isRunning)!)
+            : summary || `${total} steps`
+          }
+          {hasError && allDone && (
+            <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+          )}
+        </span>
+
+        {/* Expand chevron */}
+        <span className="flex-shrink-0 text-[10px] font-mono text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150">
+          {isExpanded ? "▾" : "▸"}
+        </span>
       </button>
-      {expanded && (
-        <div className="border-t border-border/50 space-y-1 p-2">
-          {toolCalls.map((tc) => (
-            <ToolCallBlock key={tc.id} toolCall={tc} />
-          ))}
-        </div>
-      )}
+
+      {/* Expanded rail view */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="pl-1 pt-1">
+              {toolCalls.map((tc, i) => (
+                <motion.div
+                  key={tc.id}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.15, delay: i * 0.03 }}
+                >
+                  <ToolCallRailItem
+                    toolCall={tc}
+                    isLast={i === toolCalls.length - 1}
+                  />
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::server::AppState;
 
@@ -92,5 +92,53 @@ pub(crate) async fn delete_time_range_handler(
         ui_events_deleted: result.ui_events_deleted,
         video_files_deleted,
         audio_files_deleted,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct DeleteDeviceDataRequest {
+    pub machine_id: String,
+}
+
+/// Delete all locally-stored data that was synced from a specific remote device.
+pub(crate) async fn delete_device_data_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<DeleteDeviceDataRequest>,
+) -> Result<JsonResponse<DeleteTimeRangeResponse>, (StatusCode, JsonResponse<Value>)> {
+    if payload.machine_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({"error": "machine_id is required"})),
+        ));
+    }
+
+    info!("deleting local data for machine_id: {}", payload.machine_id);
+
+    let result = state
+        .db
+        .delete_by_machine_id(&payload.machine_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": format!("failed to delete device data: {}", e)})),
+            )
+        })?;
+
+    info!(
+        "deleted device data for {}: frames={}, ocr={}, audio={}",
+        payload.machine_id, result.frames_deleted, result.ocr_deleted, result.audio_transcriptions_deleted
+    );
+
+    Ok(JsonResponse(DeleteTimeRangeResponse {
+        frames_deleted: result.frames_deleted,
+        ocr_deleted: result.ocr_deleted,
+        audio_transcriptions_deleted: result.audio_transcriptions_deleted,
+        audio_chunks_deleted: result.audio_chunks_deleted,
+        video_chunks_deleted: result.video_chunks_deleted,
+        accessibility_deleted: result.accessibility_deleted,
+        ui_events_deleted: result.ui_events_deleted,
+        video_files_deleted: 0,
+        audio_files_deleted: 0,
     }))
 }

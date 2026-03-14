@@ -67,6 +67,38 @@ private class LiveTextManager {
     /// from intercepting clicks on UI controls (nav bar, filters, scrubber, etc.).
     var guardViews: [String: ClickGuardView] = [:]
 
+    // MARK: - Analysis LRU Cache
+    /// Caches ImageAnalysis objects keyed by image path so revisiting frames
+    /// and prefetched adjacent frames are instant (no re-analysis needed).
+    private let cacheMaxSize = 30
+    private var cacheOrder: [String] = []  // oldest first
+    private var cacheMap: [String: ImageAnalysis] = [:]
+    private let cacheLock = NSLock()
+
+    func getCachedAnalysis(_ key: String) -> ImageAnalysis? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let analysis = cacheMap[key] else { return nil }
+        // Move to end (most recently used)
+        cacheOrder.removeAll { $0 == key }
+        cacheOrder.append(key)
+        return analysis
+    }
+
+    func setCachedAnalysis(_ key: String, _ analysis: ImageAnalysis) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if cacheMap[key] != nil {
+            cacheOrder.removeAll { $0 == key }
+        } else if cacheOrder.count >= cacheMaxSize {
+            // Evict oldest
+            let oldest = cacheOrder.removeFirst()
+            cacheMap.removeValue(forKey: oldest)
+        }
+        cacheMap[key] = analysis
+        cacheOrder.append(key)
+    }
+
     /// Reusable URLSession for fetching frame images (avoid per-call session alloc).
     lazy var urlSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -84,6 +116,48 @@ private class LiveTextManager {
         let a = ImageAnalyzer()
         analyzer = a
         return a
+    }
+
+    /// Load an image from a local path or HTTP URL. Returns nil on failure.
+    func loadImage(_ pathStr: String) -> NSImage? {
+        var result: NSImage?
+        autoreleasepool {
+            if pathStr.hasPrefix("http://") || pathStr.hasPrefix("https://") {
+                if let url = URL(string: pathStr) {
+                    let sem = DispatchSemaphore(value: 0)
+                    var fetchedData: Data?
+                    urlSession.dataTask(with: url) { data, _, _ in
+                        fetchedData = data
+                        sem.signal()
+                    }.resume()
+                    sem.wait()
+                    if let data = fetchedData, !data.isEmpty {
+                        result = NSImage(data: data)
+                    }
+                }
+            } else {
+                result = NSImage(contentsOfFile: pathStr)
+            }
+        }
+        return result
+    }
+
+    /// Run VisionKit analysis on an image. Returns the analysis or nil.
+    func analyzeImage(_ image: NSImage) -> ImageAnalysis? {
+        let analyzer = ensureAnalyzer()
+        let semaphore = DispatchSemaphore(value: 0)
+        var analysisResult: ImageAnalysis?
+        let config = ImageAnalyzer.Configuration([.text, .machineReadableCode])
+
+        Task.detached { [image] in
+            do {
+                let analysis = try await analyzer.analyze(image, orientation: .up, configuration: config)
+                analysisResult = analysis
+            } catch {}
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return analysisResult
     }
 }
 
@@ -144,7 +218,25 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
             contentView.addSubview(overlay)
             mgr.overlayView = overlay
         }
-        let _ = mgr.ensureAnalyzer()
+        let analyzer = mgr.ensureAnalyzer()
+
+        // Warm up VisionKit by running a tiny dummy analysis in the background.
+        // The first real analyze() call triggers Apple's ML model loading which
+        // can take several seconds. By doing it here the models are ready by
+        // the time the user navigates to a frame.
+        Task.detached {
+            let img: NSImage = autoreleasepool {
+                let size = NSSize(width: 1, height: 1)
+                let img = NSImage(size: size)
+                img.lockFocus()
+                NSColor.white.setFill()
+                NSRect(origin: .zero, size: size).fill()
+                img.unlockFocus()
+                return img
+            }
+            let config = ImageAnalyzer.Configuration([.text])
+            let _ = try? await analyzer.analyze(img, orientation: .up, configuration: config)
+        }
 
         return 0
     }
@@ -175,98 +267,87 @@ public func ltAnalyzeImage(
         }
         let pathStr = String(cString: path)
         let mgr = LiveTextManager.shared
-        guard let overlay = mgr.overlayView else {
+        guard mgr.overlayView != nil else {
             outError.pointee = makeCString("overlay not initialized, call lt_init first")
             return -2
         }
-        guard let contentView = mgr.hostContentView else {
+        guard mgr.hostContentView != nil else {
             outError.pointee = makeCString("no host content view")
             return -3
         }
 
-        // Load image from path or URL — use autorelease pool to ensure
-        // transient NSImage/CGImage/Data objects are freed promptly.
-        var nsImage: NSImage?
-        var loadError: String?
-        autoreleasepool {
-            if pathStr.hasPrefix("http://") || pathStr.hasPrefix("https://") {
-                if let url = URL(string: pathStr) {
-                    let sem = DispatchSemaphore(value: 0)
-                    var fetchedData: Data?
-                    var fetchError: Error?
-                    mgr.urlSession.dataTask(with: url) { data, response, error in
-                        fetchedData = data
-                        fetchError = error
-                        sem.signal()
-                    }.resume()
-                    sem.wait()
-
-                    if let err = fetchError {
-                        loadError = "fetch error: \(err.localizedDescription)"
-                    } else if let data = fetchedData, !data.isEmpty {
-                        nsImage = NSImage(data: data)
-                        if nsImage == nil { loadError = "NSImage init failed (\(data.count) bytes)" }
-                    } else {
-                        loadError = "empty response"
-                    }
-                } else {
-                    loadError = "invalid URL"
-                }
-            } else {
-                nsImage = NSImage(contentsOfFile: pathStr)
-                if nsImage == nil { loadError = "file not found" }
-            }
+        // Check analysis cache first — revisited or prefetched frames are instant
+        if let cached = mgr.getCachedAnalysis(pathStr) {
+            mgr.currentAnalysis = cached
+            mgr.pendingAnalysis = cached
+            outText.pointee = makeCString(cached.transcript)
+            return 0
         }
-        guard let image = nsImage, image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil else {
-            outError.pointee = makeCString("failed to load image: \(pathStr) (\(loadError ?? "unknown"))")
+
+        // Load and analyze
+        guard let image = mgr.loadImage(pathStr),
+              image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil else {
+            outError.pointee = makeCString("failed to load image: \(pathStr)")
             return -4
         }
 
-        // Run analysis (async bridged with semaphore).
-        // Must use Task.detached so the task runs on the cooperative thread pool
-        // rather than inheriting the caller's (non-Swift) execution context.
-        let analyzer = mgr.ensureAnalyzer()
-        let semaphore = DispatchSemaphore(value: 0)
-        var analysisResult: ImageAnalysis?
-        var analysisError: Error?
-
-        let analyzerConfig = ImageAnalyzer.Configuration([.text, .machineReadableCode])
-
-        Task.detached { [image] in
-            do {
-                let analysis = try await analyzer.analyze(image, orientation: .up, configuration: analyzerConfig)
-                analysisResult = analysis
-            } catch {
-                analysisError = error
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        // Release image immediately — analysis holds its own data
-        nsImage = nil
-
-        if let err = analysisError {
-            outError.pointee = makeCString("analysis failed: \(err.localizedDescription)")
-            return -5
-        }
-        guard let analysis = analysisResult else {
+        guard let analysis = mgr.analyzeImage(image) else {
             outError.pointee = makeCString("analysis returned nil")
             return -5
         }
 
+        mgr.setCachedAnalysis(pathStr, analysis)
         mgr.currentAnalysis = analysis
         // Don't apply to overlay yet — store as pending. The analysis will be
         // applied in lt_update_position once the correct frame geometry is set.
-        // This ensures VisionKit computes hit regions against the right rect.
         mgr.pendingAnalysis = analysis
 
-        // Return recognized text from the analysis transcript (macOS 13+)
         outText.pointee = makeCString(analysis.transcript)
         return 0
     }
     #endif
 
     outError.pointee = makeCString("VisionKit not available")
+    return -1
+}
+
+// MARK: - Prefetch (background analysis for adjacent frames)
+
+/// Analyze images in the background and cache results. Fire-and-forget.
+/// Skips images that are already cached. Does NOT set pendingAnalysis
+/// or update the overlay — only populates the cache for future instant hits.
+@_cdecl("lt_prefetch")
+public func ltPrefetch(_ pathsJson: UnsafePointer<CChar>?) -> Int32 {
+    #if canImport(VisionKit)
+    if #available(macOS 13.0, *) {
+        guard let pathsJson = pathsJson else { return -1 }
+        let jsonStr = String(cString: pathsJson)
+        guard let data = jsonStr.data(using: .utf8),
+              let paths = try? JSONSerialization.jsonObject(with: data) as? [String],
+              !paths.isEmpty else { return -2 }
+
+        let mgr = LiveTextManager.shared
+
+        // Fire-and-forget on a background queue
+        DispatchQueue.global(qos: .utility).async {
+            for pathStr in paths {
+                // Skip already cached
+                if mgr.getCachedAnalysis(pathStr) != nil { continue }
+
+                autoreleasepool {
+                    guard let image = mgr.loadImage(pathStr),
+                          image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil else {
+                        return  // skip this image
+                    }
+                    if let analysis = mgr.analyzeImage(image) {
+                        mgr.setCachedAnalysis(pathStr, analysis)
+                    }
+                }
+            }
+        }
+        return 0
+    }
+    #endif
     return -1
 }
 

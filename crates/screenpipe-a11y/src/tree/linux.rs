@@ -16,7 +16,7 @@
 //! - Enable with: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    AccessibilityTreeNode, NodeBounds, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
     TreeWalkerPlatform, TruncationReason,
 };
 use anyhow::{Context, Result};
@@ -866,7 +866,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         // Skip incognito / private browsing windows (localized title check)
         if self.config.ignore_incognito_windows && crate::incognito::is_title_private(&window_title)
         {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::Incognito));
         }
 
         let app_lower = app_name.to_lowercase();
@@ -877,7 +877,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             let p = pattern.to_lowercase();
             app_lower.contains(&p) || window_lower.contains(&p)
         }) {
-            return Ok(TreeWalkResult::Skipped);
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Apply user-configured included windows (whitelist)
@@ -887,7 +887,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
                 app_lower.contains(&p) || window_lower.contains(&p)
             });
             if !matches {
-                return Ok(TreeWalkResult::Skipped);
+                return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
             }
         }
 

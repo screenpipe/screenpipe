@@ -83,7 +83,10 @@ describe('isModelAllowed', () => {
 
   it('should allow gemini pro for logged_in but not anonymous', () => {
     expect(isModelAllowed('gemini-3-pro', 'logged_in')).toBe(true);
+    expect(isModelAllowed('gemini-3.1-pro', 'logged_in')).toBe(true);
+    expect(isModelAllowed('gemini-3.1-pro-preview', 'logged_in')).toBe(true);
     expect(isModelAllowed('gemini-3-pro', 'anonymous')).toBe(false);
+    expect(isModelAllowed('gemini-3.1-pro', 'anonymous')).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { throttle } from "lodash";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
+import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -74,6 +75,8 @@ export function useScrollZoom(opts: {
 		return () => { if (rafId !== null) cancelAnimationFrame(rafId); };
 	}, [targetZoom]);
 
+	const clearSelectionRange = useTimelineSelection((s) => s.setSelectionRange);
+
 	const handleScroll = useMemo(
 		() =>
 			throttle(
@@ -126,6 +129,9 @@ export function useScrollZoom(opts: {
 							)),
 						);
 
+					// Clear timeline selection when scrolling to navigate
+					clearSelectionRange(null);
+
 					requestAnimationFrame(() => {
 						setCurrentIndex((prevIndex: number) => {
 							let newIndex: number;
@@ -159,7 +165,7 @@ export function useScrollZoom(opts: {
 				{ leading: true, trailing: false },
 			),
 			// eslint-disable-next-line react-hooks/exhaustive-deps
-	[frames, zoomLevel, pausePlayback, matchingIndices, hasSearchHighlight, dismissSearchHighlight], // Re-create when zoom/filter changes
+	[frames, zoomLevel, pausePlayback, matchingIndices, hasSearchHighlight, dismissSearchHighlight, clearSelectionRange], // Re-create when zoom/filter changes
 	);
 
 	// Attach scroll/zoom handler so pinch-to-zoom and scroll-to-navigate work.
@@ -303,6 +309,9 @@ export function useScrollZoom(opts: {
 					)),
 				);
 
+			// Clear timeline selection when scrolling to navigate
+			clearSelectionRange(null);
+
 			requestAnimationFrame(() => {
 				setCurrentIndex((prevIndex: number) => {
 					let newIndex: number;
@@ -332,7 +341,7 @@ export function useScrollZoom(opts: {
 		});
 		return () => { unlisten.then((f) => f()); };
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [embedded, frames, zoomLevel, pausePlayback, matchingIndices, hasSearchHighlight, dismissSearchHighlight, inSearchReviewMode, searchResultIndex, searchResultsCount, showSearchModal]);
+	}, [embedded, frames, zoomLevel, pausePlayback, matchingIndices, hasSearchHighlight, dismissSearchHighlight, inSearchReviewMode, searchResultIndex, searchResultsCount, showSearchModal, clearSelectionRange]);
 
 	// React onWheel handler for embedded mode — attached directly via JSX prop
 	// as a fallback when addEventListener on document/container doesn't receive events

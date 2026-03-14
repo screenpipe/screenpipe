@@ -82,6 +82,10 @@ pub struct RecordingConfig {
     /// When set, overrides the engine-aware default (Deepgram=3600s, Whisper/OpenAI=600s).
     /// None = use engine-aware defaults.
     pub batch_max_duration_secs: Option<u64>,
+
+    /// Persisted power mode preference ("auto", "performance", "battery_saver").
+    /// Restored from settings on startup so the user's choice survives app restarts.
+    pub power_mode: Option<String>,
 }
 
 impl RecordingConfig {
