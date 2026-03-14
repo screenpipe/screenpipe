@@ -642,6 +642,10 @@ async fn main() {
         .plugin(tauri_plugin_http::init())
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "dictation" {
+                    let _ = window.app_handle().emit("dictation-window-closed", ());
+                    return;
+                }
                 let _ = window.set_always_on_top(false);
                 let _ = window.set_visible_on_all_workspaces(false);
 
@@ -1652,3 +1656,5 @@ async fn main() {
         }
     });
 }
+#[cfg(test)]
+mod updates_test;

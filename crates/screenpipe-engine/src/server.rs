@@ -573,6 +573,10 @@ impl SCServer {
             .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
+            )
+            .route(
+                "/dictation/transcribe",
+                axum::routing::post(crate::routes::dictation::dictation_transcribe_handler),
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
@@ -692,6 +696,10 @@ impl SCServer {
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
+            .route(
+                "/ws/dictation",
+                get(crate::routes::dictation::ws_dictation_handler),
+            )
             .route(
                 "/frames/export",
                 get(handle_video_export_ws).post(handle_video_export_post),

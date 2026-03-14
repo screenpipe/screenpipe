@@ -147,6 +147,59 @@ pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
     Ok((samples, sample_rate))
 }
 
+/// Decode raw audio bytes (any format ffmpeg supports, e.g. WebM/Opus) into
+/// mono f32 samples at 16 kHz — suitable for feeding into transcription engines.
+pub fn read_audio_from_bytes(audio_bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
+    let sample_rate: u32 = 16000;
+
+    let mut command = Command::new(find_ffmpeg_path().unwrap());
+    command
+        .args([
+            "-i",
+            "pipe:0",
+            "-f",
+            "f32le",
+            "-ar",
+            &sample_rate.to_string(),
+            "-ac",
+            "1",
+            "pipe:1",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to spawn ffmpeg for audio decode: {}", e))?;
+
+    // Write audio bytes to ffmpeg stdin
+    if let Some(ref mut stdin) = child.stdin {
+        stdin.write_all(audio_bytes)?;
+    }
+    // Drop stdin to signal EOF
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("ffmpeg audio decode failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("ffmpeg audio decode failed: {}", stderr));
+    }
+
+    let samples: Vec<f32> = bytemuck::cast_slice(&output.stdout).to_vec();
+    Ok((samples, sample_rate))
+}
+
 pub fn write_audio_to_file(
     audio: &[f32],
     sample_rate: u32,

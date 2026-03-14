@@ -24,6 +24,7 @@ import {
   UserPlus,
   Monitor,
   Mic,
+  Headset,
   Volume2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -35,6 +36,7 @@ import { AccountSection } from "@/components/settings/account-section";
 import ShortcutSection from "@/components/settings/shortcut-section";
 import { AIPresets } from "@/components/settings/ai-presets";
 import { RecordingSettings } from "@/components/settings/recording-settings";
+import { DictationSection } from "@/components/settings/dictation-section";
 import GeneralSettings from "@/components/settings/general-settings";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { FeedbackSection } from "@/components/settings/feedback-section";
@@ -66,6 +68,7 @@ type MainSection = "home" | "timeline" | "pipes" | "help";
 type SettingsModalSection =
   | "account"
   | "recording"
+  | "dictation"
   | "ai"
   | "general"
   | "display"
@@ -80,15 +83,15 @@ type SettingsModalSection =
 // All valid URL sections (main + modal)
 const ALL_SECTIONS = [
   "home", "timeline", "pipes", "help",
-  "account", "recording", "ai", "general", "display", "shortcuts",
-  "connections", "privacy", "storage", "meetings", "team", "referral",
+  "account", "recording", "dictation", "ai", "general", "display", "shortcuts",
+  "connections", "privacy", "storage", "team", "referral",
   "feedback", // backwards compat → maps to "help"
   "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ];
 
 const MODAL_SECTIONS = new Set<string>([
-  "account", "recording", "ai", "general", "display", "shortcuts",
-  "connections", "privacy", "storage", "meetings", "team", "referral",
+  "account", "recording", "dictation", "ai", "general", "display", "shortcuts",
+  "connections", "privacy", "storage", "team", "referral",
 ]);
 
 function SettingsPageContent() {
@@ -284,6 +287,8 @@ function SettingsPageContent() {
         return <AccountSection />;
       case "recording":
         return <RecordingSettings />;
+      case "dictation":
+        return <DictationSection />;
       case "shortcuts":
         return <ShortcutSection />;
       case "privacy":
@@ -313,6 +318,7 @@ function SettingsPageContent() {
     { id: "general", label: "General", icon: <SettingsIcon className="h-4 w-4" />, group: "app" },
     { id: "display", label: "Display", icon: <Layout className="h-4 w-4" />, group: "app" },
     { id: "recording", label: "Recording", icon: <Video className="h-4 w-4" />, group: "app" },
+    { id: "dictation", label: "Dictation", icon: <Headset className="h-4 w-4" />, group: "app" },
     { id: "ai", label: "AI models", icon: <Brain className="h-4 w-4" />, group: "app" },
     { id: "shortcuts", label: "Shortcuts", icon: <Keyboard className="h-4 w-4" />, group: "app" },
     { id: "privacy", label: "Privacy", icon: <Shield className="h-4 w-4" />, group: "data" },

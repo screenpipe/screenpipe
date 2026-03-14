@@ -127,8 +127,8 @@ pub fn hide_main_window(app_handle: &tauri::AppHandle) {
 
     let window_to_close = ShowRewindWindow::Main;
 
-    if let Err(e) = window_to_close.close(app_handle) {
-        error!("failed to close window: {}", e);
+    if let Err(e) = ShowRewindWindow::Main.close(app_handle) {
+        error!("failed to close main window: {}", e);
     }
 }
 

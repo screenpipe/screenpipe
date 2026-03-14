@@ -109,6 +109,27 @@ fn get_target_arch() -> &'static str {
 
 /// Check if this is a source/community build (not an official release)
 /// Official releases are built with --features official-build in GitHub Actions
+/// Check if the current user is a macOS admin (in the "admin" group).
+/// Always returns true on non-macOS platforms.
+pub fn is_macos_admin() -> bool {
+    static IS_ADMIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IS_ADMIN.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("id").arg("-Gn").output() {
+                if let Ok(groups) = String::from_utf8(output.stdout) {
+                    return groups.split_whitespace().any(|g| g == "admin");
+                }
+            }
+            false
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
+        }
+    })
+}
+
 pub fn is_source_build(_app: &tauri::AppHandle) -> bool {
     // The official-build feature is only enabled during CI releases
     // Source builds will not have this feature enabled
@@ -305,6 +326,27 @@ impl UpdatesManager {
                 let menu_item = self.update_menu_item.clone();
                 let mut downloaded: u64 = 0;
                 let mut last_pct: u8 = 0;
+                if !is_macos_admin() {
+                    warn!("skipping auto-update: user is not a macOS admin");
+                    let _ = self.app.emit("update-needs-admin", serde_json::json!({
+                        "version": update.version
+                    }));
+                    let app_notif = self.app.clone();
+                    let version_str = update.version.clone();
+                    std::thread::spawn(move || {
+                        let _ = app_notif.notification()
+                            .builder()
+                            .title("screenpipe update available")
+                            .body(format!("v{} is ready — ask your admin to install it", version_str))
+                            .show();
+                    });
+                    if let Some(ref item) = self.update_menu_item {
+                        let _ = item.set_enabled(true);
+                        let _ = item.set_text("Update available (ask admin)");
+                    }
+                    return Ok(false);
+                }
+
                 let download_result = update
                     .download_and_install(
                         move |chunk_len, content_len| {

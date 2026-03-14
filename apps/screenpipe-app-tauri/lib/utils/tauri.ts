@@ -1026,7 +1026,7 @@ chatAlwaysOnTop?: boolean;
  * AppleScript detection for Chromium browsers.
  */
 ignoreIncognitoWindows?: boolean }
-export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
+export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery" | "Dictation"
 export type Suggestion = { text: string }
 /**
  * Sync configuration.

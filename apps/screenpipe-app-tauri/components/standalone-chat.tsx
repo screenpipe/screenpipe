@@ -47,6 +47,8 @@ import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
+import { DictationButton } from "@/components/dictation-indicator";
+import { useDictation } from "@/lib/hooks/use-dictation";
 
 const SCREENPIPE_API = "http://localhost:3030";
 const PI_CHAT_SESSION = "chat";
@@ -805,6 +807,17 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const { items: appItems } = useSqlAutocomplete("app");
   const { suggestions: autoSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
+
+  // Dictation hook for voice input
+  const { state: dictationState, transcribedText, toggleDictation } = useDictation({
+    onTranscription: (text) => {
+      // Append transcribed text to input
+      setInput((prev) => prev + (prev ? " " : "") + text);
+    },
+    onError: (error) => {
+      toast({ title: "dictation error", description: error, variant: "destructive" });
+    },
+  });
 
   // Custom summary templates (persisted in settings)
   const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
@@ -3635,6 +3648,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 )}
               </AnimatePresence>
             </div>
+            {/* Dictation button - between textarea and paperclip */}
+            {!settings.disabledShortcuts?.includes("dictation" as any) && (
+              <DictationButton
+                state={dictationState}
+                onToggle={toggleDictation}
+                disabled={isLoading || !canChat}
+              />
+            )}
             <Button
               type="button"
               size="icon"

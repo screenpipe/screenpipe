@@ -38,6 +38,7 @@ pub enum RewindWindowId {
     Onboarding,
     Chat,
     PermissionRecovery,
+    Dictation,
 }
 
 impl FromStr for RewindWindowId {
@@ -51,6 +52,7 @@ impl FromStr for RewindWindowId {
             "onboarding" => Ok(RewindWindowId::Onboarding),
             "chat" => Ok(RewindWindowId::Chat),
             "permission-recovery" => Ok(RewindWindowId::PermissionRecovery),
+            "dictation" => Ok(RewindWindowId::Dictation),
             _ => Ok(RewindWindowId::Main),
         }
     }
@@ -65,6 +67,7 @@ impl std::fmt::Display for RewindWindowId {
             RewindWindowId::Onboarding => write!(f, "onboarding"),
             RewindWindowId::Chat => write!(f, "chat"),
             RewindWindowId::PermissionRecovery => write!(f, "permission-recovery"),
+            RewindWindowId::Dictation => write!(f, "dictation"),
         }
     }
 }
@@ -78,6 +81,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::Chat => "chat",
             RewindWindowId::PermissionRecovery => "permission-recovery",
+            RewindWindowId::Dictation => "dictation",
         }
     }
 
@@ -89,6 +93,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => "onboarding",
             RewindWindowId::Chat => "ai chat",
             RewindWindowId::PermissionRecovery => "fix permissions",
+            RewindWindowId::Dictation => "dictation",
         }
     }
 
@@ -100,6 +105,7 @@ impl RewindWindowId {
             RewindWindowId::Onboarding => (450.0, 500.0),
             RewindWindowId::Chat => (600.0, 750.0),
             RewindWindowId::PermissionRecovery => (500.0, 580.0),
+            RewindWindowId::Dictation => (400.0, 200.0),
         })
     }
 
@@ -117,6 +123,7 @@ pub enum ShowRewindWindow {
     Onboarding,
     Chat,
     PermissionRecovery,
+    Dictation,
 }
 
 impl ShowRewindWindow {
@@ -189,6 +196,7 @@ impl ShowRewindWindow {
             ShowRewindWindow::Onboarding => RewindWindowId::Onboarding,
             ShowRewindWindow::Chat => RewindWindowId::Chat,
             ShowRewindWindow::PermissionRecovery => RewindWindowId::PermissionRecovery,
+            ShowRewindWindow::Dictation => RewindWindowId::Dictation,
         }
     }
 
@@ -202,6 +210,7 @@ impl ShowRewindWindow {
             ShowRewindWindow::Onboarding => None,
             ShowRewindWindow::Chat => None,
             ShowRewindWindow::PermissionRecovery => None,
+            ShowRewindWindow::Dictation => None,
         }
     }
 
@@ -412,7 +421,8 @@ impl ShowRewindWindow {
 
                 // Reposition to center of primary monitor
                 if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
                     let pos = monitor.position();
                     let scale = monitor.scale_factor();
                     let origin_x = pos.x as f64 / scale;
@@ -421,8 +431,12 @@ impl ShowRewindWindow {
                     let bar_h = 80.0;
                     let x = origin_x + (logical.width - bar_w) / 2.0;
                     let y = origin_y + logical.height * 0.22;
-                    window.set_size(Size::Logical(LogicalSize::new(bar_w, bar_h))).ok();
-                    window.set_position(Position::Logical(LogicalPosition::new(x, y))).ok();
+                    window
+                        .set_size(Size::Logical(LogicalSize::new(bar_w, bar_h)))
+                        .ok();
+                    window
+                        .set_position(Position::Logical(LogicalPosition::new(x, y)))
+                        .ok();
                 }
 
                 // Bring to front with high level (already class-swizzled to NSPanel)
@@ -573,6 +587,42 @@ impl ShowRewindWindow {
                         .unwrap_or_default()
                         .chat_always_on_top;
                     window.set_always_on_top(chat_on_top).ok();
+                    window.show().ok();
+                    window.set_focus().ok();
+                    return Ok(window);
+                }
+            }
+
+            // Dictation window needs panel behavior on macOS to show above fullscreen
+            if id.label() == RewindWindowId::Dictation.label() {
+                #[cfg(target_os = "macos")]
+                {
+                    let app_clone = app.clone();
+                    run_on_main_thread_safe(app, move || {
+                        use objc::{msg_send, sel, sel_impl};
+                        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+
+                        if let Ok(panel) =
+                            app_clone.get_webview_panel(RewindWindowId::Dictation.label())
+                        {
+                            // Level 1001 to appear above fullscreen apps
+                            panel.set_level(1001);
+                            // Move to active space
+                            panel.set_collection_behaviour(
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                            );
+                            panel.order_front_regardless();
+                            panel.make_key_window();
+                        }
+                    });
+
+                    return Ok(window);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
                     window.show().ok();
                     window.set_focus().ok();
                     return Ok(window);
@@ -1193,7 +1243,8 @@ impl ShowRewindWindow {
                 let bar_w = 680.0_f64;
                 let bar_h = 80.0; // input row + footer
                 let (x, y) = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
                     let pos = monitor.position();
                     let scale = monitor.scale_factor();
                     let origin_x = pos.x as f64 / scale;
@@ -1206,30 +1257,28 @@ impl ShowRewindWindow {
                     (200.0, 140.0)
                 };
                 let bar_w = if let Ok(Some(monitor)) = app.primary_monitor() {
-                    let logical: LogicalSize<f64> = monitor.size().to_logical(monitor.scale_factor());
+                    let logical: LogicalSize<f64> =
+                        monitor.size().to_logical(monitor.scale_factor());
                     bar_w.min(logical.width - 40.0)
                 } else {
                     bar_w
                 };
 
-                let builder = WebviewWindow::builder(
-                    app,
-                    self.id().label(),
-                    WebviewUrl::App(url.into()),
-                )
-                .title("")
-                .visible(false) // show after panel conversion
-                .accept_first_mouse(true)
-                .shadow(true)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .visible_on_all_workspaces(true)
-                .inner_size(bar_w, bar_h)
-                .min_inner_size(400.0, 56.0)
-                .position(x, y)
-                .focused(true)
-                .resizable(true);
+                let builder =
+                    WebviewWindow::builder(app, self.id().label(), WebviewUrl::App(url.into()))
+                        .title("")
+                        .visible(false) // show after panel conversion
+                        .accept_first_mouse(true)
+                        .shadow(true)
+                        .decorations(false)
+                        .transparent(true)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .inner_size(bar_w, bar_h)
+                        .min_inner_size(400.0, 56.0)
+                        .position(x, y)
+                        .focused(true)
+                        .resizable(true);
 
                 let window = builder.build()?;
 
@@ -1251,7 +1300,8 @@ impl ShowRewindWindow {
                                 // Do NOT use to_panel() — its Id::from_retained_ptr causes
                                 // use-after-free on window.close() → SIGSEGV
                                 let nspanel_class: id = msg_send![
-                                    tauri_nspanel::raw_nspanel::RawNSPanel::class(), class
+                                    tauri_nspanel::raw_nspanel::RawNSPanel::class(),
+                                    class
                                 ];
                                 object_setClass(ns_win, nspanel_class);
 
@@ -1344,43 +1394,43 @@ impl ShowRewindWindow {
 
                             if let Ok(panel) = window_clone.to_panel() {
                                 let chat_on_top = SettingsStore::get(window_clone.app_handle())
-                                .unwrap_or_default()
-                                .unwrap_or_default()
-                                .chat_always_on_top;
+                                    .unwrap_or_default()
+                                    .unwrap_or_default()
+                                    .chat_always_on_top;
 
-                            if chat_on_top {
-                                // Level 1001 to appear above fullscreen apps
-                                panel.set_level(1001);
-                                // NonActivatingPanel (128) so clicking the chat doesn't
-                                // activate the app (which would switch Spaces away from
-                                // fullscreen apps). Preserve existing style bits.
-                                unsafe {
-                                    let current: i32 = msg_send![&*panel, styleMask];
-                                    panel.set_style_mask(current | 128);
+                                if chat_on_top {
+                                    // Level 1001 to appear above fullscreen apps
+                                    panel.set_level(1001);
+                                    // NonActivatingPanel (128) so clicking the chat doesn't
+                                    // activate the app (which would switch Spaces away from
+                                    // fullscreen apps). Preserve existing style bits.
+                                    unsafe {
+                                        let current: i32 = msg_send![&*panel, styleMask];
+                                        panel.set_style_mask(current | 128);
+                                    }
+                                } else {
+                                    panel.set_level(0);
                                 }
-                            } else {
-                                panel.set_level(0);
-                            }
 
-                            // Don't hide when app deactivates
-                            panel.set_hides_on_deactivate(false);
+                                // Don't hide when app deactivates
+                                panel.set_hides_on_deactivate(false);
 
-                            // Enable dragging by clicking anywhere on the window background
-                            let _: () = unsafe {
-                                msg_send![&*panel, setMovableByWindowBackground: true]
-                            };
+                                // Enable dragging by clicking anywhere on the window background
+                                let _: () = unsafe {
+                                    msg_send![&*panel, setMovableByWindowBackground: true]
+                                };
 
-                            // NSWindowSharingNone=0 hides from screen recorders, NSWindowSharingReadOnly=1 allows capture
-                            let capturable = SettingsStore::get(window_clone.app_handle())
-                                .unwrap_or_default()
-                                .unwrap_or_default()
-                                .show_overlay_in_screen_recording;
-                            let sharing: u64 = if capturable { 1 } else { 0 };
-                            let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
+                                // NSWindowSharingNone=0 hides from screen recorders, NSWindowSharingReadOnly=1 allows capture
+                                let capturable = SettingsStore::get(window_clone.app_handle())
+                                    .unwrap_or_default()
+                                    .unwrap_or_default()
+                                    .show_overlay_in_screen_recording;
+                                let sharing: u64 = if capturable { 1 } else { 0 };
+                                let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 
-                            // MoveToActiveSpace so show_existing can pull
-                            // it to any Space (including fullscreen).
-                            panel.set_collection_behaviour(
+                                // MoveToActiveSpace so show_existing can pull
+                                // it to any Space (including fullscreen).
+                                panel.set_collection_behaviour(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -1442,6 +1492,69 @@ impl ShowRewindWindow {
                         }
                     });
                 }
+
+                window
+            }
+            ShowRewindWindow::Dictation => {
+                #[cfg(target_os = "macos")]
+                let window = {
+                    let builder = self
+                        .window_builder(app, "/dictation")
+                        .inner_size(450.0, 180.0)
+                        .min_inner_size(350.0, 150.0)
+                        .max_inner_size(600.0, 300.0)
+                        .resizable(true)
+                        .focused(true)
+                        .visible(true)
+                        .always_on_top(true)
+                        .hidden_title(true);
+                    let window = builder.build()?;
+
+                    // Convert to panel for fullscreen support
+                    if let Ok(_panel) = window.to_panel() {
+                        let window_clone = window.clone();
+                        run_on_main_thread_safe(app, move || {
+                            use objc::{msg_send, sel, sel_impl};
+                            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+
+                            if let Ok(panel) = window_clone.to_panel() {
+                                // Level 1001 to appear above fullscreen apps
+                                panel.set_level(1001);
+                                // NonActivatingPanel so clicking doesn't activate app
+                                unsafe {
+                                    let current: i32 = msg_send![&*panel, styleMask];
+                                    panel.set_style_mask(current | 128);
+                                }
+                                panel.set_hides_on_deactivate(false);
+                                // Draggable by background
+                                let _: () = unsafe {
+                                    msg_send![&*panel, setMovableByWindowBackground: true]
+                                };
+                                // Move to active space
+                                panel.set_collection_behaviour(
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
+                                    NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                                );
+                            }
+                        });
+                    }
+
+                    window
+                };
+
+                #[cfg(not(target_os = "macos"))]
+                let window = {
+                    let builder = self
+                        .window_builder(app, "/dictation")
+                        .inner_size(450.0, 180.0)
+                        .min_inner_size(350.0, 150.0)
+                        .max_inner_size(600.0, 300.0)
+                        .resizable(true)
+                        .focused(true)
+                        .always_on_top(true);
+                    builder.build()?
+                };
 
                 window
             }
