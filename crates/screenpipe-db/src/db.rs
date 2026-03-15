@@ -317,12 +317,16 @@ impl DatabaseManager {
     /// and that frames_fts includes accessibility_text.
     /// An earlier version of migration 20260220000000 may have been applied
     /// without these columns.
-    async fn ensure_event_driven_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    pub async fn ensure_event_driven_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         // 1. Fix missing columns on frames table
         let missing_columns: &[(&str, &str)] = &[
+            ("snapshot_path", "TEXT DEFAULT NULL"),
+            ("accessibility_text", "TEXT DEFAULT NULL"),
             ("accessibility_tree_json", "TEXT DEFAULT NULL"),
             ("content_hash", "INTEGER DEFAULT NULL"),
             ("simhash", "INTEGER DEFAULT NULL"),
+            ("capture_trigger", "TEXT DEFAULT NULL"),
+            ("text_source", "TEXT DEFAULT NULL"),
         ];
 
         for (col_name, col_type) in missing_columns {

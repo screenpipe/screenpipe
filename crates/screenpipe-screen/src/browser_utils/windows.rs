@@ -77,8 +77,8 @@ impl WindowsUrlDetector {
                 }
             }
             Err(e) => {
-                error!("failed to find edit bar: {}", e);
-                return Err(anyhow!("failed to find edit bar: {}", e));
+                debug!("failed to find edit bar: {}", e);
+                return Ok(None);
             }
         }
         Ok(None)
