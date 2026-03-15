@@ -10,6 +10,11 @@ pnpm-lock.yaml
 
 # testing
 /coverage
+.e2e-data/
+.e2e/
+e2e/videos/
+e2e/screenshots/
+e2e/dist/
 
 # next.js
 /.next/

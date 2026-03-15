@@ -214,10 +214,11 @@ impl ShowRewindWindow {
         overlay_mode: &str,
         label: &str,
     ) -> tauri::Result<WebviewWindow> {
-        let capturable = SettingsStore::get(app)
-            .unwrap_or_default()
-            .unwrap_or_default()
-            .show_overlay_in_screen_recording;
+        let capturable = crate::config::is_e2e_mode()
+            || SettingsStore::get(app)
+                .unwrap_or_default()
+                .unwrap_or_default()
+                .show_overlay_in_screen_recording;
 
         if overlay_mode == "window" {
             info!("showing existing main window (window mode)");
@@ -517,7 +518,8 @@ impl ShowRewindWindow {
                     let settings = SettingsStore::get(app)
                         .unwrap_or_default()
                         .unwrap_or_default();
-                    let capturable = settings.show_overlay_in_screen_recording;
+                    let capturable = crate::config::is_e2e_mode()
+                        || settings.show_overlay_in_screen_recording;
                     let chat_on_top = settings.chat_always_on_top;
                     let app_clone = app.clone();
                     run_on_main_thread_safe(app, move || {
@@ -599,7 +601,8 @@ impl ShowRewindWindow {
                     .unwrap_or_default();
                 let overlay_mode = settings.overlay_mode;
                 #[allow(unused_variables)] // used only on macOS
-                let show_in_recording = settings.show_overlay_in_screen_recording;
+                let show_in_recording = crate::config::is_e2e_mode()
+                    || settings.show_overlay_in_screen_recording;
                 // Record what mode we're creating so we can detect changes later
                 *MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()) = overlay_mode.clone();
                 let use_window_mode = overlay_mode == "window";
@@ -1371,10 +1374,11 @@ impl ShowRewindWindow {
                             };
 
                             // NSWindowSharingNone=0 hides from screen recorders, NSWindowSharingReadOnly=1 allows capture
-                            let capturable = SettingsStore::get(window_clone.app_handle())
-                                .unwrap_or_default()
-                                .unwrap_or_default()
-                                .show_overlay_in_screen_recording;
+                            let capturable = crate::config::is_e2e_mode()
+                                || SettingsStore::get(window_clone.app_handle())
+                                    .unwrap_or_default()
+                                    .unwrap_or_default()
+                                    .show_overlay_in_screen_recording;
                             let sharing: u64 = if capturable { 1 } else { 0 };
                             let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 

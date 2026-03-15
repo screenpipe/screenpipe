@@ -83,7 +83,7 @@ export default function GeneralSettings() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="section-settings-general">
       <div className="space-y-1">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold tracking-tight text-foreground">

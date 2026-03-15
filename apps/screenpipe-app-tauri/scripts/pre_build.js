@@ -31,6 +31,11 @@ const config = {
 		// Windows ARM64 (aarch64-pc-windows-msvc) — tordona/ffmpeg-win-arm64, full-shared for bin/ + lib/
 		ffmpegNameArm64: 'ffmpeg-master-latest-full-shared-win-arm64',
 		ffmpegUrlArm64: 'https://github.com/tordona/ffmpeg-win-arm64/releases/download/latest/ffmpeg-master-latest-full-shared-win-arm64.7z',
+		// ONNX Runtime CPU-only (GPU/DirectML causes issues on Intel integrated GPUs)
+		onnxName: 'onnxruntime-win-x64-1.19.2',
+		onnxUrl: 'https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip',
+		onnxNameArm64: 'onnxruntime-win-arm64-1.19.2',
+		onnxUrlArm64: 'https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-arm64-1.19.2.zip',
 	},
 	linux: {
 		aptPackages: [
@@ -496,6 +501,24 @@ if (platform == 'windows') {
 			} catch (err) {
 				console.warn('Skipping VC redist DLL copy (optional outside CI):', err.message);
 		}
+	}
+
+	// Setup ONNX Runtime (CPU-only) for PII/whisper — must run before cargo build
+	const onnxName = winArch === 'arm64' ? config.windows.onnxNameArm64 : config.windows.onnxName;
+	const onnxUrl = winArch === 'arm64' ? config.windows.onnxUrlArm64 : config.windows.onnxUrl;
+	if (!(await fs.exists(path.join(onnxName, 'lib', 'onnxruntime.lib')))) {
+		console.log(`downloading ONNX Runtime (${winArch})...`);
+		if (await fs.exists(onnxName)) {
+			await fs.rm(path.join(onnxName), { recursive: true, force: true }).catch(() => {});
+		}
+		await $`${wgetPath} --no-config --tries=10 --retry-connrefused --waitretry=10 -O ${onnxName}.zip ${onnxUrl}`;
+		await $`${sevenZ} x ${onnxName}.zip -y`;
+		const extracted = (await fs.readdir(cwd, { withFileTypes: true })).find((d) => d.isDirectory() && d.name.startsWith('onnxruntime-'));
+		if (extracted && extracted.name !== onnxName) {
+			await fs.rename(path.join(cwd, extracted.name), path.join(cwd, onnxName));
+		}
+		await fs.rm(path.join(cwd, `${onnxName}.zip`), { force: true }).catch(() => {});
+		console.log(`ONNX Runtime extracted to ${onnxName}`);
 	}
 }
 

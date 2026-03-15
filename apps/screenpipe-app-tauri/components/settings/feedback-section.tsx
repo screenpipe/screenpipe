@@ -16,7 +16,7 @@ export function FeedbackSection() {
   const isLoggedIn = !!settings.user?.email;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="section-help">
       <div className="space-y-1">
         <h1 className="text-xl font-bold tracking-tight text-foreground">
           Help

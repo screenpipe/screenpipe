@@ -2774,7 +2774,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   };
 
   return (
-    <div className={cn("flex flex-col bg-background", className ?? "h-screen")}>
+    <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       {/* Header - draggable only in standalone mode */}
       {/* Add left padding on macOS to avoid traffic light overlap (standalone only) */}
       <div

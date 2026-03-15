@@ -9,9 +9,6 @@ edition = { workspace = true }
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[build-dependencies]
-reqwest = { workspace = true }
-which = "7.0.0"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -106,10 +103,8 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-ort = { version = "=2.0.0-rc.6", features = [
-  "download-binaries",
-  "copy-dylibs",
-] }
+ort = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
 esaxx-rs = "0.1.10"
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"

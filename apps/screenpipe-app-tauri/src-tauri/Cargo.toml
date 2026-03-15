@@ -124,6 +124,7 @@ icalendar = "0.17"
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-cli = "2.4.1"
 tauri-plugin-global-shortcut = "2.3.1"
+tauri-plugin-webdriver = { version = "0.2", optional = true }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
@@ -173,11 +174,12 @@ lazy_static = "1.5.0"
 
 
 [features]
+default = ["custom-protocol", "qwen3-asr"]
 metal = ["screenpipe-audio/metal"]
 pulseaudio = ["screenpipe-audio/pulseaudio"]
 vulkan = ["screenpipe-audio/vulkan"]
 cargo-clippy = []
-default = ["custom-protocol", "qwen3-asr"]
+e2e = ["tauri-plugin-webdriver"]
 
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

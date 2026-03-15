@@ -988,6 +988,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			<div
 				ref={containerRef}
 				className="inset-0 flex flex-col text-foreground relative"
+				data-testid="section-timeline"
 				onWheel={onContainerWheel}
 				style={{
 					height: embedded ? "100%" : "100vh",

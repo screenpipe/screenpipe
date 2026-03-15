@@ -116,6 +116,23 @@ fn get_env(name: &str) -> String {
     std::env::var(String::from(name)).unwrap_or(String::from(""))
 }
 
+/// Returns which E2E seeds are requested (env SCREENPIPE_E2E_SEED, comma-separated).
+/// Rust uses "onboarding" in setup to complete onboarding at startup.
+#[tauri::command]
+#[specta::specta]
+fn get_e2e_seed_flags() -> Vec<String> {
+    std::env::var("SCREENPIPE_E2E_SEED")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.split(',')
+                .map(|part| part.trim().to_lowercase())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 use tokio::time::{sleep, Duration};
 
 #[tauri::command]
@@ -503,6 +520,7 @@ async fn main() {
                 permissions::request_arc_automation_permission,
                 // Commands from main.rs
                 get_env,
+                get_e2e_seed_flags,
                 vault_status,
                 vault_unlock,
                 get_log_files,
@@ -621,7 +639,7 @@ async fn main() {
 
         if let Err(e) = builder.export(
             Typescript::default().bigint(specta_typescript::BigIntExportBehavior::BigInt),
-            "../lib/utils/tauri.ts",
+            "lib/utils/tauri.ts",
         ) {
             eprintln!("Warning: Failed to export TypeScript bindings: {e}");
         }
@@ -705,6 +723,9 @@ async fn main() {
     }));
     let app = app.plugin(tauri_plugin_global_shortcut::Builder::new().build());
 
+    #[cfg(feature = "e2e")]
+    let app = app.plugin(tauri_plugin_webdriver::init());
+
     // Only add Sentry plugin if telemetry is enabled
     let app = if let Some(ref _guard) = sentry_guard {
         let client = sentry::Hub::current().client().unwrap();
@@ -785,6 +806,7 @@ async fn main() {
             suspend_global_shortcuts,
             resume_global_shortcuts,
             get_env,
+            get_e2e_seed_flags,
             vault_status,
             vault_unlock,
             // Sync commands
@@ -1075,6 +1097,16 @@ async fn main() {
                 store::OnboardingStore::default()
             });
             app.manage(onboarding_store.clone());
+
+            // E2E seed: when SCREENPIPE_E2E_SEED contains "onboarding", mark onboarding complete
+            let e2e_flags = get_e2e_seed_flags();
+            if e2e_flags.iter().any(|f| f == "onboarding") {
+                if let Err(e) = store::OnboardingStore::update(&app.handle(), |o| o.complete()) {
+                    error!("E2E seed: failed to complete onboarding: {}", e);
+                } else {
+                    info!("E2E seed: onboarding marked complete");
+                }
+            }
 
             // Pre-download AI models in background immediately.
             // These downloads don't need any permissions — they just fetch files to cache.

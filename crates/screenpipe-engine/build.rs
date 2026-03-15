@@ -1,19 +1,3 @@
-#[cfg(target_os = "windows")]
-fn link_onnx() {
-    let arch_var = std::env::var("CARGO_CFG_TARGET_ARCH");
-    let arch = arch_var.as_deref().unwrap_or("x86_64");
-    // Windows aarch64 uses load-dynamic: ort loads our DLL at runtime, no compile-time link.
-    if arch == "aarch64" {
-        return;
-    }
-    let pkg = "onnxruntime-win-x64-1.19.2";
-    println!(
-        "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
-        pkg
-    );
-    println!("cargo:rustc-link-lib=dylib=onnxruntime");
-}
-
 #[cfg(target_os = "macos")]
 fn has_foundation_models_sdk() -> bool {
     let sdk_path = std::process::Command::new("xcrun")
@@ -40,11 +24,6 @@ fn has_foundation_models_sdk() -> bool {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    {
-        link_onnx();
-    }
-
     #[cfg(target_os = "macos")]
     {
         // Only weak-link FoundationModels if the SDK actually has it.

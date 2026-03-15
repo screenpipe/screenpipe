@@ -75,6 +75,13 @@ async getEnv(name: string) : Promise<string> {
     return await TAURI_INVOKE("get_env", { name });
 },
 /**
+ * Returns which E2E seeds are requested (env SCREENPIPE_E2E_SEED, comma-separated).
+ * Rust uses "onboarding" in setup to complete onboarding at startup.
+ */
+async getE2eSeedFlags() : Promise<string[]> {
+    return await TAURI_INVOKE("get_e2e_seed_flags");
+},
+/**
  * Check vault lock state from filesystem (no server needed).
  */
 async vaultStatus() : Promise<Result<string, string>> {

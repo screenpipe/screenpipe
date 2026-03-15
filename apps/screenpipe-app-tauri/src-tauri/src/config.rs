@@ -4,8 +4,13 @@
 
 use std::{fs, path::PathBuf};
 use tracing::warn;
-
 use screenpipe_core::paths::default_screenpipe_data_dir;
+
+/// True when built with the `e2e` Cargo feature. When true, overlay/windows
+/// use NSWindowSharingReadOnly so OBS/screen recorders can capture the app.
+pub fn is_e2e_mode() -> bool {
+    cfg!(feature = "e2e")
+}
 
 pub fn get_base_dir(
     _app: &tauri::AppHandle,
