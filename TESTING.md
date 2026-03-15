@@ -29,7 +29,9 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **chat shortcut on fullscreen space** — press chat shortcut while on a fullscreen space. chat panel MUST appear on top. Fixed: panel pre-created at startup, show uses order_front→activate order.
 - [ ] **chat shortcut on normal desktop** — chat appears, receives keyboard focus, can type immediately.
 - [ ] **overlay toggle on/off** — press shortcut twice. first shows, second hides. no "ghost" window left behind.
-- [ ] **chat toggle on/off** — press chat shortcut twice. first shows, second closes.
+- [ ] **chat toggle on/off** — press chat shortcut twice. first shows, second closes/hides.
+- [ ] **chat Escape hide** — press Escape while chat is focused. It must use `order_out` (hide) instead of `close` to preserve state and prevent re-creation lag (`5b7b0dd44`).
+- [ ] **chat UI redesigned** — Verify Chat UI features: input layout, image viewer, preset dropdown, and proper scrollbar behavior in modals (`2bcdf8d8b`, `19789657d`).
 - [ ] **overlay does NOT follow space swipe** — show overlay, then three-finger swipe to another space. overlay should NOT follow you (no blink-and-disappear). was broken by `MoveToActiveSpace` staying set.
 - [ ] **no blink on show** — overlay appears instantly, no flash of white/transparent then reappear. was broken multiple times (`3097872b`, `8706ae73`, `09a18070`).
 - [ ] **no blink on hide** — overlay disappears instantly. no momentary reappear after hiding.
@@ -43,7 +45,11 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **no space jump on hide** — hiding the overlay should NOT switch you to a different space.
 - [ ] **screen recording visibility setting** — toggle "show in screen recording" in settings. overlay should appear/disappear from screen recordings accordingly (`206107ba`).
 - [ ] **search panel focus** — open search, keyboard focus is in search input immediately (`2315a39c`, `1f2681e3`).
-- [ ] **ghost clicks after hide** — hide overlay via `order_out`. clicking where overlay was should NOT trigger overlay buttons (`32e1a962`).
+- [ ] **ghost clicks after hide** — hide overlay via `order_out`. clicking where overlay was should NOT trigger overlay buttons. also verify for notification-panel and shortcut-reminder (`32e1a962`, `32fed7c8c`).
+- [ ] **Live Text HTTP for VisionKit** — On macOS, verify LiveText uses HTTP for VisionKit to ensure stability and avoid TDZ crashes (`c332ec8a7`).
+- [ ] **Live Text missing files** — Verify LiveText treats missing files as transient, preventing permanent failures if a frame is temporarily unavailable (`19789657d`).
+- [ ] **Live Text guard rect refresh** — Verify LiveText guard rects refresh correctly when timeline frames load, preventing misaligned interaction areas (`91d3d3fde`).
+- [ ] **Live Text stability** — Verify LiveText analyze timer doesn't get cancelled prematurely (no `isSnapshotFrame` in deps) (`1685d89d2`).
 - [ ] **pinch-to-zoom works** — pinch gesture on trackpad zooms timeline without needing to click first (`d99444a7`, `523a629e`).
 - [ ] **shortcut reminder on all Spaces** — switch between 3+ Spaces (including fullscreen apps). reminder pill stays visible on every Space simultaneously.
 - [ ] **shortcut reminder on fullscreen app** — fullscreen Chrome/Safari, reminder shows at top center. not just leftmost Space.
@@ -260,6 +266,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **no concurrent reconciliation issues** — Verify that concurrent reconciliation processes do not cause issues during heavy load or sync operations. (`1d436bc3`)
 - [ ] **pipe_config blobs skipped in sync** — Verify that `pipe_config` blobs are correctly skipped during synchronization, preventing unnecessary data transfer and potential issues. (`08d5c53a`)
 - [ ] **Pi's native auto-compaction for pipe session history** — Verify that Pi's native auto-compaction feature for pipe session history works as expected, preventing indefinite growth of history and maintaining performance. (`8f49e2cf`)
+- [ ] **Data integrity (fsync)** — Verify that snapshots are `fsync`'d before DB commit to prevent data loss or corruption during power failure/crash (`2e63282b8`).
 - [ ] **UTF-8 panic with long multi-byte strings** — Introduce long strings with multi-byte UTF-8 characters (e.g., in window titles, chat input, search queries). Verify no panics occur when these strings are truncated, stored, or processed.
 
 - [ ] **slow DB insert warning** — check logs. "Slow DB batch insert" warnings should be <1s in normal operation. >3s indicates contention.
@@ -364,7 +371,9 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Hybrid OCR for canvas apps** — Verify that text from Google Docs and Figma (canvas-rendered) is captured using hybrid OCR. (`4d2b05990`, `f09f1e9aa`)
 - [ ] **Search modal scroll** — Verify that the search modal is scrollable on Windows/Linux embedded timeline and trackpad/wheel scrolling works. (`f108f1f0d`, `2a2bd9b5`, `5762c60bf`)
 - [ ] **Modal scrolling (general)** — Verify that all modals (e.g., settings, pipes, search) are scrollable and handle overflow correctly, especially on Windows and Linux. (`19789657d`)
-- [ ] **Search modal UX** — Verify that click interference from Live Text and wheel handlers is resolved, and app/date filter timezone bugs are fixed. (`0c883819e`, `b7123231`, `f09f1e9aa`)
+- [ ] **Search modal UX** — Verify that click interference from Live Text and wheel handlers is resolved, and app/date filter timezone bugs are fixed (`0c883819e`, `b7123231`, `f09f1e9aa`).
+- [ ] **Timeline filters scoped to viewport** — Verify timeline filters are scoped to the actual viewport instead of a fixed 800-frame window (`9277431e4`).
+- [ ] **Timeline refresh button** — Verify the refresh button has a `cursor-pointer` and hover state (`0cee47b62`).
 
 commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`
 
@@ -614,7 +623,9 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Tool call UI with progress rail** — Execute a pipe that uses tool calls. Verify the redesigned UI featuring a progress rail timeline and auto-collapse for friendly interaction. (`6c23e1399`, `d81ea65c1`)
 - [ ] **In-app Notification Panel** — Use the `/notify` API (e.g., via a pipe). Verify an in-app notification panel appears instead of a system notification. (`34937b2dc`)
 - [ ] **Pipe Suggestions Scheduler** — Verify that pipe suggestions are displayed according to the scheduled intervals. (`41c8b8085`)
-- [ ] **Pi agent & search timeouts** — Run a long-running search or Pi agent task. Verify it doesn't timeout prematurely at 60s (should allow up to 120s for search). (`f01213cf5`)
+- [ ] **Pipe suggestion notification** — Verify that pipe suggestion notifications reliably open the chat UI (`c742086e2`).
+- [ ] **Pipes tab order** — Verify that "My Pipes" is the first tab in the Pipes tab order (`75ea1a8d8`, `b25f05488`).
+- [ ] **Pipe publish payload** — Verify that the pipe publish payload is consistent and correctly checked for errors in the response body (`b25f05488`, `ad53dba08`).
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -641,7 +652,8 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 commits: `58460e02`, `853e0975`
 
 - [ ] **Admin team-shared filters** — Admins should be able to remove individual team-shared filters.
-- [ ] **Simplified team invite** — Verify the simplified team invite flow using a single web URL without requiring a passphrase. (`44a19b73f`, `b53b08b6e`)
+- [ ] **Simplified team invite** — Verify the simplified team invite flow using a single web URL without requiring a passphrase (`44a19b73f`, `b53b08b6e`). Also verify the app handles web invite URLs correctly (`b503bc6be`).
+- [ ] **Team state key handling** — Verify that the app shows a missing key state correctly and that `missingKey` is reset on `TeamState` reset (`b503bc6be`, `61ccd6f05`).
 - [ ] **Per-request AI cost tracking and admin spend endpoint** — Verify that per-request AI costs are tracked correctly and that the admin spend endpoint provides accurate usage data.
 
 commits: `58460e02`
@@ -688,7 +700,7 @@ commits: `fc830b43`
 
 ### 24. Data Management
 
-- [ ] **Delete local data confirmation** — Use the "Delete device local data" feature. Verify an `AlertDialog` appears instead of a standard `window.confirm`. (`b5db080d6`)
+- [ ] **Delete local data confirmation** — Use the "Delete device local data" feature. Verify an `AlertDialog` appears instead of a standard `window.confirm`. Also verify that `delete_device_local_data` is registered correctly in all command blocks (`b5db080d6`).
 
 ### 25. Feedback & Support
 
