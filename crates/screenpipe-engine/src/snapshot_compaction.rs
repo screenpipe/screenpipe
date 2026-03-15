@@ -132,7 +132,7 @@ async fn run_compaction_cycle(
 ) -> Result<usize> {
     let cutoff = Utc::now() - Duration::seconds(MIN_AGE_SECS);
 
-    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+    let rows_result: Result<Vec<(i64, String, String, String)>, sqlx::Error> = sqlx::query_as(
         r#"
         SELECT id, snapshot_path, device_name, timestamp
         FROM frames
@@ -144,7 +144,18 @@ async fn run_compaction_cycle(
     )
     .bind(cutoff)
     .fetch_all(&db.pool)
-    .await?;
+    .await;
+
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(e) => {
+            if e.to_string().contains("no such column") {
+                debug!("snapshot compaction: snapshot_path column not found (legacy schema), skipping compaction");
+                return Ok(0);
+            }
+            return Err(e.into());
+        }
+    };
 
     if rows.is_empty() {
         debug!("snapshot compaction: no eligible frames");
@@ -661,5 +672,44 @@ mod tests {
             POLL_INTERVAL_SECS
         };
         assert_eq!(delay, POLL_INTERVAL_SECS);
+    }
+
+    #[tokio::test]
+    async fn test_run_compaction_cycle_missing_column() {
+        use screenpipe_db::DatabaseManager;
+        
+        // In-memory DB with all migrations applied
+        let db = DatabaseManager::new("sqlite::memory:").await.unwrap();
+        
+        // Drop the triggers that prevent table recreation
+        sqlx::query("PRAGMA foreign_keys=OFF").execute(&db.pool).await.unwrap();
+        sqlx::query("DROP TRIGGER IF EXISTS frames_ai").execute(&db.pool).await.unwrap();
+        sqlx::query("DROP TRIGGER IF EXISTS frames_ad").execute(&db.pool).await.unwrap();
+        sqlx::query("DROP TRIGGER IF EXISTS frames_au").execute(&db.pool).await.unwrap();
+        
+        // Recreate the frames table WITHOUT snapshot_path
+        sqlx::query("DROP TABLE frames").execute(&db.pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_chunk_id INTEGER,
+                offset_index INTEGER,
+                timestamp DATETIME NOT NULL,
+                name TEXT,
+                device_name TEXT NOT NULL,
+                browser_url TEXT,
+                full_text TEXT,
+                accessibility_text TEXT,
+                accessibility_text_length INTEGER
+            )"
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let result = run_compaction_cycle(&db, "high", 100, &None).await;
+        // Should succeed and return 0 compacted frames (graceful skip)
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
     }
 }
