@@ -1248,7 +1248,10 @@ impl PipeManager {
             if cb_error_type.as_deref() == Some("context_overflow") {
                 let pipe_dir = pipes_dir_for_log.join(&pipe_name);
                 if let Err(e) = delete_pi_sessions(&pipe_dir) {
-                    warn!("failed to clear Pi session after context overflow for '{}': {}", pipe_name, e);
+                    warn!(
+                        "failed to clear Pi session after context overflow for '{}': {}",
+                        pipe_name, e
+                    );
                 } else {
                     info!("cleared Pi session for '{}' after context overflow — next run starts fresh", pipe_name);
                 }

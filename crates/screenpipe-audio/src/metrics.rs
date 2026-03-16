@@ -186,7 +186,8 @@ impl AudioPipelineMetrics {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        self.last_transcription_attempt_ts.store(now, Ordering::Relaxed);
+        self.last_transcription_attempt_ts
+            .store(now, Ordering::Relaxed);
     }
 
     pub fn record_duplicate_blocked(&self) {
@@ -310,7 +311,9 @@ impl AudioPipelineMetrics {
             audio_level_rms: self.audio_level_rms_x10000.load(Ordering::Relaxed) as f64 / 10000.0,
             last_db_write_ts: self.last_db_write_ts.load(Ordering::Relaxed),
             db_write_failures: self.db_write_failures.load(Ordering::Relaxed),
-            last_transcription_attempt_ts: self.last_transcription_attempt_ts.load(Ordering::Relaxed),
+            last_transcription_attempt_ts: self
+                .last_transcription_attempt_ts
+                .load(Ordering::Relaxed),
         }
     }
 }

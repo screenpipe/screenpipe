@@ -152,7 +152,7 @@ impl WhatsAppGateway {
         let mut child = Command::new(&node_path)
             .arg(script_path.to_str().unwrap())
             .env("WHATSAPP_SESSION_DIR", session_dir.to_str().unwrap())
-            .stdin(Stdio::piped())   // keep stdin open so gateway doesn't self-terminate
+            .stdin(Stdio::piped()) // keep stdin open so gateway doesn't self-terminate
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -226,7 +226,9 @@ impl WhatsAppGateway {
             let _keep_alive = _stdin;
             // Block forever — stdin handle stays open, keeping the gateway alive.
             // When stop_process() kills the child, this task becomes inert.
-            loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; }
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
         });
 
         // Log stderr
@@ -288,7 +290,9 @@ impl WhatsAppGateway {
 
                 // Process is dead — should we restart?
                 if !auto_restart.load(Ordering::SeqCst) {
-                    info!("whatsapp: gateway exited and auto-restart is disabled, watchdog stopping");
+                    info!(
+                        "whatsapp: gateway exited and auto-restart is disabled, watchdog stopping"
+                    );
                     *status.lock().await = WhatsAppStatus::Disconnected;
                     *http_port.lock().await = None;
                     return;
@@ -368,8 +372,7 @@ impl WhatsAppGateway {
                                     }
                                     Ok(GatewayEvent::Connected { name, phone }) => {
                                         info!("whatsapp: connected as {} ({})", name, phone);
-                                        *s.lock().await =
-                                            WhatsAppStatus::Connected { name, phone };
+                                        *s.lock().await = WhatsAppStatus::Connected { name, phone };
                                     }
                                     Ok(GatewayEvent::Disconnected { reason }) => {
                                         warn!("whatsapp: disconnected — {}", reason);
@@ -401,8 +404,10 @@ impl WhatsAppGateway {
                         tokio::spawn(async move {
                             let _keep = stdin_handle;
                             // Block forever — stdin handle stays open, keeping the gateway alive.
-            // When stop_process() kills the child, this task becomes inert.
-            loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; }
+                            // When stop_process() kills the child, this task becomes inert.
+                            loop {
+                                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                            }
                         });
 
                         // Log stderr

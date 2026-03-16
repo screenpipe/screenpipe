@@ -242,7 +242,9 @@ pub async fn start_device_monitor(
                                                         "[DEVICE_RECOVERY] initial sync: stopping non-default output: {}",
                                                         device_name
                                                     );
-                                                    let _ = audio_manager.stop_device(device_name).await;
+                                                    let _ = audio_manager
+                                                        .stop_device(device_name)
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -273,7 +275,8 @@ pub async fn start_device_monitor(
                                             "[DEVICE_RECOVERY] initial sync: started communications output: {}",
                                             comm_name
                                         );
-                                        default_tracker.last_communications_output = Some(comm_name);
+                                        default_tracker.last_communications_output =
+                                            Some(comm_name);
                                     }
                                     Err(e) => {
                                         warn!(
@@ -390,7 +393,9 @@ pub async fn start_device_monitor(
                     #[cfg(target_os = "windows")]
                     {
                         let old_comm = default_tracker.last_communications_output.clone();
-                        if let Some(new_comm_output) = default_tracker.check_communications_output_changed() {
+                        if let Some(new_comm_output) =
+                            default_tracker.check_communications_output_changed()
+                        {
                             info!(
                                 "[DEVICE_RECOVERY] communications output changed to: {}",
                                 new_comm_output
@@ -398,7 +403,8 @@ pub async fn start_device_monitor(
 
                             // Stop the previous communications device if it's not the multimedia default
                             if let Some(ref old_name) = old_comm {
-                                if default_tracker.last_output.as_deref() != Some(old_name.as_str()) {
+                                if default_tracker.last_output.as_deref() != Some(old_name.as_str())
+                                {
                                     let _ = audio_manager.stop_device(old_name).await;
                                 }
                             }

@@ -133,7 +133,9 @@ pub async fn process_transcription_result(
                     name: result.input.device.name.clone(),
                     device_type: match result.input.device.device_type {
                         crate::core::device::DeviceType::Input => screenpipe_db::DeviceType::Input,
-                        crate::core::device::DeviceType::Output => screenpipe_db::DeviceType::Output,
+                        crate::core::device::DeviceType::Output => {
+                            screenpipe_db::DeviceType::Output
+                        }
                     },
                 },
                 Some(speaker.id),
@@ -157,7 +159,8 @@ pub async fn process_transcription_result(
                         "Failed to insert audio chunk+transcription for device {} (attempt {}/3): {}, retrying...",
                         result.input.device, retry + 1, e
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * (retry as u64 + 1))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * (retry as u64 + 1)))
+                        .await;
                 } else {
                     error!(
                         "Failed to insert audio chunk+transcription for device {} after 3 retries: {}",
@@ -182,7 +185,11 @@ pub async fn get_or_create_speaker_from_embedding(
         debug!(
             "matched speaker id={} name={:?}",
             speaker.id,
-            if speaker.name.is_empty() { "unnamed" } else { &speaker.name }
+            if speaker.name.is_empty() {
+                "unnamed"
+            } else {
+                &speaker.name
+            }
         );
         // Improve cluster over time: update centroid and store diverse embeddings
         if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {

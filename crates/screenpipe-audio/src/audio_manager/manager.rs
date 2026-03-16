@@ -533,14 +533,21 @@ impl AudioManager {
                         let mut inserted = false;
                         for retry in 0..3u32 {
                             match db.insert_audio_chunk(&path, capture_dt).await {
-                                Ok(_) => { inserted = true; break; }
+                                Ok(_) => {
+                                    inserted = true;
+                                    break;
+                                }
                                 Err(e) => {
                                     warn!(
                                         "failed to insert audio chunk into db (attempt {}/3): {:?}",
-                                        retry + 1, e
+                                        retry + 1,
+                                        e
                                     );
                                     if retry < 2 {
-                                        tokio::time::sleep(std::time::Duration::from_millis(500 * (retry as u64 + 1))).await;
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            500 * (retry as u64 + 1),
+                                        ))
+                                        .await;
                                     }
                                 }
                             }

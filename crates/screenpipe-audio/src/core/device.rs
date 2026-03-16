@@ -234,10 +234,7 @@ pub async fn get_cpal_device_and_config(
                         result
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "ScreenCaptureKit unavailable for System Audio: {}",
-                            e
-                        );
+                        tracing::warn!("ScreenCaptureKit unavailable for System Audio: {}", e);
                         None
                     }
                 };
@@ -293,7 +290,9 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
-        best_config.clone().with_sample_rate(best_config.max_sample_rate())
+        best_config
+            .clone()
+            .with_sample_rate(best_config.max_sample_rate())
     } else {
         let configs: Vec<_> = cpal_audio_device.supported_input_configs()?.collect();
         let best_config = configs
@@ -306,7 +305,9 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported input configurations found"))?;
 
-        best_config.clone().with_sample_rate(best_config.max_sample_rate())
+        best_config
+            .clone()
+            .with_sample_rate(best_config.max_sample_rate())
     };
 
     Ok((cpal_audio_device, config))
@@ -607,14 +608,13 @@ mod windows_com_audio {
     /// Returns the friendly name if it differs from the eConsole default,
     /// or None if they are the same device.
     pub unsafe fn get_communications_output_name() -> Result<Option<String>> {
+        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
         use windows::Win32::Media::Audio::{
             eCommunications, eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
         };
         use windows::Win32::System::Com::{
-            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
-            STGM,
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM,
         };
-        use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 
         // COM init (idempotent per thread — returns S_FALSE if already initialized)
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);

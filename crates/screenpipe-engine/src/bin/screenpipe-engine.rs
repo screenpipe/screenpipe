@@ -1011,9 +1011,9 @@ async fn main() -> anyhow::Result<()> {
         .map(|detector| start_meeting_watcher(detector.clone()));
 
     // Persist meeting state transitions to DB (smart mode only)
-    let _meeting_persister_handle = meeting_detector
-        .as_ref()
-        .map(|detector| start_meeting_persister(detector.clone(), db.clone(), manual_meeting.clone()));
+    let _meeting_persister_handle = meeting_detector.as_ref().map(|detector| {
+        start_meeting_persister(detector.clone(), db.clone(), manual_meeting.clone())
+    });
 
     // Bridge calendar events from event bus into meeting detector
     let _calendar_bridge_handle = meeting_detector

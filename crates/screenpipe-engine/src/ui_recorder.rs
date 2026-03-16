@@ -366,7 +366,6 @@ pub async fn start_ui_recording(
     })
 }
 
-
 // Dead code below removed: TreeWalkerMetrics, run_tree_walker, constants.
 // Tree walker is disabled — paired_capture.rs handles accessibility capture.
 // Keeping this comment as a tombstone for git blame.

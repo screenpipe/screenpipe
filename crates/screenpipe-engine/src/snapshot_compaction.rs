@@ -277,7 +277,10 @@ async fn compact_chunk(
     for (frame_id, snapshot_path, _) in frames {
         let jpeg_path = Path::new(snapshot_path);
         if !jpeg_path.exists() {
-            debug!("snapshot file missing, clearing DB pointer: {}", snapshot_path);
+            debug!(
+                "snapshot file missing, clearing DB pointer: {}",
+                snapshot_path
+            );
             let _ = sqlx::query("UPDATE frames SET snapshot_path = NULL WHERE id = ?")
                 .bind(frame_id)
                 .execute(&db.pool)

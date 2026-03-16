@@ -138,8 +138,7 @@ pub async fn handle_pipe_command(command: &PipeCommand) -> anyhow::Result<()> {
 
 /// Get the API base URL from env or default.
 fn api_base_url() -> String {
-    std::env::var("SCREENPIPE_API_BASE_URL")
-        .unwrap_or_else(|_| "https://screenpi.pe".to_string())
+    std::env::var("SCREENPIPE_API_BASE_URL").unwrap_or_else(|_| "https://screenpi.pe".to_string())
 }
 
 /// Get the auth token from SCREENPIPE_API_KEY env var or ~/.screenpipe/auth.json.
@@ -162,10 +161,7 @@ fn get_auth_token() -> Option<String> {
 }
 
 /// Publish a local pipe to the registry.
-async fn handle_publish_command(
-    name: &str,
-    pipes_dir: &std::path::Path,
-) -> anyhow::Result<()> {
+async fn handle_publish_command(name: &str, pipes_dir: &std::path::Path) -> anyhow::Result<()> {
     let pipe_dir = pipes_dir.join(name);
     let pipe_md_path = pipe_dir.join("pipe.md");
 
@@ -243,7 +239,14 @@ async fn handle_publish_command(
 }
 
 /// Parse YAML frontmatter from pipe.md content.
-fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+fn parse_frontmatter(
+    content: &str,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
         return (None, None, None, None);
@@ -305,10 +308,7 @@ async fn handle_search_command(query: &str) -> anyhow::Result<()> {
             println!("{}", "-".repeat(95));
             for pipe in pipes {
                 let slug = pipe.get("slug").and_then(|v| v.as_str()).unwrap_or("?");
-                let category = pipe
-                    .get("category")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
+                let category = pipe.get("category").and_then(|v| v.as_str()).unwrap_or("-");
                 let installs = pipe
                     .get("install_count")
                     .or_else(|| pipe.get("installs"))
@@ -361,10 +361,7 @@ async fn handle_info_command(slug: &str) -> anyhow::Result<()> {
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
-    let category = pipe
-        .get("category")
-        .and_then(|v| v.as_str())
-        .unwrap_or("-");
+    let category = pipe.get("category").and_then(|v| v.as_str()).unwrap_or("-");
     let installs = pipe
         .get("install_count")
         .or_else(|| pipe.get("installs"))
@@ -374,10 +371,7 @@ async fn handle_info_command(slug: &str) -> anyhow::Result<()> {
         .get("average_rating")
         .or_else(|| pipe.get("rating"))
         .and_then(|v| v.as_f64());
-    let author = pipe
-        .get("author")
-        .and_then(|v| v.as_str())
-        .unwrap_or("-");
+    let author = pipe.get("author").and_then(|v| v.as_str()).unwrap_or("-");
 
     println!("{}", title);
     println!("{}", "=".repeat(title.len()));
@@ -437,10 +431,7 @@ async fn handle_status_command(slug: &str) -> anyhow::Result<()> {
     let pipe = body.get("data").unwrap_or(&body);
 
     let title = pipe.get("title").and_then(|v| v.as_str()).unwrap_or(slug);
-    let version = pipe
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("-");
+    let version = pipe.get("version").and_then(|v| v.as_str()).unwrap_or("-");
     let review_status = pipe
         .get("review_status")
         .and_then(|v| v.as_str())

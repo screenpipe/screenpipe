@@ -21,6 +21,8 @@ pub mod monitor;
 pub mod profile;
 
 // Re-export the public API at the module level
-pub use manager::{start_power_manager, start_power_manager_with_pref, PowerManagerHandle, PowerStatus};
+pub use manager::{
+    start_power_manager, start_power_manager_with_pref, PowerManagerHandle, PowerStatus,
+};
 pub use monitor::{PowerState, ThermalState};
 pub use profile::{PowerMode, PowerProfile, ProfileName};

@@ -6,9 +6,9 @@ use crate::transcription::VocabularyEntry;
 use anyhow::Result;
 use mp3lame_encoder::{Builder, FlushNoGap, MonoPcm};
 use reqwest::{Client, Response};
-use std::mem::MaybeUninit;
 use screenpipe_core::Language;
 use serde_json::Value;
+use std::mem::MaybeUninit;
 use tracing::{debug, error, info};
 
 use crate::transcription::deepgram::{CUSTOM_DEEPGRAM_API_TOKEN, DEEPGRAM_API_URL};
@@ -106,9 +106,7 @@ fn create_mp3_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'s
 
     // Flush remaining frames
     let mut flush_buf: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); 7200];
-    let flush_size = encoder
-        .flush::<FlushNoGap>(&mut flush_buf)
-        .unwrap_or(0);
+    let flush_size = encoder.flush::<FlushNoGap>(&mut flush_buf).unwrap_or(0);
     let mut result = mp3_buf;
     if flush_size > 0 {
         let flushed: Vec<u8> = flush_buf[..flush_size]
