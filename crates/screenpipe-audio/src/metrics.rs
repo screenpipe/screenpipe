@@ -71,6 +71,10 @@ pub struct AudioPipelineMetrics {
     pub started_at: Instant,
     /// Unix timestamp (secs) of most recent DB insert — used by health check to avoid DB queries
     pub last_db_write_ts: AtomicU64,
+    /// Unix timestamp (secs) of most recent transcription attempt (heartbeat for stall detection).
+    /// Advances even when VAD filters all audio as silence, so the health check can distinguish
+    /// "nothing to write" from "pipeline stalled".
+    pub last_transcription_attempt_ts: AtomicU64,
 }
 
 impl AudioPipelineMetrics {
@@ -99,6 +103,7 @@ impl AudioPipelineMetrics {
             per_device_rms_x10000: RwLock::new(HashMap::new()),
             started_at: Instant::now(),
             last_db_write_ts: AtomicU64::new(0),
+            last_transcription_attempt_ts: AtomicU64::new(0),
         }
     }
 
@@ -164,6 +169,18 @@ impl AudioPipelineMetrics {
             .unwrap()
             .as_secs();
         self.last_db_write_ts.store(now, Ordering::Relaxed);
+    }
+
+    /// Record that a transcription result was received and attempted to be processed.
+    /// This serves as a heartbeat for stall detection — even if VAD filters all audio
+    /// and nothing is written to DB, this timestamp advances.
+    pub fn record_transcription_attempt(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.last_transcription_attempt_ts
+            .store(now, Ordering::Relaxed);
     }
 
     pub fn record_duplicate_blocked(&self) {
@@ -286,6 +303,9 @@ impl AudioPipelineMetrics {
             },
             audio_level_rms: self.audio_level_rms_x10000.load(Ordering::Relaxed) as f64 / 10000.0,
             last_db_write_ts: self.last_db_write_ts.load(Ordering::Relaxed),
+            last_transcription_attempt_ts: self
+                .last_transcription_attempt_ts
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -341,4 +361,6 @@ pub struct AudioMetricsSnapshot {
     pub audio_level_rms: f64,
     /// Unix timestamp (secs) of most recent DB insert (0 = none yet)
     pub last_db_write_ts: u64,
+    /// Unix timestamp (secs) of most recent transcription attempt (heartbeat)
+    pub last_transcription_attempt_ts: u64,
 }

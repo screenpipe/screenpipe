@@ -214,8 +214,8 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         && vision_snap.last_capture_attempt_ts > 0
         && vision_snap.uptime_secs > 120.0
     {
-        let capture_fresh = now_ts.saturating_sub(vision_snap.last_capture_attempt_ts)
-            < threshold_secs;
+        let capture_fresh =
+            now_ts.saturating_sub(vision_snap.last_capture_attempt_ts) < threshold_secs;
         // Require at least one successful DB write before flagging a stall.
         // last_db_write_ts == 0 means "never written yet" (pipeline warming up),
         // not "writes stopped" — same fix as audio side.
@@ -237,16 +237,22 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     let audio_db_write_stalled = if !state.audio_disabled
         && global_audio_active
         && audio_snap.uptime_secs > 120.0
-        && audio_snap.last_db_write_ts > 0
     {
-        let db_stale = now_ts.saturating_sub(audio_snap.last_db_write_ts) > threshold_secs;
-        if db_stale {
+        // Only flag a stall when the transcription consumer is actively processing
+        // (heartbeat recent) but DB writes have stopped. This prevents false positives
+        // during silence when VAD filters everything and nothing is written to DB.
+        let transcription_fresh = audio_snap.last_transcription_attempt_ts > 0
+            && now_ts.saturating_sub(audio_snap.last_transcription_attempt_ts) < threshold_secs;
+        let db_stale = audio_snap.last_db_write_ts == 0
+            || now_ts.saturating_sub(audio_snap.last_db_write_ts) > threshold_secs;
+        let stalled = transcription_fresh && db_stale;
+        if stalled {
             warn!(
-                "health_check: audio DB writes stalled — devices active but last DB write {}s ago (pool exhaustion likely)",
-                now_ts.saturating_sub(audio_snap.last_db_write_ts),
+                "health_check: audio DB writes stalled — transcription active but last DB write {}s ago (pool exhaustion/lock contention likely)",
+                if audio_snap.last_db_write_ts > 0 { now_ts.saturating_sub(audio_snap.last_db_write_ts) } else { 0 },
             );
         }
-        db_stale
+        stalled
     } else {
         false
     };
@@ -266,9 +272,8 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     // Cross-check: if audio is enabled, uptime > 2 min, but zero chunks were ever
     // sent, the audio pipeline never started capturing (e.g. device retry loop).
     // The per-device timestamp fallback would mask this as "ok", so override here.
-    let audio_never_captured = !state.audio_disabled
-        && audio_snap.uptime_secs > 120.0
-        && audio_snap.chunks_sent == 0;
+    let audio_never_captured =
+        !state.audio_disabled && audio_snap.uptime_secs > 120.0 && audio_snap.chunks_sent == 0;
 
     let audio_status = if state.audio_disabled {
         "disabled".to_string()
