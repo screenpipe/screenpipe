@@ -225,8 +225,8 @@ mod tests {
         }
 
         let params = feed.get_capture_params();
-        assert_eq!(params.interval, Duration::from_millis(100));
-        assert_eq!(params.skip_threshold, 0.005);
+        assert_eq!(params.interval, Duration::from_millis(200)); // 5 FPS during burst
+        assert_eq!(params.skip_threshold, 0.02);
     }
 
     #[test]
