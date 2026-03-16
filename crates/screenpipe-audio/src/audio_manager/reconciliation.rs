@@ -207,7 +207,8 @@ pub async fn reconcile_untranscribed(
             if let Err(e) = db.delete_audio_chunks_batch(&orphan_chunk_ids).await {
                 warn!(
                     "reconciliation: failed to batch-delete {} orphan chunks: {}",
-                    orphan_chunk_ids.len(), e
+                    orphan_chunk_ids.len(),
+                    e
                 );
                 consecutive_db_errors += 1;
             } else {
@@ -282,7 +283,8 @@ pub async fn reconcile_untranscribed(
             if let Err(e) = db.delete_audio_chunks_batch(&old_chunk_ids).await {
                 warn!(
                     "reconciliation: failed to batch-delete {} silent chunks: {}",
-                    old_chunks.len(), e
+                    old_chunks.len(),
+                    e
                 );
                 consecutive_db_errors += 1;
             } else {
@@ -502,7 +504,8 @@ async fn retry_pending_transcriptions(
         // (e.g. by archive cleanup), the INSERT will always fail with a FK
         // constraint violation — remove the orphaned pending file instead of
         // retrying forever.
-        let chunk_exists = db.audio_chunk_exists(pending.audio_chunk_id)
+        let chunk_exists = db
+            .audio_chunk_exists(pending.audio_chunk_id)
             .await
             .unwrap_or(false);
 

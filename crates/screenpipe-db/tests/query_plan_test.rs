@@ -203,13 +203,18 @@ mod query_plan_tests {
     #[tokio::test]
     async fn test_search_accessibility_with_time_range_uses_index() {
         let db = setup_test_db().await;
+        seed_data(&db, 50).await;
 
+        // Post-consolidation: accessibility search queries frames.full_text
         let plan = explain(
             &db,
-            r#"SELECT id, text_content, app_name, window_name, timestamp
-            FROM accessibility
-            WHERE timestamp >= '2020-01-01' AND timestamp <= '2030-01-01'
-            ORDER BY timestamp DESC
+            r#"SELECT f.id, COALESCE(f.full_text, '') as text_output, f.timestamp,
+                      COALESCE(f.app_name, '') as app_name,
+                      COALESCE(f.window_name, '') as window_name
+            FROM frames f
+            WHERE f.timestamp >= '2020-01-01' AND f.timestamp <= '2030-01-01'
+              AND f.full_text IS NOT NULL AND f.full_text != ''
+            ORDER BY f.timestamp DESC
             LIMIT 20 OFFSET 0"#,
         )
         .await;

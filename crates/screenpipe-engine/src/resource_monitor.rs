@@ -67,7 +67,13 @@ fn detect_gpus() -> Vec<String> {
     // Cap to 8 GPUs (more than enough) and truncate long names
     gpus.into_iter()
         .take(8)
-        .map(|s| if s.len() > 200 { s[..200].to_string() } else { s })
+        .map(|s| {
+            if s.len() > 200 {
+                s[..200].to_string()
+            } else {
+                s
+            }
+        })
         .collect()
 }
 
@@ -210,11 +216,9 @@ fn detect_gpus_windows() -> Vec<String> {
     }
 
     // Fallback to wmic (older Windows)
-    if let Some(output) = run_cmd_with_timeout(
-        "wmic",
-        &["path", "win32_VideoController", "get", "name"],
-        5,
-    ) {
+    if let Some(output) =
+        run_cmd_with_timeout("wmic", &["path", "win32_VideoController", "get", "name"], 5)
+    {
         return output
             .lines()
             .skip(1) // skip header "Name"

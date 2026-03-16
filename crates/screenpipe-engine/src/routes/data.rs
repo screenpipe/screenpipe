@@ -157,7 +157,10 @@ pub(crate) async fn delete_device_data_handler(
 
     info!(
         "deleted device data for {}: frames={}, ocr={}, audio={}",
-        payload.machine_id, result.frames_deleted, result.ocr_deleted, result.audio_transcriptions_deleted
+        payload.machine_id,
+        result.frames_deleted,
+        result.ocr_deleted,
+        result.audio_transcriptions_deleted
     );
 
     Ok(JsonResponse(DeleteTimeRangeResponse {

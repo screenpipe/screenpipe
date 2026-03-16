@@ -249,16 +249,12 @@ pub(crate) async fn delete_memory_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    state
-        .db
-        .delete_memory(id)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": e.to_string()})),
-            )
-        })?;
+    state.db.delete_memory(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": e.to_string()})),
+        )
+    })?;
 
     Ok(JsonResponse(json!({"ok": true})))
 }

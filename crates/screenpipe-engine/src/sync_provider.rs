@@ -344,16 +344,18 @@ impl ScreenpipeSyncProvider {
 
         let accessibility_records: Vec<AccessibilityRecord> = records
             .into_iter()
-            .map(|(_, timestamp, app_name, window_name, text_content, browser_url)| {
-                AccessibilityRecord {
-                    sync_id: Uuid::new_v4().to_string(),
-                    timestamp,
-                    app_name,
-                    window_name,
-                    text_content,
-                    browser_url,
-                }
-            })
+            .map(
+                |(_, timestamp, app_name, window_name, text_content, browser_url)| {
+                    AccessibilityRecord {
+                        sync_id: Uuid::new_v4().to_string(),
+                        timestamp,
+                        app_name,
+                        window_name,
+                        text_content,
+                        browser_url,
+                    }
+                },
+            )
             .collect();
 
         let chunk = SyncChunk {
@@ -671,14 +673,13 @@ impl ScreenpipeSyncProvider {
         let mut imported_accessibility = 0;
         for acc in &chunk.accessibility_records {
             // Check if already imported via sync_id on frames
-            let exists: Option<(i64,)> =
-                sqlx::query_as("SELECT 1 FROM frames WHERE sync_id = ?")
-                    .bind(&acc.sync_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| {
-                        SyncError::Database(format!("failed to check accessibility frame: {}", e))
-                    })?;
+            let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM frames WHERE sync_id = ?")
+                .bind(&acc.sync_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| {
+                    SyncError::Database(format!("failed to check accessibility frame: {}", e))
+                })?;
 
             if exists.is_some() {
                 skipped += 1;

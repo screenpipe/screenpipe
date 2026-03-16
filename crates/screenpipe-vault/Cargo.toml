@@ -36,6 +36,9 @@ keyring = { version = "3", optional = true }
 [dev-dependencies]
 tempfile = "3"
 
+[package.metadata.cargo-machete]
+ignored = ["keyring"]  # optional dep behind `keychain` feature flag — intentionally unused in default build
+
 [features]
 default = []
 keychain = ["dep:keyring"]

@@ -76,6 +76,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -154,6 +156,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -177,6 +181,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -189,6 +195,8 @@ mod tests {
                 ContentType::OCR,
                 2,
                 4,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -282,6 +290,8 @@ mod tests {
                 ContentType::All,
                 2,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -393,6 +403,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -412,6 +424,8 @@ mod tests {
                 ContentType::All,
                 3,
                 3,
+                None,
+                None,
                 None,
                 None,
                 None,

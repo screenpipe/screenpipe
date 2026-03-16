@@ -78,6 +78,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -128,6 +130,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -139,6 +143,8 @@ mod tests {
                 ContentType::Audio,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -207,6 +213,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -218,6 +226,8 @@ mod tests {
                 ContentType::Audio,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -280,9 +290,9 @@ mod tests {
         .await
         .unwrap();
 
-        // Verify that frames_fts was populated
-        let fts_data: Option<(i64, String, String, String, bool)> = sqlx::query_as(
-            "SELECT rowid, browser_url, app_name, window_name, focused FROM frames_fts WHERE rowid = ?",
+        // Verify that frames_fts was populated (focused column was removed in consolidation migration)
+        let fts_data: Option<(i64, String, String, String)> = sqlx::query_as(
+            "SELECT id, browser_url, app_name, window_name FROM frames_fts WHERE id = ?",
         )
         .bind(frame_id)
         .fetch_optional(&db.pool)
@@ -309,6 +319,7 @@ mod tests {
         .await
         .unwrap();
 
+        // With app_name filter: search_ocr + search_accessibility both find the frame
         let one_result = db
             .search(
                 "Hello",
@@ -326,10 +337,13 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
-        assert_eq!(one_result.len(), 1);
+        // Post-consolidation: 1 OCR + 1 UI (same frame)
+        assert_eq!(one_result.len(), 2);
 
         let results = db
             .search(
@@ -348,10 +362,13 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
-        assert_eq!(results.len(), 2);
+        // Post-consolidation: 1 OCR + 1 Audio + 1 UI = 3
+        assert_eq!(results.len(), 3);
 
         let ocr_count = results
             .iter()
@@ -361,9 +378,14 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, SearchResult::Audio(_)))
             .count();
+        let ui_count = results
+            .iter()
+            .filter(|r| matches!(r, SearchResult::UI(_)))
+            .count();
 
         assert_eq!(ocr_count, 1);
         assert_eq!(audio_count, 1);
+        assert_eq!(ui_count, 1);
     }
 
     #[tokio::test]
@@ -468,13 +490,12 @@ mod tests {
                 .unwrap();
         println!("Frames FTS data (full_text): {:?}", ocr_fts_data);
 
-        // check if frames_fts is properly indexed
-        let frame_fts_data: Vec<(i64, String, String, String, bool)> = sqlx::query_as(
-            "SELECT id, browser_url, app_name, window_name, focused FROM frames_fts",
-        )
-        .fetch_all(&db.pool)
-        .await
-        .unwrap();
+        // check if frames_fts is properly indexed (focused column removed in consolidation migration)
+        let frame_fts_data: Vec<(i64, String, String, String)> =
+            sqlx::query_as("SELECT id, browser_url, app_name, window_name FROM frames_fts")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
         println!("Frames FTS data: {:?}", frame_fts_data);
 
         let insert_result = db
@@ -538,6 +559,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -563,11 +586,15 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
         println!("Full time range results: {:?}", results);
-        assert_eq!(results.len(), 4, "Expected 4 results for full time range");
+        // Post-consolidation: frames appear as both OCR and UI results.
+        // 2 OCR + 2 Audio + 2 UI = 6.
+        assert_eq!(results.len(), 6, "Expected 6 results for full time range");
 
         // Test search with limited time range
         let results = db
@@ -587,14 +614,17 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
         println!("Limited time range results: {:?}", results);
+        // Post-consolidation: 1 OCR + 1 Audio + 1 UI = 3.
         assert_eq!(
             results.len(),
-            2,
-            "Expected 2 results for limited time range"
+            3,
+            "Expected 3 results for limited time range"
         );
 
         // Test search with OCR content type and time range
@@ -606,6 +636,8 @@ mod tests {
                 0,
                 Some(start_time),
                 Some(end_time),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -629,6 +661,8 @@ mod tests {
                 0,
                 Some(start_time),
                 Some(end_time),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -765,15 +799,18 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
 
         println!("Limited time range results: {:?}", results);
+        // Post-consolidation: 1 OCR + 1 Audio + 1 UI = 3.
         assert_eq!(
             results.len(),
-            2,
-            "Expected 2 results for limited time range"
+            3,
+            "Expected 3 results for limited time range"
         );
 
         // Test count with Audio content type and time range
@@ -1249,6 +1286,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1274,6 +1313,8 @@ mod tests {
                 None,
                 None,
                 Some("non_existent"),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1305,14 +1346,19 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
 
+        // Post-consolidation: search() returns frames as both OCR and UI results
+        // (search_ocr and search_accessibility both query frames.full_text).
+        // 2 frames × 2 result types = 4. count_search_results already deduplicates.
         assert_eq!(
             results.len(),
-            2,
-            "Should find both frames in All content search"
+            4,
+            "Should find both frames in All content search (OCR + UI)"
         );
 
         // Count results with frame_name filter
@@ -1387,24 +1433,9 @@ mod tests {
         .await
         .unwrap();
 
-        // Insert accessibility data (replaces legacy ui_monitoring table)
-        sqlx::query(
-            r#"
-            INSERT INTO accessibility (
-                text_content,
-                timestamp,
-                app_name,
-                window_name
-            ) VALUES (?, ?, ?, ?)
-            "#,
-        )
-        .bind("Hello from UI")
-        .bind(Utc::now())
-        .bind("test_app")
-        .bind("test_window")
-        .execute(&db.pool)
-        .await
-        .unwrap();
+        // Insert accessibility data as frame with full_text (accessibility table was dropped)
+        insert_test_accessibility_frame(&db, "test_app", "test_window", "Hello from UI", None)
+            .await;
 
         // Test count with All content types
         let count = db
@@ -1518,30 +1549,62 @@ mod tests {
         }
     }
 
-    /// No-op: accessibility and accessibility_fts tables were dropped by migration.
-    /// Kept as a stub so existing call sites don't need to be removed.
-    async fn index_accessibility_fts(_db: &DatabaseManager) {
-        // Tables dropped — nothing to index.
+    /// Helper: insert a frame with full_text populated (simulates accessibility data).
+    /// After the consolidation migration, accessibility data lives in frames.full_text
+    /// and is indexed via frames_fts triggers. The old accessibility table was dropped.
+    async fn insert_test_accessibility_frame(
+        db: &DatabaseManager,
+        app_name: &str,
+        window_name: &str,
+        text: &str,
+        browser_url: Option<&str>,
+    ) -> i64 {
+        // Ensure a video chunk exists (required by insert_frame)
+        let _ = db
+            .insert_video_chunk("test_a11y_video.mp4", "test_device")
+            .await
+            .unwrap();
+
+        let frame_id = db
+            .insert_frame(
+                "test_device",
+                None,
+                browser_url,
+                Some(app_name),
+                Some(window_name),
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Set full_text on the frame — this triggers frames_fts INSERT
+        sqlx::query("UPDATE frames SET full_text = ?1 WHERE id = ?2")
+            .bind(text)
+            .bind(frame_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        frame_id
     }
 
     // =========================================================================
-    // Accessibility table tests
+    // Accessibility search tests (post-consolidation: data in frames.full_text)
     // =========================================================================
 
     #[tokio::test]
     async fn test_insert_and_search_accessibility() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text(
+        insert_test_accessibility_frame(
+            &db,
             "Safari",
             "Wikipedia",
             "Hello from accessibility tree",
             Some("https://en.wikipedia.org"),
         )
-        .await
-        .unwrap();
-
-        index_accessibility_fts(&db).await;
+        .await;
 
         let results = db
             .search(
@@ -1549,6 +1612,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1577,14 +1642,8 @@ mod tests {
     async fn test_search_accessibility_app_filter() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("Chrome", "Google", "chrome text", None)
-            .await
-            .unwrap();
-        db.insert_accessibility_text("Firefox", "MDN", "firefox text", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        insert_test_accessibility_frame(&db, "Chrome", "Google", "chrome text", None).await;
+        insert_test_accessibility_frame(&db, "Firefox", "MDN", "firefox text", None).await;
 
         let results = db
             .search_accessibility("", Some("Chrome"), None, None, None, 100, 0)
@@ -1598,14 +1657,8 @@ mod tests {
     async fn test_search_accessibility_window_filter() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("Chrome", "Gmail", "gmail text", None)
-            .await
-            .unwrap();
-        db.insert_accessibility_text("Chrome", "GitHub", "github text", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        insert_test_accessibility_frame(&db, "Chrome", "Gmail", "gmail text", None).await;
+        insert_test_accessibility_frame(&db, "Chrome", "GitHub", "github text", None).await;
 
         let results = db
             .search_accessibility("", None, Some("GitHub"), None, None, 100, 0)
@@ -1620,20 +1673,15 @@ mod tests {
         let db = setup_test_db().await;
 
         let before = Utc::now();
-        // Sleep >1s because accessibility.timestamp uses CURRENT_TIMESTAMP (second precision)
         tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
-        db.insert_accessibility_text("App1", "Win1", "first entry", None)
-            .await
-            .unwrap();
+        insert_test_accessibility_frame(&db, "App1", "Win1", "first entry", None).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
         let mid = Utc::now();
         tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
 
-        db.insert_accessibility_text("App2", "Win2", "second entry", None)
-            .await
-            .unwrap();
+        insert_test_accessibility_frame(&db, "App2", "Win2", "second entry", None).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
         let after = Utc::now();
@@ -1647,6 +1695,8 @@ mod tests {
                 0,
                 Some(before),
                 Some(after),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1679,6 +1729,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1694,19 +1746,16 @@ mod tests {
     async fn test_search_accessibility_fts() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text(
+        insert_test_accessibility_frame(
+            &db,
             "App",
             "Win",
             "the quick brown fox jumps over the lazy dog",
             None,
         )
-        .await
-        .unwrap();
-        db.insert_accessibility_text("App", "Win", "hello world greeting message", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        .await;
+        insert_test_accessibility_frame(&db, "App", "Win", "hello world greeting message", None)
+            .await;
 
         let results = db
             .search(
@@ -1714,6 +1763,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1740,12 +1791,8 @@ mod tests {
     async fn test_search_accessibility_empty_query() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("App1", "Win1", "text one", None)
-            .await
-            .unwrap();
-        db.insert_accessibility_text("App2", "Win2", "text two", None)
-            .await
-            .unwrap();
+        insert_test_accessibility_frame(&db, "App1", "Win1", "text one", None).await;
+        insert_test_accessibility_frame(&db, "App2", "Win2", "text two", None).await;
 
         let results = db
             .search(
@@ -1753,6 +1800,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1774,11 +1823,7 @@ mod tests {
     async fn test_search_accessibility_no_matches() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("App", "Win", "some text here", None)
-            .await
-            .unwrap();
-
-        index_accessibility_fts(&db).await;
+        insert_test_accessibility_frame(&db, "App", "Win", "some text here", None).await;
 
         let results = db
             .search(
@@ -1786,6 +1831,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1807,10 +1854,15 @@ mod tests {
     async fn test_content_type_all_includes_accessibility() {
         let db = setup_test_db().await;
 
-        // Insert Accessibility data (use empty query so FTS is not needed)
-        db.insert_accessibility_text("TestApp", "TestWin", "Hello from accessibility", None)
-            .await
-            .unwrap();
+        // Insert Accessibility data as frame with full_text
+        insert_test_accessibility_frame(
+            &db,
+            "TestApp",
+            "TestWin",
+            "Hello from accessibility",
+            None,
+        )
+        .await;
 
         // ContentType::All with empty query returns all content types
         let results = db
@@ -1819,6 +1871,8 @@ mod tests {
                 ContentType::All,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1845,10 +1899,8 @@ mod tests {
     async fn test_content_type_vision_includes_accessibility() {
         let db = setup_test_db().await;
 
-        // Insert Accessibility data
-        db.insert_accessibility_text("App", "Win", "Vision accessibility text", None)
-            .await
-            .unwrap();
+        // Insert Accessibility data as frame with full_text
+        insert_test_accessibility_frame(&db, "App", "Win", "Vision accessibility text", None).await;
 
         // All = OCR + Audio + Accessibility, empty query bypasses FTS
         let results = db
@@ -1857,6 +1909,8 @@ mod tests {
                 ContentType::All,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1883,15 +1937,15 @@ mod tests {
     async fn test_content_type_ui_routes_to_accessibility() {
         let db = setup_test_db().await;
 
-        // Insert into accessibility table (not ui_monitoring)
-        db.insert_accessibility_text(
+        // Insert accessibility data as frame with full_text
+        insert_test_accessibility_frame(
+            &db,
             "DeprecatedApp",
             "DeprecatedWin",
             "deprecated UI query text",
             None,
         )
-        .await
-        .unwrap();
+        .await;
 
         // ContentType::Accessibility should return accessibility data (empty query)
         let results = db
@@ -1900,6 +1954,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1926,15 +1982,9 @@ mod tests {
     async fn test_count_accessibility() {
         let db = setup_test_db().await;
 
-        db.insert_accessibility_text("App1", "Win1", "count test one", None)
-            .await
-            .unwrap();
-        db.insert_accessibility_text("App2", "Win2", "count test two", None)
-            .await
-            .unwrap();
-        db.insert_accessibility_text("App3", "Win3", "count test three", None)
-            .await
-            .unwrap();
+        insert_test_accessibility_frame(&db, "App1", "Win1", "count test one", None).await;
+        insert_test_accessibility_frame(&db, "App2", "Win2", "count test two", None).await;
+        insert_test_accessibility_frame(&db, "App3", "Win3", "count test three", None).await;
 
         // Empty query count (bypasses FTS)
         let count = db
@@ -1957,9 +2007,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 3, "Should count all 3 accessibility entries");
 
-        // FTS query count
-        index_accessibility_fts(&db).await;
-
+        // FTS query count (frames_fts triggers handle indexing automatically)
         let count = db
             .count_search_results(
                 "nonexistent",

@@ -93,9 +93,7 @@ sentry = { version = "0.42", features = ["tracing"] }
 regex = "1"
 raw-window-handle = "0.6"
 
-notify = "8.0.0"
 futures = "0.3.30"
-async-stream = "0.3"
 
 chrono = "0.4.39"
 chrono-tz = "0.10"

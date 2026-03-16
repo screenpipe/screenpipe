@@ -493,6 +493,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -505,6 +507,8 @@ mod tests {
                 10,
                 0,
                 Some(now - Duration::minutes(1)),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -538,6 +542,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -556,6 +562,8 @@ mod tests {
                 0,
                 None,
                 Some(now - Duration::minutes(10)),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -698,6 +706,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -720,6 +730,8 @@ mod tests {
                 0,
                 Some(old_timestamp - Duration::seconds(1)),
                 Some(old_timestamp + Duration::seconds(1)),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -776,6 +788,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -791,6 +805,8 @@ mod tests {
                 0,
                 Some(four_hours_ago - Duration::minutes(5)),
                 Some(four_hours_ago + Duration::minutes(5)),
+                None,
+                None,
                 None,
                 None,
                 None,

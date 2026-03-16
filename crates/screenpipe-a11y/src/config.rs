@@ -298,10 +298,18 @@ mod tests {
         let mut config = UiCaptureConfig::new();
         config.compile_patterns();
 
+        // Bare "password"/"secret" patterns were removed from
+        // excluded_window_pattern_strings to avoid false positives.
+        // Incognito/private browsing detection is handled by the
+        // crate::incognito module instead.
+        assert!(config.should_capture_window("Enter Password - Chrome"));
+        assert!(config.should_capture_window("Secret Notes - App"));
+        assert!(config.should_capture_window("GitHub - Chrome"));
+
+        // Custom patterns still work when configured
+        config.excluded_window_pattern_strings = vec!["(?i)password".to_string()];
+        config.compile_patterns();
         assert!(!config.should_capture_window("Enter Password - Chrome"));
-        assert!(!config.should_capture_window("Secret Notes - App"));
-        // Note: "Private Browsing" and "Incognito" are now handled by
-        // crate::incognito module, not by config excluded_window_patterns.
         assert!(config.should_capture_window("GitHub - Chrome"));
     }
 

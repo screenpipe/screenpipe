@@ -158,6 +158,9 @@ async fn test_add_tags_and_search() {
             ContentItem::Input(_) => {
                 unreachable!()
             }
+            ContentItem::Memory(_) => {
+                unreachable!()
+            }
         }
     }
 }
@@ -360,6 +363,9 @@ async fn test_search_by_multiple_tags() {
             }
             ContentItem::Input(_) => {
                 panic!("Input content should not be included in the results");
+            }
+            ContentItem::Memory(_) => {
+                panic!("Memory content should not be included in the results");
             }
         }
     }
