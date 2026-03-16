@@ -31,6 +31,7 @@ async fn open_real_db() -> Arc<DatabaseManager> {
 /// With the semaphore, only 2 should run at a time, and writes should
 /// still go through.
 #[tokio::test]
+#[ignore] // requires real DB at ~/.screenpipe/db.sqlite — run manually
 async fn test_concurrent_ocr_searches_dont_starve_pool() {
     let db = open_real_db().await;
     let now = Utc::now();
@@ -128,6 +129,7 @@ async fn test_concurrent_ocr_searches_dont_starve_pool() {
 /// Test that the 30s timeout on search would fire for pathologically slow queries.
 /// We simulate this by running a search with no time bounds on the full DB.
 #[tokio::test]
+#[ignore] // requires real DB at ~/.screenpipe/db.sqlite — run manually
 async fn test_search_completes_within_timeout() {
     let db = open_real_db().await;
     let now = Utc::now();
