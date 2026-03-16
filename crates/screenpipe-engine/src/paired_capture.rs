@@ -285,6 +285,11 @@ pub async fn paired_capture(
         )
         .await?;
 
+    // Yield to the tokio scheduler after the DB write so that audio pipeline
+    // tasks (which also need DB access) are not starved by back-to-back
+    // vision frame inserts.
+    tokio::task::yield_now().await;
+
     let duration_ms = start.elapsed().as_millis() as u64;
     debug!(
         "paired_capture: frame_id={}, trigger={}, text_source={:?}, total={duration_ms}ms",

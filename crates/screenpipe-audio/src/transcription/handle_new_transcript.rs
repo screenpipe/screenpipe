@@ -152,14 +152,18 @@ pub async fn handle_new_transcript(
         )
         .await
         {
-            Err(e) => error!("Error processing audio result: {}", e),
+            Err(e) => {
+                error!("Error processing audio result: {}", e);
+                metrics.record_db_write_failure();
+            }
             Ok(result) => {
                 if let Some(ref result) = result {
                     prev_id_by_device.insert(device_key.clone(), result.audio_chunk_id);
+                    metrics.record_db_insert(word_count as u64);
                 } else {
                     prev_id_by_device.remove(&device_key);
+                    metrics.record_db_write_failure();
                 }
-                metrics.record_db_insert(word_count as u64);
 
                 if was_trimmed {
                     debug!(
