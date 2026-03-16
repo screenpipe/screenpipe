@@ -36,6 +36,9 @@ regex = "1.11"
 once_cell = "1.19"
 
 
+[dev-dependencies]
+screenpipe-core = { path = "../screenpipe-core" }
+
 [[bench]]
 name = "db_benchmarks"
 harness = false

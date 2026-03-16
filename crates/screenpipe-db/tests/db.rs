@@ -78,6 +78,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -128,6 +130,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -139,6 +143,8 @@ mod tests {
                 ContentType::Audio,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -207,6 +213,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -218,6 +226,8 @@ mod tests {
                 ContentType::Audio,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -326,6 +336,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -337,6 +349,8 @@ mod tests {
                 ContentType::All,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -538,6 +552,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -563,6 +579,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -578,6 +596,8 @@ mod tests {
                 0,
                 Some(mid_time),
                 Some(end_time),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -615,6 +635,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -629,6 +651,8 @@ mod tests {
                 0,
                 Some(start_time),
                 Some(end_time),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -756,6 +780,8 @@ mod tests {
                 0,
                 Some(mid_time),
                 Some(end_time),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1249,6 +1275,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1277,6 +1305,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1302,6 +1332,8 @@ mod tests {
                 None,
                 None,
                 Some("test_video"),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1560,6 +1592,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1656,6 +1690,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1670,6 +1706,8 @@ mod tests {
                 0,
                 Some(mid),
                 Some(after),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1725,6 +1763,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1753,6 +1793,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1797,6 +1839,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1819,6 +1863,8 @@ mod tests {
                 ContentType::All,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1868,6 +1914,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1900,6 +1948,8 @@ mod tests {
                 ContentType::Accessibility,
                 100,
                 0,
+                None,
+                None,
                 None,
                 None,
                 None,
