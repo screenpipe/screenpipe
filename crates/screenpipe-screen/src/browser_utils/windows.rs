@@ -77,8 +77,8 @@ impl WindowsUrlDetector {
                 }
             }
             Err(e) => {
-                error!("failed to find edit bar: {}", e);
-                return Err(anyhow!("failed to find edit bar: {}", e));
+                debug!("failed to find edit bar: {}", e);
+                return Ok(None);
             }
         }
         Ok(None)
@@ -93,5 +93,17 @@ impl BrowserUrlDetector for WindowsUrlDetector {
         _window_title: &str,
     ) -> Result<Option<String>> {
         Self::get_active_url_from_window(process_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detector_instantiation() {
+        let detector = WindowsUrlDetector::new();
+        // Just verify it doesn't panic on creation
+        let _ = detector;
     }
 }
