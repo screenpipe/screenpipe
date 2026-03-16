@@ -1031,9 +1031,16 @@ mod pii_redaction_tests {
     use image::{ImageBuffer, Rgb};
 
     fn create_test_jpeg() -> Vec<u8> {
-        // Create a simple 100x100 white image
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_fn(100, 100, |_, _| Rgb([255, 255, 255]));
+        // Create a 100x100 image with a non-uniform pattern (checkerboard).
+        // A uniform (e.g. all-white) image defeats blur assertions because
+        // blurring white pixels produces identical white pixels.
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
+            if (x / 10 + y / 10) % 2 == 0 {
+                Rgb([0, 0, 0])
+            } else {
+                Rgb([255, 255, 255])
+            }
+        });
         let dynamic_img = DynamicImage::ImageRgb8(img);
 
         let mut output = Cursor::new(Vec::new());

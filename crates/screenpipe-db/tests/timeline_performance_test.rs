@@ -659,17 +659,19 @@ mod timeline_performance_tests {
             frames_with_audio.len()
         );
 
-        // Verify the audio is on the correct frames (frames 2, 3, 4 based on timestamps)
+        // Verify the audio is on the correct frames.
+        // find_video_chunks pads audio range by ±15s (AUDIO_FRAME_PAD_SECS) so that
+        // nearby frames also show the audio indicator on the timeline.
         let _frame_timestamps_with_audio: Vec<_> =
             frames_with_audio.iter().map(|f| f.timestamp).collect();
 
-        let expected_start = audio_start_time;
-        let expected_end = audio_start_time + Duration::seconds(6);
+        let expected_start = audio_start_time - Duration::seconds(15);
+        let expected_end = audio_start_time + Duration::seconds(6) + Duration::seconds(15);
 
         for frame in &frames_with_audio {
             assert!(
                 frame.timestamp >= expected_start && frame.timestamp <= expected_end,
-                "Frame at {:?} has audio but is outside expected range [{:?}, {:?}]",
+                "Frame at {:?} has audio but is outside padded range [{:?}, {:?}]",
                 frame.timestamp,
                 expected_start,
                 expected_end

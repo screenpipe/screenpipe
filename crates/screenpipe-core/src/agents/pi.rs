@@ -1381,6 +1381,13 @@ mod tests {
 
     #[test]
     fn test_ensure_pi_config_adds_ollama_provider() {
+        // Clean up stale models.json from other tests to ensure isolation.
+        // Tests share ~/.pi/agent/ and ensure_pi_config merges into existing
+        // config, so a previous test's screenpipe provider would persist.
+        if let Ok(config_dir) = get_pi_config_dir() {
+            let _ = std::fs::remove_file(config_dir.join("models.json"));
+        }
+
         // Call ensure_pi_config with ollama provider info
         PiExecutor::ensure_pi_config(
             None,

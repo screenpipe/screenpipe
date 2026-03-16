@@ -153,7 +153,7 @@ async fn test_add_tags_and_search() {
                 assert!(audio.tags.contains(&"audio".to_string()));
             }
             ContentItem::UI(_) => {
-                unreachable!()
+                // Post-consolidation: frames with full_text appear as both OCR and UI
             }
             ContentItem::Input(_) => {
                 unreachable!()
@@ -327,13 +327,13 @@ async fn test_search_by_multiple_tags() {
         .await
         .unwrap();
 
-    // Search for items with multiple tags, excluding UI content
+    // Search for all content types to verify tags on both vision and audio
     let search_response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/search?content_type=audio")
+                .uri("/search?content_type=all")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -345,9 +345,25 @@ async fn test_search_by_multiple_tags() {
     let body = to_bytes(search_response.into_body(), usize::MAX)
         .await
         .unwrap();
+
+    println!("Raw response body: {}", String::from_utf8_lossy(&body));
+
     let search_results: PaginatedResponse<ContentItem> = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(search_results.data.len(), 2);
+    // Post-consolidation: OCR + Audio + UI (same frame as OCR) = 3
+    let ocr_count = search_results
+        .data
+        .iter()
+        .filter(|i| matches!(i, ContentItem::OCR(_)))
+        .count();
+    let audio_count = search_results
+        .data
+        .iter()
+        .filter(|i| matches!(i, ContentItem::Audio(_)))
+        .count();
+    assert_eq!(ocr_count, 1, "Expected 1 OCR result");
+    assert_eq!(audio_count, 1, "Expected 1 Audio result");
+
     for item in search_results.data {
         match item {
             ContentItem::OCR(ocr) => {
@@ -359,7 +375,7 @@ async fn test_search_by_multiple_tags() {
                 assert!(audio.tags.contains(&"call".to_string()));
             }
             ContentItem::UI(_) => {
-                panic!("UI content should not be included in the results");
+                // Post-consolidation: frames with full_text appear as both OCR and UI
             }
             ContentItem::Input(_) => {
                 panic!("Input content should not be included in the results");
