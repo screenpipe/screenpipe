@@ -1,4 +1,5 @@
 use anyhow::Result;
+use dirs::home_dir;
 use screenpipe_core::paths;
 use screenpipe_core::Language;
 use screenpipe_engine::video_utils::extract_frames_from_video;
