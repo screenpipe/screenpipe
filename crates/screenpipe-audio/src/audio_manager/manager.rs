@@ -566,8 +566,12 @@ impl AudioManager {
                 // When the session ends, reconciliation will transcribe all untranscribed chunks.
                 if is_batch_mode {
                     if let Some(ref meeting) = meeting_detector {
+                        // Track meeting state separately from audio session state
+                        // to detect when a meeting specifically ends (not just any audio)
+                        let was_in_meeting = meeting.is_in_meeting();
                         let was_in_session = meeting.is_in_audio_session();
                         meeting.check_grace_period().await;
+                        let now_in_meeting = meeting.is_in_meeting();
                         let now_in_session = meeting.is_in_audio_session();
 
                         // Detect session-end: either the transition happened during
@@ -575,6 +579,11 @@ impl AudioManager {
                         // between chunks (was=false, now=false, but we had deferred).
                         let session_just_ended =
                             !now_in_session && (was_in_session || had_deferred_segments);
+
+                        // Also detect when a meeting specifically ends (not just audio session).
+                        // This ensures we transcribe accumulated meeting audio promptly
+                        // instead of waiting for the deferral cap when output audio continues.
+                        let meeting_just_ended = was_in_meeting && !now_in_meeting;
 
                         // Max deferral cap: force reconciliation if we've been
                         // deferring longer than MAX_DEFERRAL_SECS, even during an
@@ -584,13 +593,17 @@ impl AudioManager {
                             && deferral_started
                                 .is_some_and(|t| t.elapsed().as_secs() >= MAX_DEFERRAL_SECS);
 
-                        if session_just_ended || deferral_cap_hit {
-                            // Reconcile: session ended or deferral cap reached
+                        if session_just_ended || meeting_just_ended || deferral_cap_hit {
+                            // Reconcile: session ended, meeting ended, or deferral cap reached
                             had_deferred_segments = false;
                             deferral_started = None;
                             if deferral_cap_hit {
                                 info!(
                                     "batch mode: deferral cap ({MAX_DEFERRAL_SECS}s) reached during active session, force-transcribing"
+                                );
+                            } else if meeting_just_ended {
+                                info!(
+                                    "batch mode: meeting ended, transcribing accumulated audio"
                                 );
                             } else {
                                 info!(
