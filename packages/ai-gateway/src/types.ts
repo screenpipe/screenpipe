@@ -142,6 +142,8 @@ export interface Env {
 	VERTEX_SERVICE_ACCOUNT_JSON: string;
 	VERTEX_PROJECT_ID: string;
 	VERTEX_REGION: string;
+	// MiniMax API key
+	MINIMAX_API_KEY: string;
 	// D1 database for usage tracking
 	DB: D1Database;
 	// Sentry error tracking

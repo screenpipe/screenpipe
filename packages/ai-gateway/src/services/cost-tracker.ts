@@ -28,6 +28,9 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'o1': { input: 15.00, output: 60.00 },
   'o1-mini': { input: 3.00, output: 12.00 },
   'o3-mini': { input: 1.10, output: 4.40 },
+  // MiniMax
+  'minimax-m2.5-highspeed': { input: 0.50, output: 2.00 },
+  'minimax-m2.5': { input: 1.00, output: 4.00 },
   // Google Gemini
   'gemini-2.5-flash': { input: 0.15, output: 0.60 },
   'gemini-2.5-pro': { input: 1.25, output: 10.00 },
@@ -118,6 +121,7 @@ export function inferProvider(model: string): string {
   if (lower.includes('claude')) return 'anthropic';
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) return 'openai';
   if (lower.includes('gemini')) return 'google';
+  if (lower.includes('minimax')) return 'minimax';
   return 'unknown';
 }
 

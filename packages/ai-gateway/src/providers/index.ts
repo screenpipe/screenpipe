@@ -2,6 +2,7 @@ import { OpenAIProvider } from './openai';
 import { AnthropicProvider } from './anthropic';
 import { VertexAIProvider } from './vertex';
 import { GeminiProvider } from './gemini';
+import { MiniMaxProvider } from './minimax';
 import { AIProvider } from './base';
 import { Env } from '../types';
 
@@ -25,6 +26,12 @@ export function createProvider(model: string, env: Env): AIProvider {
 			env.VERTEX_PROJECT_ID,
 			'us-central1' // Gemini uses us-central1 region
 		);
+	}
+	if (model.toLowerCase().includes('minimax')) {
+		if (!env.MINIMAX_API_KEY) {
+			throw new Error('MiniMax API key not configured');
+		}
+		return new MiniMaxProvider(env.MINIMAX_API_KEY);
 	}
 	return new OpenAIProvider(env.OPENAI_API_KEY);
 }

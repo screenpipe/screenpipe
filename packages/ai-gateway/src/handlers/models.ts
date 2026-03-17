@@ -25,6 +25,11 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google' },
     ];
 
+    const minimaxModels = env.MINIMAX_API_KEY ? [
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', provider: 'minimax' },
+      { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 Highspeed', provider: 'minimax' },
+    ] : [];
+
     let models: { id: string; name: string; provider: string; tier_available?: boolean }[] = [
       ...anthropicModels.map(m => ({
         id: m.id,
@@ -32,6 +37,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
         provider: 'anthropic',
       })),
       ...geminiModels,
+      ...minimaxModels,
     ];
 
     // Filter models based on tier
