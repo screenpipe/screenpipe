@@ -105,7 +105,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["microsoft teams", "teams"],
-                windows_process_names: &["ms-teams.exe", "teams.exe"],
+                windows_process_names: &["ms-teams.exe", "teams.exe", "msedgewebview2.exe"],
                 browser_url_patterns: &["teams.microsoft.com", "teams.live.com"],
             },
             call_signals: vec![
