@@ -123,6 +123,8 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'gpt-4o-mini': 1,
   'gpt-4o': 3,
   'gpt-4': 3,
+  'minimax-m2.7-highspeed': 1,
+  'minimax-m2.7': 2,
   'minimax-m2.5-highspeed': 1,
   'minimax-m2.5': 2,
 };

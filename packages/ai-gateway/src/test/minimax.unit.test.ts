@@ -28,15 +28,17 @@ describe('MiniMaxProvider', () => {
 		expect(provider.supportsJson).toBe(true);
 	});
 
-	it('should return static model list', async () => {
+	it('should return static model list with M2.7 as default', async () => {
 		const provider = new MiniMaxProvider('sk-test');
 		const models = await provider.listModels();
 
-		expect(models.length).toBe(2);
-		expect(models[0].id).toBe('MiniMax-M2.5');
+		expect(models.length).toBe(4);
+		expect(models[0].id).toBe('MiniMax-M2.7');
 		expect(models[0].provider).toBe('minimax');
-		expect(models[1].id).toBe('MiniMax-M2.5-highspeed');
+		expect(models[1].id).toBe('MiniMax-M2.7-highspeed');
 		expect(models[1].provider).toBe('minimax');
+		expect(models[2].id).toBe('MiniMax-M2.5');
+		expect(models[3].id).toBe('MiniMax-M2.5-highspeed');
 	});
 });
 
@@ -172,21 +174,27 @@ describe('createProvider routing for MiniMax', () => {
 // Cost tracker — MiniMax pricing
 // ============================================================================
 describe('MiniMax cost tracking', () => {
-	it('should return pricing for MiniMax-M2.5', () => {
-		const cost = getModelCost('MiniMax-M2.5', 1_000_000, 1_000_000);
+	it('should return pricing for MiniMax-M2.7', () => {
+		const cost = getModelCost('MiniMax-M2.7', 1_000_000, 1_000_000);
 		// input: $1.00/M, output: $4.00/M → total $5.00
 		expect(cost).toBe(5.00);
 	});
 
-	it('should return pricing for MiniMax-M2.5-highspeed', () => {
-		const cost = getModelCost('MiniMax-M2.5-highspeed', 1_000_000, 1_000_000);
+	it('should return pricing for MiniMax-M2.7-highspeed', () => {
+		const cost = getModelCost('MiniMax-M2.7-highspeed', 1_000_000, 1_000_000);
 		// input: $0.50/M, output: $2.00/M → total $2.50
 		expect(cost).toBe(2.50);
 	});
 
+	it('should return pricing for MiniMax-M2.5', () => {
+		const cost = getModelCost('MiniMax-M2.5', 1_000_000, 1_000_000);
+		expect(cost).toBe(5.00);
+	});
+
 	it('should infer minimax provider from model name', () => {
+		expect(inferProvider('MiniMax-M2.7')).toBe('minimax');
 		expect(inferProvider('MiniMax-M2.5')).toBe('minimax');
-		expect(inferProvider('minimax-m2.5-highspeed')).toBe('minimax');
+		expect(inferProvider('minimax-m2.7-highspeed')).toBe('minimax');
 	});
 });
 
@@ -194,12 +202,16 @@ describe('MiniMax cost tracking', () => {
 // Usage tracker — MiniMax model weights
 // ============================================================================
 describe('MiniMax model weights', () => {
-	it('should assign weight 2 to MiniMax-M2.5', () => {
-		expect(getModelWeight('MiniMax-M2.5')).toBe(2);
+	it('should assign weight 2 to MiniMax-M2.7', () => {
+		expect(getModelWeight('MiniMax-M2.7')).toBe(2);
 	});
 
-	it('should assign weight 1 to MiniMax-M2.5-highspeed', () => {
-		expect(getModelWeight('MiniMax-M2.5-highspeed')).toBe(1);
+	it('should assign weight 1 to MiniMax-M2.7-highspeed', () => {
+		expect(getModelWeight('MiniMax-M2.7-highspeed')).toBe(1);
+	});
+
+	it('should assign weight 2 to MiniMax-M2.5', () => {
+		expect(getModelWeight('MiniMax-M2.5')).toBe(2);
 	});
 });
 
@@ -208,7 +220,8 @@ describe('MiniMax model weights', () => {
 // ============================================================================
 describe('MiniMax model access by tier', () => {
 	it('should allow MiniMax models for subscribed users (wildcard)', () => {
+		expect(isModelAllowed('MiniMax-M2.7', 'subscribed')).toBe(true);
+		expect(isModelAllowed('MiniMax-M2.7-highspeed', 'subscribed')).toBe(true);
 		expect(isModelAllowed('MiniMax-M2.5', 'subscribed')).toBe(true);
-		expect(isModelAllowed('MiniMax-M2.5-highspeed', 'subscribed')).toBe(true);
 	});
 });

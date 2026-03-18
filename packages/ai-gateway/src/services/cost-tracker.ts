@@ -29,6 +29,8 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'o1-mini': { input: 3.00, output: 12.00 },
   'o3-mini': { input: 1.10, output: 4.40 },
   // MiniMax
+  'minimax-m2.7-highspeed': { input: 0.50, output: 2.00 },
+  'minimax-m2.7': { input: 1.00, output: 4.00 },
   'minimax-m2.5-highspeed': { input: 0.50, output: 2.00 },
   'minimax-m2.5': { input: 1.00, output: 4.00 },
   // Google Gemini

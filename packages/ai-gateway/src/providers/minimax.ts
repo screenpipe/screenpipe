@@ -179,6 +179,16 @@ export class MiniMaxProvider implements AIProvider {
 	async listModels(): Promise<{ id: string; name: string; provider: string }[]> {
 		return [
 			{
+				id: 'MiniMax-M2.7',
+				name: 'MiniMax M2.7',
+				provider: 'minimax',
+			},
+			{
+				id: 'MiniMax-M2.7-highspeed',
+				name: 'MiniMax M2.7 Highspeed',
+				provider: 'minimax',
+			},
+			{
 				id: 'MiniMax-M2.5',
 				name: 'MiniMax M2.5',
 				provider: 'minimax',

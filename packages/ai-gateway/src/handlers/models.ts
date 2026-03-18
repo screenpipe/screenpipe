@@ -26,6 +26,8 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
     ];
 
     const minimaxModels = env.MINIMAX_API_KEY ? [
+      { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', provider: 'minimax' },
+      { id: 'MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed', provider: 'minimax' },
       { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', provider: 'minimax' },
       { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 Highspeed', provider: 'minimax' },
     ] : [];

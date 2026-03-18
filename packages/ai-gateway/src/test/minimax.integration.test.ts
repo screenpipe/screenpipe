@@ -26,7 +26,7 @@ describe('MiniMax integration', () => {
 		const provider = new MiniMaxProvider(API_KEY);
 
 		const body: RequestBody = {
-			model: 'MiniMax-M2.5-highspeed',
+			model: 'MiniMax-M2.7-highspeed',
 			messages: [
 				{ role: 'user', content: 'Reply with exactly the word "pong". Nothing else.' },
 			],
@@ -51,7 +51,7 @@ describe('MiniMax integration', () => {
 		const provider = new MiniMaxProvider(API_KEY);
 
 		const body: RequestBody = {
-			model: 'MiniMax-M2.5-highspeed',
+			model: 'MiniMax-M2.7-highspeed',
 			messages: [
 				{ role: 'user', content: 'Say hello in one word.' },
 			],
