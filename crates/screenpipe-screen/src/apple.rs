@@ -34,10 +34,15 @@ pub fn get_apple_languages(languages: &[Language]) -> Vec<String> {
         m
     });
 
-    languages
+    let mut result: Vec<String> = languages
         .iter()
         .filter_map(|lang| map.get(lang).map(|&s| s.to_string()))
-        .collect()
+        .collect();
+    // Chinese: include both Simplified and Traditional
+    if languages.contains(&Language::Chinese) && !result.contains(&"zh-Hant".to_string()) {
+        result.push("zh-Hant".to_string());
+    }
+    result
 }
 
 #[allow(dead_code)]

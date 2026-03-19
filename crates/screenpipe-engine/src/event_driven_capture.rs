@@ -214,6 +214,7 @@ pub async fn event_driven_capture_loop(
     vision_metrics: Arc<screenpipe_screen::PipelineMetrics>,
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     use_pii_removal: bool,
+    languages: Vec<screenpipe_core::Language>,
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
 ) -> Result<()> {
     info!(
@@ -263,6 +264,7 @@ pub async fn event_driven_capture_loop(
             &tree_walker_config,
             &CaptureTrigger::Manual,
             use_pii_removal,
+            &languages,
             None, // first capture — no previous hash
             last_db_write,
         )
@@ -408,6 +410,7 @@ pub async fn event_driven_capture_loop(
                         &tree_walker_config,
                         &trigger,
                         use_pii_removal,
+                        &languages,
                         last_content_hash,
                         last_db_write,
                     ),
@@ -607,6 +610,7 @@ async fn do_capture(
     tree_walker_config: &TreeWalkerConfig,
     trigger: &CaptureTrigger,
     use_pii_removal: bool,
+    languages: &[screenpipe_core::Language],
     previous_content_hash: Option<i64>,
     last_db_write: Instant,
 ) -> Result<CaptureOutput> {
@@ -730,6 +734,7 @@ async fn do_capture(
         focused: true, // event-driven captures are always for the focused window
         capture_trigger: trigger.as_str(),
         use_pii_removal,
+        languages: languages.to_vec(),
     };
 
     let result = paired_capture(&ctx, tree_snapshot.as_ref()).await?;

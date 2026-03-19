@@ -210,6 +210,7 @@ impl RecordingConfig {
             monitor_ids: self.monitor_ids.clone(),
             use_all_monitors: self.use_all_monitors,
             ignore_incognito_windows: self.ignore_incognito_windows,
+            languages: self.languages.clone(),
         }
     }
 }
