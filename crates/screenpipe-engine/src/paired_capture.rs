@@ -44,6 +44,8 @@ pub struct CaptureContext<'a> {
     pub focused: bool,
     pub capture_trigger: &'a str,
     pub use_pii_removal: bool,
+    /// Languages for OCR recognition.
+    pub languages: Vec<screenpipe_core::Language>,
     /// When Some, this frame references another frame's elements (dedup).
     pub elements_ref_frame_id: Option<i64>,
 }
@@ -153,17 +155,18 @@ pub async fn paired_capture(
         {
             let _permit = ocr_semaphore().acquire().await.unwrap();
             let image_for_ocr = ctx.image.clone();
+            let languages = ctx.languages.clone();
             let ocr_result = tokio::task::spawn_blocking(move || {
                 #[cfg(target_os = "macos")]
                 {
                     let (text, json, _confidence) =
-                        screenpipe_screen::perform_ocr_apple(&image_for_ocr, &[]);
+                        screenpipe_screen::perform_ocr_apple(&image_for_ocr, &languages);
                     (text, json)
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
                     let (text, json, _confidence) =
-                        screenpipe_screen::perform_ocr_tesseract(&image_for_ocr, vec![]);
+                        screenpipe_screen::perform_ocr_tesseract(&image_for_ocr, languages);
                     (text, json)
                 }
             })
@@ -563,6 +566,7 @@ mod tests {
             focused: true,
             capture_trigger: "click",
             use_pii_removal: false,
+            languages: vec![],
             elements_ref_frame_id: None,
         };
 
@@ -597,6 +601,7 @@ mod tests {
             focused: true,
             capture_trigger: "app_switch",
             use_pii_removal: false,
+            languages: vec![],
             elements_ref_frame_id: None,
         };
 
@@ -654,6 +659,7 @@ mod tests {
             focused: true,
             capture_trigger: "idle",
             use_pii_removal: false,
+            languages: vec![],
             elements_ref_frame_id: None,
         };
 

@@ -35,6 +35,8 @@ pub struct VisionManagerConfig {
     pub use_all_monitors: bool,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
+    /// Languages for OCR recognition.
+    pub languages: Vec<screenpipe_core::Language>,
 }
 
 /// Status of the VisionManager
@@ -274,6 +276,7 @@ impl VisionManager {
         let vision_metrics = self.config.vision_metrics.clone();
         let hot_frame_cache = self.hot_frame_cache.clone();
         let use_pii_removal = self.config.use_pii_removal;
+        let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
 
         info!(
@@ -298,6 +301,7 @@ impl VisionManager {
                 vision_metrics,
                 hot_frame_cache,
                 use_pii_removal,
+                languages,
                 power_profile_rx,
             )
             .await
