@@ -647,7 +647,7 @@ async fn main() {
         // Export to a temp file first, then only overwrite if content changed.
         // This avoids triggering the Tauri dev watcher on every launch which
         // causes an infinite rebuild loop.
-        let bindings_path = "lib/utils/tauri.ts";
+        let bindings_path = "../lib/utils/tauri.ts";
         let tmp_path = format!("{}.tmp", bindings_path);
         if let Err(e) = builder.export(
             Typescript::default().bigint(specta_typescript::BigIntExportBehavior::BigInt),

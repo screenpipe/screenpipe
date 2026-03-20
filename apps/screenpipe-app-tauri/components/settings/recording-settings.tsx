@@ -485,7 +485,7 @@ export function RecordingSettings() {
 
   // Add validation state
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const [pendingChanges, setPendingChanges] = useState<Partial<SettingsStore>>({});
+  const [pendingChanges, setPendingChanges] = useState<Partial<Settings>>({});
 
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
@@ -578,7 +578,7 @@ export function RecordingSettings() {
 
   // Optimized debounced validation
   const debouncedValidateSettings = useMemo(
-    () => debounce((newSettings: Partial<SettingsStore>) => {
+    () => debounce((newSettings: Partial<Settings>) => {
       const errors: Record<string, string> = {};
       
       // Validate numeric fields

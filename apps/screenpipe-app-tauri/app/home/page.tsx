@@ -83,6 +83,13 @@ type SettingsModalSection =
   | "notifications"
   | "referral";
 
+type SettingsModalSectionItem = {
+  id: SettingsModalSection;
+  label: string;
+  icon: React.ReactNode;
+  group?: string;
+};
+
 // All valid URL sections (main + modal)
 const ALL_SECTIONS = [
   "home", "timeline", "pipes", "help",
@@ -319,7 +326,7 @@ function SettingsPageContent() {
   ].filter((s) => !isSectionHidden(s.id));
 
   // Settings modal sidebar items (filtered by enterprise policy)
-  const settingsModalSections: { id: SettingsModalSection; label: string; icon: React.ReactNode; group?: string }[] = [
+  const settingsModalSections = ([
     { id: "display", label: "Display", icon: <Layout className="h-4 w-4" />, group: "app" },
     { id: "general", label: "General", icon: <SettingsIcon className="h-4 w-4" />, group: "app" },
     { id: "ai", label: "AI models", icon: <Brain className="h-4 w-4" />, group: "app" },
@@ -334,7 +341,7 @@ function SettingsPageContent() {
     { id: "team", label: "Team", icon: <Users className="h-4 w-4" />, group: "account" },
     { id: "account", label: "Account", icon: <User className="h-4 w-4" />, group: "account" },
     { id: "referral", label: "Get free month", icon: <Gift className="h-4 w-4" />, group: "account" },
-  ].filter((s) => !isSectionHidden(s.id));
+  ] satisfies SettingsModalSectionItem[]).filter((s) => !isSectionHidden(s.id));
 
   const appGroup = settingsModalSections.filter(s => s.group === "app");
   const dataGroup = settingsModalSections.filter(s => s.group === "data");

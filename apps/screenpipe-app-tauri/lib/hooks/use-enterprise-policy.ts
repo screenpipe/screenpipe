@@ -49,8 +49,8 @@ export function useEnterprisePolicy() {
       let licenseKey: string | null = null;
       try {
         const res = await commands.getEnterpriseLicenseKey();
-        if (res.status === "ok" && res.data) {
-          licenseKey = res.data;
+        if (res) {
+          licenseKey = res;
         }
       } catch {
         // no enterprise.json — use defaults only

@@ -192,6 +192,14 @@ async getAudioDevices() : Promise<Result<AudioDeviceInfo[], string>> {
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
+/**
+ * Read the enterprise license key from `enterprise.json` next to the executable.
+ * Admins push this file via Intune/MDM to a protected directory (e.g. Program Files)
+ * that employees cannot modify. Returns None if the file doesn't exist or is invalid.
+ */
+async getEnterpriseLicenseKey() : Promise<string | null> {
+    return await TAURI_INVOKE("get_enterprise_license_key");
+},
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_disk_usage", { forceRefresh, dataDir }) };
@@ -656,7 +664,9 @@ async piInstall() : Promise<Result<null, string>> {
 }
 },
 /**
- * Send a prompt to Pi, optionally with images
+ * Send a prompt to Pi, optionally with images.
+ * The command is serialized through the queue — it will wait for any prior
+ * command (new_session, abort) to fully complete before being written to stdin.
  */
 async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
     try {
@@ -667,7 +677,8 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
 }
 },
 /**
- * Abort current Pi operation. Waits for the Pi SDK to confirm the abort completed.
+ * Abort current Pi operation. Priority command — cancels all pending commands
+ * in the queue and sends abort directly. Waits for the SDK's done event.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -679,7 +690,8 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 },
 /**
  * Start a new Pi session (clears conversation history).
- * Waits for the Pi SDK to finish aborting any in-flight work and resetting state.
+ * Serialized through the queue — waits for any in-flight work to complete,
+ * then sends new_session and waits for the SDK's done event before returning.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -983,7 +995,7 @@ apiKey: string | null;
 /**
  * Max output tokens (default 4096)
  */
-maxTokens?: number;
+maxTokens?: number; 
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
@@ -991,42 +1003,181 @@ systemPrompt?: string | null }
 export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
 export type SettingsStore = 
 /**
- * Catch-all for fields added by the frontend (e.g. chatHistory, deviceId)
+ * All recording/capture config lives here. Flattened so the JSON shape
+ * is unchanged — `disableAudio`, `port`, `fps`, etc. stay at the top level.
+ */
+({ 
+/**
+ * Disable all audio capture and transcription.
+ */
+disableAudio: boolean; 
+/**
+ * Audio transcription engine identifier.
+ * Values: "whisper-large-v3-turbo", "whisper-large-v3-turbo-quantized",
+ * "deepgram", "screenpipe-cloud", etc.
+ */
+audioTranscriptionEngine: string; 
+/**
+ * Transcription mode: "realtime" or "batch".
+ * Previously stored in SettingsStore.extra["transcriptionMode"].
+ */
+transcriptionMode: string; 
+/**
+ * Audio device names/IDs to capture from.
+ */
+audioDevices: string[]; 
+/**
+ * Automatically follow the system default audio devices.
+ */
+useSystemDefaultAudio: boolean; 
+/**
+ * Duration of each audio chunk in seconds before transcription.
+ * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
+ */
+audioChunkDuration: number; 
+/**
+ * Deepgram API key for cloud transcription.
+ * Empty string or "default" means not configured.
+ * Kept as String (not Option) to match existing store.bin schema.
+ */
+deepgramApiKey: string; 
+/**
+ * VAD sensitivity level: "low", "medium", "high".
+ */
+vadSensitivity: string; 
+/**
+ * Filter music-dominant audio before transcription using spectral analysis.
+ */
+filterMusic: boolean; 
+/**
+ * Maximum batch duration in seconds for batch transcription.
+ * None = use engine-aware defaults (Deepgram=3600s, Whisper/OpenAI=600s).
+ * Previously stored in SettingsStore.extra["batchMaxDurationSecs"].
+ */
+batchMaxDurationSecs?: bigint | null; 
+/**
+ * Custom vocabulary for transcription biasing and word replacement.
+ * Previously stored in SettingsStore.extra["vocabularyWords"].
+ */
+vocabularyWords?: VocabEntry[]; 
+/**
+ * Disable all screen capture.
+ */
+disableVision: boolean; 
+/**
+ * Specific monitor IDs to capture.
+ */
+monitorIds: string[]; 
+/**
+ * Capture from all connected monitors.
+ */
+useAllMonitors: boolean; 
+/**
+ * Target frames per second for screen capture.
+ */
+fps: number; 
+/**
+ * Dynamically adjust FPS based on screen content changes.
+ */
+adaptiveFps: boolean; 
+/**
+ * Video quality preset: "low", "balanced", "high", "max".
+ */
+videoQuality: string; 
+/**
+ * Window titles to exclude from capture.
+ */
+ignoredWindows: string[]; 
+/**
+ * Window titles to exclusively capture (empty = capture all).
+ */
+includedWindows: string[]; 
+/**
+ * URLs to exclude from capture.
+ */
+ignoredUrls?: string[]; 
+/**
+ * Automatically detect and skip incognito / private browsing windows.
+ */
+ignoreIncognitoWindows: boolean; 
+/**
+ * Languages for transcription (ISO 639-1 codes).
+ */
+languages: string[]; 
+/**
+ * Redact personally identifiable information from transcriptions.
+ */
+usePiiRemoval: boolean; 
+/**
+ * Screenpipe cloud user ID. Empty string means not logged in.
+ * Kept as String (not Option) to match existing store.bin schema.
+ */
+userId: string; 
+/**
+ * Display name for speaker identification.
+ * Fallback chain: this field → cloud auth name → cloud auth email.
+ * Previously stored in SettingsStore.extra["userName"].
+ */
+userName?: string | null; 
+/**
+ * OpenAI-compatible transcription endpoint URL.
+ * Previously stored in SettingsStore.extra["openaiCompatibleEndpoint"].
+ */
+openaiCompatibleEndpoint?: string | null; 
+/**
+ * OpenAI-compatible transcription API key.
+ * Previously stored in SettingsStore.extra["openaiCompatibleApiKey"].
+ */
+openaiCompatibleApiKey?: string | null; 
+/**
+ * OpenAI-compatible transcription model name.
+ * Previously stored in SettingsStore.extra["openaiCompatibleModel"].
+ */
+openaiCompatibleModel?: string | null; 
+/**
+ * HTTP server port for the screenpipe API.
+ */
+port: number; 
+/**
+ * Power mode preference: "auto", "performance", "battery_saver".
+ * Previously stored in SettingsStore.extra["powerMode"].
+ */
+powerMode?: string | null; 
+/**
+ * Use Chinese mirror for Hugging Face model downloads.
+ */
+useChineseMirror: boolean; 
+/**
+ * Enable anonymous analytics (PostHog).
+ */
+analyticsEnabled: boolean; 
+/**
+ * Persistent analytics ID (UUID, stable across sessions).
+ */
+analyticsId: string; 
+/**
+ * Enable input event capture (keyboard, mouse, clipboard).
+ */
+enableInputCapture: boolean; 
+/**
+ * Enable accessibility text capture (AX tree walker).
+ */
+enableAccessibility: boolean }) & 
+/**
+ * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; deepgramApiKey: string; isLoading: boolean; userId: string; 
-/**
- * Persistent analytics ID used for PostHog tracking (both frontend and backend)
- */
-analyticsId: string; devMode: boolean; audioTranscriptionEngine: string; ocrEngine: string; monitorIds: string[]; audioDevices: string[]; 
-/**
- * When true, automatically follow system default audio devices
- */
-useSystemDefaultAudio?: boolean; usePiiRemoval: boolean; 
-/**
- * Filter music-dominant audio before transcription using spectral analysis
- */
-filterMusic?: boolean; port: number; dataDir: string; disableAudio: boolean; ignoredWindows: string[]; includedWindows: string[]; ignoredUrls?: string[]; fps: number; vadSensitivity: string; analyticsEnabled: boolean; audioChunkDuration: number; useChineseMirror: boolean; languages: string[]; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; realtimeAudioTranscriptionEngine: string; disableVision: boolean; 
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; realtimeAudioTranscriptionEngine: string; 
 /**
  * When true, screen capture continues but OCR text extraction is skipped.
  * Reduces CPU usage significantly while still recording video.
  */
-disableOcr?: boolean; useAllMonitors: boolean; adaptiveFps?: boolean; showShortcutOverlay?: boolean; 
+disableOcr?: boolean; showShortcutOverlay?: boolean; 
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
 deviceId?: string; 
-/**
- * Enable input event capture (keyboard, mouse, clipboard).
- * Requires input monitoring permission on macOS.
- */
-enableInputCapture?: boolean; 
-/**
- * Enable accessibility text capture (AX tree walker).
- * Requires accessibility permission on macOS.
- */
-enableAccessibility?: boolean; 
 /**
  * Auto-install updates and restart when a new version is available.
  * When disabled, users must click "update now" in the tray menu.
@@ -1043,21 +1194,14 @@ overlayMode?: string;
  */
 showOverlayInScreenRecording?: boolean; 
 /**
- * Video quality preset controlling storage vs quality tradeoff.
- * Affects H.265 CRF during recording and JPEG quality during frame extraction.
- * Values: "low", "balanced", "high", "max". Default: "balanced".
- */
-videoQuality?: string; 
-/**
  * When true, the chat window stays above all other windows (default: true).
  */
 chatAlwaysOnTop?: boolean; 
 /**
- * Automatically detect and skip incognito / private browsing windows.
- * Uses localized title matching (20+ languages) and on macOS, native
- * AppleScript detection for Chromium browsers.
+ * Show restart notifications when audio/vision capture stalls.
+ * Disabled by default for now until the stall detector is more reliable.
  */
-ignoreIncognitoWindows?: boolean }
+showRestartNotifications?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string }
 /**
@@ -1073,6 +1217,18 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: bigint | null; storageLimit: bigint | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
+/**
+ * Custom vocabulary entry for transcription biasing and word replacement.
+ */
+export type VocabEntry = { 
+/**
+ * The word or phrase to bias toward during transcription.
+ */
+word: string; 
+/**
+ * Optional replacement — if set, the transcribed `word` is replaced with this.
+ */
+replace_with?: string | null }
 
 /** tauri-specta globals **/
 
