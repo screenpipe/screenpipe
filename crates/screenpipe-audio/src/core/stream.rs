@@ -190,20 +190,22 @@ impl AudioStream {
         #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
         {
             let (tx, rx) = oneshot::channel();
-            self.stream_control.send(StreamControl::Stop(tx))?;
-            rx.await?;
+            if self.stream_control.send(StreamControl::Stop(tx)).is_ok() {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+            }
         }
 
         if let Some(thread_arc) = self.stream_thread.as_ref() {
             let thread_arc_clone = thread_arc.clone();
             let thread_handle = tokio::task::spawn_blocking(move || {
-                let mut thread_guard = thread_arc_clone.blocking_lock();
-                if let Some(join_handle) = thread_guard.take() {
-                    join_handle.abort();
+                if let Ok(mut thread_guard) = thread_arc_clone.try_lock() {
+                    if let Some(join_handle) = thread_guard.take() {
+                        join_handle.abort();
+                    }
                 }
             });
 
-            thread_handle.await?;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), thread_handle).await;
         }
 
         Ok(())

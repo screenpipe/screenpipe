@@ -88,7 +88,7 @@ impl DeviceManager {
         }
 
         if let Some(p) = self.streams.get(device) {
-            let _ = p.value().stop().await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), p.value().stop()).await;
         }
 
         self.streams.remove(device);
