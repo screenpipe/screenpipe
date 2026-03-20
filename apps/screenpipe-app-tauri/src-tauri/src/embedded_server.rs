@@ -100,8 +100,11 @@ pub async fn start_embedded_server(
         std::env::set_var("SCREENPIPE_ANALYTICS_ID", &config.analytics_id);
     }
 
-    // Initialize server-side analytics (PostHog) so events like search_performed fire
-    analytics::init(config.analytics_enabled);
+    // Initialize server-side analytics (PostHog) so events like search_performed fire.
+    // Offline mode disables PostHog but keeps Sentry crash reports.
+    let offline_mode = screenpipe_core::offline::is_offline_mode();
+    let analytics_effective = config.analytics_enabled && !offline_mode;
+    analytics::init(analytics_effective);
 
     // Chinese HuggingFace mirror
     if config.use_chinese_mirror {

@@ -688,11 +688,16 @@ const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
 /// Returns the generated token (if any) so the caller can clean it up later.
+///
+/// In offline mode, the permissions extension is always installed (even for
+/// unrestricted pipes) so it can block external network requests.
 async fn setup_pipe_permissions(
     pipe_dir: &Path,
     config: &PipeConfig,
     token_registry: Option<&Arc<dyn permissions::PipeTokenRegistry>>,
 ) -> Option<String> {
+    let offline = crate::offline::is_offline_mode();
+
     if let Err(e) = PiExecutor::ensure_permissions_extension(pipe_dir, config) {
         warn!("failed to install permissions extension: {}", e);
     }
@@ -703,9 +708,29 @@ async fn setup_pipe_permissions(
         warn!("failed to install filtered skills: {}", e);
     }
 
+    // In offline mode, always install the permissions extension so it can
+    // block external curl commands, even if the pipe has no other restrictions.
+    if offline {
+        let ext_dir = pipe_dir.join(".pi").join("extensions");
+        let ext_path = ext_dir.join("screenpipe-permissions.ts");
+        if !ext_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&ext_dir) {
+                warn!("failed to create extensions dir for offline mode: {}", e);
+            } else {
+                let ext_content = include_str!("../../assets/extensions/screenpipe-permissions.ts");
+                if let Err(e) = std::fs::write(&ext_path, ext_content) {
+                    warn!("failed to install permissions extension for offline mode: {}", e);
+                }
+            }
+        }
+    }
+
     let mut perms = permissions::PipePermissions::from_config(config);
 
-    if perms.has_any_restrictions() {
+    // In offline mode, force restrictions so the permissions JSON is always written
+    let force_write = offline;
+
+    if perms.has_any_restrictions() || force_write {
         // Generate a unique pipe token for server-side enforcement
         use rand::Rng;
         let suffix: u64 = rand::thread_rng().gen();

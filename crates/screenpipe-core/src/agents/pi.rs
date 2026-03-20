@@ -200,18 +200,22 @@ impl PiExecutor {
         Ok(())
     }
 
-    /// Install or remove the web-search extension based on provider.
+    /// Install or remove the web-search extension based on provider and offline mode.
     /// Web search uses the screenpipe cloud backend, so we only enable it
     /// for screenpipe-cloud to avoid sending data to our backend when the
-    /// user chose a local/custom provider.
+    /// user chose a local/custom provider. Always removed in offline mode.
     pub fn ensure_web_search_extension(project_dir: &Path, provider: Option<&str>) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         let ext_path = ext_dir.join("web-search.ts");
 
-        let is_screenpipe_cloud = matches!(
-            provider,
-            None | Some("screenpipe") | Some("screenpipe-cloud") | Some("pi")
-        );
+        // Offline mode: never install web search (it calls api.screenpi.pe)
+        let offline = crate::offline::is_offline_mode();
+
+        let is_screenpipe_cloud = !offline
+            && matches!(
+                provider,
+                None | Some("screenpipe") | Some("screenpipe-cloud") | Some("pi")
+            );
 
         if is_screenpipe_cloud {
             std::fs::create_dir_all(&ext_dir)?;
@@ -261,10 +265,16 @@ impl PiExecutor {
         // Only add screenpipe cloud provider if it's the intended provider
         // (or no provider specified). If the user explicitly chose ollama/openai/custom,
         // do NOT write screenpipe into models.json to avoid silent credit drain via fallback.
-        let should_add_screenpipe = match provider {
-            None => true,
-            Some("screenpipe") | Some("screenpipe-cloud") | Some("pi") => true,
-            Some(_) => false,
+        // Offline mode: never add screenpipe cloud provider.
+        let offline = crate::offline::is_offline_mode();
+        let should_add_screenpipe = if offline {
+            false
+        } else {
+            match provider {
+                None => true,
+                Some("screenpipe") | Some("screenpipe-cloud") | Some("pi") => true,
+                Some(_) => false,
+            }
         };
 
         if should_add_screenpipe {
@@ -469,32 +479,37 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
-            cmd.env("SCREENPIPE_API_KEY", token);
-        }
+        // Offline mode: strip all cloud API keys to prevent external requests.
+        // Only localhost providers (ollama) work in offline mode.
+        let offline = crate::offline::is_offline_mode();
+        if !offline {
+            if let Some(ref token) = self.user_token {
+                cmd.env("SCREENPIPE_API_KEY", token);
+            }
 
-        // Pi resolves apiKey values in models.json as env var names.
-        // Set the actual key so the subprocess can find it.
-        if let Some(key) = provider_api_key {
-            if !key.is_empty() {
-                match resolved_provider {
-                    "openai" | "openai-byok" => {
-                        cmd.env("OPENAI_API_KEY", key);
+            // Pi resolves apiKey values in models.json as env var names.
+            // Set the actual key so the subprocess can find it.
+            if let Some(key) = provider_api_key {
+                if !key.is_empty() {
+                    match resolved_provider {
+                        "openai" | "openai-byok" => {
+                            cmd.env("OPENAI_API_KEY", key);
+                        }
+                        "openai-chatgpt" => {
+                            cmd.env("OPENAI_CHATGPT_TOKEN", key);
+                        }
+                        "anthropic" | "anthropic-byok" => {
+                            cmd.env("ANTHROPIC_API_KEY", key);
+                        }
+                        "custom" => {
+                            cmd.env("CUSTOM_API_KEY", key);
+                        }
+                        // Ensure screenpipe API key is set as env var fallback
+                        "screenpipe" if self.user_token.is_none() => {
+                            cmd.env("SCREENPIPE_API_KEY", key);
+                        }
+                        _ => {}
                     }
-                    "openai-chatgpt" => {
-                        cmd.env("OPENAI_CHATGPT_TOKEN", key);
-                    }
-                    "anthropic" | "anthropic-byok" => {
-                        cmd.env("ANTHROPIC_API_KEY", key);
-                    }
-                    "custom" => {
-                        cmd.env("CUSTOM_API_KEY", key);
-                    }
-                    // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
-                        cmd.env("SCREENPIPE_API_KEY", key);
-                    }
-                    _ => {}
                 }
             }
         }
@@ -577,30 +592,34 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
-            cmd.env("SCREENPIPE_API_KEY", token);
-        }
+        // Offline mode: strip all cloud API keys (same logic as spawn_pi)
+        let offline = crate::offline::is_offline_mode();
+        if !offline {
+            if let Some(ref token) = self.user_token {
+                cmd.env("SCREENPIPE_API_KEY", token);
+            }
 
-        if let Some(key) = provider_api_key {
-            if !key.is_empty() {
-                match resolved_provider {
-                    "openai" | "openai-byok" => {
-                        cmd.env("OPENAI_API_KEY", key);
+            if let Some(key) = provider_api_key {
+                if !key.is_empty() {
+                    match resolved_provider {
+                        "openai" | "openai-byok" => {
+                            cmd.env("OPENAI_API_KEY", key);
+                        }
+                        "openai-chatgpt" => {
+                            cmd.env("OPENAI_CHATGPT_TOKEN", key);
+                        }
+                        "anthropic" | "anthropic-byok" => {
+                            cmd.env("ANTHROPIC_API_KEY", key);
+                        }
+                        "custom" => {
+                            cmd.env("CUSTOM_API_KEY", key);
+                        }
+                        // Ensure screenpipe API key is set as env var fallback
+                        "screenpipe" if self.user_token.is_none() => {
+                            cmd.env("SCREENPIPE_API_KEY", key);
+                        }
+                        _ => {}
                     }
-                    "openai-chatgpt" => {
-                        cmd.env("OPENAI_CHATGPT_TOKEN", key);
-                    }
-                    "anthropic" | "anthropic-byok" => {
-                        cmd.env("ANTHROPIC_API_KEY", key);
-                    }
-                    "custom" => {
-                        cmd.env("CUSTOM_API_KEY", key);
-                    }
-                    // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
-                        cmd.env("SCREENPIPE_API_KEY", key);
-                    }
-                    _ => {}
                 }
             }
         }

@@ -164,6 +164,11 @@ pub struct PipePermissions {
     /// Pipe token for server-side validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipe_token: Option<String>,
+
+    /// When true, the pipe is running in offline mode — the permissions
+    /// extension will block all curl commands to non-localhost URLs.
+    #[serde(default)]
+    pub offline_mode: bool,
 }
 
 impl PipePermissions {
@@ -183,6 +188,7 @@ impl PipePermissions {
             time_range,
             days,
             pipe_token: None,
+            offline_mode: crate::offline::is_offline_mode(),
         }
     }
 
@@ -610,6 +616,7 @@ mod tests {
             time_range: None,
             days: None,
             pipe_token: None,
+            offline_mode: false,
         }
     }
 
@@ -948,5 +955,45 @@ mod tests {
         // Days: weekdays
         assert!(perms.is_day_allowed(Weekday::Mon));
         assert!(!perms.is_day_allowed(Weekday::Sat));
+    }
+
+    #[test]
+    fn from_config_inherits_offline_mode() {
+        // Set offline mode and verify it propagates to PipePermissions
+        crate::offline::set_offline_mode(true);
+        let config = PipeConfig {
+            name: "offline-test".to_string(),
+            schedule: "manual".to_string(),
+            enabled: true,
+            agent: "pi".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            provider: None,
+            preset: vec![],
+            permissions: PipePermissionsConfig::default(),
+            connections: vec![],
+            timeout: None,
+            source_slug: None,
+            installed_version: None,
+            source_hash: None,
+            config: std::collections::HashMap::new(),
+        };
+        let perms = PipePermissions::from_config(&config);
+        assert!(perms.offline_mode);
+
+        // Reset
+        crate::offline::set_offline_mode(false);
+        let perms2 = PipePermissions::from_config(&config);
+        assert!(!perms2.offline_mode);
+    }
+
+    #[test]
+    fn offline_mode_serializes_to_json() {
+        let mut perms = make_perms();
+        perms.offline_mode = true;
+        let json = serde_json::to_string(&perms).unwrap();
+        assert!(json.contains("\"offline_mode\":true"));
+
+        let deserialized: PipePermissions = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.offline_mode);
     }
 }

@@ -23,6 +23,7 @@ interface Permissions {
   time_range: [number, number, number, number] | null;
   days: number[] | null;
   pipe_token: string | null;
+  offline_mode: boolean;
 }
 
 const DEFAULT_ALLOWED_ENDPOINTS: string[] = [
@@ -65,6 +66,7 @@ try {
           : Object.keys(parsed.days || {}).map(Number)
         : null,
       pipe_token: parsed.pipe_token || null,
+      offline_mode: parsed.offline_mode || false,
     };
   }
 } catch {
@@ -178,6 +180,32 @@ function hitsScreenpipeApi(cmd: string): boolean {
   return /localhost:\d+/.test(cmd) || /127\.0\.0\.1:\d+/.test(cmd);
 }
 
+function isLocalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".local") ||
+      // LAN ranges
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hitsExternalUrl(cmd: string): boolean {
+  const urls = cmd.match(/https?:\/\/[^\s"'\\)}\]]+/g);
+  if (!urls) return false;
+  return urls.some((url) => !isLocalUrl(url));
+}
+
 function isParsableCurl(cmd: string): boolean {
   return /\bcurl\b/.test(cmd);
 }
@@ -283,15 +311,37 @@ export default function (pi: ExtensionAPI) {
   if (!hasPerms()) return;
 
   pi.on("before_agent_start", async (event: any) => {
+    let extra = "";
+    if (PERMS?.offline_mode) {
+      extra =
+        "\n\n## Offline Mode\n" +
+        "This pipe is running in OFFLINE MODE. You MUST NOT make any external network requests.\n" +
+        "- Only localhost and LAN URLs are allowed (localhost, 127.0.0.1, 192.168.x.x, 10.x.x.x)\n" +
+        "- Use Ollama at localhost:11434 for AI inference\n" +
+        "- External APIs (OpenAI, Anthropic, Slack, etc.) are BLOCKED\n" +
+        "- Web search is not available\n";
+    }
     const rules = buildPermissionRules();
-    if (rules) {
-      return { systemPrompt: event.systemPrompt + "\n\n" + rules + "\n" };
+    if (rules || extra) {
+      return { systemPrompt: event.systemPrompt + extra + (rules ? "\n\n" + rules : "") + "\n" };
     }
   });
 
   pi.on("tool_call", async (event: any) => {
     if (event.tool !== "bash" && event.name !== "bash") return;
     const cmd: string = event.input?.command || "";
+
+    // Offline mode: block ALL external (non-localhost/LAN) network requests
+    if (PERMS?.offline_mode && hitsExternalUrl(cmd)) {
+      return {
+        block: true,
+        reason:
+          "Offline mode is enabled — external network requests are blocked. " +
+          "Only localhost and LAN addresses are allowed. " +
+          "Use Ollama (localhost:11434) for AI, or disable offline mode in Settings → Privacy.",
+      };
+    }
+
     if (hitsScreenpipeApi(cmd) && !isParsableCurl(cmd)) {
       return {
         block: true,
