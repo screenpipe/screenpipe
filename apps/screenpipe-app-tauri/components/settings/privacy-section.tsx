@@ -409,7 +409,6 @@ export function PrivacySection() {
             {settings.offlineMode && (
               <div className="mt-2 ml-[26px] text-xs text-muted-foreground space-y-1">
                 <p>Cloud AI providers, web search, and external connections are disabled.</p>
-                <p>Pipes will use Ollama (localhost:11434) for AI. Make sure it&apos;s running.</p>
               </div>
             )}
           </CardContent>

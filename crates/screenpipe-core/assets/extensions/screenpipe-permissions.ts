@@ -317,7 +317,6 @@ export default function (pi: ExtensionAPI) {
         "\n\n## Offline Mode\n" +
         "This pipe is running in OFFLINE MODE. You MUST NOT make any external network requests.\n" +
         "- Only localhost and LAN URLs are allowed (localhost, 127.0.0.1, 192.168.x.x, 10.x.x.x)\n" +
-        "- Use Ollama at localhost:11434 for AI inference\n" +
         "- External APIs (OpenAI, Anthropic, Slack, etc.) are BLOCKED\n" +
         "- Web search is not available\n";
     }
@@ -338,7 +337,7 @@ export default function (pi: ExtensionAPI) {
         reason:
           "Offline mode is enabled — external network requests are blocked. " +
           "Only localhost and LAN addresses are allowed. " +
-          "Use Ollama (localhost:11434) for AI, or disable offline mode in Settings → Privacy.",
+          "Disable offline mode in Settings → Privacy to restore external access.",
       };
     }
 
