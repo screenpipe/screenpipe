@@ -1490,6 +1490,8 @@ pub fn advance_state(
                     MeetingState::Active {
                         meeting_id,
                         app: result.app_name.clone(),
+
+
                         started_at, // preserve original start time
                         last_seen: Instant::now(),
                     },

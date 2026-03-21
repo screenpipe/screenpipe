@@ -21,6 +21,7 @@ hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", features
 ] }
 log = "0.4"
 tracing = "0.1.40"
+sysinfo = "0.30"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "chrono"] }
 tracing-appender = { version = "0.2.3" }
 tokio = { version = "1.15", features = ["full", "tracing"] }

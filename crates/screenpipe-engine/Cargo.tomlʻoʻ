@@ -66,7 +66,7 @@ console-subscriber = { version = "0.4.1", optional = true }
 clap = { version = "4.3", features = ["derive", "env"] }
 
 # Memory watchdog
-
+sysinfo = "0.29.0"
 
 # Color
 colored = "2.0"
