@@ -39,6 +39,7 @@ VERTEX_REGION = "us-east5"
 # Secrets (set via `wrangler secret put <NAME>`):
 # - VERTEX_SERVICE_ACCOUNT_JSON: GCP service account JSON for Vertex AI
 # - VERTEX_PROJECT_ID: Your GCP project ID
+# - NOVITA_API_KEY: Novita AI API key (https://novita.ai) for Kimi K2.5, GLM-5, MiniMax M2.5
 
 # Bind the Workers AI model catalog. Run machine learning models, powered by serverless GPUs, on Cloudflare's global network
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#workers-ai

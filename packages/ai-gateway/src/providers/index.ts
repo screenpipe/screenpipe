@@ -4,6 +4,7 @@ import { VertexAIProvider } from './vertex';
 import { GeminiProvider } from './gemini';
 import { OpenRouterProvider } from './openrouter';
 import { VertexMaasProvider, isVertexMaasModel } from './vertex-maas';
+import { NovitaProvider } from './novita';
 import { AIProvider } from './base';
 import { Env } from '../types';
 
@@ -15,6 +16,14 @@ function isOpenRouterModel(model: string): boolean {
 	const lower = model.toLowerCase();
 	return OPENROUTER_PREFIXES.some(p => lower.startsWith(p)) ||
 		OPENROUTER_MODELS.some(m => lower.includes(m));
+}
+
+// Models routed through Novita AI (moonshotai/kimi-k2.5, zai-org/glm-5, minimax/minimax-m2.5)
+const NOVITA_PREFIXES = ['moonshotai/', 'zai-org/', 'minimax/'];
+
+function isNovitaModel(model: string): boolean {
+	const lower = model.toLowerCase();
+	return NOVITA_PREFIXES.some(p => lower.startsWith(p));
 }
 
 export function createProvider(model: string, env: Env): AIProvider {
@@ -42,6 +51,12 @@ export function createProvider(model: string, env: Env): AIProvider {
 			throw new Error('OpenRouter API key not configured');
 		}
 		return new OpenRouterProvider(env.OPENROUTER_API_KEY);
+	}
+	if (isNovitaModel(model)) {
+		if (!env.NOVITA_API_KEY) {
+			throw new Error('Novita AI API key not configured');
+		}
+		return new NovitaProvider(env.NOVITA_API_KEY);
 	}
 	return new OpenAIProvider(env.OPENAI_API_KEY);
 }

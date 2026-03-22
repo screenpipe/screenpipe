@@ -135,6 +135,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'qwen3-coder': 1,
   'step-3.5-flash:free': 0,
   'step-3.5-flash': 0,
+  // Novita AI models
+  'kimi-k2.5': 1,
+  'glm-5': 3,
+  'minimax-m2.5': 1,
 };
 
 export function getModelWeight(model?: string): number {
@@ -166,6 +170,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'deepseek/deepseek-chat',
       'qwen/qwen3.5-flash',
       'meta-llama/llama-4-scout',
+      'minimax/minimax-m2.5',
     ],
   },
   logged_in: {
@@ -186,6 +191,9 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'qwen/qwen3.5-397b',
       'meta-llama/llama-4-scout',
       'meta-llama/llama-4-maverick',
+      'moonshotai/kimi-k2.5',
+      'zai-org/glm-5',
+      'minimax/minimax-m2.5',
     ],
   },
   subscribed: {

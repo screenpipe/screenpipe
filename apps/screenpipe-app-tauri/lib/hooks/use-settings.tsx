@@ -15,7 +15,8 @@ export type AIProviderType =
 	| "anthropic"
 	| "custom"
 	| "embedded"
-	| "pi";
+	| "pi"
+	| "novita";
 
 export type EmbeddedLLMConfig = {
 	enabled: boolean;
@@ -61,6 +62,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "openai-chatgpt";
+	  }
+	| {
+			provider: "novita";
+			apiKey: string;
 	  }
 );
 

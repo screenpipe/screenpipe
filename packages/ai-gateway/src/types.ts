@@ -151,6 +151,8 @@ export interface Env {
 	AUTO_RELOAD_SECRET: string;
 	// OpenRouter (DeepSeek, Llama, Qwen, Mistral via single API)
 	OPENROUTER_API_KEY: string;
+	// Novita AI (Kimi K2.5, GLM-5, MiniMax M2.5 via OpenAI-compatible API)
+	NOVITA_API_KEY: string;
 	// Admin API auth
 	ADMIN_SECRET: string;
 	// Self-hosted Whisper A/B test

@@ -34,7 +34,7 @@ export const userSchema = z.object({
   credits_balance: z.number().nullable(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "pi", "anthropic"]);
+export const aiProviderTypeSchema = z.enum(["openai", "native-ollama", "custom", "pi", "anthropic", "novita"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(

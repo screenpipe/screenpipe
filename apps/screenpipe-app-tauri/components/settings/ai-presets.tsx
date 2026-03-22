@@ -129,7 +129,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi" | "novita";
   title: string;
   description: string;
   imageSrc: string;
@@ -485,6 +485,10 @@ const AISection = ({
       case "pi":
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "claude-haiku-4-5";
+        break;
+      case "novita":
+        newUrl = "https://api.novita.ai/openai";
+        newModel = "moonshotai/kimi-k2.5";
         break;
     }
 
@@ -988,6 +992,15 @@ const AISection = ({
           break;
         }
 
+        case "novita": {
+          setModels([
+            { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (262K ctx, reasoning + vision)", provider: "novita" },
+            { id: "zai-org/glm-5", name: "GLM-5 (203K ctx, reasoning)", provider: "novita" },
+            { id: "minimax/minimax-m2.5", name: "MiniMax M2.5 (205K ctx, cheapest)", provider: "novita" },
+          ]);
+          break;
+        }
+
         default:
           setModels([]);
       }
@@ -1108,6 +1121,15 @@ const AISection = ({
             onClick={() => handleAiProviderChange("native-ollama")}
           />
 
+          <AIProviderCard
+            type="novita"
+            title="Novita AI"
+            description="Fast inference for Kimi K2.5, GLM-5, and MiniMax models"
+            imageSrc="/images/novita.png"
+            selected={settingsPreset?.provider === "novita"}
+            onClick={() => handleAiProviderChange("novita")}
+          />
+
           {piAvailable && (
             <AIProviderCard
               type="pi"
@@ -1150,7 +1172,7 @@ const AISection = ({
       )}
 
 
-      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
+      {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || settingsPreset?.provider === "novita" || (isApiKeyRequired &&
         settingsPreset?.provider === "openai")) && (
           <div className="w-full">
             <div className="flex flex-col gap-4 mb-4 w-full">
@@ -1600,6 +1622,7 @@ const providerImageSrc: Record<string, string> = {
   "native-ollama": "/images/ollama.png",
   custom: "/images/custom.png",
   pi: "/images/screenpipe.png",
+  novita: "/images/novita.png",
 };
 
 // Sortable preset card for drag-and-drop reordering
