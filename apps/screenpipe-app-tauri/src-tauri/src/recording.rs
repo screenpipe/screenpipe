@@ -164,8 +164,9 @@ pub async fn spawn_screenpipe(
         return Ok(());
     }
 
-    let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
-    let port = store.recording.port;
+    // always use the default port — the desktop app hardcodes 3030 everywhere,
+    // so letting users change it via settings just breaks all API calls.
+    let port: u16 = 3030;
     let health_url = format!("http://localhost:{}/health", port);
 
     // Check if another start is already in progress (race between main.rs boot and frontend)

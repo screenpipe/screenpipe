@@ -582,13 +582,6 @@ export function RecordingSettings() {
       const errors: Record<string, string> = {};
       
       // Validate numeric fields
-      if (newSettings.port !== undefined) {
-        const portValidation = validateField("port", newSettings.port);
-        if (!portValidation.isValid && portValidation.error) {
-          errors.port = portValidation.error;
-        }
-      }
-      
       if (newSettings.dataDir !== undefined) {
         const dataDirValidation = validateField("dataDir", newSettings.dataDir);
         if (!dataDirValidation.isValid && dataDirValidation.error) {

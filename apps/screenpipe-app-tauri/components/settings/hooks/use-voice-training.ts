@@ -26,14 +26,14 @@ export function useVoiceTraining(opts: {
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
-          `http://localhost:${settings.port}/speakers/search?name=${encodeURIComponent(name)}`,
+          `http://localhost:3030/speakers/search?name=${encodeURIComponent(name)}`,
           { signal: controller.signal }
         );
         if (res.ok) setSpeakerSuggestions(await res.json());
       } catch { /* ignore */ }
     }, 300);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [settings.userName, settings.port]);
+  }, [settings.userName]);
 
   const handleStartTraining = useCallback(() => {
     const name = (settings.userName || "").trim();
