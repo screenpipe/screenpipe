@@ -35,7 +35,7 @@ pub async fn train_voice(
             "voice training requires audio recording, but audio is disabled in settings".into(),
         );
     }
-    let port = store.recording.port;
+    let port: u16 = 3030;
 
     if TRAINING_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("voice training already in progress".into());
