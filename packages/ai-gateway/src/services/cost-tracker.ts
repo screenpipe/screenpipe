@@ -34,10 +34,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'qwen3-coder': { input: 0.22, output: 1.00 },
   'step-3.5-flash:free': { input: 0.00, output: 0.00 },
   'step-3.5-flash': { input: 0.00, output: 0.00 },
-  // Novita AI
-  'kimi-k2.5': { input: 0.60, output: 3.00 },
-  'glm-5': { input: 1.00, output: 3.20 },
-  'minimax-m2.5': { input: 0.30, output: 1.20 },
+  // Novita AI — use full namespaced IDs to avoid clobbering Vertex MaaS zero-cost entries
+  'moonshotai/kimi-k2.5': { input: 0.60, output: 3.00 },
+  'zai-org/glm-5': { input: 1.00, output: 3.20 },
+  'minimax/minimax-m2.5': { input: 0.30, output: 1.20 },
   // Google Gemini
   'gemini-2.5-flash': { input: 0.15, output: 0.60 },
   'gemini-2.5-pro': { input: 1.25, output: 10.00 },
@@ -137,9 +137,10 @@ export function inferProvider(model: string): string {
   if (lower.includes('claude')) return 'anthropic';
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) return 'openai';
   if (lower.includes('gemini')) return 'google';
+  // Novita must be checked before vertex-maas: Novita IDs contain substrings matched by vertex-maas
+  if (lower.startsWith('moonshotai/') || lower.startsWith('zai-org/') || lower.startsWith('minimax/')) return 'novita';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
   if (lower.includes('deepseek') || lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
-  if (lower.startsWith('moonshotai/') || lower.startsWith('zai-org/') || lower.startsWith('minimax/')) return 'novita';
   return 'unknown';
 }
 

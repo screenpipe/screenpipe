@@ -232,6 +232,8 @@ pub enum AIProviderType {
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+    #[serde(rename = "novita")]
+    Novita,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -533,6 +535,7 @@ impl SettingsStore {
                 "opencode",
                 "pi",
                 "anthropic",
+                "novita",
             ];
             if let Some(presets) = obj.get_mut("aiPresets") {
                 if let Some(arr) = presets.as_array_mut() {

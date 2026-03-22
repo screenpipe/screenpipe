@@ -39,6 +39,14 @@ export function createProvider(model: string, env: Env): AIProvider {
 		}
 		return new GeminiProvider(env.GEMINI_API_KEY);
 	}
+	// Novita AI — must be checked before Vertex MaaS because isVertexMaasModel()
+	// matches on substrings like "glm-5" and "kimi-k2.5" which appear in Novita IDs
+	if (isNovitaModel(model)) {
+		if (!env.NOVITA_API_KEY) {
+			throw new Error('Novita AI API key not configured');
+		}
+		return new NovitaProvider(env.NOVITA_API_KEY);
+	}
 	// Vertex AI MaaS — GLM-4.7, GLM-5, Kimi K2.5 (burns GCP credits, free for users)
 	if (isVertexMaasModel(model)) {
 		if (!env.VERTEX_SERVICE_ACCOUNT_JSON || !env.VERTEX_PROJECT_ID) {
@@ -51,12 +59,6 @@ export function createProvider(model: string, env: Env): AIProvider {
 			throw new Error('OpenRouter API key not configured');
 		}
 		return new OpenRouterProvider(env.OPENROUTER_API_KEY);
-	}
-	if (isNovitaModel(model)) {
-		if (!env.NOVITA_API_KEY) {
-			throw new Error('Novita AI API key not configured');
-		}
-		return new NovitaProvider(env.NOVITA_API_KEY);
 	}
 	return new OpenAIProvider(env.OPENAI_API_KEY);
 }

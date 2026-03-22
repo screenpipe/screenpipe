@@ -135,10 +135,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'qwen3-coder': 1,
   'step-3.5-flash:free': 0,
   'step-3.5-flash': 0,
-  // Novita AI models
-  'kimi-k2.5': 1,
-  'glm-5': 3,
-  'minimax-m2.5': 1,
+  // Novita AI models — use full namespaced IDs to avoid clobbering Vertex MaaS zero-weight entries
+  'moonshotai/kimi-k2.5': 1,
+  'zai-org/glm-5': 3,
+  'minimax/minimax-m2.5': 1,
 };
 
 export function getModelWeight(model?: string): number {
