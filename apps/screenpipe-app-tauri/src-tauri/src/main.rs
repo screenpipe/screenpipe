@@ -298,9 +298,9 @@ async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, St
 #[tauri::command]
 #[specta::specta]
 #[allow(dead_code)]
-async fn is_server_running(app: AppHandle) -> Result<bool, String> {
-    let store = app.state::<store::SettingsStore>();
-    let port = store.recording.port;
+async fn is_server_running(_app: AppHandle) -> Result<bool, String> {
+    // always check port 3030 — the desktop app hardcodes this port everywhere
+    let port: u16 = 3030;
     let client = reqwest::Client::new();
     let response = client
         .get(format!("http://localhost:{}", port))
@@ -1406,7 +1406,9 @@ async fn main() {
                             }
 
                             info!("Starting embedded screenpipe server on dedicated runtime...");
-                            let config = store_clone.to_recording_config(data_dir_clone);
+                            let mut config = store_clone.to_recording_config(data_dir_clone);
+                            // always bind to port 3030 — the desktop app hardcodes this port everywhere
+                            config.port = 3030;
 
                             match embedded_server::start_embedded_server(config, on_pipe_output).await {
                                 Ok(handle) => {

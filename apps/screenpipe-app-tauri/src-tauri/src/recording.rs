@@ -308,8 +308,10 @@ pub async fn spawn_screenpipe(
         );
     }
 
-    // Build config from store
-    let config = store.to_recording_config(data_dir);
+    // Build config from store, but always bind to port 3030 in the desktop app —
+    // the frontend hardcodes localhost:3030 for all API calls.
+    let mut config = store.to_recording_config(data_dir);
+    config.port = 3030;
     let recording_state_inner = state.handle.clone();
 
     // Create pipe output callback that emits Tauri events to the frontend
