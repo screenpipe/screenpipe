@@ -466,6 +466,7 @@ pub struct ScanResult {
 /// node against the profile's [`CallSignal`]s. It exits early once enough
 /// signals are found and skips subtrees that are unlikely to contain call
 /// controls (text areas, scroll areas, etc.).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct MeetingUiScanner {
     /// Maximum depth to walk in the AX tree.
     max_depth: usize,
@@ -473,12 +474,24 @@ pub struct MeetingUiScanner {
     scan_timeout: Duration,
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub struct MeetingUiScanner {}
+
+#[cfg(target_os = "macos")]
 impl Default for MeetingUiScanner {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+impl MeetingUiScanner {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl MeetingUiScanner {
     /// Create a new scanner with default settings (depth=25, timeout=5s).
     pub fn new() -> Self {
@@ -505,7 +518,6 @@ impl MeetingUiScanner {
     /// `is_in_call = true` if the process is running).
     ///
     /// Wraps the AX walk in `std::panic::catch_unwind` to survive cidre FFI panics.
-    #[cfg(target_os = "macos")]
     pub fn scan_process(&self, pid: i32, profile: &MeetingDetectionProfile) -> ScanResult {
         let app_name = get_app_name_for_pid(pid).unwrap_or_else(|| format!("pid:{}", pid));
         let max_depth = self.max_depth;
@@ -615,8 +627,11 @@ impl MeetingUiScanner {
         }
     }
 
+}
+
+#[cfg(target_os = "windows")]
+impl MeetingUiScanner {
     /// Windows: scan a process's windows via UI Automation for call control signals.
-    #[cfg(target_os = "windows")]
     pub fn scan_process(&self, pid: i32, profile: &MeetingDetectionProfile) -> ScanResult {
         let app_name = windows_get_process_name(pid).unwrap_or_else(|| format!("pid:{}", pid));
         let max_depth = self.max_depth;
@@ -671,9 +686,11 @@ impl MeetingUiScanner {
             leave_signals_matched,
         }
     }
+}
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+impl MeetingUiScanner {
     /// Fallback for platforms other than macOS and Windows.
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     pub fn scan_process(&self, pid: i32, profile: &MeetingDetectionProfile) -> ScanResult {
         let _ = profile;
         let app_name = format!("pid:{}", pid);
@@ -810,6 +827,7 @@ fn walk_for_signals(
     }
 }
 
+#[cfg(target_os = "macos")]
 /// A signal with pre-lowercased match strings to avoid per-node allocations.
 struct PrecomputedSignal {
     signal: CallSignal,
@@ -817,6 +835,7 @@ struct PrecomputedSignal {
     lower: String,
 }
 
+#[cfg(target_os = "macos")]
 impl PrecomputedSignal {
     fn from_signals(signals: &[CallSignal]) -> Vec<PrecomputedSignal> {
         signals
@@ -921,6 +940,7 @@ fn check_signal_match(
     }
 }
 
+#[cfg(target_os = "macos")]
 /// Optimized signal match using pre-lowercased signal strings and pre-lowercased node fields.
 /// Avoids per-signal and per-node `.to_lowercase()` allocations on the hot path.
 fn check_signal_match_precomputed(
@@ -983,6 +1003,7 @@ fn check_signal_match_precomputed(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 /// Format a human-readable label for a matched signal (used in debug logging).
 fn format_signal_match(
     signal: &CallSignal,
@@ -1545,6 +1566,7 @@ const FAST_ENDING_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Key phrases that indicate the user has explicitly left a meeting.
 /// These are matched (case-insensitively) against element titles/descriptions
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 /// when `CallSignal::LeaveConfirmation` is used in a profile's `leave_signals`.
 /// The scanner checks if any of these phrases appear in the element's text.
 const LEAVE_CONFIRMATION_PHRASES: &[&str] = &[
@@ -1734,7 +1756,7 @@ pub fn advance_state(
                 )
             } else {
                 // Use shorter timeout for high-confidence endings (5s vs 30s).
-                let timeout = if *high_confidence {
+                let timeout = if high_confidence {
                     FAST_ENDING_TIMEOUT
                 } else {
                     ENDING_TIMEOUT
@@ -1763,7 +1785,7 @@ pub fn advance_state(
                             app,
                             started_at,
                             since,
-                            high_confidence: *high_confidence,
+                            high_confidence,
                         },
                         None,
                     )
@@ -1799,6 +1821,7 @@ pub struct RunningMeetingApp {
     pub browser_url: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 /// Known browser app names (lowercase).
 const BROWSER_NAMES: &[&str] = &[
     "google chrome",
@@ -2149,7 +2172,6 @@ async fn db_find_browser_meetings(
 
     for (app_name, window_name) in &rows {
         let window_lower = window_name.to_lowercase();
-        let app_lower = app_name.to_lowercase();
         for (idx, profile) in profiles.iter().enumerate() {
             if profile.app_identifiers.browser_url_patterns.is_empty() {
                 continue;
@@ -2161,19 +2183,22 @@ async fn db_find_browser_meetings(
                 .any(|p| window_lower.contains(&p.to_lowercase()));
             if matches {
                 #[cfg(target_os = "macos")]
-                let pid = cidre::objc::ar_pool(|| -> i32 {
-                    let ws = cidre::ns::Workspace::shared();
-                    let apps = ws.running_apps();
-                    for i in 0..apps.len() {
-                        let a = &apps[i];
-                        if let Some(n) = a.localized_name() {
-                            if n.to_string().to_lowercase() == app_lower {
-                                return a.pid();
+                let pid = {
+                    let app_lower = app_name.to_lowercase();
+                    cidre::objc::ar_pool(|| -> i32 {
+                        let ws = cidre::ns::Workspace::shared();
+                        let apps = ws.running_apps();
+                        for i in 0..apps.len() {
+                            let a = &apps[i];
+                            if let Some(n) = a.localized_name() {
+                                if n.to_string().to_lowercase() == app_lower {
+                                    return a.pid();
+                                }
                             }
                         }
-                    }
-                    -1
-                });
+                        -1
+                    })
+                };
                 #[cfg(not(target_os = "macos"))]
                 let pid = -1i32;
                 if pid > 0 {

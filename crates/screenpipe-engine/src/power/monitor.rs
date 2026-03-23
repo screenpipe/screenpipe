@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Thermal pressure level reported by the OS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

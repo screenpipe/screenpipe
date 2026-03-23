@@ -17,7 +17,7 @@
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Global flag — when `true`, all monitors skip screen capture.
 static DRM_CONTENT_PAUSED: AtomicBool = AtomicBool::new(false);
@@ -173,30 +173,34 @@ pub fn check_and_update_drm_state(
     }
 }
 
-/// Known browser app names that can host DRM content in tabs.
-/// When one of these is focused, we can't determine the URL without the
-/// accessibility tree (which requires an active capture), so we keep the
-/// DRM pause active. Only clears when user switches to a non-browser app.
-const BROWSER_APPS: &[&str] = &[
-    "arc",
-    "google chrome",
-    "chrome",
-    "safari",
-    "firefox",
-    "microsoft edge",
-    "edge",
-    "brave browser",
-    "brave",
-    "opera",
-    "vivaldi",
-    "chromium",
-    "zen browser",
-    "orion",
-];
+#[cfg(target_os = "macos")]
+mod browser_detection {
+    use super::*;
+    /// Known browser app names that can host DRM content in tabs.
+    /// When one of these is focused, we can't determine the URL without the
+    /// accessibility tree (which requires an active capture), so we keep the
+    /// DRM pause active. Only clears when user switches to a non-browser app.
+    pub const BROWSER_APPS: &[&str] = &[
+        "arc",
+        "google chrome",
+        "chrome",
+        "safari",
+        "firefox",
+        "microsoft edge",
+        "edge",
+        "brave browser",
+        "brave",
+        "opera",
+        "vivaldi",
+        "chromium",
+        "zen browser",
+        "orion",
+    ];
 
-fn is_browser(app_name: &str) -> bool {
-    let lower = app_name.to_lowercase();
-    BROWSER_APPS.iter().any(|&b| lower.contains(b))
+    pub fn is_browser(app_name: &str) -> bool {
+        let lower = app_name.to_lowercase();
+        BROWSER_APPS.iter().any(|&b| lower.contains(b))
+    }
 }
 
 /// Query the current foreground app and check if DRM is still active.
