@@ -127,6 +127,7 @@ pub struct RecordingSettings {
     pub ignore_incognito_windows: bool,
 
     /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
+    /// Enabled by default to prevent streaming services from showing black screens.
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
@@ -242,7 +243,7 @@ impl Default for RecordingSettings {
             included_windows: vec![],
             ignored_urls: vec![],
             ignore_incognito_windows: true,
-            pause_on_drm_content: false,
+            pause_on_drm_content: true,
             languages: vec![],
             use_pii_removal: false,
             user_id: String::new(),
