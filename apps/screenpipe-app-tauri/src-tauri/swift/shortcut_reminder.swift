@@ -339,7 +339,7 @@ struct HoverIconButton: View {
 // MARK: - Panel controller
 
 @available(macOS 13.0, *)
-class ShortcutReminderController: NSObject {
+class ShortcutReminderController: NSObject, ObservableObject {
     static let shared = ShortcutReminderController()
 
     private var panel: NSPanel?
@@ -507,6 +507,7 @@ class ShortcutReminderController: NSObject {
         p.sharingType = .readOnly
 
         let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(kExpandedW), height: Int(kExpandedH)))
+        tracking.controller = self
         tracking.autoresizingMask = [.width, .height]
         p.contentView = tracking
         self.trackingView = tracking
@@ -566,6 +567,8 @@ class ShortcutReminderController: NSObject {
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {
+    weak var controller: ShortcutReminderController?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         return true
     }
@@ -584,6 +587,7 @@ private class ReminderTrackingView: NSView {
     override func mouseEntered(with event: NSEvent) {
         window?.disableCursorRects()
         NSCursor.pointingHand.set()
+        controller?.isExpanded = true
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -593,6 +597,7 @@ private class ReminderTrackingView: NSView {
     override func mouseExited(with event: NSEvent) {
         window?.enableCursorRects()
         NSCursor.arrow.set()
+        controller?.isExpanded = false
     }
 }
 
