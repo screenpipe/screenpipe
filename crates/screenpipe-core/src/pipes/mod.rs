@@ -522,7 +522,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                 "aiPresets": [{
                     "id": "default",
                     "model": "claude-haiku-4-5",
-                    "provider": "pi",
+                    "provider": "screenpipe-cloud",
                     "defaultPreset": true,
                     "maxContextChars": 200000
                 }]
@@ -558,7 +558,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         .get("provider")
         .and_then(|v| v.as_str())
         .and_then(|p| match p {
-            "pi" => Some("screenpipe"),
+            "screenpipe-cloud" | "pi" => Some("screenpipe"),
             "native-ollama" => Some("ollama"),
             "openai" => Some("openai"),
             "openai-chatgpt" => Some("openai-chatgpt"),

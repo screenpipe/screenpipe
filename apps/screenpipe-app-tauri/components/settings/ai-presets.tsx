@@ -129,7 +129,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
   title: string;
   description: string;
   imageSrc: string;
@@ -235,7 +235,7 @@ const AISection = ({
 
   // Filter presets the same way the UI does so hidden presets don't block creation
   const visiblePresets = useMemo(
-    () => settings.aiPresets.filter((p) => !isEnterprise || p.provider !== "pi"),
+    () => settings.aiPresets.filter((p) => !isEnterprise || p.provider !== "screenpipe-cloud"),
     [settings.aiPresets, isEnterprise]
   );
 
@@ -485,7 +485,7 @@ const AISection = ({
         newUrl = "https://api.anthropic.com";
         newModel = "claude-sonnet-4-6";
         break;
-      case "pi":
+      case "screenpipe-cloud":
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "claude-haiku-4-5";
         break;
@@ -502,7 +502,7 @@ const AISection = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   const runDiagnostics = useCallback(async () => {
-    if (settingsPreset?.provider === "pi") return;
+    if (settingsPreset?.provider === "screenpipe-cloud") return;
 
     // Abort any previous run
     diagnosticsAbortRef.current?.abort();
@@ -949,7 +949,7 @@ const AISection = ({
           break;
         }
 
-        case "pi": {
+        case "screenpipe-cloud": {
           // Fetch models from gateway so new models appear automatically
           try {
             const token = settings.user?.token || "";
@@ -1027,7 +1027,7 @@ const AISection = ({
 
   // Auto-trigger diagnostics when provider + url + apiKey are set (debounced)
   useEffect(() => {
-    if (settingsPreset?.provider === "pi") return;
+    if (settingsPreset?.provider === "screenpipe-cloud") return;
     if (!settingsPreset?.provider) return;
 
     const needsApiKey =
@@ -1113,12 +1113,12 @@ const AISection = ({
 
           {piAvailable && (
             <AIProviderCard
-              type="pi"
+              type="screenpipe-cloud"
               title="Screenpipe Cloud"
               description="AI coding agent powered by Screenpipe Cloud. Requires login."
               imageSrc="/images/screenpipe.png"
-              selected={settingsPreset?.provider === "pi"}
-              onClick={() => handleAiProviderChange("pi")}
+              selected={settingsPreset?.provider === "screenpipe-cloud"}
+              onClick={() => handleAiProviderChange("screenpipe-cloud")}
               disabled={!settings.user?.token}
               warningText={!settings.user?.token ? "Login required" : undefined}
             />
@@ -1452,7 +1452,7 @@ const AISection = ({
         helperText="This prompt will be used to guide the AI's responses"
       />
 
-      {settingsPreset?.provider !== "pi" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && (
         <div className="w-full">
           <Label htmlFor="maxTokens" className="text-sm font-medium">
             Max Output Tokens
@@ -1497,7 +1497,7 @@ const AISection = ({
         </div>
       )}
 
-      {settingsPreset?.provider !== "pi" && (
+      {settingsPreset?.provider !== "screenpipe-cloud" && (
         <div className="w-full border rounded-lg">
           <button
             type="button"
@@ -1821,7 +1821,7 @@ export const AIPresets = () => {
     try {
       // Prevent deletion of pi-agent preset for Pro subscribers (pi = screenpipe cloud)
       const presetToRemove = settings.aiPresets.find((preset) => preset.id === id);
-      if (presetToRemove?.provider === "pi" && settings.user?.cloud_subscribed) {
+      if (presetToRemove?.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
         toast({
           title: "Cannot delete cloud preset",
           description: "This preset is included with your Pro subscription",
@@ -1996,11 +1996,11 @@ export const AIPresets = () => {
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext
-          items={settings.aiPresets.filter((preset) => !isEnterprise || preset.provider !== "pi").map((p) => p.id)}
+          items={settings.aiPresets.filter((preset) => !isEnterprise || preset.provider !== "screenpipe-cloud").map((p) => p.id)}
           strategy={rectSortingStrategy}
         >
           <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-3">
-            {settings.aiPresets.filter((preset) => !isEnterprise || preset.provider !== "pi").map((preset) => (
+            {settings.aiPresets.filter((preset) => !isEnterprise || preset.provider !== "screenpipe-cloud").map((preset) => (
               <SortablePresetCard
                 key={preset.id}
                 preset={preset}

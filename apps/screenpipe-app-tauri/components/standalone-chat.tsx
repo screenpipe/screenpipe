@@ -1483,7 +1483,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   // All providers now route through Pi — isPi is always true when we have a preset
   const isPi = true;
   const hasValidModel = activePreset?.model && activePreset.model.trim() !== "";
-  const needsLogin = (activePreset?.provider === "screenpipe-cloud" || activePreset?.provider === "pi") && !settings.user?.token;
+  const needsLogin = activePreset?.provider === "screenpipe-cloud" && !settings.user?.token;
   // Pi auto-starts on first message, so don't block chat when Pi is not running
   const canChat = hasPresets && hasValidModel && !needsLogin && !piStarting;
 

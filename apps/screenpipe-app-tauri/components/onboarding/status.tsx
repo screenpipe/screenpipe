@@ -209,7 +209,7 @@ const OnboardingStatus: React.FC<OnboardingStatusProps> = ({
     if (settings.aiPresets.length === 0) {
       const defaultPreset = {
         id: "pi-agent",
-        provider: "pi" as const,
+        provider: "screenpipe-cloud" as const,
         url: "",
         model: "claude-haiku-4-5",
         maxContextChars: 200000,

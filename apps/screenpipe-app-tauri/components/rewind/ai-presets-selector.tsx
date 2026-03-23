@@ -196,7 +196,7 @@ export function AIProviderConfig({
 
   // Fetch PI models from gateway (single source of truth)
   useEffect(() => {
-    if (selectedProvider !== "pi") return;
+    if (selectedProvider !== "screenpipe-cloud") return;
     const fetchPiModels = async () => {
       try {
         const token = settings?.user?.token || "";
@@ -536,13 +536,13 @@ export function AIProviderConfig({
             <Button
               type="button"
               disabled={!settings?.user?.token}
-              variant={selectedProvider === "pi" ? "default" : "outline"}
+              variant={selectedProvider === "screenpipe-cloud" ? "default" : "outline"}
               className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
               onClick={() => {
-                setSelectedProvider("pi");
+                setSelectedProvider("screenpipe-cloud");
                 setFormData({
                   ...formData,
-                  provider: "pi",
+                  provider: "screenpipe-cloud",
                   url: "", // Pi uses RPC mode
                   model: "claude-haiku-4-5",
                 });
@@ -811,7 +811,7 @@ export function AIProviderConfig({
           </div>
         )}
 
-        {selectedProvider === "pi" && (
+        {selectedProvider === "screenpipe-cloud" && (
           <div className="space-y-1">
             <Label htmlFor="model" className="text-xs">model</Label>
             <Select
@@ -1034,7 +1034,7 @@ export const AIPresetsSelector = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
     const presets = (settings?.aiPresets || []) as AIPreset[];
-    return isEnterprise ? presets.filter((p) => p.provider !== "pi") : presets;
+    return isEnterprise ? presets.filter((p) => p.provider !== "screenpipe-cloud") : presets;
   }, [settings?.aiPresets, isEnterprise]);
 
   const selectedPreset = useMemo(() => {
@@ -1049,7 +1049,7 @@ export const AIPresetsSelector = ({
   // Check if selected preset requires login
   const selectedPresetRequiresLogin = useMemo(() => {
     const preset = aiPresets.find((p) => p.id === selectedPreset);
-    return preset?.provider === "pi" && !settings?.user?.token;
+    return preset?.provider === "screenpipe-cloud" && !settings?.user?.token;
   }, [aiPresets, selectedPreset, settings?.user?.token]);
 
   useEffect(() => {
@@ -1267,7 +1267,7 @@ export const AIPresetsSelector = ({
   const handleRemovePreset = (preset: AIPreset) => {
     if (!settings?.aiPresets) return;
     // Prevent deletion of pi-agent preset for Pro subscribers (pi = screenpipe cloud)
-    if (preset.provider === "pi" && settings.user?.cloud_subscribed) {
+    if (preset.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
       toast.error("Cannot delete cloud preset", {
         description: "This preset is included with your Pro subscription",
       });
