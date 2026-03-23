@@ -146,11 +146,42 @@ async fn get_media_file(file_path: &str) -> Result<serde_json::Value, String> {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_DELAY_MS: u64 = 100;
 
+    // Validate file_path early with clear diagnostics for malformed inputs
+    let file_path = file_path.trim();
+    if file_path.is_empty() {
+        return Err("Invalid file path: empty string".to_string());
+    }
+    // Detect obviously malformed paths (e.g., just an extension like ".mp4"
+        // or an accidental command string passed as path)
+    let file_path_lower = file_path.to_lowercase();
+    if file_path_lower == ".mp4"
+        || file_path_lower == ".mp3"
+        || file_path_lower == ".wav"
+        || file_path_lower == ".webm"
+        || file_path_lower.starts_with("ffmpeg ")
+        || file_path_lower.starts_with("ffprobe ")
+    {
+        error!(
+            "[webview] get_media_file received malformed path: '{}'",
+            file_path
+        );
+        return Err(format!("Invalid file path (possible injection or encoding issue): '{}'", file_path));
+    }
+    // Check for paths that look like they have no filename, only extension+params
+    if file_path.starts_with("-") || file_path.contains(" -i ") {
+        error!(
+            "[webview] get_media_file received suspicious path (looks like a command): '{}'",
+            file_path
+        );
+        return Err(format!(
+            "Invalid file path (looks like a command, not a file): '{}'",
+            file_path
+        ));
+    }
+
     debug!("Reading media file: {}", file_path);
 
-    let path = Path::new(file_path);
-
-    // Retry loop to handle files that may be in the process of being written
+    let path = Path::new(file_path); to handle files that may be in the process of being written
     let mut last_error = String::new();
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
