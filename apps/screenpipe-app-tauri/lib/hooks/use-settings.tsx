@@ -1,4 +1,5 @@
 import { homeDir } from "@tauri-apps/api/path";
+import { setServerPort } from "@/lib/api-base";
 import { getVersion } from "@tauri-apps/api/app";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
@@ -572,11 +573,17 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				const loadedSettings = await settingsStore.get();
 				setSettings(loadedSettings);
 				setIsSettingsLoaded(true);
+
+			// Update server port when settings change
+			setServerPort(loadedSettings.port || 3030);
 				setLoadingError(null);
 			} catch (error) {
 				console.error("Failed to load settings:", error);
 				setLoadingError(error instanceof Error ? error.message : "Unknown error");
 				setIsSettingsLoaded(true);
+
+			// Update server port when settings change
+			setServerPort(loadedSettings.port || 3030);
 			}
 		};
 
@@ -585,6 +592,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// Listen for changes
 		const unsubscribe = settingsStore.listen((newSettings) => {
 			setSettings(newSettings);
+			// Update server port when settings change via store
+			setServerPort(newSettings.port || 3030);
 		});
 
 		return () => {
