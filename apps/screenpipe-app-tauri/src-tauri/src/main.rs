@@ -489,26 +489,89 @@ async fn main() {
         default_hook(info);
     }));
 
-    // Set permanent OLLAMA_ORIGINS env var on Windows if not present
+    // Set OLLAMA_ORIGINS env var on Windows so embedded Ollama accepts CORS requests
+    // from the Tauri frontend (tauri://localhost). Must set BOTH the registry
+    // (so future Ollama processes pick it up) AND the current process env (so
+    // child processes spawned by this app get it immediately).
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
+        use winreg::enums::*;
+        use winreg::RegKey;
+
         const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const OLLAMA_ORIGINS_VAL: &str = "*";
 
-        if env::var("OLLAMA_ORIGINS").is_err() {
-            let output = std::process::Command::new("setx")
-                .args(&["OLLAMA_ORIGINS", "*"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .expect("failed to execute process");
+        // Read current registry value (if any)
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let env_key = hkcu
+            .open_subkey_with_flags(r"Environment", KEY_READ | KEY_WRITE)
+            .ok();
+        let registry_already_set = env_key
+            .as_ref()
+            .and_then(|k| k.get_value::<String, _>("OLLAMA_ORIGINS").ok())
+            .map(|v| v == OLLAMA_ORIGINS_VAL)
+            .unwrap_or(false);
 
-            if !output.status.success() {
-                error!(
-                    "failed to set OLLAMA_ORIGINS: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
+        // Set in current process env if not already set
+        if env::var("OLLAMA_ORIGINS").is_err() || env::var("OLLAMA_ORIGINS").unwrap() != OLLAMA_ORIGINS_VAL {
+            env::set_var("OLLAMA_ORIGINS", OLLAMA_ORIGINS_VAL);
+            info!("set OLLAMA_ORIGINS=* in current process env");
+        }
+
+        // Persist to registry if not already set correctly
+        if !registry_already_set {
+            if let Some(env_key) = env_key {
+                // Write registry value (REG_SZ)
+                if let Err(e) = env_key.set_value("OLLAMA_ORIGINS", &OLLAMA_ORIGINS_VAL) {
+                    error!("failed to write OLLAMA_ORIGINS to registry: {}", e);
+                } else {
+                    info!("permanently set OLLAMA_ORIGINS=* in registry");
+
+                    // Broadcast WM_SETTINGCHANGE so other processes (e.g. already-running
+                    // Ollama) pick up the new value. "Environment" is the correct
+                    // registry key name; the full string required by WM_SETTINGCHANGE.
+                    unsafe {
+                        use std::ffi::OsStr;
+                        use std::os::windows::ffi::OsStrExt;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            SendMessageW, HWND_BROADCAST, WM_SETTINGCHANGE,
+                        };
+
+                        let env_wide: Vec<u16> = OsStr::new("Environment")
+                            .encode_wide()
+                            .chain(std::iter::once(0))
+                            .collect();
+                        let _ = SendMessageW(
+                            HWND_BROADCAST,
+                            WM_SETTINGCHANGE,
+                            windows::Win32::Foundation::WPARAM(0),
+                            windows::Win32::Foundation::LPARAM(env_wide.as_ptr() as isize),
+                        );
+                        info!("broadcast WM_SETTINGCHANGE for OLLAMA_ORIGINS");
+                    }
+                }
             } else {
-                info!("permanently set OLLAMA_ORIGINS=* for user");
+                // Fallback to setx if registry access fails
+                let output = std::process::Command::new("setx")
+                    .args(&["OLLAMA_ORIGINS", OLLAMA_ORIGINS_VAL])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+
+                match output {
+                    Ok(out) if out.status.success() => {
+                        info!("permanently set OLLAMA_ORIGINS=* via setx fallback");
+                    }
+                    Ok(out) => {
+                        error!(
+                            "setx fallback failed: {}",
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        error!("failed to run setx fallback: {}", e);
+                    }
+                }
             }
         }
     }
