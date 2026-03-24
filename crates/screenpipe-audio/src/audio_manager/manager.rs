@@ -811,7 +811,7 @@ impl AudioManager {
     ///
     /// The crossbeam channels are `Arc`-wrapped and survive handler restarts,
     /// so per-device recording tasks keep sending without interruption.
-    pub async fn check_and_restart_central_handlers(&self) -> CentralHandlerRestartResult {
+    pub async fn check_and_restart_central_handlers(&self, force: bool) -> CentralHandlerRestartResult {
         let mut result = CentralHandlerRestartResult::default();
 
         // --- fast path: read-lock to check liveness ---
@@ -830,19 +830,24 @@ impl AudioManager {
             }
         };
 
-        if !recording_dead && !transcription_dead {
+        if !force && !recording_dead && !transcription_dead {
             return result; // both alive, nothing to do
         }
 
-        // --- slow path: write-lock and restart dead handlers ---
-        if recording_dead {
+        // --- slow path: write-lock and restart dead (or force-abort live) handlers ---
+        if recording_dead || force {
             let mut guard = self.recording_receiver_handle.write().await;
-            // double-check under write lock (another task may have restarted it)
             let still_dead = match guard.as_ref() {
                 Some(h) => h.is_finished(),
                 None => true,
             };
-            if still_dead {
+            if still_dead || force {
+                if force && !still_dead {
+                    if let Some(h) = guard.take() {
+                        warn!("force-aborting audio-receiver handler");
+                        h.abort();
+                    }
+                }
                 warn!("central audio-receiver handler is dead, restarting");
                 match self.start_audio_receiver_handler().await {
                     Ok(handle) => {
@@ -858,13 +863,19 @@ impl AudioManager {
             }
         }
 
-        if transcription_dead {
+        if transcription_dead || force {
             let mut guard = self.transcription_receiver_handle.write().await;
             let still_dead = match guard.as_ref() {
                 Some(h) => h.is_finished(),
                 None => true,
             };
-            if still_dead {
+            if still_dead || force {
+                if force && !still_dead {
+                    if let Some(h) = guard.take() {
+                        warn!("force-aborting transcription-receiver handler");
+                        h.abort();
+                    }
+                }
                 warn!("central transcription-receiver handler is dead, restarting");
                 match self.start_transcription_receiver_handler().await {
                     Ok(handle) => {
