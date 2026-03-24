@@ -2589,7 +2589,25 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       if (!piSessionSyncedRef.current && messages.length > 0) {
         const historyLines = messages
           .slice(-40)
-          .map(m => `${m.role}: ${m.content}`)
+          .map(m => {
+            let text = m.content || "";
+            // Include contentBlocks info (tool calls, results) for richer context
+            if (m.contentBlocks?.length) {
+              const blockTexts = m.contentBlocks.map((b: any) => {
+                if (b.type === "text" && b.text) return b.text;
+                if (b.type === "tool" && b.toolCall) {
+                  const tc = b.toolCall;
+                  let s = `[tool: ${tc.toolName}](${JSON.stringify(tc.args)})`;
+                  if (tc.result) s += ` → ${tc.result.slice(0, 500)}`;
+                  return s;
+                }
+                return "";
+              }).filter(Boolean).join("\n");
+              if (blockTexts && !text) text = blockTexts;
+              else if (blockTexts) text += "\n" + blockTexts;
+            }
+            return `${m.role}: ${text}`;
+          })
           .join("\n");
         promptMessage = `<conversation_history>\n${historyLines}\n</conversation_history>\n\n${userMessage}`;
         piSessionSyncedRef.current = true;

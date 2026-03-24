@@ -128,19 +128,14 @@ impl PersistentCapture {
         }
     }
 
-    /// Convert an xcap Frame (BGRA raw bytes) to DynamicImage (RGBA).
+    /// Convert an xcap Frame to DynamicImage.
+    /// Note: xcap 0.9.1's `texture_to_frame` already converts BGRA→RGBA via `bgra_to_rgba()`,
+    /// so Frame.raw is already in RGBA order — no channel swap needed here.
     fn frame_to_image(frame: &Frame) -> Result<DynamicImage> {
         let width = frame.width;
         let height = frame.height;
-        let mut rgba = frame.raw.clone();
 
-        // BGRA → RGBA: swap B and R channels
-        for pixel in rgba.chunks_exact_mut(4) {
-            let pixel: &mut [u8] = pixel;
-            pixel.swap(0, 2);
-        }
-
-        let img = RgbaImage::from_raw(width, height, rgba)
+        let img = RgbaImage::from_raw(width, height, frame.raw.clone())
             .ok_or_else(|| anyhow!("failed to create RgbaImage from frame {}x{}", width, height))?;
 
         Ok(DynamicImage::ImageRgba8(img))

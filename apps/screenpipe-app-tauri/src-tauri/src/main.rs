@@ -1529,9 +1529,26 @@ async fn main() {
                 let app_handle_wake = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut was_asleep = false;
+                    let mut last_tick = std::time::Instant::now();
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        let woke = screenpipe_engine::sleep_monitor::recently_woke_from_sleep();
+                        let now = std::time::Instant::now();
+                        let elapsed = now.duration_since(last_tick);
+                        last_tick = now;
+
+                        // Primary: NSWorkspace sleep monitor flag
+                        let woke_flag = screenpipe_engine::sleep_monitor::recently_woke_from_sleep();
+                        // Fallback: if the 2s poll took >30s, the system clearly slept
+                        // (NSWorkspace observer can silently fail to register)
+                        let woke_gap = elapsed.as_secs() > 30;
+                        if woke_gap && !woke_flag {
+                            tracing::info!(
+                                "wake detected via time gap ({}s elapsed, sleep monitor flag=false)",
+                                elapsed.as_secs()
+                            );
+                        }
+                        let woke = woke_flag || woke_gap;
+
                         if woke && !was_asleep {
                             // System just woke — wait for display to stabilize
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;

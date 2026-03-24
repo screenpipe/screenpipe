@@ -204,12 +204,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   };
 
   // ---- Auto-save conversation when a response completes (isLoading transitions from true to false) ----
-  // Skip saving pipe watch conversations — they're transient, not user-initiated chats
+  // Skip saving live pipe watch conversations (transient, streaming from pipe_event).
+  // But DO save pipe execution conversations that the user has loaded and is chatting in
+  // (they have a conversationId and user-typed messages without pipe- IDs).
   const prevIsLoadingRef = useRef(false);
   useEffect(() => {
     if (prevIsLoadingRef.current && !isLoading && messages.length > 0) {
-      const isPipeWatch = messages.some((m) => m.id?.startsWith("pipe-"));
-      if (!isPipeWatch) {
+      // Only skip if ALL messages are pipe-generated (live watch).
+      // If the user has typed follow-up messages, some won't have pipe- IDs → save.
+      const allPipe = messages.every((m) => m.id?.startsWith("pipe-"));
+      if (!allPipe) {
         saveConversation(messages);
       }
     }
