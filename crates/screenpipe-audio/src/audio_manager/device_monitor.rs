@@ -627,8 +627,24 @@ pub async fn start_device_monitor(
 
                 // Check central handler health (audio-receiver + transcription-receiver)
                 if !central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
-                    let result = audio_manager.check_and_restart_central_handlers().await;
-                    if result.recording_restarted || result.transcription_restarted {
+                    let metrics_snapshot = audio_manager.metrics.snapshot();
+                    let now_ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    
+                    let is_stalled = !enabled_devices.is_empty() 
+                        && metrics_snapshot.last_transcription_attempt_ts > 0
+                        && now_ts - metrics_snapshot.last_transcription_attempt_ts > 120; // 2 minutes
+
+                    let result = if is_stalled {
+                        warn!("[DEVICE_RECOVERY] audio pipeline stalled (no heartbeat for 120s), forcing restart");
+                        audio_manager.check_and_restart_central_handlers().await
+                    } else {
+                        audio_manager.check_and_restart_central_handlers().await
+                    };
+
+                    if is_stalled || result.recording_restarted || result.transcription_restarted {
                         let now = Instant::now();
                         central_restart_times.push(now);
                         // Evict entries older than 5 minutes
