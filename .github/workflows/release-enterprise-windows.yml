@@ -147,16 +147,6 @@ jobs:
         shell: bash
         run: cp apps/screenpipe-app-tauri/src-tauri/tauri.enterprise.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
 
-      - name: Install CodeSignTool for binary signing
-        shell: powershell
-        run: |
-          $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
-          Write-Host "Downloading CodeSignTool..."
-          Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" -OutFile "$env:RUNNER_TEMP\cst.zip"
-          Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$cstDest" -Force
-          echo "CODESIGNTOOL_PATH=$cstDest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "CodeSignTool installed at $cstDest"
-
       - name: Build (enterprise, Windows x64)
         uses: tauri-apps/tauri-action@v0.5.17
         env:
@@ -183,128 +173,9 @@ jobs:
           tauriScript: bunx tauri -v
           retryAttempts: 3
 
-      - name: Sign installer with SSL.com EV certificate
-        shell: powershell
-        env:
-          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
-          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
-          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
-          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: |
-          # CodeSignTool already installed in earlier step
-          $cstDest = $env:CODESIGNTOOL_PATH
-          $jarFile = Get-ChildItem $cstDest -Recurse -Filter "code_sign_tool*.jar" | Select-Object -First 1
-          $javaFile = Get-ChildItem $cstDest -Recurse -Filter "java.exe" | Select-Object -First 1
-          if (-not $jarFile) { throw "CodeSignTool jar not found" }
-          if (-not $javaFile) { throw "Java not found in CodeSignTool" }
-
-          # Find the installer exe
-          $nsisDir = "apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
-          $exe = Get-ChildItem "$nsisDir/*.exe" | Select-Object -First 1
-          if (-not $exe) { throw "No installer exe found in $nsisDir" }
-          Write-Host "Signing installer: $($exe.Name)"
-
-          # Sign with CodeSignTool
-          $signedDir = Join-Path $cstDest "signed_installer"
-          if (Test-Path $signedDir) { Remove-Item $signedDir -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
-
-          Push-Location $cstDest
-          & $javaFile.FullName -jar $jarFile.FullName sign `
-            "-username=$env:ESIGNER_USERNAME" `
-            "-password=$env:ESIGNER_PASSWORD" `
-            "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
-            "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
-            "-input_file_path=$($exe.FullName)" `
-            "-output_dir_path=$signedDir"
-          Pop-Location
-
-          if ($LASTEXITCODE -ne 0) { throw "Code signing failed with exit code $LASTEXITCODE" }
-
-          $signedExe = Join-Path $signedDir $exe.Name
-          if (-not (Test-Path $signedExe)) { throw "Signed file not found at $signedExe" }
-          Copy-Item $signedExe $exe.FullName -Force
-          Write-Host "Installer signed: $($exe.Name)"
-
-          # Regenerate Tauri .sig file for the signed exe
-          $sigFile = "$($exe.FullName).sig"
-          if (Test-Path $sigFile) {
-            Remove-Item $sigFile
-            $keyFile = Join-Path $env:RUNNER_TEMP "tauri-key.txt"
-            Set-Content -Path $keyFile -Value $env:TAURI_SIGNING_PRIVATE_KEY -NoNewline
-            Push-Location apps/screenpipe-app-tauri
-            bunx tauri signer sign $exe.FullName --private-key-path $keyFile --password $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-            Pop-Location
-            Write-Host "Tauri signature regenerated"
-          }
-
-      - name: Create .intunewin and upload to R2
-        shell: powershell
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-        run: |
-          cd apps/screenpipe-app-tauri
-          $intunewinPath = $null
-          try { .\scripts\exe-to-intunewin.ps1 } catch { Write-Host ".intunewin creation failed: $_" }
-          $intunewin = Get-ChildItem "scripts\intunewin\out\*.intunewin" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($intunewin) { $intunewinPath = $intunewin.FullName }
-
-          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing AWS CLI..."
-            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\awscli.msi"
-            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\awscli.msi /quiet"
-            $env:PATH += ";C:\Program Files\Amazon\AWSCLIV2"
-          }
-          $version = (Get-Content src-tauri/Cargo.toml | Select-String -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $r2Endpoint = "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
-          $r2Prefix = "s3://screenpipe-releases/enterprise/releases/$version/x86_64-pc-windows-msvc"
-          $nsisDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
-
-          Write-Host "Uploading enterprise Windows bundles for v$version to R2..."
-          Get-ChildItem "$nsisDir/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          Get-ChildItem "$nsisDir/*.nsis.zip","$nsisDir/*.sig" -ErrorAction SilentlyContinue | ForEach-Object {
-            aws s3 cp $_.FullName "$r2Prefix/$($_.Name)" --endpoint-url $r2Endpoint
-            Write-Host "  $($_.Name)"
-          }
-          if ($intunewinPath) {
-            aws s3 cp $intunewinPath "$r2Prefix/$(Split-Path -Leaf $intunewinPath)" --endpoint-url $r2Endpoint
-            Write-Host "  $(Split-Path -Leaf $intunewinPath)"
-          }
-          Write-Host "R2 enterprise upload complete for Windows"
-
       - name: Upload enterprise NSIS installer (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: enterprise-windows-x64
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-
-      - name: Notify enterprise build subscribers
-        shell: bash
-        env:
-          ENTERPRISE_NOTIFY_SECRET: ${{ secrets.ENTERPRISE_NOTIFY_SECRET }}
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ -z "$ENTERPRISE_NOTIFY_SECRET" ]; then
-            echo "::error::ENTERPRISE_NOTIFY_SECRET is not set in GitHub secrets"
-            exit 1
-          fi
-          HTTP_CODE=$(curl -s -o /tmp/notify_response.txt -w "%{http_code}" -X POST "https://screenpi.pe/api/enterprise/builds/notify" \
-            -H "Authorization: Bearer $ENTERPRISE_NOTIFY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "{\"version\": \"$VERSION\"}")
-          BODY=$(cat /tmp/notify_response.txt)
-          echo "Response: HTTP $HTTP_CODE — $BODY"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Notified subscribers for v$VERSION"
-          else
-            echo "::error::Notification failed (HTTP $HTTP_CODE). If 401, the ENTERPRISE_NOTIFY_SECRET in GitHub Actions does not match the one in Vercel env."
-            exit 1
-          fi
