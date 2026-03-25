@@ -23,6 +23,7 @@ async fn setup_test_env() -> Result<(FrameCache, Arc<DatabaseManager>)> {
                 .join("db.sqlite")
                 .to_str()
                 .unwrap(),
+            Default::default(),
         )
         .await
         .unwrap(),

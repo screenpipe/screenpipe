@@ -65,7 +65,7 @@ export async function handleVoiceQuery(request: Request, env: Env): Promise<Resp
 			punctuate: request.headers.get('punctuate') !== 'false',
 		};
 
-		const aiModel = request.headers.get('ai-model') || 'gpt-4o';
+		const aiModel = request.headers.get('ai-model') || 'gpt-5.4';
 		const systemPrompt = request.headers.get('system-prompt') || 'You are a helpful assistant.';
 
 		const transcriptionResult = await transcribeAudio(validation.audioBuffer, env, transcriptionOptions);
@@ -166,7 +166,7 @@ export async function handleVoiceChat(request: Request, env: Env): Promise<Respo
 			punctuate: request.headers.get('punctuate') !== 'false',
 		};
 
-		const aiModel = request.headers.get('ai-model') || 'gpt-4o';
+		const aiModel = request.headers.get('ai-model') || 'gpt-5.4';
 		const systemPrompt = request.headers.get('system-prompt') || 'You are a helpful assistant. Keep your responses concise.';
 		const voice = (request.headers.get('voice') as TTSVoiceModelType) || 'aura-asteria-en';
 

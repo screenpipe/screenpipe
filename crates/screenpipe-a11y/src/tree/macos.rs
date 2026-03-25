@@ -27,6 +27,7 @@ const BROWSER_NAMES: &[&str] = &[
     "vivaldi",
     "opera",
     "zen",
+    "comet",
     "brave browser",
     "google chrome",
     "microsoft edge",

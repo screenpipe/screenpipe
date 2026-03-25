@@ -18,6 +18,11 @@ function isOpenRouterModel(model: string): boolean {
 }
 
 export function createProvider(model: string, env: Env): AIProvider {
+	// Screenpipe event classifier — routes to self-hosted vLLM
+	if (model === 'screenpipe-event-classifier') {
+		const vllmUrl = env.EVENT_CLASSIFIER_URL || 'http://34.122.128.37:8080/v1';
+		return new OpenAIProvider('none', vllmUrl);
+	}
 	if (model.toLowerCase().includes('claude')) {
 		if (!env.ANTHROPIC_API_KEY) {
 			throw new Error('Anthropic API key not configured');

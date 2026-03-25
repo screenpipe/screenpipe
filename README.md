@@ -9,22 +9,7 @@
 
 
 <p align="center">AI memory for your screen</p>
-<p align="center">AI finally knows what you're doing</p>
-
-
-
-<p align="center">
-   <a href ="https://screenpi.pe">
-      <img src="https://github.com/user-attachments/assets/c88d218e-40a7-405d-b419-eec1553ea287">
-   </a>
-</p>
-
-
-<p align="center">
-   <a href ="https://screenpi.pe">
-      <img src="https://github.com/user-attachments/assets/b482f71d-cccc-4b42-a9b9-bf06a67d401b" alt="logo" width="800">
-   </a>
-</p>
+<p align="center">run agents that work for you in the background based on what you do</p>
 
 
 <p align="center">
@@ -43,8 +28,9 @@
   <a href="https://www.youtube.com/@screen_pipe">
     <img src="https://img.shields.io/youtube/channel/subscribers/UCwjkpAsb70_mENKvy7hT5bw?style=for-the-badge&logo=youtube&logoColor=white&label=subscribers" alt="youtube">
   </a>
-</p>
+</p
 
+![image](https://github.com/user-attachments/assets/fa91a7c3-e25b-451e-b37f-cfb23a222e78)
 ![image](https://github.com/user-attachments/assets/dec2e07c-b3d5-46dd-9f36-c0c26a82c9fb)
 
 
@@ -61,6 +47,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 ```
 
 - **remember everything** - never forget what you saw, heard, or did
+- **run agents that work based on what you do** - pipes are agents triggered by your work activity
 - **search with ai** - find anything using natural language
 - **100% local** - your data never leaves your machine
 - **open source** - inspect, modify, own

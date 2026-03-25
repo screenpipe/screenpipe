@@ -5,6 +5,7 @@ use crate::{AudioChunkInfo, UntranscribedChunk};
 use chrono::{DateTime, Utc};
 use image::DynamicImage;
 use libsqlite3_sys::sqlite3_auto_extension;
+use screenpipe_config::DbConfig;
 use sqlite_vec::sqlite3_vec_init;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::pool::PoolConnection;
@@ -138,11 +139,11 @@ impl Drop for ImmediateTx {
 }
 
 pub struct DatabaseManager {
-    /// Read-only pool (27 connections). Used for all SELECT queries.
+    /// Read-only pool. Used for all SELECT queries.
     /// Separated from writes so read bursts (search, timeline, API) can never
-    /// starve the write pipeline.
+    /// starve the write pipeline. Size depends on DbConfig tier.
     pub pool: SqlitePool,
-    /// Dedicated write pool (3 connections). Used exclusively by
+    /// Dedicated write pool. Used exclusively by
     /// begin_immediate_with_retry(). Small pool is fine because writes are
     /// serialized by write_semaphore anyway — the extra connections handle
     /// the rare case of connection detach without killing the pool.
@@ -163,10 +164,13 @@ pub struct DatabaseManager {
 }
 
 impl DatabaseManager {
-    pub async fn new(database_path: &str) -> Result<Self, sqlx::Error> {
+    pub async fn new(database_path: &str, config: DbConfig) -> Result<Self, sqlx::Error> {
         debug!(
-            "Initializing DatabaseManager with database path: {}",
-            database_path
+            "Initializing DatabaseManager with database path: {} (mmap={}MB, cache={}KB, read_pool={})",
+            database_path,
+            config.mmap_size / (1024 * 1024),
+            config.cache_size_kb,
+            config.read_pool_max,
         );
         let connection_string = format!("sqlite:{}", database_path);
 
@@ -196,8 +200,8 @@ impl DatabaseManager {
             // write, not fsync to main DB. Reduces commit latency significantly.
             // Default (FULL) fsyncs on every commit which is unnecessary in WAL.
             .pragma("synchronous", "NORMAL")
-            .pragma("cache_size", "-64000") // 64 MB page cache
-            .pragma("mmap_size", "268435456") // 256 MB memory-mapped I/O
+            .pragma("cache_size", format!("-{}", config.cache_size_kb))
+            .pragma("mmap_size", config.mmap_size.to_string())
             .pragma("temp_store", "MEMORY")
             // Checkpoint after 4000 pages (~16MB) instead of default 1000 (~4MB).
             // Reduces checkpoint stalls during write bursts — checkpoint happens
@@ -206,19 +210,18 @@ impl DatabaseManager {
             .pragma("wal_autocheckpoint", "4000");
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
-        // 27 connections — large enough to handle read bursts without starving.
         let read_pool = SqlitePoolOptions::new()
-            .max_connections(27)
-            .min_connections(3)
+            .max_connections(config.read_pool_max)
+            .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(connect_options.clone())
             .await?;
 
         // Write pool: dedicated to INSERT/UPDATE/DELETE via begin_immediate_with_retry().
-        // 3 connections — writes are serialized by write_semaphore so only 1 is active
+        // Writes are serialized by write_semaphore so only 1 is active
         // at a time; extras absorb connection detach without killing the pool.
         let write_pool = SqlitePoolOptions::new()
-            .max_connections(3)
+            .max_connections(config.write_pool_max)
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(10))
             .connect_with(connect_options)

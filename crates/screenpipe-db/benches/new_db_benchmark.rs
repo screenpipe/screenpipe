@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 fn create_test_db() -> DatabaseManager {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        DatabaseManager::new("sqlite::memory:")
+        DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .expect("Failed to create in-memory database")
     })

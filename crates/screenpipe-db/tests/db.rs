@@ -17,7 +17,7 @@ mod tests {
             .with_max_level(tracing::Level::INFO)
             .try_init();
 
-        let db = DatabaseManager::new("sqlite::memory:").await.unwrap();
+        let db = DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap();
 
         // Run all migrations with better error handling
         match sqlx::migrate!("./src/migrations").run(&db.pool).await {

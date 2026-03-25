@@ -73,6 +73,12 @@ pub struct HealthCheckResponse {
     /// True when DRM streaming content is detected and capture should be fully stopped.
     #[serde(default)]
     pub drm_content_paused: bool,
+    /// Device hostname for remote monitoring
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Screenpipe version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Serialize, OaSchema, Deserialize, Clone)]
@@ -636,6 +642,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         vision_db_write_stalled,
         audio_db_write_stalled,
         drm_content_paused: crate::drm_detector::drm_content_paused(),
+        hostname: hostname::get().ok().and_then(|h| h.into_string().ok()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
     }
 }
 

@@ -125,7 +125,7 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'gemini-3-flash': 0,
   'gemini-2.5-flash': 0,
   // OpenRouter models
-  'qwen3.5-flash': 1,
+  'qwen3.5-flash': 0,
   'qwen3.5-397b': 3,
   'deepseek-chat': 1,
   'deepseek-v3.2-speciale': 3,
@@ -311,7 +311,8 @@ export async function trackUsage(
         dailyCount = weight;
       } else {
         // Check limit BEFORE incrementing — don't inflate counter on rejected requests
-        if (existing.daily_count >= limits.dailyQueries) {
+        // Skip limit check for free models (weight=0) — they never count toward quota
+        if (weight > 0 && existing.daily_count >= limits.dailyQueries) {
           // Daily free quota exhausted — try credit fallback
           if (userId) {
             const credit = await tryDeductCredit(env, userId, 'ai_query');

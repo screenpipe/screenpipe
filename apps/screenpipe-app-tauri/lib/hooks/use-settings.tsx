@@ -106,9 +106,10 @@ export type Settings = SettingsStore & {
 	lockVaultShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
-	adaptiveFps?: boolean;
 	enableInputCapture?: boolean;
 	enableAccessibility?: boolean;
+	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
+	enableWorkflowEvents?: boolean;
 	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
 	transcriptionMode?: "realtime" | "smart" | "batch";
 	/** User's name for speaker identification — input device audio will be labeled with this name */
@@ -167,6 +168,11 @@ export type Settings = SettingsStore & {
 		pipeNotifications: boolean;
 		mutedPipes: string[];
 	};
+	/** Remote devices to monitor pipes on (LAN addresses) */
+	monitorDevices?: Array<{
+		address: string;
+		label?: string;
+	}>;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -243,7 +249,7 @@ let DEFAULT_SETTINGS: Settings = {
 			userId: "",
 			analyticsId: "",
 			devMode: false,
-			audioTranscriptionEngine: "whisper-large-v3-turbo",
+			audioTranscriptionEngine: "parakeet",
 			ocrEngine: "default",
 			monitorIds: ["default"],
 			audioDevices: ["default"],
@@ -258,7 +264,6 @@ let DEFAULT_SETTINGS: Settings = {
 			ignoredUrls: [],
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
-			fps: 0.5,
 			vadSensitivity: "medium",
 			analyticsEnabled: true,
 			audioChunkDuration: 30,
@@ -302,7 +307,6 @@ let DEFAULT_SETTINGS: Settings = {
 			disableVision: false,
 			disableOcr: false,
 			useAllMonitors: true,
-			adaptiveFps: false,
 			showShortcutOverlay: true,
 			chatHistory: {
 				conversations: [],
@@ -331,7 +335,6 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.ignoredWindows = [...DEFAULT_IGNORED_WINDOWS_IN_ALL_OS];
 		DEFAULT_SETTINGS.ignoredWindows.push(...(DEFAULT_IGNORED_WINDOWS_PER_OS[p] ?? []));
 		DEFAULT_SETTINGS.ocrEngine = p === "macos" ? "apple-native" : p === "windows" ? "windows-native" : "tesseract";
-		DEFAULT_SETTINGS.fps = p === "macos" ? 0.5 : 1;
 		DEFAULT_SETTINGS.showScreenpipeShortcut = p === "windows" ? "Alt+S" : "Control+Super+S";
 		DEFAULT_SETTINGS.showChatShortcut = p === "windows" ? "Alt+L" : "Control+Super+L";
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
@@ -471,24 +474,22 @@ function createSettingsStore() {
 		}
 
 		// Migration: Auto-detect hardware and adjust engine for weak machines (one-time only)
-		if (!(settings as any)._hardwareCapabilityMigrationDone) {
-			try {
-				const { commands: tauriCommands } = await import("../utils/tauri");
-				const hw = await tauriCommands.getHardwareCapability();
-				if (hw.isWeakForLargeModel) {
-					const currentEngine = settings.audioTranscriptionEngine;
-					if (currentEngine.includes("large")) {
-						// Weak hardware with a large model: downgrade to recommended
-						settings.audioTranscriptionEngine = hw.recommendedEngine;
-						needsUpdate = true;
-					}
+		// Migration: Switch to Parakeet as default engine (one-time)
+		// - Paid cloud subscribers → screenpipe-cloud (better accuracy)
+		// - Everyone else → parakeet (lightweight, multilingual, works on all hardware)
+		if (!(settings as any)._parakeetDefaultMigrationDone) {
+			const engine = settings.audioTranscriptionEngine;
+			const isWhisperVariant = engine?.includes("whisper");
+			if (isWhisperVariant || engine === "screenpipe-cloud") {
+				if (settings.user?.cloud_subscribed) {
+					settings.audioTranscriptionEngine = "screenpipe-cloud";
+				} else {
+					settings.audioTranscriptionEngine = "parakeet";
 				}
-				// Only mark done on success — if backend wasn't ready, retry next load
-				(settings as any)._hardwareCapabilityMigrationDone = true;
 				needsUpdate = true;
-			} catch {
-				// Backend not ready (e.g. during SSR) — skip, will retry next settings load
 			}
+			(settings as any)._parakeetDefaultMigrationDone = true;
+			needsUpdate = true;
 		}
 
 		// Save migrations if needed

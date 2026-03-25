@@ -22,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 futures = { version = "0.3.31", features = ["std"] }
 
+screenpipe-config = { path = "../screenpipe-config" }
 zerocopy = { version = "0.7.32" }
 
 tokio = { version = "1.15", features = ["full", "tracing"] }

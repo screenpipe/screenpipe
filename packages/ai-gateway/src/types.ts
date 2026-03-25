@@ -146,6 +146,8 @@ export interface Env {
 	DB: D1Database;
 	// Sentry error tracking
 	SENTRY_DSN: string;
+	// Event classifier (self-hosted vLLM)
+	EVENT_CLASSIFIER_URL: string;
 	// Auto-reload settings
 	WEBSITE_URL: string;
 	AUTO_RELOAD_SECRET: string;
@@ -153,9 +155,14 @@ export interface Env {
 	OPENROUTER_API_KEY: string;
 	// Admin API auth
 	ADMIN_SECRET: string;
-	// Self-hosted Whisper A/B test
+	// Transcription A/B/C test routing
 	SELF_HOSTED_TRANSCRIPTION_URL?: string;
+	WHISPER_URL?: string;
+	PARAKEET_URL?: string;
+	DEEPGRAM_TRAFFIC_PCT?: string;
 	WHISPER_TRAFFIC_PCT?: string;
+	PARAKEET_TRAFFIC_PCT?: string;
+	DUAL_SEND_PCT?: string;
 	WHISPER_DUAL_SEND_PCT?: string;
 	// Configurable tier limits (override defaults without redeploying)
 	LIMIT_ANONYMOUS_DAILY?: string;

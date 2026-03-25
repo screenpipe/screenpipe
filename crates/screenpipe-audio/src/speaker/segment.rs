@@ -310,7 +310,7 @@ pub fn get_speaker_from_embedding(
     embedding_manager: &mut EmbeddingManager,
     embedding: Vec<f32>,
 ) -> String {
-    let search_threshold = 0.2; // cosine similarity threshold (1 - distance), equivalent to 0.8 distance
+    let search_threshold = 0.45; // cosine similarity threshold (1 - distance), aligned with DB threshold of 0.55 distance
 
     embedding_manager
         .search_speaker(embedding.clone(), search_threshold)

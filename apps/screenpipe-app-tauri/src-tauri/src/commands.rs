@@ -112,7 +112,13 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
 #[tauri::command]
 #[specta::specta]
 pub fn get_enterprise_license_key() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            warn!("enterprise: failed to get current_exe: {}", e);
+            return None;
+        }
+    };
     let exe_dir = exe.parent()?;
 
     // Check next to executable first (Program Files on Windows, .app/Contents/MacOS on macOS)
@@ -127,15 +133,40 @@ pub fn get_enterprise_license_key() -> Option<String> {
     };
 
     if !config_path.exists() {
+        info!(
+            "enterprise: no enterprise.json at {}",
+            config_path.display()
+        );
         return None;
     }
 
-    let contents = std::fs::read_to_string(&config_path).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    parsed
+    info!("enterprise: found enterprise.json at {}", config_path.display());
+
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("enterprise: failed to read {}: {}", config_path.display(), e);
+            return None;
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("enterprise: failed to parse enterprise.json: {}", e);
+            return None;
+        }
+    };
+    let key = parsed
         .get("license_key")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(|s| s.to_string());
+
+    match &key {
+        Some(k) => info!("enterprise: license key loaded ({}...)", &k[..k.len().min(8)]),
+        None => warn!("enterprise: enterprise.json missing 'license_key' field"),
+    }
+
+    key
 }
 
 #[tauri::command]
@@ -1218,8 +1249,8 @@ pub async fn show_notification_panel(
         }
     }
 
-    let window_width = 320.0;
-    let window_height = 180.0;
+    let window_width = 340.0;
+    let window_height = 380.0;
 
     // Position at top-right of the screen where the cursor is
     let (x, y) = {
@@ -1263,6 +1294,12 @@ pub async fn show_notification_panel(
         }
     };
 
+    // Parse autoDismissMs from payload for the server-side safety timeout
+    let auto_dismiss_ms: u64 = serde_json::from_str::<serde_json::Value>(&payload)
+        .ok()
+        .and_then(|v| v.get("autoDismissMs")?.as_u64())
+        .unwrap_or(20000);
+
     // If window exists, reposition to current screen and show
     if let Some(window) = app_handle.get_webview_window(label) {
         info!("notification-panel window exists, repositioning and showing");
@@ -1300,6 +1337,21 @@ pub async fn show_notification_panel(
                 }
             });
         }
+
+        // Server-side safety timeout: force-hide the notification if the JS
+        // auto-dismiss timer fails (e.g. webview timer throttled on Windows).
+        // Adds 5s buffer so JS normally handles it first.
+        let app_safety = app_handle.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 5000)).await;
+            if let Some(w) = app_safety.get_webview_window("notification-panel") {
+                if w.is_visible().unwrap_or(false) {
+                    info!("Safety timeout: force-hiding notification panel");
+                    let _ = w.hide();
+                }
+            }
+        });
+
         return Ok(());
     }
 
@@ -1394,6 +1446,19 @@ pub async fn show_notification_panel(
             "notification-panel-update",
             &payload_clone,
         );
+    });
+
+    // Server-side safety timeout for newly created windows too
+    let app_safety = app_handle.clone();
+    tokio::spawn(async move {
+        // 2s wait for mount + autoDismissMs + 5s buffer
+        tokio::time::sleep(std::time::Duration::from_millis(auto_dismiss_ms + 7000)).await;
+        if let Some(w) = app_safety.get_webview_window("notification-panel") {
+            if w.is_visible().unwrap_or(false) {
+                info!("Safety timeout: force-hiding notification panel (new window)");
+                let _ = w.hide();
+            }
+        }
     });
 
     Ok(())

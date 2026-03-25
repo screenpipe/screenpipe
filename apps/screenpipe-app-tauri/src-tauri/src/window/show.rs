@@ -333,12 +333,25 @@ impl ShowRewindWindow {
             #[cfg(target_os = "windows")]
             {
                 window.show().ok();
-                // Overlay mode: bring to front WITHOUT stealing focus.
-                // Using bring_to_front (SWP_NOACTIVATE) instead of
-                // bring_to_front_and_activate (SetForegroundWindow) prevents
-                // the overlay from yanking focus away from fullscreen games.
-                if let Err(e) = crate::windows_overlay::bring_to_front(window) {
-                    error!("Failed to bring window to front: {}", e);
+                // Reposition overlay to the monitor where the cursor is,
+                // matching macOS behavior where the panel moves to the active screen.
+                if let Ok(cursor) = app.cursor_position() {
+                    if let Err(e) = crate::windows_overlay::reposition_to_cursor_monitor(
+                        window,
+                        cursor.x as i32,
+                        cursor.y as i32,
+                    ) {
+                        error!("Failed to reposition overlay to cursor monitor: {}", e);
+                        // Fallback: just bring to front at current position
+                        if let Err(e) = crate::windows_overlay::bring_to_front(window) {
+                            error!("Failed to bring window to front: {}", e);
+                        }
+                    }
+                } else {
+                    // Can't get cursor position, just bring to front
+                    if let Err(e) = crate::windows_overlay::bring_to_front(window) {
+                        error!("Failed to bring window to front: {}", e);
+                    }
                 }
                 let _ = app.emit("window-focused", true);
             }

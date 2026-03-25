@@ -175,6 +175,7 @@ const BROWSER_NAMES: &[&str] = &[
     "edge",
     "epiphany",
     "zen",
+    "comet",
     "google-chrome",
     "microsoft-edge",
 ];

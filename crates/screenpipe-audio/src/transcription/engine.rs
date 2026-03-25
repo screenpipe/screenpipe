@@ -14,7 +14,7 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 use screenpipe_core::Language;
 use std::sync::Arc;
-#[cfg(feature = "qwen3-asr")]
+#[cfg(any(feature = "qwen3-asr", feature = "parakeet"))]
 use std::sync::Mutex as StdMutex;
 use tracing::{error, info};
 use whisper_rs::{WhisperContext, WhisperState};
@@ -31,6 +31,11 @@ pub enum TranscriptionEngine {
     },
     #[cfg(feature = "qwen3-asr")]
     Qwen3Asr {
+        model: Arc<StdMutex<audiopipe::Model>>,
+        vocabulary: Vec<VocabularyEntry>,
+    },
+    #[cfg(feature = "parakeet")]
+    Parakeet {
         model: Arc<StdMutex<audiopipe::Model>>,
         vocabulary: Vec<VocabularyEntry>,
     },
@@ -111,6 +116,29 @@ impl TranscriptionEngine {
                 }
             }
 
+            AudioTranscriptionEngine::Parakeet => {
+                #[cfg(feature = "parakeet")]
+                {
+                    let model = tokio::task::spawn_blocking(|| {
+                        audiopipe::Model::from_pretrained("parakeet-tdt-0.6b-v3")
+                    })
+                    .await
+                    .map_err(|e| anyhow!("parakeet model loading task panicked: {}", e))?
+                    .map_err(|e| anyhow!("failed to load parakeet model: {}", e))?;
+                    info!("parakeet-tdt-0.6b-v3 (multilingual) model loaded successfully");
+                    Ok(Self::Parakeet {
+                        model: Arc::new(StdMutex::new(model)),
+                        vocabulary,
+                    })
+                }
+                #[cfg(not(feature = "parakeet"))]
+                {
+                    Err(anyhow!(
+                        "parakeet engine selected but the 'parakeet' feature is not enabled"
+                    ))
+                }
+            }
+
             // All Whisper variants
             _ => {
                 let engine_for_download = config.clone();
@@ -128,7 +156,7 @@ impl TranscriptionEngine {
                 info!("loading whisper model with GPU acceleration...");
                 let context = tokio::task::spawn_blocking(move || {
                     WhisperContext::new_with_params(
-                        &quantized_path.to_string_lossy(),
+                        &quantized_path,
                         context_param,
                     )
                     .map(Arc::new)
@@ -183,6 +211,11 @@ impl TranscriptionEngine {
                 model: model.clone(),
                 vocabulary: vocabulary.clone(),
             }),
+            #[cfg(feature = "parakeet")]
+            Self::Parakeet { model, vocabulary } => Ok(TranscriptionSession::Parakeet {
+                model: model.clone(),
+                vocabulary: vocabulary.clone(),
+            }),
             Self::Deepgram {
                 api_key,
                 languages,
@@ -229,6 +262,8 @@ impl TranscriptionEngine {
             Self::Whisper { config, .. } => (**config).clone(),
             #[cfg(feature = "qwen3-asr")]
             Self::Qwen3Asr { .. } => AudioTranscriptionEngine::Qwen3Asr,
+            #[cfg(feature = "parakeet")]
+            Self::Parakeet { .. } => AudioTranscriptionEngine::Parakeet,
             Self::Deepgram { .. } => AudioTranscriptionEngine::Deepgram,
             Self::OpenAICompatible { .. } => AudioTranscriptionEngine::OpenAICompatible,
             Self::Disabled => AudioTranscriptionEngine::Disabled,
@@ -249,6 +284,11 @@ pub enum TranscriptionSession {
     },
     #[cfg(feature = "qwen3-asr")]
     Qwen3Asr {
+        model: Arc<StdMutex<audiopipe::Model>>,
+        vocabulary: Vec<VocabularyEntry>,
+    },
+    #[cfg(feature = "parakeet")]
+    Parakeet {
         model: Arc<StdMutex<audiopipe::Model>>,
         vocabulary: Vec<VocabularyEntry>,
     },
@@ -344,6 +384,16 @@ impl TranscriptionSession {
                 }
             }
 
+            #[cfg(feature = "parakeet")]
+            Self::Parakeet { model, .. } => {
+                let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
+                let opts = audiopipe::TranscribeOptions::default();
+                let result = engine
+                    .transcribe_with_sample_rate(audio, sample_rate, opts)
+                    .map_err(|e| anyhow!("{}", e))?;
+                Ok(result.text)
+            }
+
             Self::Whisper {
                 state,
                 languages,
@@ -397,6 +447,8 @@ impl TranscriptionSession {
                     Self::Whisper { vocabulary, .. } => vocabulary,
                     #[cfg(feature = "qwen3-asr")]
                     Self::Qwen3Asr { vocabulary, .. } => vocabulary,
+                    #[cfg(feature = "parakeet")]
+                    Self::Parakeet { vocabulary, .. } => vocabulary,
                     Self::Deepgram { vocabulary, .. } => vocabulary,
                     Self::OpenAICompatible { vocabulary, .. } => vocabulary,
                     Self::Disabled => return Ok(text),

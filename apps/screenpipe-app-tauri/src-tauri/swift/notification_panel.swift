@@ -225,8 +225,7 @@ struct NotificationContentView: View {
             MarkdownText(payload.body)
                 .padding(.horizontal, 14)
                 .padding(.top, 4)
-
-            Spacer(minLength: 6)
+                .padding(.bottom, 8)
 
             // Action buttons
             if !payload.actions.isEmpty {
@@ -312,7 +311,9 @@ struct NotificationContentView: View {
 }
 
 // MARK: - Basic Markdown text renderer
-// Supports **bold**, `code`, [links](url), and plain text
+// Supports **bold**, `code`, [links](url), and plain text.
+// Links are rendered as Button views (not AttributedString) so they
+// receive clicks in non-activating panels without needing key focus.
 
 @available(macOS 13.0, *)
 struct MarkdownText: View {
@@ -334,47 +335,60 @@ struct MarkdownText: View {
         }
     }
 
-    private func renderLine(_ line: String) -> some View {
-        var result = Text("")
+    /// A parsed inline segment
+    fileprivate enum Segment {
+        case text(AttributedString)
+        case link(label: String, url: URL)
+    }
+
+    /// Parse a line into segments, separating links from other inline content
+    private func parseSegments(_ line: String) -> [Segment] {
+        var segments: [Segment] = []
         var remaining = line[line.startIndex...]
+        var textRun = AttributedString()
+
+        func flushText() {
+            if !textRun.characters.isEmpty {
+                segments.append(.text(textRun))
+                textRun = AttributedString()
+            }
+        }
 
         while !remaining.isEmpty {
             if remaining.hasPrefix("**") {
-                // Bold
                 let after = remaining[remaining.index(remaining.startIndex, offsetBy: 2)...]
                 if let end = after.range(of: "**") {
-                    let bold = after[after.startIndex..<end.lowerBound]
-                    result = result + Text(String(bold))
-                        .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
-                        .foregroundColor(.primary.opacity(0.9))
+                    let bold = String(after[after.startIndex..<end.lowerBound])
+                    var attr = AttributedString(bold)
+                    attr.font = Brand.swiftUIMonoFont(size: 11, weight: .medium)
+                    attr.foregroundColor = .primary.opacity(0.9)
+                    textRun.append(attr)
                     remaining = after[end.upperBound...]
                     continue
                 }
             }
             if remaining.hasPrefix("`") {
-                // Code
                 let after = remaining[remaining.index(after: remaining.startIndex)...]
                 if let end = after.firstIndex(of: "`") {
-                    let code = after[after.startIndex..<end]
-                    result = result + Text(String(code))
-                        .font(Brand.swiftUIMonoFont(size: 10))
-                        .foregroundColor(.primary.opacity(0.6))
+                    let code = String(after[after.startIndex..<end])
+                    var attr = AttributedString(code)
+                    attr.font = Brand.swiftUIMonoFont(size: 10)
+                    attr.foregroundColor = .primary.opacity(0.6)
+                    textRun.append(attr)
                     remaining = after[after.index(after: end)...]
                     continue
                 }
             }
             if remaining.hasPrefix("[") {
-                // Link: [text](url)
                 let afterBracket = remaining[remaining.index(after: remaining.startIndex)...]
                 if let closeBracket = afterBracket.firstIndex(of: "]") {
-                    let linkText = afterBracket[afterBracket.startIndex..<closeBracket]
+                    let linkText = String(afterBracket[afterBracket.startIndex..<closeBracket])
                     let afterClose = afterBracket[afterBracket.index(after: closeBracket)...]
                     if afterClose.hasPrefix("(") {
                         let urlStart = afterClose.index(after: afterClose.startIndex)
                         let urlPart = afterClose[urlStart...]
                         if let closeParen = urlPart.firstIndex(of: ")") {
                             var urlStr = String(urlPart[urlPart.startIndex..<closeParen])
-                            // Support bare file paths: /path/to/file or ~/path/to/file
                             if urlStr.hasPrefix("~/") {
                                 urlStr = NSString(string: urlStr).expandingTildeInPath
                             }
@@ -382,12 +396,8 @@ struct MarkdownText: View {
                                 urlStr = "file://" + urlStr
                             }
                             if let url = URL(string: urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlStr) ?? URL(string: urlStr) {
-                                var linkAttr = AttributedString(String(linkText))
-                                linkAttr.link = url
-                                linkAttr.underlineStyle = .single
-                                result = result + Text(linkAttr)
-                                    .font(Brand.swiftUIMonoFont(size: 11))
-                                    .foregroundColor(.primary.opacity(0.7))
+                                flushText()
+                                segments.append(.link(label: linkText, url: url))
                                 remaining = urlPart[urlPart.index(after: closeParen)...]
                                 continue
                             }
@@ -396,15 +406,77 @@ struct MarkdownText: View {
                 }
             }
             // Plain character
-            result = result + Text(String(remaining[remaining.startIndex]))
-                .font(Brand.swiftUIMonoFont(size: 11))
-                .foregroundColor(.primary.opacity(0.5))
+            var attr = AttributedString(String(remaining[remaining.startIndex]))
+            attr.font = Brand.swiftUIMonoFont(size: 11)
+            attr.foregroundColor = .primary.opacity(0.5)
+            textRun.append(attr)
             remaining = remaining[remaining.index(after: remaining.startIndex)...]
         }
+        flushText()
+        return segments
+    }
 
+    @ViewBuilder
+    private func renderLine(_ line: String) -> some View {
+        let segments = parseSegments(line)
+        let hasLinks = segments.contains { if case .link = $0 { return true } else { return false } }
+
+        if !hasLinks {
+            // No links — pure Text concatenation (wraps naturally)
+            textView(for: segments)
+                .lineSpacing(2)
+                .lineLimit(nil)
+        } else {
+            // Has links — render text segments as Text, links as clickable Buttons
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                    switch seg {
+                    case .text(let attr):
+                        Text(attr)
+                            .lineSpacing(2)
+                            .lineLimit(nil)
+                    case .link(let label, let url):
+                        LinkButton(label: label, url: url)
+                    }
+                }
+            }
+        }
+    }
+
+    private func textView(for segments: [Segment]) -> Text {
+        var result = Text("")
+        for seg in segments {
+            if case .text(let attr) = seg {
+                result = result + Text(attr)
+            }
+        }
         return result
-            .lineSpacing(2)
-            .lineLimit(4)
+    }
+}
+
+/// A clickable link rendered as a Button so it works in non-activating panels.
+/// SwiftUI Text with AttributedString links requires key focus to handle clicks,
+/// which non-activating panels don't provide. Button works without activation.
+@available(macOS 13.0, *)
+private struct LinkButton: View {
+    let label: String
+    let url: URL
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: {
+            NSWorkspace.shared.open(url)
+        }) {
+            Text(label)
+                .font(Brand.swiftUIMonoFont(size: 11))
+                .foregroundColor(isHovered ? .primary.opacity(0.9) : .primary.opacity(0.7))
+                .underline()
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onHover { h in
+            withAnimation(.linear(duration: Brand.animDuration)) { isHovered = h }
+        }
     }
 }
 
@@ -456,6 +528,14 @@ private class HoverTrackingView: NSView {
     }
 }
 
+/// Custom NSPanel subclass that accepts key status so that buttons and
+/// links inside the SwiftUI hosting view receive click events even though
+/// the panel uses .nonactivatingPanel style mask.
+@available(macOS 13.0, *)
+private class ClickablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 @available(macOS 13.0, *)
 class NotificationPanelController: NSObject {
     static let shared = NotificationPanelController()
@@ -472,6 +552,13 @@ class NotificationPanelController: NSObject {
     private var isHovered: Bool = false
     /// Incremented per notification so rapid-fire notifications each restart the timer
     private var epoch: Int = 0
+
+    // Panel dimensions
+    private static let panelWidth: CGFloat = 360
+    private static let shadowPadding: CGFloat = 20
+    private static let contentWidth: CGFloat = panelWidth - shadowPadding * 2
+    private static let minContentHeight: CGFloat = 120
+    private static let maxContentHeight: CGFloat = 400
 
     func show(payload: NotificationPayload) {
         DispatchQueue.main.async { [self] in
@@ -530,11 +617,10 @@ class NotificationPanelController: NSObject {
     }
 
     private func createPanel() {
-        // Panel is 360x220 to give room for the shadow (20px radius).
-        // The SwiftUI content is padded inward so the visible notification
-        // is still 320x180 with shadow extending into the padding area.
-        let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+        // Start with a reasonable default; updateContent will resize to fit
+        let initialHeight = Self.minContentHeight + Self.shadowPadding * 2
+        let p = ClickablePanel(
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: initialHeight),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -555,7 +641,7 @@ class NotificationPanelController: NSObject {
         p.sharingType = .readOnly
 
         // Use a custom tracking view as the content view
-        let tracking = HoverTrackingView(frame: NSRect(x: 0, y: 0, width: 360, height: 220))
+        let tracking = HoverTrackingView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: initialHeight))
         tracking.controller = self
         tracking.autoresizingMask = [.width, .height]
         p.contentView = tracking
@@ -570,12 +656,9 @@ class NotificationPanelController: NSObject {
         for screen in NSScreen.screens {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
-                // Panel is 360x220, content is 320x180 with 20px SwiftUI padding
-                // (shadow area). Place the panel so its edge aligns with the
-                // visible screen edge — the 20px internal padding becomes the
-                // visual margin, giving equal spacing on top and right.
-                let x = visible.origin.x + visible.size.width - 360
-                let y = visible.origin.y + visible.size.height - 220
+                let panelHeight = panel.frame.height
+                let x = visible.origin.x + visible.size.width - Self.panelWidth
+                let y = visible.origin.y + visible.size.height - panelHeight
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 break
             }
@@ -603,10 +686,11 @@ class NotificationPanelController: NSObject {
                 }
             }
         )
-        // Wrap in padding so shadow has room to render within the oversized panel
+        // Fixed width, height determined by content
         let view = innerView
-            .frame(width: 320, height: 180)
-            .padding(20)
+            .frame(width: Self.contentWidth)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(Self.shadowPadding)
 
         let contentView = panel.contentView!
         if let hosting = hostingView {
@@ -617,6 +701,19 @@ class NotificationPanelController: NSObject {
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
             self.hostingView = hosting
+        }
+
+        // Measure intrinsic content size and resize panel to fit
+        if let hosting = hostingView {
+            let fittingSize = hosting.fittingSize
+            let newHeight = min(max(fittingSize.height, Self.minContentHeight + Self.shadowPadding * 2), Self.maxContentHeight + Self.shadowPadding * 2)
+            let currentFrame = panel.frame
+            if abs(currentFrame.height - newHeight) > 1 {
+                // Anchor top-right: grow downward from top
+                let newY = currentFrame.origin.y + currentFrame.height - newHeight
+                let newFrame = NSRect(x: currentFrame.origin.x, y: newY, width: Self.panelWidth, height: newHeight)
+                panel.setFrame(newFrame, display: true, animate: false)
+            }
         }
     }
 

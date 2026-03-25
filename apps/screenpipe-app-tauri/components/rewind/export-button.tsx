@@ -58,7 +58,7 @@ export function ExportButton() {
 
 			// Create WebSocket connection - send frame_ids in message body to avoid URL length limits
 			ws = new WebSocket(
-				`ws://localhost:3030/frames/export?fps=${settings.fps ?? 0.5}`,
+				`ws://localhost:3030/frames/export?fps=0.5`,
 			);
 
 			// Set a timeout to handle connection issues

@@ -34,6 +34,32 @@ use tracing::{debug, error, info, warn};
 // Config & log types
 // ---------------------------------------------------------------------------
 
+/// Event trigger configuration for a pipe.
+///
+/// Pipes with triggers run when a matching workflow event fires, in addition
+/// to (or instead of) their schedule. Set `schedule: manual` to run only on events.
+///
+/// Example frontmatter:
+/// ```yaml
+/// trigger:
+///   events:
+///     - crm_update_from_social
+///     - prospect_research
+///   custom:
+///     - "when I finish a meeting and open my notes"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerConfig {
+    /// Built-in event type names (e.g., "crm_update_from_social", "debugging_session").
+    /// Matched exactly against WorkflowEvent.event_type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<String>,
+    /// Plain-language custom triggers (future: matched via embedding similarity).
+    /// Reserved for v2 — currently parsed but not evaluated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom: Vec<String>,
+}
+
 /// Parsed pipe configuration (from pipe.md front-matter).
 ///
 /// Only `schedule` and `enabled` are required in pipe.md.
@@ -102,6 +128,12 @@ pub struct PipeConfig {
     /// Set higher for long-running pipes (e.g. coding agents): `timeout: 2400`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+
+    /// Event triggers — pipe runs when a matching workflow event fires.
+    /// Works alongside schedule (both can trigger), or set `schedule: manual`
+    /// for event-only execution. Requires cloud subscription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TriggerConfig>,
 
     /// Store slug this pipe was installed from (set during store install).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2505,6 +2537,12 @@ impl PipeManager {
                 }
             }
 
+            // Subscribe to workflow events for event-triggered pipes
+            use futures::StreamExt;
+            let mut workflow_rx = screenpipe_events::subscribe_to_event::<
+                screenpipe_events::WorkflowEvent,
+            >("workflow_event");
+
             loop {
                 // Check for shutdown
                 if *rx.borrow() {
@@ -2530,6 +2568,48 @@ impl PipeManager {
                         .map(|(n, (c, b, _))| (n.clone(), c.clone(), b.clone()))
                         .collect()
                 };
+
+                // Drain pending workflow events and trigger matching pipes
+                {
+                    use futures::FutureExt;
+                    while let Some(event) =
+                        workflow_rx.next().now_or_never().flatten()
+                    {
+                        let event_type = &event.data.event_type;
+                        for (name, config, _body) in &pipe_snapshot {
+                            if !config.enabled {
+                                continue;
+                            }
+                            if let Some(ref trigger) = config.trigger {
+                                if trigger.events.iter().any(|e| e == event_type) {
+                                    // Check not already running
+                                    let already_running = {
+                                        let r = running.lock().await;
+                                        r.contains_key(name)
+                                    };
+                                    if already_running {
+                                        debug!(
+                                            "scheduler: event '{}' skipped pipe '{}' (already running)",
+                                            event_type, name
+                                        );
+                                        continue;
+                                    }
+                                    info!(
+                                        "scheduler: event '{}' ({:.0}%) triggered pipe '{}'",
+                                        event_type,
+                                        event.data.confidence * 100.0,
+                                        name
+                                    );
+                                    // Record last_run to prevent schedule from also firing immediately
+                                    last_run.insert(name.clone(), Utc::now());
+                                    if let Some(ref store) = store {
+                                        let _ = store.upsert_scheduler_state(name, true).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 for (name, config, body) in &pipe_snapshot {
                     if !config.enabled {

@@ -534,7 +534,7 @@ mod speaker_benchmark {
             return None;
         }
 
-        let db = DatabaseManager::new(db_path.to_str().unwrap())
+        let db = DatabaseManager::new(db_path.to_str().unwrap(), Default::default())
             .await
             .expect("failed to open DB");
 

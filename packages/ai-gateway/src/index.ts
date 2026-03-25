@@ -588,7 +588,7 @@ curl -X POST $HOST/v1/chat/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer $TOKEN" \
 -d '{
-"model": "gpt-4o",
+"model": "gpt-5.4",
 "messages": [
 	{
 	"role": "system",

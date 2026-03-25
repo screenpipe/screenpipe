@@ -43,7 +43,7 @@ hf-hub = { workspace = true }
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
 rubato = "0.15.0"
-whisper-rs = { git = "https://github.com/divanshu-go/whisper-rs.git", rev = "43a3a2cd4db3609fa266a0d695b00acb737be1b3", features = ["tracing_backend"] }
+whisper-rs = { git = "https://github.com/screenpipe/whisper-rs.git", rev = "97e4070", features = ["tracing_backend"] }
 
 # Log
 log = { workspace = true }
@@ -64,6 +64,7 @@ reqwest = { workspace = true }
 
 screenpipe-core = { path = "../screenpipe-core" }
 screenpipe-events = { path = "../screenpipe-events" }
+screenpipe-config = { path = "../screenpipe-config" }
 screenpipe-db = { path = "../screenpipe-db" }
 
 # crossbeam
@@ -82,7 +83,7 @@ ort = { version = "=2.0.0-rc.6", default-features = false, features = ["ndarray"
 ort-sys = { version = "=2.0.0-rc.6", default-features = false }
 knf-rs = "0.3.2"
 futures = "0.3.31"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "b199cf5b3d1e0e87604f02910240a2bc8851cf9a", default-features = false, features = ["qwen3-asr-antirez-blas"], optional = true }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "ab853b7", default-features = false, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
 
@@ -116,7 +117,7 @@ libsamplerate-sys = "0.1.10"
 # Windows ARM64: use our own ONNX Runtime DLL at runtime (load-dynamic); no compile-time link, no ort.pyke.io cache
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 ort = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
-ort-sys = { version = "=2.0.0-rc.6", default-features = false, features = ["load-dynamic"] }
+ort-sys = { version = "=2.0.0-rc.6", default-features = false }
 esaxx-rs = "0.1.10"
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
@@ -137,11 +138,13 @@ tracing-subscriber = "0.3.16"
 
 [features]
 default = ["pulseaudio"]
-metal = ["whisper-rs/metal", "audiopipe?/metal"]
+metal = ["whisper-rs/metal", "audiopipe?/metal", "audiopipe?/coreml"]
 cuda = ["whisper-rs/cuda"]
+directml = ["audiopipe?/directml"]
 vulkan = ["audiopipe?/vulkan-ggml"]
 pulseaudio = ["dep:libpulse-binding", "dep:libpulse-simple-binding"]
 qwen3-asr = ["dep:audiopipe"]
+parakeet = ["dep:audiopipe"]
 
 [[example]]
 name = "screenpipe-audio"

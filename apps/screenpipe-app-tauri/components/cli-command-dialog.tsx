@@ -119,9 +119,6 @@ export function CliCommandDialog({ settings }: CliCommandDialogProps) {
     if (settings.deepgramApiKey && settings.deepgramApiKey !== "default") {
       args.push(`--deepgram-api-key "${settings.deepgramApiKey}"`);
     }
-    if (settings.fps !== 0.2) {
-      args.push(`--fps ${settings.fps}`);
-    }
     if (!settings.analyticsEnabled) {
       args.push("--disable-telemetry");
     }

@@ -21,8 +21,8 @@ import { VertexAIProvider } from './vertex';
 
 // Vertex MaaS model IDs — model names without publisher prefix, all on global endpoint
 const VERTEX_MAAS_MODELS: Record<string, { vertexId: string; region: string }> = {
-	'glm-4.7': { vertexId: 'zhipuai/glm-4.7-maas', region: 'global' },
-	'glm-5': { vertexId: 'zhipuai/glm-5-maas', region: 'global' },
+	'glm-4.7': { vertexId: 'zai-org/glm-4.7-maas', region: 'global' },
+	'glm-5': { vertexId: 'zai-org/glm-5-maas', region: 'global' },
 	'kimi-k2.5': { vertexId: 'moonshotai/kimi-k2-thinking-maas', region: 'global' },
 };
 

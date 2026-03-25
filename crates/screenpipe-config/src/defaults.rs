@@ -5,16 +5,17 @@
 //! Platform-aware and tier-aware default overrides for [`RecordingSettings`].
 
 use crate::RecordingSettings;
+use sysinfo::{System, SystemExt};
 
 /// Device performance tier, determined by hardware detection.
 /// Used to select conservative or aggressive default settings on first launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceTier {
-    /// High-end: Apple Silicon M2+, 16GB+ RAM, <8M total pixels
+    /// High-end: ≥16 GB RAM and ≥8 cores
     High,
-    /// Mid-range: M1 / Intel i7+ 16GB, moderate display
+    /// Mid-range: ≥12 GB or (≥8 GB and ≥6 cores)
     Mid,
-    /// Low-end: Intel i5, ≤8GB, or very high pixel count (>8M)
+    /// Low-end: <8 GB or <6 cores
     Low,
 }
 
@@ -39,13 +40,140 @@ impl DeviceTier {
     }
 }
 
+/// Classify tier from RAM (GB) and core count. Pure logic, no I/O.
+pub fn classify_tier(ram_gb: u64, cores: u64) -> DeviceTier {
+    if ram_gb >= 16 && cores >= 8 {
+        DeviceTier::High
+    } else if ram_gb >= 12 || (ram_gb >= 8 && cores >= 6) {
+        DeviceTier::Mid
+    } else {
+        DeviceTier::Low
+    }
+}
+
+/// Detect the device tier based on available RAM and CPU cores.
+///
+/// | Tier | Criteria                              |
+/// |------|---------------------------------------|
+/// | High | ≥16 GB RAM and ≥8 cores               |
+/// | Mid  | ≥12 GB or (≥8 GB and ≥6 cores)        |
+/// | Low  | everything else                        |
+pub fn detect_tier() -> DeviceTier {
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    let ram_gb = sys.total_memory() / (1024 * 1024 * 1024);
+    let cores = sys.cpus().len() as u64;
+
+    // Re-query CPU count via sysinfo's physical core count if cpus() is empty
+    // (can happen before refresh_cpu)
+    let cores = if cores == 0 {
+        sys.physical_core_count().unwrap_or(1) as u64
+    } else {
+        cores
+    };
+
+    classify_tier(ram_gb, cores)
+}
+
+/// Database configuration tuned per device tier.
+///
+/// Controls SQLite PRAGMA values and connection pool sizes.
+/// `Default` returns the High-tier values matching the previous hardcoded settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DbConfig {
+    /// SQLite `mmap_size` pragma in bytes.
+    pub mmap_size: u64,
+    /// SQLite `cache_size` pragma in KiB (negative value = KiB).
+    pub cache_size_kb: u64,
+    /// Max connections in the read pool.
+    pub read_pool_max: u32,
+    /// Min connections in the read pool.
+    pub read_pool_min: u32,
+    /// Max connections in the write pool.
+    pub write_pool_max: u32,
+}
+
+impl DbConfig {
+    /// Return the config for a given tier.
+    pub fn for_tier(tier: DeviceTier) -> Self {
+        match tier {
+            DeviceTier::High => Self::default(),
+            DeviceTier::Mid => Self {
+                mmap_size: 128 * 1024 * 1024,       // 128 MB
+                cache_size_kb: 32_000,               // 32 MB
+                read_pool_max: 12,
+                read_pool_min: 2,
+                write_pool_max: 3,
+            },
+            DeviceTier::Low => Self {
+                mmap_size: 32 * 1024 * 1024,        // 32 MB
+                cache_size_kb: 8_000,                // 8 MB
+                read_pool_max: 5,
+                read_pool_min: 1,
+                write_pool_max: 2,
+            },
+        }
+    }
+}
+
+impl Default for DbConfig {
+    /// High-tier defaults — identical to the previous hardcoded values.
+    fn default() -> Self {
+        Self {
+            mmap_size: 256 * 1024 * 1024,            // 256 MB
+            cache_size_kb: 64_000,                    // 64 MB
+            read_pool_max: 27,
+            read_pool_min: 3,
+            write_pool_max: 3,
+        }
+    }
+}
+
+/// Audio/transcription channel capacities tuned per device tier.
+///
+/// Controls the `crossbeam::channel::bounded` sizes in `AudioManager`.
+/// `Default` returns the High-tier values matching the previous hardcoded settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelConfig {
+    /// Capacity for the audio recording channel.
+    pub recording_capacity: usize,
+    /// Capacity for the transcription result channel.
+    pub transcription_capacity: usize,
+}
+
+impl ChannelConfig {
+    /// Return the config for a given tier.
+    pub fn for_tier(tier: DeviceTier) -> Self {
+        match tier {
+            DeviceTier::High => Self::default(),
+            DeviceTier::Mid => Self {
+                recording_capacity: 500,
+                transcription_capacity: 500,
+            },
+            DeviceTier::Low => Self {
+                recording_capacity: 100,
+                transcription_capacity: 100,
+            },
+        }
+    }
+}
+
+impl Default for ChannelConfig {
+    /// High-tier defaults — identical to the previous hardcoded values (1000).
+    fn default() -> Self {
+        Self {
+            recording_capacity: 1000,
+            transcription_capacity: 1000,
+        }
+    }
+}
+
 /// Apply platform-specific defaults to a `RecordingSettings`.
 ///
 /// Called once when creating default settings. Sets values that differ
 /// by operating system (e.g., FPS, ignored windows).
 pub fn apply_platform_defaults(settings: &mut RecordingSettings) {
-    settings.fps = if cfg!(target_os = "macos") { 0.5 } else { 1.0 };
-
     // Platform-specific system windows to ignore
     let mut ignored = vec![
         "bit bar".to_string(),
@@ -80,20 +208,17 @@ pub fn apply_platform_defaults(settings: &mut RecordingSettings) {
 pub fn apply_tier_defaults(settings: &mut RecordingSettings, tier: DeviceTier) {
     match tier {
         DeviceTier::High => {
-            settings.fps = if cfg!(target_os = "macos") { 0.5 } else { 1.0 };
             settings.video_quality = "balanced".to_string();
             settings.power_mode = Some("auto".to_string());
         }
         DeviceTier::Mid => {
-            settings.fps = if cfg!(target_os = "macos") { 0.3 } else { 0.5 };
             settings.video_quality = "balanced".to_string();
             settings.power_mode = Some("auto".to_string());
         }
         DeviceTier::Low => {
-            settings.fps = 0.2;
             settings.video_quality = "low".to_string();
             settings.power_mode = Some("battery_saver".to_string());
-            settings.adaptive_fps = true;
+            settings.audio_transcription_engine = "parakeet".to_string();
         }
     }
 }
@@ -113,10 +238,8 @@ mod tests {
     fn low_tier_is_conservative() {
         let mut settings = RecordingSettings::default();
         apply_tier_defaults(&mut settings, DeviceTier::Low);
-        assert!(settings.fps <= 0.2);
         assert_eq!(settings.video_quality, "low");
         assert_eq!(settings.power_mode.as_deref(), Some("battery_saver"));
-        assert!(settings.adaptive_fps);
     }
 
     #[test]
@@ -125,5 +248,81 @@ mod tests {
         let default_quality = settings.video_quality.clone();
         apply_tier_defaults(&mut settings, DeviceTier::High);
         assert_eq!(settings.video_quality, default_quality);
+    }
+
+    #[test]
+    fn detect_tier_returns_valid_tier() {
+        let tier = detect_tier();
+        // Just verify it doesn't panic and returns a valid tier
+        assert!(matches!(tier, DeviceTier::High | DeviceTier::Mid | DeviceTier::Low));
+    }
+
+    // ── classify_tier boundary tests ──────────────────────────────────
+    // These simulate VMs / containers / low-end hardware without needing
+    // a real machine.
+
+    #[test]
+    fn classify_high_tier() {
+        // M4 Max 128GB, 16 cores
+        assert_eq!(classify_tier(128, 16), DeviceTier::High);
+        // Boundary: exactly 16 GB, 8 cores
+        assert_eq!(classify_tier(16, 8), DeviceTier::High);
+    }
+
+    #[test]
+    fn classify_mid_tier() {
+        // 16 GB but only 4 cores → not High (needs ≥8 cores), but ≥12 GB → Mid
+        assert_eq!(classify_tier(16, 4), DeviceTier::Mid);
+        // 12 GB, 2 cores → ≥12 GB alone qualifies for Mid
+        assert_eq!(classify_tier(12, 2), DeviceTier::Mid);
+        // 8 GB, 6 cores → (≥8 GB and ≥6 cores) → Mid
+        assert_eq!(classify_tier(8, 6), DeviceTier::Mid);
+        // 10 GB, 8 cores → ≥8 GB and ≥6 cores → Mid
+        assert_eq!(classify_tier(10, 8), DeviceTier::Mid);
+    }
+
+    #[test]
+    fn classify_low_tier() {
+        // Typical low-end: 8 GB, 4 cores
+        assert_eq!(classify_tier(8, 4), DeviceTier::Low);
+        // 4 GB, 2 cores (cheap VPS)
+        assert_eq!(classify_tier(4, 2), DeviceTier::Low);
+        // 7 GB, 8 cores → <8 GB, not ≥12 → Low
+        assert_eq!(classify_tier(7, 8), DeviceTier::Low);
+    }
+
+    #[test]
+    fn classify_zero_ram_or_cores() {
+        // Container edge case: sysinfo returns 0
+        assert_eq!(classify_tier(0, 0), DeviceTier::Low);
+        assert_eq!(classify_tier(0, 16), DeviceTier::Low);
+        assert_eq!(classify_tier(32, 0), DeviceTier::Mid); // ≥12 GB → Mid even with 0 cores
+    }
+
+    #[test]
+    fn db_config_default_matches_high() {
+        assert_eq!(DbConfig::default(), DbConfig::for_tier(DeviceTier::High));
+    }
+
+    #[test]
+    fn db_config_low_is_smaller() {
+        let high = DbConfig::for_tier(DeviceTier::High);
+        let low = DbConfig::for_tier(DeviceTier::Low);
+        assert!(low.mmap_size < high.mmap_size);
+        assert!(low.cache_size_kb < high.cache_size_kb);
+        assert!(low.read_pool_max < high.read_pool_max);
+    }
+
+    #[test]
+    fn channel_config_default_matches_high() {
+        assert_eq!(ChannelConfig::default(), ChannelConfig::for_tier(DeviceTier::High));
+    }
+
+    #[test]
+    fn channel_config_low_is_smaller() {
+        let high = ChannelConfig::for_tier(DeviceTier::High);
+        let low = ChannelConfig::for_tier(DeviceTier::Low);
+        assert!(low.recording_capacity < high.recording_capacity);
+        assert!(low.transcription_capacity < high.transcription_capacity);
     }
 }

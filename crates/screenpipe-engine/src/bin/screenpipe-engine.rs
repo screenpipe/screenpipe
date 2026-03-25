@@ -540,12 +540,15 @@ async fn main() -> anyhow::Result<()> {
     analytics::check_macos_version();
 
     let db = Arc::new(
-        DatabaseManager::new(&format!("{}/db.sqlite", local_data_dir.to_string_lossy()))
-            .await
-            .map_err(|e| {
-                eprintln!("failed to initialize database: {:?}", e);
-                e
-            })?,
+        DatabaseManager::new(
+            &format!("{}/db.sqlite", local_data_dir.to_string_lossy()),
+            config.db_config.clone(),
+        )
+        .await
+        .map_err(|e| {
+            eprintln!("failed to initialize database: {:?}", e);
+            e
+        })?,
     );
 
     // Start sleep/wake monitor for telemetry (macOS only)

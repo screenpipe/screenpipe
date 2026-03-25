@@ -45,6 +45,7 @@ const CHROMIUM_BROWSERS: &[&str] = &[
     "brave",
     "vivaldi",
     "opera",
+    "comet",
 ];
 
 /// Maps an app name to the AppleScript application identifier.

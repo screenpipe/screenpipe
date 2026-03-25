@@ -158,7 +158,7 @@ export function UsageSection() {
       const cachedChatEntrySet = new Set(
         cache.entries
           .filter((e) => e.source === "chat")
-          .map((e) => `${e.timestamp}::${e.model}`)
+          .map((e) => `${e.timestamp}::${e.provider}::${e.model}`)
       );
 
       for (const conv of convs) {
@@ -172,7 +172,7 @@ export function UsageSection() {
               continue;
             }
             // Skip if already in cache
-            const entryKey = `${msg.timestamp}::${model}`;
+            const entryKey = `${msg.timestamp}::${provider || "unknown"}::${model}`;
             if (cachedChatEntrySet.has(entryKey)) continue;
 
             newEntries.push({
@@ -196,7 +196,7 @@ export function UsageSection() {
           const cachedPipeEntrySet = new Set(
             cache.entries
               .filter((e) => e.source === "pipe")
-              .map((e) => `${e.timestamp}::${e.model}`)
+              .map((e) => `${e.timestamp}::${e.provider}::${e.model}`)
           );
 
           for (const pipe of pipes) {
@@ -215,7 +215,7 @@ export function UsageSection() {
                     ? new Date(exec.started_at).getTime()
                     : Date.now();
 
-                  const entryKey = `${ts}::${exec.model}`;
+                  const entryKey = `${ts}::${exec.provider || "pipe"}::${exec.model}`;
                   if (cachedPipeEntrySet.has(entryKey)) continue;
 
                   pipeNewCount++;
@@ -236,19 +236,22 @@ export function UsageSection() {
         // screenpipe not running
       }
 
+      // Merge new entries with cached entries (deduplicated by timestamp::model)
+      const allEntries = [...(cache.entries || []), ...newEntries];
+
       // Update cache
       const updatedCache: UsageCache = {
         version: 2,
         lastChatUpdate: Date.now(),
         lastPipeUpdate: Date.now(),
-        entries: newEntries,
+        entries: allEntries,
         totalChats: totalChatsCount,
         totalChatMessages: chatMsgs,
         untrackedMessages: untracked,
       };
 
       cacheRef.current = updatedCache;
-      setEntries(newEntries);
+      setEntries(allEntries);
       setTotalChats(totalChatsCount);
       setTotalChatMessages(chatMsgs);
       setUntrackedMessages(untracked);

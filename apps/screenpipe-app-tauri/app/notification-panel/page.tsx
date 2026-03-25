@@ -275,6 +275,13 @@ export default function NotificationPanelPage() {
     let elapsedBeforePause = 0;
     let resumedAt = Date.now();
     let wasHovered = false;
+    let dismissed = false;
+
+    const doHide = () => {
+      if (dismissed) return;
+      dismissed = true;
+      hide(true);
+    };
 
     intervalRef.current = setInterval(() => {
       if (hoveredRef.current) {
@@ -295,15 +302,25 @@ export default function NotificationPanelPage() {
       setProgress(remaining);
 
       if (remaining <= 0) {
-        hide(true);
+        doHide();
       }
     }, 50);
+
+    // Safety fallback: setTimeout is more reliable than setInterval on
+    // Windows where unfocused webview timers can be throttled to ~1s.
+    // This ensures the notification always dismisses even if setInterval stalls.
+    const safetyTimeout = setTimeout(() => {
+      if (!hoveredRef.current) {
+        doHide();
+      }
+    }, totalMs + 2000);
 
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      clearTimeout(safetyTimeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, hide, notificationEpoch]);
@@ -361,6 +378,19 @@ export default function NotificationPanelPage() {
             padding-left: 16px;
           }
           .notif-md li { margin: 1px 0; }
+          .notif-body::-webkit-scrollbar {
+            width: 4px;
+          }
+          .notif-body::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .notif-body::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 2px;
+          }
+          .notif-body::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 0, 0, 0.3);
+          }
         `}</style>
 
         {/* Header */}
@@ -412,7 +442,7 @@ export default function NotificationPanelPage() {
         </div>
 
         {/* Body */}
-        <div style={{ padding: "8px 14px", flex: 1, overflow: "auto" }}>
+        <div className="notif-body" style={{ padding: "8px 14px", flex: 1, overflow: "auto", minHeight: 0 }}>
           <div
             style={{
               fontSize: "12px",

@@ -952,7 +952,7 @@ export type CalendarStatus = { available: boolean; authorized: boolean; authoriz
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
-export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; isWeakForLargeModel: boolean; recommendedEngine: string; reason: string }
+export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type LogFile = { name: string; path: string; modified_at: bigint }
@@ -1051,8 +1051,8 @@ vadSensitivity: string;
 filterMusic: boolean; 
 /**
  * Maximum batch duration in seconds for batch transcription.
- * None = use engine-aware defaults (Deepgram=3600s, Whisper/OpenAI=600s).
- * Previously stored in SettingsStore.extra["batchMaxDurationSecs"].
+ * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
+ * Also controls the max deferral cap during active meetings.
  */
 batchMaxDurationSecs?: bigint | null; 
 /**
@@ -1071,15 +1071,7 @@ monitorIds: string[];
 /**
  * Capture from all connected monitors.
  */
-useAllMonitors: boolean; 
-/**
- * Target frames per second for screen capture.
- */
-fps: number; 
-/**
- * Dynamically adjust FPS based on screen content changes.
- */
-adaptiveFps: boolean; 
+useAllMonitors: boolean;
 /**
  * Video quality preset: "low", "balanced", "high", "max".
  */

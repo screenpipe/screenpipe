@@ -694,13 +694,21 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .map(|obj| !obj.contains_key("haikuToQwenFlashMigrated"))
         .unwrap_or(false);
 
-    let (mut store, should_save) = match SettingsStore::get(app) {
-        Ok(Some(store)) => (
-            store,
-            should_persist_restart_notification_migration || needs_haiku_migration,
-        ),
-        Ok(None) => (SettingsStore::default(), true), // New store, save defaults
+    let is_new_store;
+    let (mut store, mut should_save) = match SettingsStore::get(app) {
+        Ok(Some(store)) => {
+            is_new_store = false;
+            (
+                store,
+                should_persist_restart_notification_migration || needs_haiku_migration,
+            )
+        }
+        Ok(None) => {
+            is_new_store = true;
+            (SettingsStore::default(), true) // New store, save defaults
+        }
         Err(e) => {
+            is_new_store = false;
             // Fallback to defaults when deserialization fails (e.g., corrupted store)
             // DON'T save - preserve original store in case it can be manually recovered
             // This prevents crashes from invalid values like negative integers in u32 fields
@@ -711,6 +719,20 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             (SettingsStore::default(), false)
         }
     };
+
+    // One-time tier detection. Two cases:
+    // - New install: detect tier AND apply tier defaults (video_quality, power_mode, etc.)
+    // - Existing user upgrading: detect tier for DB/channel config but do NOT override
+    //   their existing capture settings (they may have customized video_quality etc.)
+    if store.recording.device_tier.is_none() {
+        let tier = screenpipe_config::detect_tier();
+        tracing::info!("detected hardware tier: {:?}", tier);
+        if is_new_store {
+            screenpipe_config::apply_tier_defaults(&mut store.recording, tier);
+        }
+        store.recording.device_tier = Some(tier.as_str().to_string());
+        should_save = true;
+    }
 
     // One-time migration: move default Haiku users to Qwen3.5 Flash
     if needs_haiku_migration {

@@ -1110,8 +1110,6 @@ async fn main() {
                     }));
                     scope.set_context("app_settings", sentry::protocol::Context::Other({
                         let mut map = std::collections::BTreeMap::new();
-                        map.insert("fps".into(), serde_json::json!(store.recording.fps));
-                        map.insert("adaptive_fps".into(), serde_json::json!(store.recording.adaptive_fps));
                         map.insert("audio_chunk_duration".into(), serde_json::json!(store.recording.audio_chunk_duration));
                         map.insert("port".into(), serde_json::json!(store.recording.port));
                         map.insert("disable_audio".into(), serde_json::json!(store.recording.disable_audio));

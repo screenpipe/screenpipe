@@ -39,7 +39,7 @@ pub trait AlternateStt: Send {
 /// Optional alternate STT engine, wrapped for shared ownership + interior mutability.
 pub type AlternateSttEngine = Arc<StdMutex<Box<dyn AlternateStt + Send>>>;
 
-#[cfg(feature = "qwen3-asr")]
+#[cfg(any(feature = "qwen3-asr", feature = "parakeet"))]
 impl AlternateStt for audiopipe::Model {
     fn transcribe(&mut self, audio: &[f32], sample_rate: u32) -> Result<String> {
         let opts = audiopipe::TranscribeOptions::default();
@@ -193,15 +193,20 @@ pub async fn stt(
                 }
             }
         }
-    } else if *audio_transcription_engine == AudioTranscriptionEngine::Qwen3Asr {
-        // Qwen3-ASR via alternate STT engine (audiopipe)
+    } else if *audio_transcription_engine == AudioTranscriptionEngine::Qwen3Asr
+        || *audio_transcription_engine == AudioTranscriptionEngine::Parakeet
+    {
+        // Qwen3-ASR / Parakeet via alternate STT engine (audiopipe)
         if let Some(ref engine) = alternate_stt {
             let mut engine = engine
                 .lock()
                 .map_err(|e| anyhow::anyhow!("stt model lock: {}", e))?;
             engine.transcribe(audio, sample_rate)
         } else {
-            Err(anyhow::anyhow!("qwen3-asr model not initialized"))
+            Err(anyhow::anyhow!(
+                "{} model not initialized",
+                audio_transcription_engine
+            ))
         }
     } else if audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible.into() {
         // OpenAI Compatible implementation

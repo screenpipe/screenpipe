@@ -10,8 +10,8 @@ export class OpenAIProvider implements AIProvider {
 	supportsJson = true;
 	private client: OpenAI;
 
-	constructor(apiKey: string) {
-		this.client = new OpenAI({ apiKey });
+	constructor(apiKey: string, baseURL?: string) {
+		this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
 	}
 
 	private createJSONSchemaFormat(schema: Record<string, unknown>, name: string, description?: string): ResponseFormatJSONSchema {

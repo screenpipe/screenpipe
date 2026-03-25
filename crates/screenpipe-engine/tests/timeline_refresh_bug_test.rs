@@ -51,7 +51,7 @@ async fn simulate_fetch_new_frames(
 /// Helper to create a test database with frames at specific times
 async fn create_test_db() -> Arc<DatabaseManager> {
     Arc::new(
-        DatabaseManager::new("sqlite::memory:")
+        DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .expect("Failed to create test database"),
     )

@@ -189,6 +189,7 @@ const BROWSER_APPS: &[&str] = &[
     "chromium",
     "zen browser",
     "orion",
+    "comet",
 ];
 
 fn is_browser(app_name: &str) -> bool {

@@ -30,7 +30,7 @@ struct DeviceResponse {
 /// Helper to create a test database with frames
 async fn create_test_db_with_frames(num_frames: i64) -> Arc<DatabaseManager> {
     let db = Arc::new(
-        DatabaseManager::new("sqlite::memory:")
+        DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .expect("Failed to create test database"),
     );

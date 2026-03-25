@@ -362,7 +362,7 @@ mod tests {
         // return "database is locked".
         let mut last_err = None;
         for _ in 0..3 {
-            match DatabaseManager::new(db_path.to_str().unwrap()).await {
+            match DatabaseManager::new(db_path.to_str().unwrap(), Default::default()).await {
                 Ok(db) => {
                     return (SqlitePipeStore::new(StdArc::new(db)), tmp_dir);
                 }

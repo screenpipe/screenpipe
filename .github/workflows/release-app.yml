@@ -192,13 +192,13 @@ jobs:
           - platform: ${{ needs.check_commit.outputs.windows_runner || 'windows-2022' }}
             args: "--target x86_64-pc-windows-msvc"
             pre-build-args: ""
-            tauri-args: "--target x86_64-pc-windows-msvc --features official-build"
+            tauri-args: "--target x86_64-pc-windows-msvc --features official-build,directml"
             target: x86_64-pc-windows-msvc
             os_type: "windows"
           - platform: windows-11-arm
             args: "--target aarch64-pc-windows-msvc"
             pre-build-args: ""
-            tauri-args: "--target aarch64-pc-windows-msvc --features official-build"
+            tauri-args: "--target aarch64-pc-windows-msvc --features official-build,directml"
             target: aarch64-pc-windows-msvc
             os_type: "windows"
           - platform: "ubuntu-24.04"
@@ -719,7 +719,7 @@ jobs:
           echo "Cleaning stale bundle artifacts from ${BUNDLE_DIR}..."
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
-          bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
+          bunx tauri build --verbose ${{ matrix.tauri-args }}
 
           # Fix ABI mismatch: the AppImage bundles libs from Ubuntu 24.04 but
           # on distros like Fedora 43 with newer system libs, symbols are missing
@@ -801,7 +801,7 @@ jobs:
           # GGML_NATIVE=ON compiles with -march=native, causing illegal instruction on CPUs without AVX-512
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
-        run: bunx tauri build --verbose --target ${{ matrix.target }} --features official-build
+        run: bunx tauri build --verbose ${{ matrix.tauri-args }}
 
       - name: Build (with codesign retry)
         if: matrix.os_type == 'macos'

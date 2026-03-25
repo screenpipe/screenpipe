@@ -1308,6 +1308,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <SelectItem value="whisper-tiny">Whisper Tiny</SelectItem>
                     <SelectItem value="whisper-tiny-quantized">Whisper Tiny (fast)</SelectItem>
                     {!isMacOS && <SelectItem value="qwen3-asr">Qwen3-ASR</SelectItem>}
+                    <SelectItem value="parakeet">Parakeet</SelectItem>
                   </SelectGroup>
                   <SelectGroup>
                     <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>
@@ -1317,17 +1318,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </SelectContent>
               </Select>
             </div>
-            {hwCapability?.isWeakForLargeModel && settings.audioTranscriptionEngine.includes("large") && (
-              <div className="mt-2 ml-[26px] p-2 rounded-md bg-yellow-500/10 border border-yellow-500/30">
-                <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                  <AlertCircle className="h-3 w-3 inline mr-1" />
-                  {hwCapability.reason}
-                  {settings.user?.cloud_subscribed
-                    ? " Consider switching to Screenpipe Cloud for better performance."
-                    : ` Consider switching to ${hwCapability.recommendedEngine} to avoid high CPU usage.`}
-                </p>
-              </div>
-            )}
             {settings.audioTranscriptionEngine === "deepgram" && (
               <div className="mt-2 ml-[26px] relative">
                 <ValidatedInput
@@ -1609,12 +1599,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   }
                 />
               </div>
-              {["smart", "batch"].includes(settings.transcriptionMode ?? "realtime") && (
+              {["smart", "batch"].includes(settings.transcriptionMode ?? "realtime") &&
+                settings.audioTranscriptionEngine === "openai-compatible" && (
                 <div className="mt-2.5 pt-2.5 border-t border-border/50">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                       Max batch duration
-                      <HelpTooltip text="Maximum duration of audio to batch before transcribing. Longer batches give better context for full meetings. 0 = auto (Deepgram ~83min, OpenAI ~50min, Whisper ~10min). Audio is compressed to MP3 before upload." />
+                      <HelpTooltip text="Maximum audio to batch before transcribing. Depends on your endpoint's file size limit. 0 = auto (~50min). Audio is compressed to MP3 before upload." />
                     </span>
                     <span className="text-xs font-mono text-foreground">
                       {(settings.batchMaxDurationSecs ?? 0) === 0
@@ -1970,6 +1961,30 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
         {/* Text extraction — accessibility and input capture are always enabled (defaults in store.rs) */}
+
+        {/* Workflow event detection (cloud) */}
+        {settings.user?.cloud_subscribed && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Workflow events
+                    <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">cloud</span>
+                  </h3>
+                  <p className="text-xs text-muted-foreground">AI detects your workflow patterns and triggers event-based pipes</p>
+                </div>
+              </div>
+              <Switch
+                checked={settings.enableWorkflowEvents || false}
+                onCheckedChange={(checked) => handleSettingsChange({ enableWorkflowEvents: checked } as any, true)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
 
       </div>
 

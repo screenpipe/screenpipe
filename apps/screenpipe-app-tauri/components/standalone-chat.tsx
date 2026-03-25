@@ -1504,16 +1504,27 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     setTimeout(() => inputRef.current?.focus(), 100);
   }, []);
 
-  // Escape key to close window
+  // Escape key: abort agent if running, otherwise close window
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
+    const handleEscape = async (e: KeyboardEvent) => {
       if (e.key === "Escape" && !showMentionDropdown) {
-        commands.closeWindow("Chat");
+        if (isLoading || isStreaming) {
+          // Stop the agent
+          try {
+            await commands.piAbort(PI_CHAT_SESSION);
+          } catch (err) {
+            console.warn("[Pi] Failed to abort on Escape:", err);
+          }
+          setIsLoading(false);
+          setIsStreaming(false);
+        } else {
+          commands.closeWindow("Chat");
+        }
       }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [showMentionDropdown]);
+  }, [showMentionDropdown, isLoading, isStreaming]);
 
   // Smart auto-scroll: only scroll to bottom if user is near the bottom.
   // If user scrolled up to read, don't interrupt them.

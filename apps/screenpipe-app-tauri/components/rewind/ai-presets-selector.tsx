@@ -504,7 +504,7 @@ export function AIProviderConfig({
                 ...formData,
                 provider: "openai-chatgpt",
                 url: "https://api.openai.com/v1",
-                model: "gpt-4o",
+                model: "gpt-5.4",
               });
             }}
           >
@@ -748,7 +748,7 @@ export function AIProviderConfig({
                 id="model"
                 type="text"
                 list="chatgpt-models"
-                placeholder="gpt-4o"
+                placeholder="gpt-5.4"
                 value={formData.model || ""}
                 onChange={(e) =>
                   setFormData({ ...formData, model: e.target.value })

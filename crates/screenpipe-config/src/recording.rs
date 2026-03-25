@@ -98,13 +98,6 @@ pub struct RecordingSettings {
     #[serde(rename = "useAllMonitors")]
     pub use_all_monitors: bool,
 
-    /// Target frames per second for screen capture.
-    pub fps: f32,
-
-    /// Dynamically adjust FPS based on screen content changes.
-    #[serde(rename = "adaptiveFps")]
-    pub adaptive_fps: bool,
-
     /// Video quality preset: "low", "balanced", "high", "max".
     #[serde(rename = "videoQuality")]
     pub video_quality: String,
@@ -203,6 +196,16 @@ pub struct RecordingSettings {
     /// Enable accessibility text capture (AX tree walker).
     #[serde(rename = "enableAccessibility", alias = "enableUiEvents")]
     pub enable_accessibility: bool,
+
+    /// Enable AI workflow event detection (cloud feature, requires subscription).
+    /// When enabled, classifies desktop activity and triggers event-based pipes.
+    #[serde(rename = "enableWorkflowEvents", default)]
+    pub enable_workflow_events: bool,
+
+    /// Detected hardware tier ("high", "mid", "low").
+    /// Set once on first launch; `None` for existing installs (treated as High).
+    #[serde(rename = "deviceTier", default, skip_serializing_if = "Option::is_none")]
+    pub device_tier: Option<String>,
 }
 
 impl RecordingSettings {
@@ -232,7 +235,7 @@ impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
             disable_audio: false,
-            audio_transcription_engine: "whisper-large-v3-turbo".to_string(),
+            audio_transcription_engine: "parakeet".to_string(),
             transcription_mode: "realtime".to_string(),
             audio_devices: vec![],
             use_system_default_audio: true,
@@ -245,8 +248,6 @@ impl Default for RecordingSettings {
             disable_vision: false,
             monitor_ids: vec![],
             use_all_monitors: true,
-            fps: default_fps(),
-            adaptive_fps: false,
             video_quality: "balanced".to_string(),
             ignored_windows: vec![],
             included_windows: vec![],
@@ -269,6 +270,8 @@ impl Default for RecordingSettings {
             analytics_id: String::new(),
             enable_input_capture: true,
             enable_accessibility: true,
+            enable_workflow_events: false,
+            device_tier: None,
         }
     }
 }
@@ -277,13 +280,7 @@ fn default_true() -> bool {
     true
 }
 
-fn default_fps() -> f32 {
-    if cfg!(target_os = "macos") {
-        0.5
-    } else {
-        1.0
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
