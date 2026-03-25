@@ -213,6 +213,14 @@ pub struct SettingsStore {
     #[serde(rename = "showRestartNotifications", default)]
     pub show_restart_notifications: bool,
 
+    /// When true, apply macOS vibrancy effect to the sidebar for a translucent look.
+    #[serde(rename = "translucentSidebar", default)]
+    pub translucent_sidebar: bool,
+
+    /// UI theme: "light", "dark", or "system".
+    #[serde(rename = "uiTheme", default = "default_ui_theme")]
+    pub ui_theme: String,
+
     /// Catch-all for fields added by the frontend (e.g. chatHistory)
     /// that the Rust struct doesn't know about. Without this, `save()` would
     /// serialize only known fields and silently wipe frontend-only data.
@@ -226,6 +234,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_ui_theme() -> String {
+    "system".to_string()
 }
 
 fn default_overlay_mode() -> String {
@@ -513,6 +525,11 @@ impl Default for SettingsStore {
             show_overlay_in_screen_recording: false,
             chat_always_on_top: true,
             show_restart_notifications: false,
+            #[cfg(target_os = "macos")]
+            translucent_sidebar: true,
+            #[cfg(not(target_os = "macos"))]
+            translucent_sidebar: false,
+            ui_theme: "system".to_string(),
             extra: std::collections::HashMap::new(),
         }
     }

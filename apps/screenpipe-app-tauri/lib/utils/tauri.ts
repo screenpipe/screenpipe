@@ -1071,7 +1071,7 @@ monitorIds: string[];
 /**
  * Capture from all connected monitors.
  */
-useAllMonitors: boolean;
+useAllMonitors: boolean; 
 /**
  * Video quality preset: "low", "balanced", "high", "max".
  */
@@ -1168,7 +1168,17 @@ enableInputCapture: boolean;
 /**
  * Enable accessibility text capture (AX tree walker).
  */
-enableAccessibility: boolean }) & 
+enableAccessibility: boolean; 
+/**
+ * Enable AI workflow event detection (cloud feature, requires subscription).
+ * When enabled, classifies desktop activity and triggers event-based pipes.
+ */
+enableWorkflowEvents?: boolean; 
+/**
+ * Detected hardware tier ("high", "mid", "low").
+ * Set once on first launch; `None` for existing installs (treated as High).
+ */
+deviceTier?: string | null }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would
@@ -1207,7 +1217,15 @@ chatAlwaysOnTop?: boolean;
  * Show restart notifications when audio/vision capture stalls.
  * Disabled by default for now until the stall detector is more reliable.
  */
-showRestartNotifications?: boolean }
+showRestartNotifications?: boolean; 
+/**
+ * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
+ */
+translucentSidebar?: boolean; 
+/**
+ * UI theme: "light", "dark", or "system".
+ */
+uiTheme?: string }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type Suggestion = { text: string }
 /**

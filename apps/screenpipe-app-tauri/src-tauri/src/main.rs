@@ -921,7 +921,8 @@ async fn main() {
             remote_sync_commands::remote_sync_discover_hosts,
             remote_sync_commands::remote_sync_start_scheduler,
             remote_sync_commands::remote_sync_stop_scheduler,
-            remote_sync_commands::remote_sync_scheduler_status
+            remote_sync_commands::remote_sync_scheduler_status,
+            commands::set_native_theme,
         ])
         .setup(move |app| {
             //deep link register_all

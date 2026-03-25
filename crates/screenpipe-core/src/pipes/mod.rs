@@ -594,6 +594,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
             "native-ollama" => Some("ollama"),
             "openai" => Some("openai"),
             "openai-chatgpt" => Some("openai-chatgpt"),
+            "anthropic" => Some("anthropic"),
             "custom" => Some("custom"), // custom uses openai-compatible API at a user-specified URL
             _ => None,
         })
@@ -2569,7 +2570,11 @@ impl PipeManager {
                         .collect()
                 };
 
-                // Drain pending workflow events and trigger matching pipes
+                // Drain pending workflow events and mark matching pipes for immediate execution.
+                // We reset their last_run to epoch so the existing should_run() check
+                // passes on this tick, reusing the full execution path without duplication.
+                let mut event_triggered: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 {
                     use futures::FutureExt;
                     while let Some(event) =
@@ -2582,7 +2587,6 @@ impl PipeManager {
                             }
                             if let Some(ref trigger) = config.trigger {
                                 if trigger.events.iter().any(|e| e == event_type) {
-                                    // Check not already running
                                     let already_running = {
                                         let r = running.lock().await;
                                         r.contains_key(name)
@@ -2600,11 +2604,9 @@ impl PipeManager {
                                         event.data.confidence * 100.0,
                                         name
                                     );
-                                    // Record last_run to prevent schedule from also firing immediately
-                                    last_run.insert(name.clone(), Utc::now());
-                                    if let Some(ref store) = store {
-                                        let _ = store.upsert_scheduler_state(name, true).await;
-                                    }
+                                    // Reset last_run so should_run() passes for "manual" pipes too
+                                    last_run.remove(name);
+                                    event_triggered.insert(name.clone());
                                 }
                             }
                         }
@@ -2616,8 +2618,9 @@ impl PipeManager {
                         continue;
                     }
 
+                    let triggered_by_event = event_triggered.contains(name);
                     let last = last_run.get(name).copied().unwrap_or(DateTime::UNIX_EPOCH);
-                    if !should_run(&config.schedule, last) {
+                    if !triggered_by_event && !should_run(&config.schedule, last) {
                         continue;
                     }
 
@@ -2730,6 +2733,7 @@ impl PipeManager {
                         extra_context.as_deref(),
                     );
                     let pipe_name = name.clone();
+                    let is_event_triggered = triggered_by_event;
                     let logs_ref = logs.clone();
                     let running_ref = running.clone();
                     let running_exec_ids_ref = running_execution_ids.clone();
@@ -2742,11 +2746,12 @@ impl PipeManager {
 
                     tokio::spawn(async move {
                         // Create DB execution row
+                        let trigger = if is_event_triggered { "event" } else { "scheduled" };
                         let exec_id = if let Some(ref store) = store_ref {
                             match store
                                 .create_execution(
                                     &pipe_name,
-                                    "scheduled",
+                                    trigger,
                                     &model,
                                     provider.as_deref(),
                                 )

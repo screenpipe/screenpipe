@@ -1704,3 +1704,20 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         .map_err(|e| format!("failed to set clipboard: {}", e))?;
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_native_theme(app_handle: tauri::AppHandle, theme: String) -> Result<(), String> {
+    info!("setting native theme to: {}", theme);
+    let tauri_theme = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None,
+    };
+
+    for window in app_handle.webview_windows().values() {
+        let _ = window.set_theme(tauri_theme);
+    }
+
+    Ok(())
+}

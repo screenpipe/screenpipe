@@ -7,7 +7,7 @@ import { createSuccessResponse, createErrorResponse } from '../utils/cors';
 import { VertexAIProvider } from '../providers/vertex';
 import {
   runTranscriptionABTest,
-  logABTestResult,
+  logAllABTestResults,
   getABTestSummary,
   getSelfHostedUrl,
   getWhisperTrafficPct,
@@ -65,11 +65,11 @@ async function handleDeepgramTranscription(
     const contentType = request.headers.get('Content-Type') || 'audio/wav';
 
     const abReq: TranscriptionRequest = { audioBuffer, contentType, sampleRate, languages };
-    const { result, logEntry } = await runTranscriptionABTest(abReq, env, deviceId ?? null);
+    const { result, logEntry, extraLogs } = await runTranscriptionABTest(abReq, env, deviceId ?? null);
 
-    // Log A/B test result in background
+    // Log A/B/C test results in background (primary + dual-send comparisons)
     if (ctx) {
-      ctx.waitUntil(logABTestResult(env, logEntry));
+      ctx.waitUntil(logAllABTestResults(env, logEntry, extraLogs));
     }
 
     if (!result.ok) {

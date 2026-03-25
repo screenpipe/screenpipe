@@ -19,6 +19,27 @@ import { AIProvider } from './base';
 import { Message, RequestBody, ResponseFormat } from '../types';
 import { VertexAIProvider } from './vertex';
 
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000;
+
+async function fetchWithRetry(url: string, init: RequestInit, label: string): Promise<Response> {
+	let lastError: Error | null = null;
+	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+		const response = await fetch(url, init);
+		if (response.status !== 429) return response;
+
+		lastError = new Error(`429 on attempt ${attempt + 1}`);
+		const retryAfter = response.headers.get('retry-after');
+		const delayMs = retryAfter
+			? Math.min(parseInt(retryAfter, 10) * 1000, 10000)
+			: BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 500;
+		console.warn(`${label}: 429 rate limited, retrying in ${Math.round(delayMs)}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+		await new Promise((r) => setTimeout(r, delayMs));
+	}
+	// Final attempt — return whatever we get
+	return fetch(url, init);
+}
+
 // Vertex MaaS model IDs — model names without publisher prefix, all on global endpoint
 const VERTEX_MAAS_MODELS: Record<string, { vertexId: string; region: string }> = {
 	'glm-4.7': { vertexId: 'zai-org/glm-4.7-maas', region: 'global' },
@@ -76,14 +97,16 @@ export class VertexMaasProvider implements AIProvider {
 		if (body.tools) payload.tools = body.tools;
 		if (body.tool_choice) payload.tool_choice = body.tool_choice;
 
-		const response = await fetch(url, {
+		const fetchInit: RequestInit = {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 				'Content-Type': 'application/json',
 			},
 			body: JSON.stringify(payload),
-		});
+		};
+
+		const response = await fetchWithRetry(url, fetchInit, `Vertex MaaS ${resolved.vertexId}`);
 
 		if (!response.ok) {
 			const error = await response.text();
@@ -114,14 +137,16 @@ export class VertexMaasProvider implements AIProvider {
 		if (body.tools) payload.tools = body.tools;
 		if (body.tool_choice) payload.tool_choice = body.tool_choice;
 
-		const response = await fetch(url, {
+		const fetchInit: RequestInit = {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 				'Content-Type': 'application/json',
 			},
 			body: JSON.stringify(payload),
-		});
+		};
+
+		const response = await fetchWithRetry(url, fetchInit, `Vertex MaaS streaming ${resolved.vertexId}`);
 
 		if (!response.ok) {
 			const error = await response.text();

@@ -35,10 +35,16 @@ enabled = true
 # add any non-secret environment variables here
 # Default Vertex AI region - us-east5 has Claude models
 VERTEX_REGION = "us-east5"
-# Self-hosted Whisper A/B test
-SELF_HOSTED_TRANSCRIPTION_URL = "https://way-blessed-vegetation-engineer.trycloudflare.com"
-WHISPER_TRAFFIC_PCT = "40"
-WHISPER_DUAL_SEND_PCT = "0"
+# Transcription A/B/C test: 60% Deepgram, 20% Parakeet, 20% Whisper
+# Dual-send 10% of requests to ALL providers for WER dataset building
+DEEPGRAM_TRAFFIC_PCT = "40"
+WHISPER_TRAFFIC_PCT = "20"
+PARAKEET_TRAFFIC_PCT = "40"
+DUAL_SEND_PCT = "10"
+PARAKEET_URL = "https://audio.screenpi.pe"
+WHISPER_URL = "https://whisper.screenpi.pe"
+# Legacy compat
+SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 
 # Secrets (set via `wrangler secret put <NAME>`):
 # - VERTEX_SERVICE_ACCOUNT_JSON: GCP service account JSON for Vertex AI

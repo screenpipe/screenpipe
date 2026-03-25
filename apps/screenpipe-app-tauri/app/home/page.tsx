@@ -121,14 +121,32 @@ function SettingsPageContent() {
   const { settings } = useSettings();
   const teamState = useTeam();
   const { isSectionHidden } = useEnterprisePolicy();
+  
+  // Default true: treat undefined (settings still loading) as enabled to avoid opaque flash on init
+  const isTranslucent = settings?.translucentSidebar !== false;
 
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [teamPromoDismissed, setTeamPromoDismissed] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("sidebar-collapsed");
     if (stored === "true") setSidebarCollapsed(true);
+    if (localStorage.getItem("team-promo-dismissed") === "true") setTeamPromoDismissed(true);
   }, []);
+
+  // Set global transparency when sidebar is translucent
+  // This allows the native macOS WindowEffect to show through the webview
+  useEffect(() => {
+    if (isTranslucent) {
+      document.documentElement.classList.add("macos-vibrancy");
+      document.body.classList.add("macos-vibrancy");
+      return () => {
+        document.documentElement.classList.remove("macos-vibrancy");
+        document.body.classList.remove("macos-vibrancy");
+      };
+    }
+  }, [isTranslucent]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
@@ -374,29 +392,30 @@ function SettingsPageContent() {
   const isFullHeight = activeSection === "home" || activeSection === "timeline";
 
   return (
-    <div className={cn("bg-background", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
-      {/* Transparent titlebar area */}
-      <div className="h-8 bg-transparent" data-tauri-drag-region></div>
+    <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
+      {/* Drag region — always absolute so it works with full-bleed translucent layout */}
+      <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 
-      <div className="px-4">
-        <div className="flex h-[calc(100vh-2rem)] min-h-0">
+      <div className="h-screen flex min-h-0">
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           <div
             className={cn(
-              "border-r bg-background flex flex-col min-h-0 rounded-tl-lg transition-all duration-200 overflow-x-hidden overflow-y-auto flex-shrink-0",
-              sidebarCollapsed ? "w-14" : "w-56",
+              "border-r flex flex-col min-h-0 transition-all duration-300 overflow-x-hidden overflow-y-auto flex-shrink-0 pl-4 pt-8",
+              // When translucent: let vibrancy show through. When disabled: solid bg with transition.
+              isTranslucent ? "vibrant-sidebar" : "bg-background",
+              sidebarCollapsed ? "w-18" : "w-[calc(14rem+1rem)]",
             )}
           >
-            <div className={cn("border-b", sidebarCollapsed ? "px-2 py-3" : "px-4 py-3")}>
+            <div className={cn(isTranslucent ? "vibrant-sidebar-border" : "", "border-b", sidebarCollapsed ? "px-2 py-3" : "px-4 py-3")}>
               {/* Row 1: name + phone + collapse */}
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
-                {!sidebarCollapsed && <h1 className="text-lg font-bold text-foreground">screenpipe</h1>}
+                {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={toggleMeeting}
                     disabled={meetingLoading}
-                    className="relative flex items-center justify-center h-5 w-5 text-muted-foreground hover:text-foreground transition-colors"
+                    className={cn("relative flex items-center justify-center h-5 w-5 transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
                     title={manualMeeting ? "stop meeting" : "start meeting"}
                   >
                     {manualMeeting && (
@@ -408,7 +427,7 @@ function SettingsPageContent() {
                     <TooltipTrigger asChild>
                       <button
                         onClick={toggleSidebar}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
                       >
                         {sidebarCollapsed ? (
                           <PanelLeftOpen className="h-4 w-4" />
@@ -442,11 +461,11 @@ function SettingsPageContent() {
                     {groups.map(({ key, icon: Icon, count, title, opacity }) => (
                       <span key={key} className="flex items-center gap-0.5" title={title}>
                         <Icon
-                          className="h-3 w-3 text-foreground transition-opacity duration-500"
+                          className={cn("h-3 w-3 transition-opacity duration-500", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
                           style={{ opacity }}
                         />
                         {count > 1 && (
-                          <span className="text-[9px] text-foreground/50 font-medium leading-none">{count}</span>
+                          <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
                         )}
                       </span>
                     ))}
@@ -473,19 +492,23 @@ function SettingsPageContent() {
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isActive
-                          ? "bg-card shadow-sm border border-border text-foreground"
-                          : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                          ? isTranslucent
+                            ? "vibrant-nav-active"
+                            : "bg-card shadow-sm border border-border text-foreground"
+                          : isTranslucent
+                            ? "vibrant-nav-item vibrant-nav-hover"
+                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
                       <div className={cn(
                         "transition-colors flex-shrink-0",
                         isActive
-                          ? "text-primary"
-                          : "text-muted-foreground group-hover:text-foreground"
+                          ? isTranslucent ? "" : "text-primary"
+                          : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         {section.icon}
                       </div>
-                      {!sidebarCollapsed && <span className="font-medium text-sm truncate">{section.label}</span>}
+                      {!sidebarCollapsed && <span className={cn("text-sm truncate", isActive && isTranslucent ? "font-semibold" : "font-medium")}>{section.label}</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -504,17 +527,26 @@ function SettingsPageContent() {
               <div className="flex-1" />
 
               {/* Team promo card — hidden when user already has a team, sidebar collapsed, or enterprise */}
-              {!teamState.team && !sidebarCollapsed && !isSectionHidden("team") && (
-                <div className="mx-1 mb-3 p-3 border border-border bg-card">
-                  <h3 className="text-sm font-medium text-foreground">
+              {!teamState.team && !sidebarCollapsed && !isSectionHidden("team") && !teamPromoDismissed && (
+                <div className={cn("mx-1 mb-3 p-3 border relative group", isTranslucent ? "vibrant-card-border" : "border-border bg-card")}>
+                  <button
+                    onClick={() => {
+                      setTeamPromoDismissed(true);
+                      localStorage.setItem("team-promo-dismissed", "true");
+                    }}
+                    className={cn("absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                  <h3 className={cn("text-sm font-medium", isTranslucent ? "vibrant-heading" : "text-foreground")}>
                     Add your team to screenpipe
                   </h3>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className={cn("text-xs mt-1", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground")}>
                     Push pipe configs and content filters to all members.
                   </p>
                   <button
                     onClick={() => openModal("team")}
-                    className="mt-2.5 px-3 py-1.5 text-xs font-medium border border-border bg-background hover:bg-foreground hover:text-background transition-colors duration-150"
+                    className={cn("mt-2.5 px-3 py-1.5 text-xs font-medium border transition-colors duration-150", isTranslucent ? "vibrant-btn-border" : "border-border bg-background hover:bg-foreground hover:text-background")}
                   >
                     ADD YOUR TEAM
                   </button>
@@ -522,7 +554,7 @@ function SettingsPageContent() {
               )}
 
               {/* Bottom items */}
-              <div className="space-y-0.5 border-t border-border pt-2">
+              <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
                 {/* Team link — hide invite promo in enterprise (unless team exists) */}
                 {(!isSectionHidden("team") || teamState.team) && (() => {
                   const teamLabel = teamState.team
@@ -532,11 +564,12 @@ function SettingsPageContent() {
                     <button
                       onClick={() => openModal("team")}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
+                        isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <UserPlus className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                      <UserPlus className={cn("h-4 w-4 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
                       {!sidebarCollapsed && <span className="font-medium text-sm truncate">{teamLabel}</span>}
                     </button>
                   );
@@ -557,11 +590,12 @@ function SettingsPageContent() {
                     <button
                       onClick={() => openModal("referral")}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
+                        isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <Gift className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                      <Gift className={cn("h-4 w-4 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
                       {!sidebarCollapsed && <span className="font-medium text-sm truncate">Get free month</span>}
                     </button>
                   );
@@ -586,15 +620,19 @@ function SettingsPageContent() {
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         settingsModalOpen
-                          ? "bg-card shadow-sm border border-border text-foreground"
-                          : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                          ? isTranslucent
+                            ? "vibrant-nav-active"
+                            : "bg-card shadow-sm border border-border text-foreground"
+                          : isTranslucent
+                            ? "vibrant-nav-item vibrant-nav-hover"
+                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
                       <div className={cn(
                         "transition-colors flex-shrink-0",
                         settingsModalOpen
-                          ? "text-primary"
-                          : "text-muted-foreground group-hover:text-foreground"
+                          ? isTranslucent ? "" : "text-primary"
+                          : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         <SettingsIcon className="h-4 w-4" />
                       </div>
@@ -626,15 +664,19 @@ function SettingsPageContent() {
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isActive
-                          ? "bg-card shadow-sm border border-border text-foreground"
-                          : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                          ? isTranslucent
+                            ? "vibrant-nav-active"
+                            : "bg-card shadow-sm border border-border text-foreground"
+                          : isTranslucent
+                            ? "vibrant-nav-item vibrant-nav-hover"
+                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
                       <div className={cn(
                         "transition-colors flex-shrink-0",
                         isActive
-                          ? "text-primary"
-                          : "text-muted-foreground group-hover:text-foreground"
+                          ? isTranslucent ? "" : "text-primary"
+                          : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         <HelpCircle className="h-4 w-4" />
                       </div>
@@ -657,7 +699,7 @@ function SettingsPageContent() {
           </TooltipProvider>
 
           {/* Content */}
-          <div className="flex-1 flex flex-col h-full bg-background min-h-0 rounded-tr-lg relative">
+          <div className={cn("flex-1 flex flex-col h-full bg-background min-h-0 relative", isTranslucent ? "rounded-none" : "rounded-tr-lg")}>
             {isFullHeight ? (
               <div className="flex-1 min-h-0 overflow-hidden">
                 {renderMainSection()}
@@ -808,7 +850,6 @@ function SettingsPageContent() {
               </div>
             )}
           </div>
-        </div>
       </div>
     </div>
   );

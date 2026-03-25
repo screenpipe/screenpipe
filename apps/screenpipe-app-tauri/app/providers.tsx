@@ -104,15 +104,15 @@ export const Providers = forwardRef<
 
   return (
     <NuqsAdapter>
-      <ThemeProvider defaultTheme="light" storageKey="screenpipe-ui-theme">
-        <SettingsProvider>
+      <SettingsProvider>
+        <ThemeProvider defaultTheme="light" storageKey="screenpipe-ui-theme">
           <ChangelogDialogProvider>
             <PermissionMonitorProvider>
               <PostHogProvider client={posthog}>{children}</PostHogProvider>
             </PermissionMonitorProvider>
           </ChangelogDialogProvider>
-        </SettingsProvider>
-      </ThemeProvider>
+        </ThemeProvider>
+      </SettingsProvider>
     </NuqsAdapter>
   );
 });

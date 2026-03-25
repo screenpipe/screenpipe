@@ -1192,7 +1192,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					const browserUrl = currentFrame?.devices?.[0]?.metadata?.browser_url;
 					if (!browserUrl) return null;
 					return (
-						<div className={`absolute ${embedded ? "top-1" : "top-[calc(env(safe-area-inset-top)+4px)]"} left-0 right-0 z-[45] flex justify-center pointer-events-none`}>
+						<div className={`absolute ${embedded ? "top-[56px]" : "top-[calc(env(safe-area-inset-top)+4px)]"} left-0 right-0 z-[45] flex justify-center pointer-events-none`}>
 							<button
 								type="button"
 								className="flex items-center gap-1.5 max-w-lg min-w-0 px-3 py-1 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 hover:bg-black/80 hover:border-white/20 transition-colors cursor-pointer pointer-events-auto"

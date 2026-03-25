@@ -5,19 +5,24 @@
 import { Env } from '../types';
 
 /**
- * Transcription A/B test: routes a percentage of traffic to self-hosted
- * Whisper and optionally dual-sends a sample to both providers for
- * offline quality comparison.
+ * Transcription A/B/C test: routes traffic across Deepgram, self-hosted Whisper,
+ * and self-hosted Parakeet.  Optionally dual-sends to ALL providers for offline
+ * quality comparison (WER dataset building).
  *
  * Config (env vars, changeable in CF dashboard without deploy):
- *   WHISPER_TRAFFIC_PCT       — % of requests routed to Whisper (0-100, default 0)
- *   WHISPER_DUAL_SEND_PCT     — % of requests sent to BOTH providers for comparison (0-100, default 0)
- *   SELF_HOSTED_TRANSCRIPTION_URL — base URL of the self-hosted server
+ *   DEEPGRAM_TRAFFIC_PCT    — % routed to Deepgram          (default 100)
+ *   WHISPER_TRAFFIC_PCT     — % routed to Whisper            (default 0)
+ *   PARAKEET_TRAFFIC_PCT    — % routed to Parakeet           (default 0)
+ *   DUAL_SEND_PCT           — % of requests sent to ALL 3 providers (default 0)
+ *   WHISPER_URL             — base URL of self-hosted Whisper
+ *   PARAKEET_URL            — base URL of self-hosted Parakeet
+ *
+ * Legacy compat: SELF_HOSTED_TRANSCRIPTION_URL / WHISPER_DUAL_SEND_PCT still work.
  */
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type TranscriptionProvider = 'deepgram' | 'whisper-self-hosted';
+export type TranscriptionProvider = 'deepgram' | 'whisper' | 'parakeet';
 
 export interface TranscriptionRequest {
   audioBuffer: ArrayBuffer;
@@ -44,7 +49,6 @@ export interface ABTestLog {
   transcript_length: number;
   status: 'success' | 'fallback' | 'error';
   device_id: string | null;
-  // Dual-send comparison fields (null when not dual-sending)
   comparison_provider: TranscriptionProvider | null;
   comparison_latency_ms: number | null;
   comparison_transcript_length: number | null;
@@ -54,46 +58,70 @@ export interface ABTestLog {
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-export function getWhisperTrafficPct(env: Env): number {
-  return clampPct(parseInt((env as any).WHISPER_TRAFFIC_PCT || '0', 10));
-}
-
-export function getDualSendPct(env: Env): number {
-  return clampPct(parseInt((env as any).WHISPER_DUAL_SEND_PCT || '0', 10));
-}
-
-export function getSelfHostedUrl(env: Env): string | null {
-  return (env as any).SELF_HOSTED_TRANSCRIPTION_URL || null;
-}
-
 function clampPct(n: number): number {
   if (isNaN(n)) return 0;
   return Math.max(0, Math.min(100, n));
 }
 
+function getEnvInt(env: Env, key: string, fallback: number): number {
+  return clampPct(parseInt((env as any)[key] || String(fallback), 10));
+}
+
+export function getWhisperTrafficPct(env: Env): number {
+  return getEnvInt(env, 'WHISPER_TRAFFIC_PCT', 0);
+}
+
+export function getWhisperUrl(env: Env): string | null {
+  return (env as any).WHISPER_URL || (env as any).SELF_HOSTED_TRANSCRIPTION_URL || null;
+}
+
+export function getParakeetUrl(env: Env): string | null {
+  return (env as any).PARAKEET_URL || null;
+}
+
+export function getDualSendPct(env: Env): number {
+  return getEnvInt(env, 'DUAL_SEND_PCT', getEnvInt(env, 'WHISPER_DUAL_SEND_PCT', 0));
+}
+
+// Legacy compat
+export function getSelfHostedUrl(env: Env): string | null {
+  return getWhisperUrl(env);
+}
+
 // ─── Routing ────────────────────────────────────────────────────────────────
 
 /**
- * Decide which provider handles this request.
- * Returns the primary provider and whether to dual-send.
+ * Pick primary provider based on traffic percentages.
+ * Roll 0-100: [0, deepgramPct) → deepgram, [deepgramPct, deepgramPct+whisperPct) → whisper, rest → parakeet.
  */
 export function pickProvider(env: Env): {
   primary: TranscriptionProvider;
   dualSend: boolean;
 } {
-  const selfHostedUrl = getSelfHostedUrl(env);
-  if (!selfHostedUrl) {
-    return { primary: 'deepgram', dualSend: false };
-  }
-
-  const roll = Math.random() * 100;
-  const whisperPct = getWhisperTrafficPct(env);
+  const whisperPct = getEnvInt(env, 'WHISPER_TRAFFIC_PCT', 0);
+  const parakeetPct = getEnvInt(env, 'PARAKEET_TRAFFIC_PCT', 0);
+  const deepgramPct = Math.max(0, 100 - whisperPct - parakeetPct);
   const dualPct = getDualSendPct(env);
 
-  const primary: TranscriptionProvider = roll < whisperPct ? 'whisper-self-hosted' : 'deepgram';
-  // Dual-send is independent of primary — uses its own roll
-  const dualSend = Math.random() * 100 < dualPct;
+  const whisperUrl = getWhisperUrl(env);
+  const parakeetUrl = getParakeetUrl(env);
 
+  const roll = Math.random() * 100;
+  let primary: TranscriptionProvider;
+
+  if (roll < deepgramPct) {
+    primary = 'deepgram';
+  } else if (roll < deepgramPct + whisperPct && whisperUrl) {
+    primary = 'whisper';
+  } else if (parakeetUrl) {
+    primary = 'parakeet';
+  } else if (whisperUrl) {
+    primary = 'whisper';
+  } else {
+    primary = 'deepgram';
+  }
+
+  const dualSend = Math.random() * 100 < dualPct;
   return { primary, dualSend };
 }
 
@@ -167,18 +195,14 @@ export async function callDeepgram(
   };
 }
 
-export async function callWhisper(
+async function callSelfHosted(
   req: TranscriptionRequest,
-  env: Env,
+  baseUrl: string,
+  provider: TranscriptionProvider,
 ): Promise<TranscriptionResult> {
   const start = Date.now();
-  const baseUrl = getSelfHostedUrl(env);
-  if (!baseUrl) {
-    return { provider: 'whisper-self-hosted', data: null, latencyMs: 0, transcriptLength: 0, ok: false, error: 'no URL configured' };
-  }
-
   const params = new URLSearchParams({
-    model: 'large-v3',
+    model: 'nova-3',
     smart_format: 'true',
     sample_rate: req.sampleRate,
   });
@@ -191,111 +215,121 @@ export async function callWhisper(
       method: 'POST',
       headers: { 'Content-Type': req.contentType },
       body: req.audioBuffer,
-      signal: AbortSignal.timeout(60_000), // GPU processing can be slower
+      signal: AbortSignal.timeout(60_000),
     });
 
     if (resp.ok) {
       const data = await resp.json();
       const transcript = extractTranscript(data);
-      return {
-        provider: 'whisper-self-hosted',
-        data,
-        latencyMs: Date.now() - start,
-        transcriptLength: transcript.length,
-        ok: true,
-      };
+      return { provider, data, latencyMs: Date.now() - start, transcriptLength: transcript.length, ok: true };
     }
 
     const errorBody = await resp.text();
-    return {
-      provider: 'whisper-self-hosted',
-      data: null,
-      latencyMs: Date.now() - start,
-      transcriptLength: 0,
-      ok: false,
-      error: `HTTP ${resp.status}: ${errorBody}`,
-    };
+    return { provider, data: null, latencyMs: Date.now() - start, transcriptLength: 0, ok: false, error: `HTTP ${resp.status}: ${errorBody}` };
   } catch (e: any) {
-    return {
-      provider: 'whisper-self-hosted',
-      data: null,
-      latencyMs: Date.now() - start,
-      transcriptLength: 0,
-      ok: false,
-      error: e.message || 'unknown error',
-    };
+    return { provider, data: null, latencyMs: Date.now() - start, transcriptLength: 0, ok: false, error: e.message || 'unknown error' };
+  }
+}
+
+export async function callWhisper(req: TranscriptionRequest, env: Env): Promise<TranscriptionResult> {
+  const url = getWhisperUrl(env);
+  if (!url) return { provider: 'whisper', data: null, latencyMs: 0, transcriptLength: 0, ok: false, error: 'no URL configured' };
+  return callSelfHosted(req, url, 'whisper');
+}
+
+export async function callParakeet(req: TranscriptionRequest, env: Env): Promise<TranscriptionResult> {
+  const url = getParakeetUrl(env);
+  if (!url) return { provider: 'parakeet', data: null, latencyMs: 0, transcriptLength: 0, ok: false, error: 'no URL configured' };
+  return callSelfHosted(req, url, 'parakeet');
+}
+
+function callProvider(provider: TranscriptionProvider, req: TranscriptionRequest, env: Env): Promise<TranscriptionResult> {
+  switch (provider) {
+    case 'deepgram': return callDeepgram(req, env);
+    case 'whisper': return callWhisper(req, env);
+    case 'parakeet': return callParakeet(req, env);
   }
 }
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
 /**
- * Run the A/B test for a single transcription request.
- *
- * Returns the response data for the winning provider.
- * Logs comparison data to D1 in the background via ctx.waitUntil.
+ * Run the A/B/C test for a single transcription request.
+ * On dual-send, fires ALL other providers in parallel and logs each comparison row.
  */
 export async function runTranscriptionABTest(
   req: TranscriptionRequest,
   env: Env,
   deviceId: string | null,
-): Promise<{ result: TranscriptionResult; status: 'success' | 'fallback'; logEntry: ABTestLog }> {
+): Promise<{ result: TranscriptionResult; status: 'success' | 'fallback'; logEntry: ABTestLog; extraLogs: ABTestLog[] }> {
   const { primary, dualSend } = pickProvider(env);
-  const other: TranscriptionProvider = primary === 'deepgram' ? 'whisper-self-hosted' : 'deepgram';
   const estimatedDuration = req.audioBuffer.byteLength / 8000;
 
-  // Call primary provider
-  const primaryResult = primary === 'deepgram'
-    ? await callDeepgram(req, env)
-    : await callWhisper(req, env);
-
-  let finalResult = primaryResult;
+  // Call primary
+  let primaryResult = await callProvider(primary, req, env);
   let status: 'success' | 'fallback' = 'success';
 
-  // Fallback: if primary failed and it was Whisper, try Deepgram
-  if (!primaryResult.ok && primary === 'whisper-self-hosted') {
-    console.warn(`whisper failed (${primaryResult.error}), falling back to deepgram`);
-    finalResult = await callDeepgram(req, env);
-    status = finalResult.ok ? 'fallback' : 'error' as any;
+  // Fallback to Deepgram if self-hosted failed
+  if (!primaryResult.ok && primary !== 'deepgram') {
+    console.warn(`${primary} failed (${primaryResult.error}), falling back to deepgram`);
+    primaryResult = await callDeepgram(req, env);
+    status = primaryResult.ok ? 'fallback' : 'error' as any;
   }
 
-  // Dual-send: fire comparison request (don't await before returning)
-  let comparisonResult: TranscriptionResult | null = null;
-  if (dualSend && primaryResult.ok) {
-    // Call the other provider for comparison
-    comparisonResult = other === 'deepgram'
-      ? await callDeepgram(req, env)
-      : await callWhisper(req, env);
-  }
-
+  // Primary log entry
   const logEntry: ABTestLog = {
     timestamp: new Date().toISOString(),
-    provider: finalResult.provider,
-    latency_ms: finalResult.latencyMs,
+    provider: primaryResult.provider,
+    latency_ms: primaryResult.latencyMs,
     audio_bytes: req.audioBuffer.byteLength,
     estimated_duration_s: Math.round(estimatedDuration),
-    transcript_length: finalResult.transcriptLength,
+    transcript_length: primaryResult.transcriptLength,
     status,
     device_id: deviceId,
-    comparison_provider: comparisonResult?.provider ?? null,
-    comparison_latency_ms: comparisonResult?.latencyMs ?? null,
-    comparison_transcript_length: comparisonResult?.transcriptLength ?? null,
-    comparison_transcript_preview: comparisonResult?.ok
-      ? extractTranscript(comparisonResult.data).slice(0, 500)
-      : null,
-    primary_transcript_preview: finalResult.ok
-      ? extractTranscript(finalResult.data).slice(0, 500)
-      : null,
+    comparison_provider: null,
+    comparison_latency_ms: null,
+    comparison_transcript_length: null,
+    comparison_transcript_preview: null,
+    primary_transcript_preview: primaryResult.ok ? extractTranscript(primaryResult.data).slice(0, 500) : null,
   };
 
-  return { result: finalResult, status, logEntry };
+  // Dual-send: call ALL other providers in parallel for dataset building
+  const extraLogs: ABTestLog[] = [];
+  if (dualSend && primaryResult.ok) {
+    const others: TranscriptionProvider[] = (['deepgram', 'whisper', 'parakeet'] as const)
+      .filter(p => p !== primary)
+      .filter(p => {
+        if (p === 'whisper') return !!getWhisperUrl(env);
+        if (p === 'parakeet') return !!getParakeetUrl(env);
+        return true;
+      });
+
+    const comparisons = await Promise.all(others.map(p => callProvider(p, req, env)));
+
+    for (const comp of comparisons) {
+      extraLogs.push({
+        timestamp: new Date().toISOString(),
+        provider: primaryResult.provider,
+        latency_ms: primaryResult.latencyMs,
+        audio_bytes: req.audioBuffer.byteLength,
+        estimated_duration_s: Math.round(estimatedDuration),
+        transcript_length: primaryResult.transcriptLength,
+        status: 'success',
+        device_id: deviceId,
+        comparison_provider: comp.provider,
+        comparison_latency_ms: comp.latencyMs,
+        comparison_transcript_length: comp.transcriptLength,
+        comparison_transcript_preview: comp.ok ? extractTranscript(comp.data).slice(0, 500) : null,
+        primary_transcript_preview: extractTranscript(primaryResult.data).slice(0, 500),
+      });
+    }
+  }
+
+  return { result: primaryResult, status, logEntry, extraLogs };
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
-/**
- * Persist an A/B test log entry to D1.
- */
 export async function logABTestResult(env: Env, entry: ABTestLog): Promise<void> {
   try {
     await env.DB.prepare(
@@ -327,9 +361,13 @@ export async function logABTestResult(env: Env, entry: ABTestLog): Promise<void>
   }
 }
 
-/**
- * Query A/B test results for the admin endpoint.
- */
+export async function logAllABTestResults(env: Env, primary: ABTestLog, extras: ABTestLog[]): Promise<void> {
+  await logABTestResult(env, primary);
+  for (const extra of extras) {
+    await logABTestResult(env, extra);
+  }
+}
+
 export async function getABTestSummary(env: Env, days: number = 7): Promise<any> {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
@@ -377,7 +415,6 @@ export async function getABTestSummary(env: Env, days: number = 7): Promise<any>
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Extract transcript text from a Deepgram-compatible response. */
 export function extractTranscript(data: any): string {
   try {
     return data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';

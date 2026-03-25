@@ -8,7 +8,8 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, FlaskConical, ExternalLink } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, FlaskConical, ExternalLink, PanelLeft } from "lucide-react";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ export function DisplaySection() {
   const { settings, updateSettings } = useSettings();
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
+  const { isMac } = usePlatform();
 
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
     if (settings) {
@@ -194,6 +196,34 @@ export function DisplaySection() {
             </div>
           </CardContent>
         </Card>
+
+        {isMac && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <PanelLeft className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Translucent Sidebar
+                      <HelpTooltip text="Apply a macOS vibrancy effect to the sidebar for a frosted glass look." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">Frosted glass sidebar effect</p>
+                  </div>
+                </div>
+                <Switch
+                  checked={settings?.translucentSidebar ?? true}
+                  onCheckedChange={(checked) => {
+                    handleSettingsChange({ translucentSidebar: checked });
+                    toast({
+                      title: checked ? "translucent sidebar enabled" : "translucent sidebar disabled",
+                    });
+                  }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

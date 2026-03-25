@@ -37,6 +37,10 @@ export interface RemotePipeStatus {
     schedule: string;
     enabled: boolean;
     source_slug?: string;
+    trigger?: {
+      events?: string[];
+      custom?: string[];
+    };
   };
   is_running: boolean;
   last_run?: string;

@@ -160,6 +160,8 @@ export type Settings = SettingsStore & {
 	localRetentionEnabled?: boolean;
 	/** Days to keep data locally before auto-deleting (default: 30) */
 	localRetentionDays?: number;
+	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
+	translucentSidebar?: boolean;
 	/** Notification preferences — which notification sources are enabled */
 	notificationPrefs?: {
 		captureStalls: boolean;

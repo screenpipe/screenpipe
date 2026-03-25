@@ -178,6 +178,16 @@ impl ShowRewindWindow {
             builder = builder.decorations(true);
         }
 
+        // Apply theme from settings
+        if let Ok(Some(settings)) = SettingsStore::get(app) {
+            let tauri_theme = match settings.ui_theme.as_str() {
+                "light" => Some(tauri::Theme::Light),
+                "dark" => Some(tauri::Theme::Dark),
+                _ => None, // "system" or others
+            };
+            builder = builder.theme(tauri_theme);
+        }
+
         builder
     }
 
@@ -1218,9 +1228,22 @@ impl ShowRewindWindow {
                     Some(p) => format!("/home?section={}", p),
                     None => "/home".to_string(),
                 };
+
                 let builder = self.window_builder(app, &url).focused(true);
                 #[cfg(target_os = "macos")]
-                let builder = builder.hidden_title(true);
+                let builder = {
+                    use tauri::window::Color;
+                    use tauri::TitleBarStyle;
+                    builder
+                        .title_bar_style(TitleBarStyle::Overlay)
+                        .hidden_title(true)
+                        .background_color(Color(0, 0, 0, 1))
+                        .effects(tauri::utils::config::WindowEffectsConfig {
+                            effects: vec![tauri::window::Effect::Menu],
+                            state: Some(tauri::window::EffectState::Active),
+                            ..Default::default()
+                        })
+                };
                 let window = builder.build()?;
 
                 // Disable WKWebView's native scroll so wheel events reach JavaScript
