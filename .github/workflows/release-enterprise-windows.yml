@@ -168,7 +168,7 @@ jobs:
           RUSTFLAGS: "-C link-arg=/LTCG"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF"
         with:
-          args: "--target x86_64-pc-windows-msvc --features enterprise-build,directml"
+          args: "--target x86_64-pc-windows-msvc"
           projectPath: "./apps/screenpipe-app-tauri"
           tauriScript: bunx tauri -v
           retryAttempts: 3
