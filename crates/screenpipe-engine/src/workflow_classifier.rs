@@ -197,7 +197,11 @@ async fn get_recent_activities(client: &Client, port: u16) -> Option<Vec<Activit
         };
 
         if !app.is_empty() || !window.is_empty() {
-            activities.push(ActivityEntry { app, window, timestamp: ts });
+            activities.push(ActivityEntry {
+                app,
+                window,
+                timestamp: ts,
+            });
         }
     }
 
@@ -258,8 +262,7 @@ async fn classify(
         content.trim()
     };
 
-    serde_json::from_str::<ClassifierResult>(clean)
-        .map_err(|e| format!("parse '{}': {}", clean, e))
+    serde_json::from_str::<ClassifierResult>(clean).map_err(|e| format!("parse '{}': {}", clean, e))
 }
 
 fn hash_activities(activities: &[ActivityEntry]) -> u64 {

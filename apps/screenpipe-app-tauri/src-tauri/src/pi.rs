@@ -1366,20 +1366,30 @@ pub async fn pi_start_inner(
             }
 
             // Signal the command queue when the SDK's agent loop finishes.
-            // "done" = agent turn complete (prompt finished).
-            // "response" = command ACK (new_session/abort acknowledged).
-            // For "response", the SDK's internal agent state machine may still be
-            // transitioning — a small delay prevents the next queued command from
-            // hitting "Agent is already processing".
+            //
+            // pi-mono SDK event types that matter for queue synchronization:
+            //   "agent_end"  = agent turn fully complete (prompt finished streaming).
+            //                  This is the authoritative "done" signal for prompts.
+            //   "response"   = command ACK (new_session/abort/prompt acknowledged).
+            //                  Fires immediately when the SDK receives the command,
+            //                  NOT when it finishes processing it.
+            //
+            // The "done" type was the original intent but pi-mono never emits it —
+            // it emits "agent_end" instead. Without "agent_end" handling, the queue
+            // was only ever unblocked by the "response" + 500ms path, which fires
+            // ~500ms after command ACK regardless of whether the agent is still
+            // streaming. This caused "Agent is already processing" when a second
+            // prompt was sent while the first was still running.
             if let Some(ref qs) = queue_state_for_reader {
                 match event_type.as_deref() {
-                    Some("done") => {
+                    Some("agent_end") => {
+                        // Agent fully done — unblock the queue immediately.
                         qs.signal_done();
                     }
                     Some("response") => {
-                        // The SDK ACKed a non-prompt command (new_session/abort)
-                        // but its agent loop may not be fully idle yet. Wait a
-                        // beat before unblocking the queue.
+                        // Fallback for new_session/abort when no active prompt is
+                        // running (no agent_end fires in that case). Also covers the
+                        // prompt ACK path as a safety net.
                         // Note: this runs on a std::thread (not tokio), so use
                         // std::thread::spawn + std::thread::sleep.
                         let qs = qs.clone();

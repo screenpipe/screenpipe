@@ -459,13 +459,12 @@ impl AudioManager {
             // Max deferral cap: hardcoded per engine (user override only for OpenAI-compatible).
             // This lets meetings accumulate audio up to the engine's optimal capacity.
             let max_deferral_secs = match *audio_transcription_engine {
-                AudioTranscriptionEngine::OpenAICompatible => {
-                    batch_max_duration_secs.unwrap_or_else(|| {
+                AudioTranscriptionEngine::OpenAICompatible => batch_max_duration_secs
+                    .unwrap_or_else(|| {
                         super::reconciliation::default_max_batch_duration_secs(
                             &audio_transcription_engine,
                         )
-                    })
-                }
+                    }),
                 _ => super::reconciliation::default_max_batch_duration_secs(
                     &audio_transcription_engine,
                 ),

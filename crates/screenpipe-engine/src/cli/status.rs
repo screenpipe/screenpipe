@@ -19,7 +19,9 @@ pub async fn handle_status_command(
 
     // Get DB stats
     let (frame_count, audio_count, last_timestamp) = if db_path.exists() {
-        match screenpipe_db::DatabaseManager::new(&db_path.to_string_lossy(), Default::default()).await {
+        match screenpipe_db::DatabaseManager::new(&db_path.to_string_lossy(), Default::default())
+            .await
+        {
             Ok(db) => {
                 let frames: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM frames")
                     .fetch_one(&db.pool)

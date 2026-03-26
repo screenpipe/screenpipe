@@ -93,14 +93,32 @@ export async function checkRateLimit(
   url.searchParams.set('tier', tier);
   url.searchParams.set('rpm', String(getTierConfig(env)[tier]?.rpm || 5));
 
-  const rateLimitResponse = await rateLimiter.fetch(url.toString());
-  const rateLimitData = (await rateLimitResponse.json()) as {
+  let rateLimitResponse: Response;
+  try {
+    rateLimitResponse = await rateLimiter.fetch(url.toString());
+  } catch (err: any) {
+    console.error('rate limiter durable object error, failing open:', err?.message);
+    return { allowed: true };
+  }
+
+  if (!rateLimitResponse.ok) {
+    console.error('rate limiter returned status', rateLimitResponse.status);
+    return { allowed: true };
+  }
+
+  let rateLimitData: {
     allowed: boolean;
     remaining: number;
     reset_in: number;
     tier: string;
     rpm_limit: number;
   };
+  try {
+    rateLimitData = await rateLimitResponse.json();
+  } catch (err: any) {
+    console.error('rate limiter response parse error, failing open:', err?.message);
+    return { allowed: true };
+  }
 
   if (!rateLimitData.allowed) {
     return {

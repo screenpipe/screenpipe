@@ -11,7 +11,9 @@ mod tests {
     use screenpipe_db::{AudioDevice, DatabaseManager, DeviceType};
 
     async fn setup_test_db() -> DatabaseManager {
-        let db = DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap();
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
 
         match sqlx::migrate!("./src/migrations").run(&db.pool).await {
             Ok(_) => {}

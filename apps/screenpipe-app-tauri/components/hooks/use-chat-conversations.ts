@@ -21,7 +21,6 @@ import {
   migrateFromStoreBin,
 } from "@/lib/chat-storage";
 
-const PI_CHAT_SESSION = "chat";
 
 // --- Types (mirrored from standalone-chat.tsx) ---
 
@@ -67,6 +66,7 @@ interface UseChatConversationsOpts {
   piMessageIdRef: MutableRefObject<string | null>;
   piContentBlocksRef: MutableRefObject<ContentBlock[]>;
   piSessionSyncedRef: MutableRefObject<boolean>;
+  piSessionIdRef: MutableRefObject<string>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
@@ -88,6 +88,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piMessageIdRef,
     piContentBlocksRef,
     piSessionSyncedRef,
+    piSessionIdRef,
     setIsLoading,
     setIsStreaming,
     setPastedImages,
@@ -251,10 +252,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   // ---- loadConversation ----
   const loadConversation = async (conv: ChatConversation) => {
-    // Abort any ongoing Pi processing before switching
+    // Abort any ongoing Pi processing on the current session before switching
     if (isLoading || isStreaming) {
       try {
-        await commands.piAbort(PI_CHAT_SESSION);
+        await commands.piAbort(piSessionIdRef.current);
       } catch (e) {
         console.warn("[Pi] Failed to abort:", e);
       }
@@ -264,6 +265,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       setIsLoading(false);
       setIsStreaming(false);
     }
+
+    // Switch to this conversation's session — each conversation is its own Pi process
+    piSessionIdRef.current = conv.id;
 
     // Load full conversation from file (conv from list may be metadata-only)
     const { loadConversationFile } = await import("@/lib/chat-storage");
@@ -304,11 +308,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   };
 
   // ---- startNewConversation ----
-  // Always kills and restarts Pi to guarantee a clean session.
-  // piNewSession() has a race condition: if a prompt is sent before it
-  // completes, the old context leaks through. Kill+restart is safe.
+  // Assigns a fresh session ID so the next message starts a brand-new Pi
+  // process. The old session stays alive (backend evicts LRU when > 4).
+  // No kill/restart needed — true multi-session means each conversation
+  // has its own process that persists across conversation switches.
   const startNewConversation = async () => {
-    // Clear frontend state first
+    // Clear frontend state
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
@@ -321,12 +326,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setShowHistory(false);
     setPastedImages([]);
 
-    // Kill Pi and restart fresh — the only reliable way to clear context
-    if (piInfo?.running) {
-      try {
-        await commands.piStop(PI_CHAT_SESSION);
-      } catch {}
-    }
+    // New session ID — Pi will be started fresh when the first message is sent
+    piSessionIdRef.current = crypto.randomUUID();
     piSessionSyncedRef.current = true;
   };
 

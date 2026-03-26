@@ -135,7 +135,7 @@ export function useMentionSystem(opts: {
 
     const cursorPos = e.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);
-    const atMatch = textBeforeCursor.match(/@(\w*)$/);
+    const atMatch = textBeforeCursor.match(/@([\w-]*)$/);
 
     if (atMatch) {
       setShowMentionDropdown(true);

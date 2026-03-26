@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::{info, warn};
 
-use super::{parse_frontmatter, read_tombstones};
+use super::{
+    load_local_overrides, parse_frontmatter, read_tombstones, save_local_overrides, serialize_pipe,
+};
 
 /// Current schema version for the sync manifest.
 pub const PIPE_SYNC_SCHEMA: u32 = 1;
@@ -307,7 +309,13 @@ pub fn apply_manifest_to_disk(
                         // Force enabled: false for newly imported pipes
                         force_disabled(&synced.raw_content)
                     } else {
-                        synced.raw_content.clone()
+                        // For updates, preserve device-local enabled override
+                        let local_overrides = load_local_overrides(pipes_dir);
+                        if let Some(&local_enabled) = local_overrides.get(name) {
+                            override_enabled(&synced.raw_content, local_enabled)
+                        } else {
+                            synced.raw_content.clone()
+                        }
                     };
 
                     if let Err(e) = std::fs::write(&pipe_md, &content) {
@@ -334,6 +342,13 @@ pub fn apply_manifest_to_disk(
                         info!("pipe sync: deleted pipe '{}'", name);
                     }
                 }
+                // Clean up device-local enabled override
+                let mut overrides = load_local_overrides(pipes_dir);
+                if overrides.remove(name.as_str()).is_some() {
+                    if let Err(e) = save_local_overrides(pipes_dir, &overrides) {
+                        warn!("failed to remove local override for '{}': {}", name, e);
+                    }
+                }
             }
             PipeSyncAction::Skipped(_) => {}
         }
@@ -348,14 +363,17 @@ pub fn apply_manifest_to_disk(
 
 /// Force `enabled: false` in pipe.md content for imported pipes.
 fn force_disabled(raw_content: &str) -> String {
+    override_enabled(raw_content, false)
+}
+
+/// Override the `enabled` field in pipe.md content with the given value.
+/// Used to apply device-local enabled overrides after sync.
+fn override_enabled(raw_content: &str, enabled: bool) -> String {
     match parse_frontmatter(raw_content) {
         Ok((mut config, body)) => {
-            config.enabled = false;
-            // Re-serialize
-            let mut cfg = config.clone();
-            cfg.name = String::new();
-            match serde_yaml::to_string(&cfg) {
-                Ok(yaml) => format!("---\n{}---\n\n{}\n", yaml, body),
+            config.enabled = enabled;
+            match serialize_pipe(&config, &body) {
+                Ok(content) => content,
                 Err(_) => raw_content.to_string(),
             }
         }

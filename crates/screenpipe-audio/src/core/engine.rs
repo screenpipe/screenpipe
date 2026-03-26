@@ -17,6 +17,7 @@ pub enum AudioTranscriptionEngine {
     OpenAICompatible,
     Qwen3Asr,
     Parakeet,
+    ParakeetMlx,
     Disabled,
 }
 
@@ -34,6 +35,7 @@ impl std::str::FromStr for AudioTranscriptionEngine {
             "openai-compatible" => Ok(Self::OpenAICompatible),
             "qwen3-asr" => Ok(Self::Qwen3Asr),
             "parakeet" | "parakeet-tdt-0.6b-v2" => Ok(Self::Parakeet),
+            "parakeet-mlx" => Ok(Self::ParakeetMlx),
             "disabled" => Ok(Self::Disabled),
             _ => Err(format!("unknown audio engine: {s}")),
         }
@@ -57,6 +59,7 @@ impl fmt::Display for AudioTranscriptionEngine {
             AudioTranscriptionEngine::OpenAICompatible => write!(f, "OpenAICompatible"),
             AudioTranscriptionEngine::Qwen3Asr => write!(f, "Qwen3Asr"),
             AudioTranscriptionEngine::Parakeet => write!(f, "Parakeet"),
+            AudioTranscriptionEngine::ParakeetMlx => write!(f, "ParakeetMlx"),
             AudioTranscriptionEngine::Disabled => write!(f, "Disabled"),
         }
     }

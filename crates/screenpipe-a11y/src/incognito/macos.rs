@@ -150,8 +150,7 @@ end if"#,
                 Some(HashSet::new())
             }
             _ => {
-                let titles: HashSet<String> =
-                    result.split("~~~").map(|s| s.to_string()).collect();
+                let titles: HashSet<String> = result.split("~~~").map(|s| s.to_string()).collect();
                 debug!(
                     "incognito: {} has {} incognito window(s): {:?}",
                     as_name,

@@ -11,7 +11,9 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 async fn setup_large_db(size: usize) -> DatabaseManager {
-    let db = DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap();
+    let db = DatabaseManager::new("sqlite::memory:", Default::default())
+        .await
+        .unwrap();
     let mut rng = rand::thread_rng();
 
     for _ in 0..size {

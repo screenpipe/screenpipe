@@ -112,6 +112,8 @@ async function getCreditBalance(env: Env, userId: string): Promise<number> {
 
 // Per-model query weights — expensive models cost more daily queries
 const MODEL_WEIGHTS: Record<string, number> = {
+  // Auto — smart routing, free
+  'auto': 0,
   // Vertex MaaS — free for users (GCP credits), weight=0 so they don't eat daily quota
   'glm-4.7': 0,
   'glm-5': 0,
@@ -158,6 +160,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
     dailyQueries: 25,
     rpm: 15,
     allowedModels: [
+      'auto',
       'claude-haiku-4-5',
       'gemini-3-flash',
       'glm-4.7',
@@ -172,6 +175,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
     dailyQueries: 50,
     rpm: 25,
     allowedModels: [
+      'auto',
       'claude-haiku-4-5',
       'claude-sonnet-4-5',
       'gemini-3-flash',

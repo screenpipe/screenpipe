@@ -244,6 +244,11 @@ pub async fn pipe_store_install(
         .and_then(|v| v.as_i64())
         .unwrap_or(1);
 
+    // Extract connections from frontmatter before installing
+    let connections: Vec<String> = screenpipe_core::pipes::parse_frontmatter(&source_md)
+        .map(|(cfg, _)| cfg.connections)
+        .unwrap_or_default();
+
     // 2. Install locally with store tracking
     let mgr = pm.lock().await;
     let name = match mgr
@@ -258,7 +263,7 @@ pub async fn pipe_store_install(
     let increment_url = format!("{}/api/pipes/store/{}/install", base, body.slug);
     let _ = client.post(&increment_url).send().await;
 
-    Json(json!({ "success": true, "name": name, "slug": body.slug }))
+    Json(json!({ "success": true, "name": name, "slug": body.slug, "connections": connections }))
 }
 
 /// POST /pipes/store/update

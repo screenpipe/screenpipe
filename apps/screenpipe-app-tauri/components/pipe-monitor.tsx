@@ -635,7 +635,7 @@ export function PipeMonitorView() {
     <div className="space-y-4">
       {/* Device bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        {devices.map((d) => (
+        {[...devices].sort((a, b) => (b.status === "online" ? 1 : 0) - (a.status === "online" ? 1 : 0)).map((d) => (
           <div
             key={d.address}
             className="flex items-center gap-1.5 text-xs bg-accent/50 px-2 py-1 rounded"
@@ -759,7 +759,7 @@ export function PipeMonitorView() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {devices.map((device) => (
+          {[...devices].sort((a, b) => (b.status === "online" ? 1 : 0) - (a.status === "online" ? 1 : 0)).map((device) => (
             <DeviceCard
               key={device.address}
               device={device}

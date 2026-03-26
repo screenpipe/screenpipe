@@ -106,12 +106,31 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
 }
 
-/// Read the enterprise license key from `enterprise.json` next to the executable.
-/// Admins push this file via Intune/MDM to a protected directory (e.g. Program Files)
-/// that employees cannot modify. Returns None if the file doesn't exist or is invalid.
+/// Read the enterprise license key from `enterprise.json`.
+/// Checks in order:
+/// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
+/// 2. `~/.screenpipe/enterprise.json` (entered manually by employee via in-app prompt)
+/// Returns None if no file is found or is invalid.
 #[tauri::command]
 #[specta::specta]
 pub fn get_enterprise_license_key() -> Option<String> {
+    // Try MDM-deployed location first (next to executable)
+    if let Some(key) = read_enterprise_key_from_exe_dir() {
+        return Some(key);
+    }
+
+    // Fallback: ~/.screenpipe/enterprise.json (manually entered by employee)
+    let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    if user_path.exists() {
+        info!("enterprise: checking user config at {}", user_path.display());
+        return read_enterprise_key_from_path(&user_path);
+    }
+
+    info!("enterprise: no enterprise.json found in any location");
+    None
+}
+
+fn read_enterprise_key_from_exe_dir() -> Option<String> {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -121,10 +140,8 @@ pub fn get_enterprise_license_key() -> Option<String> {
     };
     let exe_dir = exe.parent()?;
 
-    // Check next to executable first (Program Files on Windows, .app/Contents/MacOS on macOS)
     let config_path = exe_dir.join("enterprise.json");
 
-    // On macOS, also check the Resources directory inside the .app bundle
     #[cfg(target_os = "macos")]
     let config_path = if config_path.exists() {
         config_path
@@ -133,19 +150,20 @@ pub fn get_enterprise_license_key() -> Option<String> {
     };
 
     if !config_path.exists() {
-        info!(
-            "enterprise: no enterprise.json at {}",
-            config_path.display()
-        );
+        info!("enterprise: no enterprise.json at {}", config_path.display());
         return None;
     }
 
-    info!("enterprise: found enterprise.json at {}", config_path.display());
+    read_enterprise_key_from_path(&config_path)
+}
 
-    let contents = match std::fs::read_to_string(&config_path) {
+fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
+    info!("enterprise: found enterprise.json at {}", path.display());
+
+    let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            error!("enterprise: failed to read {}: {}", config_path.display(), e);
+            error!("enterprise: failed to read {}: {}", path.display(), e);
             return None;
         }
     };
@@ -167,6 +185,23 @@ pub fn get_enterprise_license_key() -> Option<String> {
     }
 
     key
+}
+
+/// Save the enterprise license key to `~/.screenpipe/enterprise.json`.
+/// Used by the in-app prompt when enterprise.json is not deployed via MDM.
+#[tauri::command]
+#[specta::specta]
+pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
+
+    let path = dir.join("enterprise.json");
+    let json = serde_json::json!({ "license_key": license_key });
+    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
+        .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
+
+    info!("enterprise: license key saved to {}", path.display());
+    Ok(())
 }
 
 #[tauri::command]

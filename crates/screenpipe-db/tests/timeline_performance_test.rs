@@ -14,7 +14,9 @@ mod timeline_performance_tests {
             .with_max_level(tracing::Level::INFO)
             .try_init();
 
-        let db = DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap();
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
 
         sqlx::migrate!("./src/migrations")
             .run(&db.pool)
@@ -403,7 +405,9 @@ mod timeline_performance_tests {
 
         let db_url = format!("sqlite:{}", path);
 
-        let db = DatabaseManager::new(&db_url, Default::default()).await.unwrap();
+        let db = DatabaseManager::new(&db_url, Default::default())
+            .await
+            .unwrap();
 
         sqlx::migrate!("./src/migrations")
             .run(&db.pool)

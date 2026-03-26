@@ -40,4 +40,19 @@ describe("global chat mentions", () => {
     expect(mentions.appName).toBe("Google Chrome");
     expect(mentions.cleanedInput).toBe("find notes");
   });
+
+  it("handles @mention trigger with hyphens", () => {
+    const regex = /@([\w-]*)$/;
+    const match1 = "@last".match(regex);
+    expect(match1).not.toBeNull();
+    expect(match1![1]).toBe("last");
+
+    const match2 = "@last-".match(regex);
+    expect(match2).not.toBeNull();
+    expect(match2![1]).toBe("last-");
+
+    const match3 = "@last-week".match(regex);
+    expect(match3).not.toBeNull();
+    expect(match3![1]).toBe("last-week");
+  });
 });

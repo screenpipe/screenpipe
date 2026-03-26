@@ -881,7 +881,7 @@ function ChatGptPanel() {
 // API integration panel (Telegram, Slack, etc.)
 // ---------------------------------------------------------------------------
 
-interface IntegrationField {
+export interface IntegrationField {
   key: string;
   label: string;
   secret: boolean;
@@ -889,7 +889,7 @@ interface IntegrationField {
   help_url: string;
 }
 
-interface IntegrationInfo {
+export interface IntegrationInfo {
   id: string;
   name: string;
   icon: string;
@@ -899,37 +899,49 @@ interface IntegrationInfo {
   connected: boolean;
 }
 
-function ApiIntegrationPanel({ integration, onRefresh }: {
-  integration: IntegrationInfo;
-  onRefresh: () => void;
+// ---------------------------------------------------------------------------
+// Reusable credential form for a single connection instance
+// ---------------------------------------------------------------------------
+
+export function ConnectionCredentialForm({
+  integrationId,
+  fields,
+  initialCredentials,
+  onSaved,
+  instanceName,
+  onDisconnect,
+  showTryInChat,
+  integrationName,
+  integrationDescription,
+}: {
+  integrationId: string;
+  fields: IntegrationField[];
+  initialCredentials?: Record<string, string>;
+  onSaved?: () => void;
+  instanceName?: string;
+  onDisconnect?: () => void;
+  showTryInChat?: boolean;
+  integrationName?: string;
+  integrationDescription?: string;
 }) {
-  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [creds, setCreds] = useState<Record<string, string>>(initialCredentials || {});
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "testing" | "saving" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (integration.connected) {
-      fetch(`http://localhost:3030/connections/${integration.id}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.credentials) {
-            const loaded: Record<string, string> = {};
-            for (const [k, v] of Object.entries(data.credentials)) {
-              if (typeof v === "string") loaded[k] = v;
-            }
-            setCreds(loaded);
-          }
-        })
-        .catch(() => {});
-    }
-  }, [integration.id, integration.connected]);
+    if (initialCredentials) setCreds(initialCredentials);
+  }, [initialCredentials]);
+
+  const endpoint = instanceName
+    ? `http://localhost:3030/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
+    : `http://localhost:3030/connections/${integrationId}`;
 
   const handleTest = async () => {
     setStatus("testing");
     setError(null);
     try {
-      const res = await fetch(`http://localhost:3030/connections/${integration.id}/test`, {
+      const res = await fetch(`http://localhost:3030/connections/${integrationId}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: creds }),
@@ -937,7 +949,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "test failed");
       setStatus("saving");
-      const saveRes = await fetch(`http://localhost:3030/connections/${integration.id}`, {
+      const saveRes = await fetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: creds }),
@@ -946,7 +958,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
       if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
       setStatus("idle");
       apiCache.invalidate("connections/list");
-      onRefresh();
+      onSaved?.();
     } catch (e: any) {
       setError(e?.message || "unknown error");
       setStatus("error");
@@ -955,16 +967,18 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
   const handleDisconnect = async () => {
     try {
-      await fetch(`http://localhost:3030/connections/${integration.id}`, { method: "DELETE" });
+      await fetch(endpoint, { method: "DELETE" });
       setCreds({});
       apiCache.invalidate("connections/list");
-      onRefresh();
+      onDisconnect?.();
     } catch { /* ignore */ }
   };
 
+  const hasCredentials = Object.values(creds).some(v => !!v);
+
   return (
     <div className="space-y-3">
-      {integration.fields.map((field) => (
+      {fields.map((field) => (
         <div key={field.key} className="space-y-1">
           <div className="flex items-center gap-1">
             <Label className="text-xs">{field.label}</Label>
@@ -1014,30 +1028,182 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
            : status === "error" ? (<>retry</>)
            : (<><Check className="h-3 w-3" />test &amp; save</>)}
         </Button>
-        {integration.connected && (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
-              onClick={() => {
-                const credSummary = Object.entries(creds)
-                  .filter(([, v]) => v)
-                  .map(([k, v]) => `${k}: ${v}`)
-                  .join("\n  ");
-                showChatWithPrefill({
-                  context: `the user has the "${integration.name}" connection set up in screenpipe with these credentials:\n  ${credSummary}\n\nthe connection API is available at GET http://localhost:3030/connections/${integration.id}\n\n${integration.description}`,
-                  prompt: `try using my ${integration.name} connection — query it and do a small test interaction to verify it works end to end. after that, suggest creating a pipe that uses this connection.`,
-                  autoSend: true,
-                });
-              }}
-            >
-              <ExternalLink className="h-3 w-3" />try in chat
+        {showTryInChat && hasCredentials && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
+            onClick={() => {
+              const credSummary = Object.entries(creds)
+                .filter(([, v]) => v)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("\n  ");
+              showChatWithPrefill({
+                context: `the user has the "${integrationName}" connection set up in screenpipe with these credentials:\n  ${credSummary}\n\nthe connection API is available at GET http://localhost:3030/connections/${integrationId}\n\n${integrationDescription || ""}`,
+                prompt: `try using my ${integrationName} connection — query it and do a small test interaction to verify it works end to end. after that, suggest creating a pipe that uses this connection.`,
+                autoSend: true,
+              });
+            }}
+          >
+            <ExternalLink className="h-3 w-3" />try in chat
+          </Button>
+        )}
+        {(onDisconnect || hasCredentials) && (
+          <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
+            <X className="h-3 w-3" />disconnect
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-instance API integration panel
+// ---------------------------------------------------------------------------
+
+interface InstanceData {
+  name: string;
+  credentials: Record<string, string>;
+}
+
+function ApiIntegrationPanel({ integration, onRefresh }: {
+  integration: IntegrationInfo;
+  onRefresh: () => void;
+}) {
+  const [instances, setInstances] = useState<InstanceData[]>([]);
+  const [instancesLoaded, setInstancesLoaded] = useState(false);
+  const [addingInstance, setAddingInstance] = useState(false);
+  const [newInstanceName, setNewInstanceName] = useState("");
+  const [defaultCreds, setDefaultCreds] = useState<Record<string, string>>({});
+
+  // Load default credentials
+  useEffect(() => {
+    if (integration.connected) {
+      fetch(`http://localhost:3030/connections/${integration.id}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.credentials) {
+            const loaded: Record<string, string> = {};
+            for (const [k, v] of Object.entries(data.credentials)) {
+              if (typeof v === "string") loaded[k] = v;
+            }
+            setDefaultCreds(loaded);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [integration.id, integration.connected]);
+
+  // Load instances
+  useEffect(() => {
+    fetch(`http://localhost:3030/connections/${integration.id}/instances`)
+      .then(r => {
+        if (!r.ok) throw new Error("not supported");
+        return r.json();
+      })
+      .then(data => {
+        const list = data.data || data.instances || data || [];
+        if (Array.isArray(list)) {
+          const mapped = list
+            .filter((i: any) => i.instance != null)
+            .map((i: any) => ({ name: i.instance, credentials: i.credentials || {} }));
+          setInstances(mapped);
+        }
+        setInstancesLoaded(true);
+      })
+      .catch(() => {
+        setInstancesLoaded(true);
+      });
+  }, [integration.id]);
+
+  const refreshAll = () => {
+    onRefresh();
+    // Re-fetch instances
+    fetch(`http://localhost:3030/connections/${integration.id}/instances`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        const list = data.data || data.instances || data || [];
+        if (Array.isArray(list)) {
+          const mapped = list
+            .filter((i: any) => i.instance != null)
+            .map((i: any) => ({ name: i.instance, credentials: i.credentials || {} }));
+          setInstances(mapped);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const handleAddInstance = () => {
+    if (!newInstanceName.trim()) return;
+    setInstances(prev => [...prev, { name: newInstanceName.trim(), credentials: {} }]);
+    setNewInstanceName("");
+    setAddingInstance(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Default instance */}
+      <div>
+        <p className="text-xs text-muted-foreground mb-2">default</p>
+        <ConnectionCredentialForm
+          integrationId={integration.id}
+          fields={integration.fields}
+          initialCredentials={defaultCreds}
+          onSaved={refreshAll}
+          onDisconnect={refreshAll}
+          showTryInChat={integration.connected}
+          integrationName={integration.name}
+          integrationDescription={integration.description}
+        />
+      </div>
+
+      {/* Named instances */}
+      {instancesLoaded && instances.map((inst) => (
+        <div key={inst.name} className="border-t border-border pt-3">
+          <p className="text-xs text-muted-foreground mb-2">{inst.name}</p>
+          <ConnectionCredentialForm
+            integrationId={integration.id}
+            fields={integration.fields}
+            initialCredentials={inst.credentials}
+            instanceName={inst.name}
+            onSaved={refreshAll}
+            onDisconnect={() => {
+              setInstances(prev => prev.filter(i => i.name !== inst.name));
+              refreshAll();
+            }}
+            showTryInChat={Object.values(inst.credentials).some(v => !!v)}
+            integrationName={`${integration.name} (${inst.name})`}
+            integrationDescription={integration.description}
+          />
+        </div>
+      ))}
+
+      {/* Add instance */}
+      <div className="border-t border-border pt-3">
+        {addingInstance ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={newInstanceName}
+              onChange={(e) => setNewInstanceName(e.target.value)}
+              placeholder="instance name (e.g. work, personal)"
+              className="h-7 text-xs flex-1"
+              spellCheck={false}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAddInstance(); }}
+              autoFocus
+            />
+            <Button onClick={handleAddInstance} size="sm" className="h-7 text-xs" disabled={!newInstanceName.trim()}>
+              add
             </Button>
-            <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
-              <X className="h-3 w-3" />disconnect
+            <Button onClick={() => { setAddingInstance(false); setNewInstanceName(""); }} variant="ghost" size="sm" className="h-7 text-xs">
+              cancel
             </Button>
-          </>
+          </div>
+        ) : (
+          <Button onClick={() => setAddingInstance(true)} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            + add instance
+          </Button>
         )}
       </div>
     </div>

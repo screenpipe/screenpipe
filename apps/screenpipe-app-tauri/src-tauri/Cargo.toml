@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.2.257"
+version = "2.2.270"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -201,6 +201,8 @@ apple-intelligence = ["screenpipe-engine/apple-intelligence"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]
+# macOS only — requires Apple MLX (Metal)
+parakeet-mlx = ["screenpipe-engine/parakeet-mlx"]
 jemalloc = ["tikv-jemallocator"]
 
 

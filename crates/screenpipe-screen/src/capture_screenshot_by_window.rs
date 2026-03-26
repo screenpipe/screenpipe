@@ -127,6 +127,10 @@ static SKIP_APPS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
         "i3bar",
         "Plank",
         "Dock",
+        "Cinnamon",
+        "cinnamon",
+        "Muffin",
+        "Budgie-panel",
         // Screenpipe's own UI should never be captured
         "screenpipe",
         "screenpipe - Development",

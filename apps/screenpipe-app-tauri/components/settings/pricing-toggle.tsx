@@ -18,7 +18,7 @@ export function PricingToggle({ isAnnual, onToggle }: PricingToggleProps) {
         onCheckedChange={onToggle}
       />
       <Label htmlFor="billing-toggle" className="text-sm">
-        annual (2 months free)
+        annual (4 months free)
       </Label>
     </div>
   );

@@ -14,7 +14,9 @@ mod tests {
     use std::sync::Arc;
 
     async fn setup_test_db() -> DatabaseManager {
-        let db = DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap();
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
         sqlx::migrate!("./src/migrations")
             .run(&db.pool)
             .await

@@ -57,6 +57,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
+import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
@@ -120,7 +121,7 @@ function SettingsPageContent() {
 
   const { settings } = useSettings();
   const teamState = useTeam();
-  const { isSectionHidden } = useEnterprisePolicy();
+  const { isSectionHidden, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
   
   // Default true: treat undefined (settings still loading) as enabled to avoid opaque flash on init
   const isTranslucent = settings?.translucentSidebar !== false;
@@ -393,6 +394,8 @@ function SettingsPageContent() {
 
   return (
     <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
+      {/* Enterprise license key prompt */}
+      {needsLicenseKey && <EnterpriseLicensePrompt onSubmit={submitLicenseKey} />}
       {/* Drag region — always absolute so it works with full-bleed translucent layout */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 

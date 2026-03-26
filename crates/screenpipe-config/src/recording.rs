@@ -204,7 +204,11 @@ pub struct RecordingSettings {
 
     /// Detected hardware tier ("high", "mid", "low").
     /// Set once on first launch; `None` for existing installs (treated as High).
-    #[serde(rename = "deviceTier", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "deviceTier",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub device_tier: Option<String>,
 }
 
@@ -279,8 +283,6 @@ impl Default for RecordingSettings {
 fn default_true() -> bool {
     true
 }
-
-
 
 #[cfg(test)]
 mod tests {

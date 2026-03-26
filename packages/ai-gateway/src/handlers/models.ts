@@ -33,6 +33,22 @@ interface ModelEntry {
 
 /** Curated model catalog — single source of truth */
 const CURATED_MODELS: ModelEntry[] = [
+  // ── Auto — smart routing with fallback ──
+  {
+    id: 'auto',
+    object: 'model',
+    owned_by: 'screenpipe',
+    name: 'Auto (recommended)',
+    description: 'automatically picks the best free model, falls back on failure',
+    tags: ['free', 'auto', 'recommended'],
+    free: true,
+    context_window: 128000,
+    best_for: ['general', 'pipes', 'chat'],
+    speed: 'fast',
+    intelligence: 'highest',
+    cost_tier: 'free',
+    recommended_for: ['pipes', 'chat', 'coding', 'analysis'],
+  },
   // ── Free models (Vertex AI MaaS — burns GCP credits, free for users) ──
   {
     id: 'glm-4.7',

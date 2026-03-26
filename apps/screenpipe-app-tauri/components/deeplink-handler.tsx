@@ -13,7 +13,6 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openSettingsWindow } from "@/lib/utils/window";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
-import { homeDir, join } from "@tauri-apps/api/path";
 
 export function DeeplinkHandler() {
   const { toast } = useToast();
@@ -38,18 +37,14 @@ export function DeeplinkHandler() {
               title: "logged in!",
               description: "you have been logged in",
             });
-            // Force-restart Pi with the new token so it picks up the new
-            // account immediately. Without this, Pi keeps running with the
-            // old/null token and the user hits the free-tier rate limit.
+            // Notify the chat UI to restart Pi with the new token so it
+            // picks up the new account immediately. The chat component knows
+            // the active session ID; we just pass the key.
             try {
-              const home = await homeDir();
-              const dir = await join(home, ".screenpipe", "pi-chat");
-              await commands.piStart("chat", dir, apiKey, null);
-              console.log("[deeplink] restarted Pi with new auth token");
+              await emit("pi-reauth", { apiKey });
+              console.log("[deeplink] emitted pi-reauth with new auth token");
             } catch (e) {
-              // Pi may not be running yet — that's fine, it'll start
-              // with the correct token on first message
-              console.log("[deeplink] Pi restart after login skipped:", e);
+              console.log("[deeplink] pi-reauth emit skipped:", e);
             }
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -70,6 +65,9 @@ export function DeeplinkHandler() {
         const success = parsedUrl.searchParams.get("success") === "true";
         const error = parsedUrl.searchParams.get("error");
         await emit("google-calendar-auth-result", { success, error });
+        // Bring the settings window to the front so the user lands back
+        // where they started (instead of staring at the timeline).
+        await openSettingsWindow();
         toast({
           title: success
             ? "google calendar connected!"

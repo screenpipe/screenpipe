@@ -83,7 +83,8 @@ ort = { version = "=2.0.0-rc.6", default-features = false, features = ["ndarray"
 ort-sys = { version = "=2.0.0-rc.6", default-features = false }
 knf-rs = "0.3.2"
 futures = "0.3.31"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "3afd3f8", default-features = false, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "123212e", default-features = false, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
+mlx-rs = { version = "0.25", optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
 
@@ -145,6 +146,7 @@ vulkan = ["audiopipe?/vulkan-ggml"]
 pulseaudio = ["dep:libpulse-binding", "dep:libpulse-simple-binding"]
 qwen3-asr = ["dep:audiopipe"]
 parakeet = ["dep:audiopipe"]
+parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
 
 [[example]]
 name = "screenpipe-audio"

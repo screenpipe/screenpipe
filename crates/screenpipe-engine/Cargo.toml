@@ -144,6 +144,7 @@ pulseaudio = ["screenpipe-audio/pulseaudio"]
 apple-intelligence = ["dep:screenpipe-apple-intelligence"]
 qwen3-asr = ["screenpipe-audio/qwen3-asr"]
 parakeet = ["screenpipe-audio/parakeet"]
+parakeet-mlx = ["screenpipe-audio/parakeet-mlx"]
 jemalloc = ["tikv-jemallocator"]
 
 [[bin]]

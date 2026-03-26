@@ -23,7 +23,11 @@ async fn open_real_db() -> Arc<DatabaseManager> {
     }
 
     let db_url = format!("sqlite:{}", db_path.display());
-    Arc::new(DatabaseManager::new(&db_url, Default::default()).await.unwrap())
+    Arc::new(
+        DatabaseManager::new(&db_url, Default::default())
+            .await
+            .unwrap(),
+    )
 }
 
 /// Simulate the pipe scenario: fire 4 heavy OCR searches concurrently

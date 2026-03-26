@@ -234,7 +234,7 @@ const DEFAULT_PI_PRESET: AIPreset = {
 	id: "pi-agent",
 	provider: "screenpipe-cloud",
 	url: "",
-	model: "qwen/qwen3.5-flash-02-23",
+	model: "auto",
 	maxContextChars: 1000000,
 	defaultPreset: true,
 	prompt: "",

@@ -193,12 +193,23 @@ async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
 /**
- * Read the enterprise license key from `enterprise.json` next to the executable.
- * Admins push this file via Intune/MDM to a protected directory (e.g. Program Files)
- * that employees cannot modify. Returns None if the file doesn't exist or is invalid.
+ * Read the enterprise license key from `enterprise.json`.
+ * Checks next to executable (MDM) then ~/.screenpipe/enterprise.json (manual).
  */
 async getEnterpriseLicenseKey() : Promise<string | null> {
     return await TAURI_INVOKE("get_enterprise_license_key");
+},
+/**
+ * Save the enterprise license key to ~/.screenpipe/enterprise.json.
+ * Used by the in-app prompt when enterprise.json is not deployed via MDM.
+ */
+async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_enterprise_license_key", { licenseKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {

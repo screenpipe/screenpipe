@@ -155,13 +155,17 @@ const EXCLUDED_APPS: &[&str] = &[
     "screenpipe",
     "nm-connection-editor",
     "polkit",
-    // Window managers — no user content
+    // Window managers / desktop shells — no user content
     "xfwm4",
     "mutter",
+    "muffin",
     "kwin",
     "marco",
     "openbox",
     "compiz",
+    "cinnamon",
+    "budgie-panel",
+    "budgie-wm",
 ];
 
 /// Known browser process names for URL extraction.

@@ -6,11 +6,88 @@ import { createProvider } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 
+// Auto model waterfall — ordered by quality/cost ratio (all free or near-free)
+const AUTO_WATERFALL = [
+  'glm-5',
+  'kimi-k2.5',
+  'glm-4.7',
+  'qwen/qwen3.5-flash-02-23',
+  'gemini-3-flash',
+];
+
+function addModelHeader(response: Response, model: string): Response {
+  const newResponse = new Response(response.body, response);
+  newResponse.headers.set('x-screenpipe-model', model);
+  return newResponse;
+}
+
+async function tryModel(model: string, body: RequestBody, env: Env): Promise<Response | null> {
+  try {
+    const provider = createProvider(model, env);
+    const reqBody = { ...body, model };
+
+    if (body.stream) {
+      const stream = await provider.createStreamingCompletion(reqBody);
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    } else {
+      return await provider.createCompletion(reqBody);
+    }
+  } catch (error: any) {
+    const status = error?.status || 500;
+    const msg = error?.message || '';
+    // Retriable errors: rate limit, server errors, timeouts
+    if (status === 429 || status >= 500 || status === 408 || msg.includes('429') || msg.includes('Resource exhausted')) {
+      console.warn(`auto: ${model} failed (${status}), trying next`);
+      logModelOutcome(env, { model, outcome: status === 429 ? 'rate_limited' : 'error' }).catch(() => {});
+      return null;
+    }
+    // Non-retriable (400, 401, 403) — bubble up
+    throw error;
+  }
+}
+
 /**
  * Handles chat completion requests.
  * Logs success/failure per model for health tracking.
  */
 export async function handleChatCompletions(body: RequestBody, env: Env): Promise<Response> {
+  // Auto model: waterfall through free models until one succeeds
+  if (body.model === 'auto') {
+    let lastError: any = null;
+    for (const model of AUTO_WATERFALL) {
+      try {
+        const response = await tryModel(model, body, env);
+        if (response) {
+          logModelOutcome(env, { model, outcome: 'ok' }).catch(() => {});
+          return addCorsHeaders(addModelHeader(response, model));
+        }
+      } catch (error) {
+        lastError = error;
+        break; // non-retriable error, stop trying
+      }
+    }
+    // All models failed
+    const errorMessage = lastError?.message || 'All auto models failed (rate limited or unavailable)';
+    const status = lastError?.status || 503;
+    console.error('auto: all models exhausted', errorMessage);
+    if (body.stream) {
+      return addCorsHeaders(new Response(
+        `data: ${JSON.stringify({ error: { message: errorMessage, type: 'api_error', code: String(status) } })}\n\ndata: [DONE]\n\n`,
+        { status, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } },
+      ));
+    }
+    return addCorsHeaders(new Response(
+      JSON.stringify({ error: { message: errorMessage, type: 'api_error', code: String(status) } }),
+      { status, headers: { 'Content-Type': 'application/json' } },
+    ));
+  }
+
   try {
     const provider = createProvider(body.model, env);
 

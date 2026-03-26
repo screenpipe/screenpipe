@@ -32,7 +32,11 @@ mod tests {
     }
 
     async fn setup_test_app() -> (Router, Arc<DatabaseManager>) {
-        let db = Arc::new(DatabaseManager::new("sqlite::memory:", Default::default()).await.unwrap());
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
 
         let audio_manager = Arc::new(
             AudioManagerBuilder::new()

@@ -249,7 +249,7 @@ export function AccountSection() {
               <span>✓</span> cloud transcription — higher quality
             </div>
             <div className="flex items-center gap-2">
-              <span>✓</span> higher AI query limits + credits
+              <span>✓</span> 100x more AI queries
             </div>
             <div className="flex items-center gap-2">
               <span>✓</span> priority support
@@ -374,7 +374,7 @@ export function AccountSection() {
                 </div>
                 <div className="flex items-center gap-2 text-foreground">
                   <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                  higher AI query limits + credits
+                  100x more AI queries
                 </div>
                 <div className="flex items-center gap-2 text-foreground">
                   <Sparkles className="h-3.5 w-3.5 shrink-0" />
@@ -466,7 +466,7 @@ export function AccountSection() {
                 </div>
                 <div className="flex items-center gap-2 text-foreground">
                   <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                  higher AI query limits + credits
+                  100x more AI queries
                 </div>
                 <div className="flex items-center gap-2 text-foreground">
                   <Sparkles className="h-3.5 w-3.5 shrink-0" />

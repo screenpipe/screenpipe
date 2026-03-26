@@ -737,18 +737,40 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         }
     };
 
-    // One-time tier detection. Two cases:
+    // Tier detection. Two cases:
     // - New install: detect tier AND apply tier defaults (video_quality, power_mode, etc.)
     // - Existing user upgrading: detect tier for DB/channel config but do NOT override
     //   their existing capture settings (they may have customized video_quality etc.)
-    if store.recording.device_tier.is_none() {
-        let tier = screenpipe_config::detect_tier();
-        tracing::info!("detected hardware tier: {:?}", tier);
-        if is_new_store {
-            screenpipe_config::apply_tier_defaults(&mut store.recording, tier);
+    // Also re-detect if the stored tier doesn't match current hardware classification
+    // (e.g. tier boundaries changed in an update).
+    {
+        let detected = screenpipe_config::detect_tier();
+        let stored_tier = store.recording.device_tier.as_deref()
+            .and_then(screenpipe_config::DeviceTier::from_str_loose);
+        if stored_tier != Some(detected) {
+            tracing::info!(
+                "hardware tier changed: {:?} -> {:?}",
+                stored_tier, detected
+            );
+            if is_new_store || store.recording.device_tier.is_none() {
+                screenpipe_config::apply_tier_defaults(&mut store.recording, detected);
+            } else if stored_tier.is_some() {
+                // Tier boundary changed in update — only fix engine if it would OOM
+                // (user on parakeet/parakeet-mlx but now classified as Low)
+                if detected == screenpipe_config::DeviceTier::Low
+                    && (store.recording.audio_transcription_engine == "parakeet"
+                        || store.recording.audio_transcription_engine == "parakeet-mlx")
+                {
+                    tracing::warn!(
+                        "device reclassified as Low tier — switching from {} to whisper-tiny to prevent OOM",
+                        store.recording.audio_transcription_engine
+                    );
+                    store.recording.audio_transcription_engine = "whisper-tiny".to_string();
+                }
+            }
+            store.recording.device_tier = Some(detected.as_str().to_string());
+            should_save = true;
         }
-        store.recording.device_tier = Some(tier.as_str().to_string());
-        should_save = true;
     }
 
     // One-time migration: move default Haiku users to Qwen3.5 Flash

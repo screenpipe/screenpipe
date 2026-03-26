@@ -19,14 +19,49 @@ use std::sync::Arc;
 use std::time::Instant;
 
 fn get_rss_mb() -> f64 {
-    std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .map(|kb| kb / 1024.0)
-        .unwrap_or(0.0)
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem::MaybeUninit;
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct PROCESS_MEMORY_COUNTERS {
+            cb: u32,
+            PageFaultCount: u32,
+            PeakWorkingSetSize: usize,
+            WorkingSetSize: usize,
+            QuotaPeakPagedPoolUsage: usize,
+            QuotaPagedPoolUsage: usize,
+            QuotaPeakNonPagedPoolUsage: usize,
+            QuotaNonPagedPoolUsage: usize,
+            PagefileUsage: usize,
+            PeakPagefileUsage: usize,
+        }
+        extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn K32GetProcessMemoryInfo(h: isize, pmc: *mut PROCESS_MEMORY_COUNTERS, cb: u32)
+                -> i32;
+        }
+        unsafe {
+            let mut pmc = MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed().assume_init();
+            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) != 0 {
+                pmc.WorkingSetSize as f64 / (1024.0 * 1024.0)
+            } else {
+                0.0
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .map(|kb| kb / 1024.0)
+            .unwrap_or(0.0)
+    }
 }
 
 /// Sample CPU% during a closure, returns (result, peak_cpu%)
@@ -42,18 +77,68 @@ where
 
     // Spawn CPU sampler thread
     let sampler = std::thread::spawn(move || {
-        while !done_clone.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Some(cpu) = std::process::Command::new("ps")
-                .args(["-o", "%cpu=", "-p", &pid.to_string()])
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|s| s.trim().parse::<f64>().ok())
-            {
-                let cpu_bits = (cpu * 10.0) as u64;
-                peak_cpu_clone.fetch_max(cpu_bits, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_os = "windows")]
+        {
+            extern "system" {
+                fn GetCurrentProcess() -> isize;
+                fn GetProcessTimes(
+                    h: isize,
+                    c: *mut u64,
+                    e: *mut u64,
+                    k: *mut u64,
+                    u: *mut u64,
+                ) -> i32;
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = pid;
+            let mut prev_kernel: u64 = 0;
+            let mut prev_user: u64 = 0;
+            let mut prev_wall = std::time::Instant::now();
+            // seed initial values
+            unsafe {
+                let h = GetCurrentProcess();
+                let (mut c, mut e) = (0u64, 0u64);
+                GetProcessTimes(h, &mut c, &mut e, &mut prev_kernel, &mut prev_user);
+            }
+            let num_cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1) as f64;
+            while !done_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                unsafe {
+                    let h = GetCurrentProcess();
+                    let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
+                    if GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u) != 0 {
+                        let wall_elapsed = prev_wall.elapsed().as_secs_f64();
+                        if wall_elapsed > 0.0 {
+                            let cpu_delta =
+                                ((k - prev_kernel) + (u - prev_user)) as f64 / 10_000_000.0;
+                            let cpu_pct = (cpu_delta / wall_elapsed) * 100.0 / num_cpus;
+                            let cpu_bits = (cpu_pct * 10.0) as u64;
+                            peak_cpu_clone
+                                .fetch_max(cpu_bits, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        prev_kernel = k;
+                        prev_user = u;
+                        prev_wall = std::time::Instant::now();
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            while !done_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(cpu) = std::process::Command::new("ps")
+                    .args(["-o", "%cpu=", "-p", &pid.to_string()])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                {
+                    let cpu_bits = (cpu * 10.0) as u64;
+                    peak_cpu_clone.fetch_max(cpu_bits, std::sync::atomic::Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
         }
     });
 
@@ -93,15 +178,31 @@ async fn main() -> anyhow::Result<()> {
     println!("║          Screenpipe Transcription Engine Benchmark          ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
-    println!("Audio: {}Hz, {:.1}s, {} samples", spec.sample_rate, duration_secs, samples.len());
+    println!(
+        "Audio: {}Hz, {:.1}s, {} samples",
+        spec.sample_rate,
+        duration_secs,
+        samples.len()
+    );
     println!();
 
     // Engines to test (local only, skip cloud/disabled)
     let engines: Vec<(AudioTranscriptionEngine, &str)> = vec![
-        (AudioTranscriptionEngine::WhisperLargeV3Turbo, "whisper-large-v3-turbo"),
-        (AudioTranscriptionEngine::WhisperLargeV3TurboQuantized, "whisper-large-v3-turbo-q8"),
+        (
+            AudioTranscriptionEngine::WhisperLargeV3Turbo,
+            "whisper-large-v3-turbo",
+        ),
+        (
+            AudioTranscriptionEngine::WhisperLargeV3TurboQuantized,
+            "whisper-large-v3-turbo-q8",
+        ),
         #[cfg(feature = "parakeet")]
-        (AudioTranscriptionEngine::Parakeet, "parakeet-tdt-0.6b-v3-int8"),
+        (
+            AudioTranscriptionEngine::Parakeet,
+            "parakeet-tdt-0.6b-v3-int8",
+        ),
+        #[cfg(feature = "parakeet-mlx")]
+        (AudioTranscriptionEngine::ParakeetMlx, "parakeet-mlx (GPU)"),
         #[cfg(feature = "qwen3-asr")]
         (AudioTranscriptionEngine::Qwen3Asr, "qwen3-asr-0.6b"),
     ];
@@ -129,8 +230,16 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => {
                 println!(
                     "│ {:<28} │ {:>8} │ {:>8} │ {:>8} │ {:>8} │ {:>8} │ {:<40} │",
-                    label, "FAIL", "-", "-", "-", "-",
-                    format!("load error: {}", &e.to_string()[..e.to_string().len().min(32)])
+                    label,
+                    "FAIL",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    format!(
+                        "load error: {}",
+                        &e.to_string()[..e.to_string().len().min(32)]
+                    )
                 );
                 continue;
             }
@@ -144,8 +253,15 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => {
                 println!(
                     "│ {:<28} │ {:>7.1}s │ {:>8} │ {:>8} │ {:>8} │ {:<48} │",
-                    label, load_time, "FAIL", "-", "-",
-                    format!("session error: {}", &e.to_string()[..e.to_string().len().min(40)])
+                    label,
+                    load_time,
+                    "FAIL",
+                    "-",
+                    "-",
+                    format!(
+                        "session error: {}",
+                        &e.to_string()[..e.to_string().len().min(40)]
+                    )
                 );
                 continue;
             }
@@ -167,13 +283,14 @@ async fn main() -> anyhow::Result<()> {
 
         for i in 0..3 {
             let t0 = Instant::now();
-            let (result, cpu) = with_cpu_monitor(
-                session.transcribe(&samples, spec.sample_rate, "benchmark")
-            ).await;
+            let (result, cpu) =
+                with_cpu_monitor(session.transcribe(&samples, spec.sample_rate, "benchmark")).await;
             match result {
                 Ok(text) => {
                     times.push(t0.elapsed().as_secs_f64());
-                    if cpu > peak_cpu { peak_cpu = cpu; }
+                    if cpu > peak_cpu {
+                        peak_cpu = cpu;
+                    }
                     if i == 0 {
                         transcript = text;
                     }
@@ -193,7 +310,12 @@ async fn main() -> anyhow::Result<()> {
         if times.is_empty() {
             println!(
                 "│ {:<28} │ {:>7.1}s │ {:>8} │ {:>8} │ {:>8} │ {:>7.0}MB │ {:<40} │",
-                label, load_time, "FAIL", "-", "-", mem_delta,
+                label,
+                load_time,
+                "FAIL",
+                "-",
+                "-",
+                mem_delta,
                 &transcript[..transcript.len().min(40)]
             );
         } else {

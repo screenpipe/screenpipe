@@ -41,10 +41,14 @@ impl DeviceTier {
 }
 
 /// Classify tier from RAM (GB) and core count. Pure logic, no I/O.
+///
+/// 8 GB machines are classified as Low because GPU-accelerated models
+/// (parakeet-mlx) consume too much of the unified memory and cause
+/// silent crashes on macOS.
 pub fn classify_tier(ram_gb: u64, cores: u64) -> DeviceTier {
     if ram_gb >= 16 && cores >= 8 {
         DeviceTier::High
-    } else if ram_gb >= 12 || (ram_gb >= 8 && cores >= 6) {
+    } else if ram_gb >= 12 || (ram_gb > 8 && cores >= 6) {
         DeviceTier::Mid
     } else {
         DeviceTier::Low
@@ -100,15 +104,15 @@ impl DbConfig {
         match tier {
             DeviceTier::High => Self::default(),
             DeviceTier::Mid => Self {
-                mmap_size: 128 * 1024 * 1024,       // 128 MB
-                cache_size_kb: 32_000,               // 32 MB
+                mmap_size: 128 * 1024 * 1024, // 128 MB
+                cache_size_kb: 32_000,        // 32 MB
                 read_pool_max: 12,
                 read_pool_min: 2,
                 write_pool_max: 3,
             },
             DeviceTier::Low => Self {
-                mmap_size: 32 * 1024 * 1024,        // 32 MB
-                cache_size_kb: 8_000,                // 8 MB
+                mmap_size: 32 * 1024 * 1024, // 32 MB
+                cache_size_kb: 8_000,        // 8 MB
                 read_pool_max: 5,
                 read_pool_min: 1,
                 write_pool_max: 2,
@@ -121,8 +125,8 @@ impl Default for DbConfig {
     /// High-tier defaults — identical to the previous hardcoded values.
     fn default() -> Self {
         Self {
-            mmap_size: 256 * 1024 * 1024,            // 256 MB
-            cache_size_kb: 64_000,                    // 64 MB
+            mmap_size: 256 * 1024 * 1024, // 256 MB
+            cache_size_kb: 64_000,        // 64 MB
             read_pool_max: 27,
             read_pool_min: 3,
             write_pool_max: 3,
@@ -218,7 +222,7 @@ pub fn apply_tier_defaults(settings: &mut RecordingSettings, tier: DeviceTier) {
         DeviceTier::Low => {
             settings.video_quality = "low".to_string();
             settings.power_mode = Some("battery_saver".to_string());
-            settings.audio_transcription_engine = "parakeet".to_string();
+            settings.audio_transcription_engine = "whisper-tiny".to_string();
         }
     }
 }
@@ -254,7 +258,10 @@ mod tests {
     fn detect_tier_returns_valid_tier() {
         let tier = detect_tier();
         // Just verify it doesn't panic and returns a valid tier
-        assert!(matches!(tier, DeviceTier::High | DeviceTier::Mid | DeviceTier::Low));
+        assert!(matches!(
+            tier,
+            DeviceTier::High | DeviceTier::Mid | DeviceTier::Low
+        ));
     }
 
     // ── classify_tier boundary tests ──────────────────────────────────
@@ -275,9 +282,11 @@ mod tests {
         assert_eq!(classify_tier(16, 4), DeviceTier::Mid);
         // 12 GB, 2 cores → ≥12 GB alone qualifies for Mid
         assert_eq!(classify_tier(12, 2), DeviceTier::Mid);
-        // 8 GB, 6 cores → (≥8 GB and ≥6 cores) → Mid
-        assert_eq!(classify_tier(8, 6), DeviceTier::Mid);
-        // 10 GB, 8 cores → ≥8 GB and ≥6 cores → Mid
+        // 8 GB, 6 cores → Low (8 GB machines use whisper-tiny to avoid MLX OOM)
+        assert_eq!(classify_tier(8, 6), DeviceTier::Low);
+        // 9 GB, 6 cores → (>8 GB and ≥6 cores) → Mid
+        assert_eq!(classify_tier(9, 6), DeviceTier::Mid);
+        // 10 GB, 8 cores → >8 GB and ≥6 cores → Mid
         assert_eq!(classify_tier(10, 8), DeviceTier::Mid);
     }
 
@@ -315,7 +324,10 @@ mod tests {
 
     #[test]
     fn channel_config_default_matches_high() {
-        assert_eq!(ChannelConfig::default(), ChannelConfig::for_tier(DeviceTier::High));
+        assert_eq!(
+            ChannelConfig::default(),
+            ChannelConfig::for_tier(DeviceTier::High)
+        );
     }
 
     #[test]

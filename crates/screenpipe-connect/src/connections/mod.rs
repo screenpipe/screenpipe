@@ -203,6 +203,54 @@ impl ConnectionManager {
         integration.test(&self.client, creds).await
     }
 
+    /// Store credentials under `id` or `id:instance`.
+    pub fn connect_instance(
+        &self,
+        id: &str,
+        instance: Option<&str>,
+        creds: Map<String, Value>,
+    ) -> Result<()> {
+        self.find(id)?;
+        let key = make_key(id, instance);
+        let mut store = load_store(&self.screenpipe_dir);
+        store.insert(
+            key,
+            SavedConnection {
+                enabled: true,
+                credentials: creds,
+            },
+        );
+        save_store(&self.screenpipe_dir, &store)
+    }
+
+    /// Return all saved instances for the given integration id.
+    ///
+    /// Matches keys that are exactly `id` (the default instance) or start with
+    /// `id:` (named instances).  Each entry is returned as
+    /// `(instance_name_or_none, connection)`.
+    pub fn get_all_instances(&self, id: &str) -> Result<Vec<(Option<String>, SavedConnection)>> {
+        self.find(id)?;
+        let store = load_store(&self.screenpipe_dir);
+        let prefix = format!("{}:", id);
+        let mut results = Vec::new();
+        for (key, conn) in &store {
+            if key == id {
+                results.push((None, conn.clone()));
+            } else if let Some(inst) = key.strip_prefix(&prefix) {
+                results.push((Some(inst.to_string()), conn.clone()));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Remove a specific instance (or the default) for the given integration.
+    pub fn disconnect_instance(&self, id: &str, instance: Option<&str>) -> Result<()> {
+        let key = make_key(id, instance);
+        let mut store = load_store(&self.screenpipe_dir);
+        store.remove(&key);
+        save_store(&self.screenpipe_dir, &store)
+    }
+
     fn find(&self, id: &str) -> Result<&dyn Integration> {
         self.integrations
             .iter()
@@ -253,6 +301,29 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Multi-instance helpers
+// ---------------------------------------------------------------------------
+
+/// Split a connection key on the first `:` separator.
+///
+/// `"notion:work"` → `("notion", Some("work"))`
+/// `"notion"`      → `("notion", None)`
+pub fn parse_connection_key(key: &str) -> (&str, Option<&str>) {
+    match key.split_once(':') {
+        Some((id, instance)) => (id, Some(instance)),
+        None => (key, None),
+    }
+}
+
+/// Build the storage key for an integration + optional instance.
+fn make_key(id: &str, instance: Option<&str>) -> String {
+    match instance {
+        Some(inst) => format!("{}:{}", id, inst),
+        None => id.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------

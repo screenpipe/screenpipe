@@ -180,9 +180,9 @@ jobs:
           # Self-hosted macOS 26 runner (MacBook Pro) for Apple Silicon + Apple Intelligence
           # Falls back to macos-latest (GH-hosted) if runner is offline
           - platform: ${{ needs.check_commit.outputs.macos_arm_runner || 'macos-latest' }}
-            args: "--target aarch64-apple-darwin --features metal"
+            args: "--target aarch64-apple-darwin --features metal,parakeet-mlx"
             target: aarch64-apple-darwin
-            tauri-args: "--target aarch64-apple-darwin --features metal,official-build"
+            tauri-args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,official-build"
             os_type: "macos"
           - platform: "macos-latest"
             args: "--target x86_64-apple-darwin --features metal"
@@ -537,8 +537,14 @@ jobs:
         if: matrix.os_type == 'macos'
         shell: bash
         run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-          echo "Setting MACOSX_DEPLOYMENT_TARGET=10.15 for std::filesystem support"
+          # aarch64 uses 14.0 because MLX Metal kernels require macOS 14+ SDK
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
+            echo "Setting MACOSX_DEPLOYMENT_TARGET=14.0 for MLX Metal kernel support"
+          else
+            echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
+            echo "Setting MACOSX_DEPLOYMENT_TARGET=10.15 for std::filesystem support"
+          fi
 
       - name: Import signing cert into build keychain (macOS)
         if: matrix.os_type == 'macos'
@@ -824,16 +830,18 @@ jobs:
           # Fix std::filesystem availability - requires macOS 10.15+
           # whisper.cpp ggml uses std::filesystem::path which needs 10.15
           # All these vars needed to ensure cmake picks up the deployment target
-          MACOSX_DEPLOYMENT_TARGET: "10.15"
-          CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+          # Note: aarch64 uses 14.0 because MLX Metal kernels require macOS 14+ SDK
+          # (MSL features not available in older deployment targets)
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.target == 'aarch64-apple-darwin' && '14.0' || '10.15' }}
           # Fix i8mm build error - force M1 compatible architecture
           # -U__ARM_FEATURE_MATMUL_INT8 undefines i8mm macro
-          # -mmacosx-version-min=10.15 ensures std::filesystem is available
+          # -mmacosx-version-min ensures std::filesystem is available
           # See: https://github.com/ggml-org/whisper.cpp/issues/3427
-          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
-          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=10.15 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
-          CMAKE_C_FLAGS: "-mmacosx-version-min=10.15"
-          CMAKE_CXX_FLAGS: "-mmacosx-version-min=10.15"
+          CFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CXXFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8' || '-mmacosx-version-min=10.15' }}
+          CMAKE_C_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mmacosx-version-min=14.0' || '-mmacosx-version-min=10.15' }}
 
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
@@ -856,6 +864,29 @@ jobs:
           # files from accumulating and being uploaded alongside the current version
           echo "Cleaning stale bundle artifacts..."
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
+
+          # Clean cached mlx-sys build — deployment target is baked into CMake cache
+          # and won't update if only the env var changes
+          echo "Cleaning mlx-sys build cache..."
+          find "apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/build" -maxdepth 1 -name "mlx-sys-*" -exec rm -rf {} + 2>/dev/null || true
+
+          # Force macOS 14.0 for MLX Metal kernels and C++ compilation.
+          # The cc crate injects --target=arm64-apple-macosx -mmacosx-version-min=10.13
+          # into CMAKE_C_FLAGS. CMake then derives CMAKE_OSX_DEPLOYMENT_TARGET=10.13,
+          # appending its own -mmacosx-version-min=10.13 AFTER our 14.0, and passing
+          # 10.13 to the Metal compiler. This breaks both MSL 3.0+ and std::filesystem.
+          # Fix: wrap cc/c++/xcrun to replace all -mmacosx-version-min flags with 14.0.
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            WRAPPER_DIR="$(pwd)/.compiler-wrapper"
+            mkdir -p "$WRAPPER_DIR"
+            for tool in cc c++ xcrun; do
+              REAL_PATH=$(which $tool)
+              printf '#!/bin/bash\nnew=(); for x in "$@"; do [[ "$x" == -mmacosx-version-min=* ]] && x="-mmacosx-version-min=14.0"; new+=("$x"); done; exec '"$REAL_PATH"' "${new[@]}"\n' > "$WRAPPER_DIR/$tool"
+              chmod +x "$WRAPPER_DIR/$tool"
+            done
+            export PATH="$WRAPPER_DIR:$PATH"
+            echo "Compiler wrappers installed: cc=$(which cc) c++=$(which c++) xcrun=$(which xcrun)"
+          fi
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "=== Build attempt $attempt/$MAX_ATTEMPTS ==="
