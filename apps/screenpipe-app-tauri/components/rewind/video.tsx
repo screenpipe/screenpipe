@@ -27,14 +27,19 @@ export const VideoComponent = memo(function VideoComponent({
   const mediaElementRef = useRef<HTMLAudioElement | HTMLVideoElement | null>(null);
 
   const sanitizeFilePath = useCallback((path: string): string => {
+    let cleaned = path.replace(/^["']|["']$/g, "").trim();
+
+    // Extract .mp4 path if surrounded by extra text
+    const unixMatch = cleaned.match(/(?:\/[^\n`"':]+)+\.mp4/i);
+    const winMatch = cleaned.match(/[A-Z]:\\[^\n`"':]+\.mp4/i);
+    if (unixMatch) cleaned = unixMatch[0].trim();
+    else if (winMatch) cleaned = winMatch[0].trim();
+
     const isWindows = navigator.userAgent.includes("Windows");
     if (isWindows) {
-      return path; // no sanitization on windows
+      return cleaned;
     }
-    return path
-      .replace(/^["']|["']$/g, "")
-      .trim()
-      .replace(/\//g, "/");
+    return cleaned.replace(/\//g, "/");
   }, []);
 
   const renderFileLink = () => (

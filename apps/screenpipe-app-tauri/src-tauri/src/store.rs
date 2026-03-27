@@ -706,18 +706,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .map(|obj| !obj.contains_key("restartNotificationsDefaultedOff"))
         .unwrap_or(false);
 
-    let needs_haiku_migration = raw_obj
-        .as_ref()
-        .map(|obj| !obj.contains_key("haikuToQwenFlashMigrated"))
-        .unwrap_or(false);
-
     let is_new_store;
     let (mut store, mut should_save) = match SettingsStore::get(app) {
         Ok(Some(store)) => {
             is_new_store = false;
             (
                 store,
-                should_persist_restart_notification_migration || needs_haiku_migration,
+                should_persist_restart_notification_migration,
             )
         }
         Ok(None) => {
@@ -754,41 +749,25 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             );
             if is_new_store || store.recording.device_tier.is_none() {
                 screenpipe_config::apply_tier_defaults(&mut store.recording, detected);
-            } else if stored_tier.is_some() {
-                // Tier boundary changed in update — only fix engine if it would OOM
-                // (user on parakeet/parakeet-mlx but now classified as Low)
-                if detected == screenpipe_config::DeviceTier::Low
-                    && (store.recording.audio_transcription_engine == "parakeet"
-                        || store.recording.audio_transcription_engine == "parakeet-mlx")
-                {
-                    tracing::warn!(
-                        "device reclassified as Low tier — switching from {} to whisper-tiny to prevent OOM",
-                        store.recording.audio_transcription_engine
-                    );
-                    store.recording.audio_transcription_engine = "whisper-tiny".to_string();
-                }
             }
             store.recording.device_tier = Some(detected.as_str().to_string());
             should_save = true;
         }
-    }
 
-    // One-time migration: move default Haiku users to Qwen3.5 Flash
-    if needs_haiku_migration {
-        for preset in &mut store.ai_presets {
-            let is_screenpipe = matches!(
-                preset.provider,
-                AIProviderType::Pi | AIProviderType::ScreenpipeCloud
+        // Unconditional safety guard: prevent parakeet/parakeet-mlx on platforms
+        // where it will crash (Low tier = OOM, macOS < 26 = MLX segfault).
+        if screenpipe_config::is_engine_unsafe(&store.recording.audio_transcription_engine, detected) {
+            let safe = screenpipe_config::best_engine_for_platform(detected);
+            tracing::warn!(
+                "engine {} is unsafe on this platform (tier={:?}, macOS={:?}) — switching to {}",
+                store.recording.audio_transcription_engine,
+                detected,
+                screenpipe_config::macos_major_version(),
+                safe,
             );
-            if is_screenpipe && preset.model == "claude-haiku-4-5" {
-                tracing::info!("migrating default Haiku preset to Qwen3.5 Flash");
-                preset.model = "qwen/qwen3.5-flash-02-23".to_string();
-            }
+            store.recording.audio_transcription_engine = safe.to_string();
+            should_save = true;
         }
-        // Persist the flag so this runs only once
-        store
-            .extra
-            .insert("haikuToQwenFlashMigrated".to_string(), Value::Bool(true));
     }
 
     if should_save {

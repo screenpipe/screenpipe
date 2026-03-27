@@ -979,6 +979,7 @@ const AISection = ({
             // fallback to hardcoded
           }
           setModels([
+            { id: "auto", name: "Auto (recommended)", provider: "screenpipe" },
             { id: "claude-haiku-4-5", name: "Haiku 4.5 (fast)", provider: "screenpipe" },
             { id: "claude-sonnet-4-5", name: "Sonnet 4.5 (balanced)", provider: "screenpipe" },
             { id: "claude-opus-4-6", name: "Opus 4.6 (powerful, pro)", provider: "screenpipe" },
@@ -1823,7 +1824,7 @@ export const AIPresets = () => {
   const removePreset = async (id: string) => {
     setIsLoading(true);
     try {
-      // Prevent deletion of pi-agent preset for Pro subscribers (pi = screenpipe cloud)
+      // Prevent deletion of screenpipe-cloud preset for Pro subscribers
       const presetToRemove = settings.aiPresets.find((preset) => preset.id === id);
       if (presetToRemove?.provider === "screenpipe-cloud" && settings.user?.cloud_subscribed) {
         toast({

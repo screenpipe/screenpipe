@@ -1,9 +1,34 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use oasgen::OaSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::error::Error as StdError;
 use std::fmt::{self, Display};
+
+/// Parse a timestamp string that may be in RFC 3339 ("2026-03-26T21:07:37+00:00"),
+/// chrono Display ("2026-03-26 21:07:37.993675 UTC"), or naive ("2026-03-26 21:07:37")
+/// format. Returns epoch (1970-01-01) if all parsing fails rather than panicking.
+fn parse_flexible_timestamp(s: &str) -> DateTime<Utc> {
+    // RFC 3339 / ISO 8601 (correct format from to_rfc3339())
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return dt.with_timezone(&Utc);
+    }
+    // chrono Display format: "2026-03-26 21:07:37.993675 UTC"
+    if let Some(trimmed) = s.strip_suffix(" UTC") {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f") {
+            return naive.and_utc();
+        }
+    }
+    // Naive without timezone: "2026-03-26 21:07:37" or with fractional
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
+        return naive.and_utc();
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return naive.and_utc();
+    }
+    // Last resort: epoch
+    DateTime::UNIX_EPOCH
+}
 
 /// Audio chunk that has no corresponding transcription row.
 /// Used by the reconciliation sweep to detect and retry orphaned chunks.
@@ -537,11 +562,13 @@ pub struct UiEventRecord {
     pub frame_id: Option<i64>,
 }
 
-/// Raw row from ui_events table
+/// Raw row from ui_events table.
+/// `timestamp` is read as String to handle both legacy format ("2026-03-26 21:07:37 UTC")
+/// and RFC 3339 format ("2026-03-26T21:07:37+00:00") from existing databases.
 #[derive(Debug, FromRow)]
 pub struct UiEventRow {
     pub id: i64,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: String,
     pub session_id: Option<String>,
     pub relative_ms: i64,
     pub event_type: String,
@@ -588,7 +615,7 @@ impl From<UiEventRow> for UiEventRecord {
 
         UiEventRecord {
             id: row.id,
-            timestamp: row.timestamp,
+            timestamp: parse_flexible_timestamp(&row.timestamp),
             session_id: row.session_id,
             relative_ms: row.relative_ms,
             event_type: row.event_type.parse().unwrap_or(UiEventType::Click),
@@ -783,5 +810,25 @@ mod tests {
             ContentType::Memory,
             serde_json::from_str(r#""memory""#).unwrap()
         );
+    }
+
+    #[test]
+    fn parse_flexible_timestamp_all_formats_agree() {
+        let rfc = super::parse_flexible_timestamp("2026-03-26T21:07:37.993675+00:00");
+        let display = super::parse_flexible_timestamp("2026-03-26 21:07:37.993675 UTC");
+        let naive = super::parse_flexible_timestamp("2026-03-26 21:07:37");
+        // All three should parse to the same date (naive loses sub-second)
+        assert_eq!(rfc.date_naive(), display.date_naive());
+        assert_eq!(rfc.date_naive(), naive.date_naive());
+        assert_eq!(rfc, display);
+        assert_eq!(naive.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-03-26 21:07:37");
+        // None should be epoch
+        assert_ne!(rfc, chrono::DateTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn parse_flexible_timestamp_garbage_returns_epoch() {
+        let ts = super::parse_flexible_timestamp("not-a-date");
+        assert_eq!(ts, chrono::DateTime::UNIX_EPOCH);
     }
 }

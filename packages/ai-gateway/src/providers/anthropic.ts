@@ -302,6 +302,17 @@ export class AnthropicProvider implements AIProvider {
 								text: `[Image URL: ${url}]`,
 							} as TextBlock;
 						}
+						// Handle Pi native format: { type: "image", data: "base64...", mimeType: "image/png" }
+						if (part.type === 'image' && part.data && part.mimeType) {
+							return {
+								type: 'image',
+								source: {
+									type: 'base64',
+									media_type: part.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+									data: part.data as string,
+								},
+							} as ImageBlockParam;
+						}
 						// Handle Anthropic native format (from Pi agent)
 						// Normalize mediaType (camelCase) to media_type (snake_case)
 						if (part.type === 'image' && part.source?.type === 'base64') {

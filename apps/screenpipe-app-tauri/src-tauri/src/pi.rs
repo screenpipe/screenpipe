@@ -1005,7 +1005,7 @@ pub async fn pi_start_inner(
             let model = resolve_screenpipe_model(&config.model, provider_name);
             (provider_name.to_string(), model)
         }
-        None => ("screenpipe".to_string(), "claude-haiku-4-5".to_string()),
+        None => ("screenpipe".to_string(), "auto".to_string()),
     };
 
     let sid = session_id.to_string();

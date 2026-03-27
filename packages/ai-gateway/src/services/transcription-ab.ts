@@ -290,7 +290,7 @@ export async function runTranscriptionABTest(
     comparison_latency_ms: null,
     comparison_transcript_length: null,
     comparison_transcript_preview: null,
-    primary_transcript_preview: primaryResult.ok ? extractTranscript(primaryResult.data).slice(0, 500) : null,
+    primary_transcript_preview: null,
   };
 
   // Dual-send: call ALL other providers in parallel for dataset building
@@ -319,8 +319,8 @@ export async function runTranscriptionABTest(
         comparison_provider: comp.provider,
         comparison_latency_ms: comp.latencyMs,
         comparison_transcript_length: comp.transcriptLength,
-        comparison_transcript_preview: comp.ok ? extractTranscript(comp.data).slice(0, 500) : null,
-        primary_transcript_preview: extractTranscript(primaryResult.data).slice(0, 500),
+        comparison_transcript_preview: null,
+        primary_transcript_preview: null,
       });
     }
   }

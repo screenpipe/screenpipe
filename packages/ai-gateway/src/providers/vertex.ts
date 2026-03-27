@@ -446,6 +446,16 @@ export class VertexAIProvider implements AIProvider {
 									url: url,
 								},
 							};
+						} else if (part.type === 'image' && part.data && part.mimeType) {
+							// Pi native format
+							return {
+								type: 'image',
+								source: {
+									type: 'base64',
+									media_type: part.mimeType,
+									data: part.data,
+								},
+							};
 						} else if (part.type === 'image' && part.source?.type === 'base64') {
 							// Handle Anthropic native format (from Pi agent)
 							// Normalize mediaType (camelCase) to media_type (snake_case)

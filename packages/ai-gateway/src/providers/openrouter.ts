@@ -136,11 +136,38 @@ export class OpenRouterProvider implements AIProvider {
 					role: msg.role,
 					content: Array.isArray(msg.content)
 						? msg.content.map((part) => {
-								if (part.type === 'image' || part.type === 'image_url') {
+								if (part.type === 'image_url' && part.image_url?.url) {
 									return {
 										type: 'image_url',
 										image_url: {
-											url: part.image?.url || part.image_url?.url,
+											url: part.image_url.url,
+											detail: part.image_url.detail || 'auto',
+										},
+									};
+								}
+								if (part.type === 'image' && part.data && part.mimeType) {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: `data:${part.mimeType};base64,${part.data}`,
+											detail: 'auto',
+										},
+									};
+								}
+								if (part.type === 'image' && part.source?.type === 'base64') {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: `data:${part.source.media_type || part.source.mediaType || 'image/png'};base64,${part.source.data}`,
+											detail: 'auto',
+										},
+									};
+								}
+								if (part.type === 'image' && part.image?.url) {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: part.image.url,
 											detail: 'auto',
 										},
 									};

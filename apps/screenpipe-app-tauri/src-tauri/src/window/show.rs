@@ -14,6 +14,8 @@ use tracing::{debug, error, info};
 use crate::store::{OnboardingStore, SettingsStore};
 
 #[cfg(target_os = "macos")]
+use super::content_process::setup_content_process_handler;
+#[cfg(target_os = "macos")]
 use super::first_responder::{make_nswindow_webview_first_responder, make_webview_first_responder};
 #[cfg(target_os = "macos")]
 use super::focus::{restore_frontmost_app, restore_frontmost_app_if_external_with_app};
@@ -224,6 +226,11 @@ impl ShowRewindWindow {
         overlay_mode: &str,
         label: &str,
     ) -> tauri::Result<WebviewWindow> {
+        #[cfg(target_os = "macos")]
+        // Ensure delegate-level recovery is installed for already-created main windows.
+        // This catches WKWebView content-process termination directly from WebKit.
+        setup_content_process_handler(window);
+
         let capturable = crate::config::is_e2e_mode()
             || SettingsStore::get(app)
                 .unwrap_or_default()
@@ -417,6 +424,9 @@ impl ShowRewindWindow {
             *MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()) = overlay_mode.clone();
         // === Other windows: standard show path ===
         } else if let Some(window) = id.get(app) {
+            #[cfg(target_os = "macos")]
+            setup_content_process_handler(&window);
+
             if id.label() == RewindWindowId::Onboarding.label() {
                 if onboarding_store.is_completed {
                     return ShowRewindWindow::Main.show(app);
@@ -1527,6 +1537,9 @@ impl ShowRewindWindow {
                 window
             }
         };
+
+        #[cfg(target_os = "macos")]
+        setup_content_process_handler(&window);
 
         Ok(window)
     }

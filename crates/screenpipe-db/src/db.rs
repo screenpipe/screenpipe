@@ -6334,7 +6334,7 @@ LIMIT ? OFFSET ?
         let result = self
             .write_queue
             .submit(WriteOp::InsertUiEvent {
-                timestamp: event.timestamp.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
                 session_id: event.session_id.clone(),
                 relative_ms: event.relative_ms,
                 event_type: event.event_type.to_string(),

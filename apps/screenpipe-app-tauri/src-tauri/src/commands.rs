@@ -487,6 +487,7 @@ pub async fn open_pipe_window(
     .focused(true)
     .fullscreen(false)
     .build()
+    .map(crate::window::finalize_webview_window)
     {
         Ok(window) => window,
         Err(e) => {
@@ -619,6 +620,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
             }
         })
         .build()
+        .map(crate::window::finalize_webview_window)
         .map_err(|e| e.to_string())?;
 
         Ok(())
@@ -669,6 +671,7 @@ pub async fn open_google_calendar_auth_window(
         }
     })
     .build()
+    .map(crate::window::finalize_webview_window)
     .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -1131,6 +1134,7 @@ pub async fn show_shortcut_reminder(
 
     let window = builder
         .build()
+        .map(crate::window::finalize_webview_window)
         .map_err(|e| format!("Failed to create shortcut reminder window: {}", e))?;
 
     info!("shortcut-reminder window created");
@@ -1412,6 +1416,7 @@ pub async fn show_notification_panel(
 
     let window = builder
         .build()
+        .map(crate::window::finalize_webview_window)
         .map_err(|e| format!("Failed to create notification panel window: {}", e))?;
 
     info!("notification-panel window created");
@@ -1755,4 +1760,171 @@ pub fn set_native_theme(app_handle: tauri::AppHandle, theme: String) -> Result<(
     }
 
     Ok(())
+}
+
+#[derive(serde::Serialize, specta::Type)]
+pub struct CacheFile {
+    pub path: String,
+    pub label: String,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let home_dir = dirs::home_dir().ok_or("no home directory")?;
+    let mut files = Vec::new();
+
+    // Pi agent node_modules (~/.screenpipe/pi-agent/)
+    let pi_agent = data_dir.join("pi-agent");
+    if pi_agent.exists() {
+        let size = dir_size(&pi_agent);
+        files.push(CacheFile {
+            path: pi_agent.to_string_lossy().to_string(),
+            label: "AI agent cache (pi-agent)".to_string(),
+            size_bytes: size,
+        });
+    }
+
+    // Pi config (~/.pi/agent/)
+    let pi_config = home_dir.join(".pi").join("agent");
+    if pi_config.exists() {
+        let size = dir_size(&pi_config);
+        files.push(CacheFile {
+            path: pi_config.to_string_lossy().to_string(),
+            label: "AI agent config (.pi/agent)".to_string(),
+            size_bytes: size,
+        });
+    }
+
+    // Stale root-level node_modules (~/.screenpipe/node_modules/)
+    let root_nm = data_dir.join("node_modules");
+    if root_nm.exists() {
+        let size = dir_size(&root_nm);
+        files.push(CacheFile {
+            path: root_nm.to_string_lossy().to_string(),
+            label: "Legacy node_modules".to_string(),
+            size_bytes: size,
+        });
+    }
+
+    // DB crash recovery/backup files
+    for entry in std::fs::read_dir(&data_dir).map_err(|e| e.to_string())? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+
+        // *.corrupt*, *.backup files
+        if name.contains(".corrupt") || name.ends_with(".backup") {
+            let size = if path.is_dir() {
+                dir_size(&path)
+            } else {
+                path.metadata().map(|m| m.len()).unwrap_or(0)
+            };
+            files.push(CacheFile {
+                path: path.to_string_lossy().to_string(),
+                label: format!("DB recovery artifact: {}", name),
+                size_bytes: size,
+            });
+        }
+
+        // db-recovery-* and db-hotfix-* directories
+        if path.is_dir() && (name.starts_with("db-recovery-") || name.starts_with("db-hotfix-")) {
+            let size = dir_size(&path);
+            files.push(CacheFile {
+                path: path.to_string_lossy().to_string(),
+                label: format!("DB recovery artifact: {}", name),
+                size_bytes: size,
+            });
+        }
+
+        // Old log files (screenpipe.*.log — legacy CLI format)
+        if name.starts_with("screenpipe.") && name.ends_with(".log") {
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            files.push(CacheFile {
+                path: path.to_string_lossy().to_string(),
+                label: format!("Old log: {}", name),
+                size_bytes: size,
+            });
+        }
+
+        // Empty/stale DB files (data.db, screenpipe.db, store.sqlite)
+        if matches!(name.as_str(), "data.db" | "screenpipe.db" | "store.sqlite") {
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            if size == 0 {
+                files.push(CacheFile {
+                    path: path.to_string_lossy().to_string(),
+                    label: format!("Empty DB: {}", name),
+                    size_bytes: size,
+                });
+            }
+        }
+    }
+
+    // Stale root-level bun artifacts
+    for name in &["bun.lock", "bun.lockb", "package.json"] {
+        let path = data_dir.join(name);
+        if path.exists() {
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            files.push(CacheFile {
+                path: path.to_string_lossy().to_string(),
+                label: format!("Stale config: {}", name),
+                size_bytes: size,
+            });
+        }
+    }
+
+    Ok(files)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_cache_files(paths: Vec<String>) -> Result<u64, String> {
+    let mut freed = 0u64;
+    for p in &paths {
+        let path = std::path::Path::new(p);
+        if !path.exists() {
+            continue;
+        }
+        let size = if path.is_dir() {
+            dir_size(path)
+        } else {
+            path.metadata().map(|m| m.len()).unwrap_or(0)
+        };
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        match result {
+            Ok(_) => {
+                info!("cache cleanup: deleted {}", p);
+                freed += size;
+            }
+            Err(e) => warn!("cache cleanup: failed to delete {}: {}", p, e),
+        }
+    }
+    Ok(freed)
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    total += p.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+            }
+        }
+    }
+    total
 }

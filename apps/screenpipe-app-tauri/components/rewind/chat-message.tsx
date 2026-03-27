@@ -79,6 +79,15 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 	const hasMP4File = (content: string) =>
 		content.trim().toLowerCase().includes(".mp4");
 
+	/** Extract the first absolute .mp4 path from a string that may contain surrounding text. */
+	const extractMP4Path = (content: string): string => {
+		// Match absolute paths (may contain spaces, dashes, dots, etc.)
+		const match = content.match(/\/(?:[^\s/`]+ )*[^\s/`]+\.mp4/i)
+			|| content.match(/(?:\/[^\n`"':]+)+\.mp4/i)
+			|| content.match(/[A-Z]:\\[^\n`"':]+\.mp4/i); // Windows
+		return match ? match[0].trim() : content.trim();
+	};
+
 	if (!message?.content?.trim()) {
 		return null;
 	}
@@ -166,7 +175,7 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 							const isMP4Link = href?.toLowerCase().includes(".mp4");
 
 							if (isMP4Link && href) {
-								return <VideoComponent filePath={href} />;
+								return <VideoComponent filePath={extractMP4Path(href)} />;
 							}
 							
 							// Handle screenpipe:// timeline deep links in-app
@@ -244,7 +253,7 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 
 							if (isMP4File || !match) {
 								if (isMP4File) {
-									return <VideoComponent filePath={content.trim()} />;
+									return <VideoComponent filePath={extractMP4Path(content)} />;
 								}
 								return (
 									<code

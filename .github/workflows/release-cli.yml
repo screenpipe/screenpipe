@@ -122,8 +122,10 @@ jobs:
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             export CFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
             export CXXFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
+            cargo build --release --features metal,parakeet-mlx --target ${{ matrix.target }}
+          else
+            cargo build --release --features metal --target ${{ matrix.target }}
           fi
-          cargo build --release --features metal --target ${{ matrix.target }}
 
       - name: Upload debug symbols to Sentry
         env:
@@ -200,6 +202,19 @@ jobs:
         run: |
           mkdir -p screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin
           cp target/${{ matrix.target }}/release/screenpipe screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/
+
+          # Bundle mlx.metallib next to CLI binary (macOS aarch64 only)
+          # MLX searches for mlx.metallib next to the binary at runtime
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            METALLIB=$(find "target/${{ matrix.target }}/release/build" -path "*/mlx-sys-*/mlx.metallib" -print -quit 2>/dev/null)
+            if [ -n "$METALLIB" ]; then
+              cp "$METALLIB" screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/mlx.metallib
+              echo "✅ Bundled mlx.metallib for CLI"
+            else
+              echo "⚠️ mlx.metallib not found in build artifacts"
+            fi
+          fi
+
           tar -czf screenpipe-${{ env.VERSION }}-${{ matrix.target }}.tar.gz -C screenpipe-${{ env.VERSION }}-${{ matrix.target }} .
 
       - name: Calculate SHA256

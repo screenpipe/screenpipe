@@ -201,6 +201,48 @@ pub async fn get_pipe_executions(
     }
 }
 
+/// GET /pipes/:id/session/:exec_id — read Pi session file for an execution.
+pub async fn get_pipe_session(
+    State(pm): State<SharedPipeManager>,
+    Path((id, exec_id)): Path<(String, i64)>,
+) -> (StatusCode, Json<Value>) {
+    let mgr = pm.lock().await;
+    let execs = match mgr.get_executions(&id, 100).await {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        }
+    };
+    let exec = match execs.iter().find(|e| e.id == exec_id) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "execution not found" })),
+            )
+        }
+    };
+    let session_path = match &exec.session_path {
+        Some(p) => p.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "no session file for this execution" })),
+            )
+        }
+    };
+    match tokio::fs::read_to_string(&session_path).await {
+        Ok(content) => (StatusCode::OK, Json(json!({ "data": content }))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("failed to read session file: {}", e) })),
+        ),
+    }
+}
+
 /// POST /pipes/:id/config — update pipe config fields.
 pub async fn update_pipe_config(
     State(pm): State<SharedPipeManager>,

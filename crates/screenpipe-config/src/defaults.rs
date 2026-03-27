@@ -7,6 +7,11 @@
 use crate::RecordingSettings;
 use sysinfo::{System, SystemExt};
 
+/// Minimum macOS major version required for parakeet-mlx (Metal GPU).
+/// macOS 26 (Tahoe) is required for the MLX framework APIs used by parakeet.
+/// On older macOS versions, the model loading segfaults during Metal buffer allocation.
+const PARAKEET_MIN_MACOS_MAJOR: u32 = 26;
+
 /// Device performance tier, determined by hardware detection.
 /// Used to select conservative or aggressive default settings on first launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +178,74 @@ impl Default for ChannelConfig {
     }
 }
 
+/// Detect the macOS major version, or `None` on other platforms.
+#[cfg(target_os = "macos")]
+pub fn macos_major_version() -> Option<u32> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    let version_str = String::from_utf8_lossy(&output.stdout);
+    version_str.trim().split('.').next()?.parse().ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn macos_major_version() -> Option<u32> {
+    None
+}
+
+/// Pick the best audio transcription engine for the current platform.
+///
+/// Decision matrix:
+///
+/// | Tier | macOS ≥ 26  | macOS < 26 / other OS |
+/// |------|-------------|-----------------------|
+/// | High | parakeet    | whisper-large-v3-turbo-quantized |
+/// | Mid  | parakeet    | whisper-large-v3-turbo-quantized |
+/// | Low  | whisper-tiny| whisper-tiny           |
+///
+/// Parakeet requires macOS 26+ for MLX Metal GPU support. On older macOS
+/// or non-Mac platforms, it crashes during model loading. Low-tier devices
+/// (≤8 GB) can't fit the 2.3 GB model regardless of OS version.
+pub fn best_engine_for_platform(tier: DeviceTier) -> &'static str {
+    if tier == DeviceTier::Low {
+        return "whisper-tiny";
+    }
+
+    let macos_ok = macos_major_version()
+        .map(|v| v >= PARAKEET_MIN_MACOS_MAJOR)
+        .unwrap_or(false);
+
+    if macos_ok {
+        "parakeet"
+    } else {
+        "whisper-large-v3-turbo-quantized"
+    }
+}
+
+/// Returns true if the given engine string is unsafe for the current platform.
+///
+/// An engine is unsafe if:
+/// - It's parakeet/parakeet-mlx on a Low-tier device (OOM crash)
+/// - It's parakeet/parakeet-mlx on macOS < 26 (segfault during Metal init)
+/// - It's parakeet/parakeet-mlx on a non-macOS platform (no MLX support)
+pub fn is_engine_unsafe(engine: &str, tier: DeviceTier) -> bool {
+    let is_parakeet = engine == "parakeet" || engine == "parakeet-mlx";
+    if !is_parakeet {
+        return false;
+    }
+
+    if tier == DeviceTier::Low {
+        return true;
+    }
+
+    let macos_ok = macos_major_version()
+        .map(|v| v >= PARAKEET_MIN_MACOS_MAJOR)
+        .unwrap_or(false);
+
+    !macos_ok
+}
+
 /// Apply platform-specific defaults to a `RecordingSettings`.
 ///
 /// Called once when creating default settings. Sets values that differ
@@ -209,7 +282,10 @@ pub fn apply_platform_defaults(settings: &mut RecordingSettings) {
 ///
 /// Called once on first launch after hardware detection. Adjusts capture
 /// aggressiveness based on what the hardware can handle comfortably.
+/// Also picks the best audio engine for the device tier and macOS version.
 pub fn apply_tier_defaults(settings: &mut RecordingSettings, tier: DeviceTier) {
+    settings.audio_transcription_engine = best_engine_for_platform(tier).to_string();
+
     match tier {
         DeviceTier::High => {
             settings.video_quality = "balanced".to_string();
@@ -222,7 +298,6 @@ pub fn apply_tier_defaults(settings: &mut RecordingSettings, tier: DeviceTier) {
         DeviceTier::Low => {
             settings.video_quality = "low".to_string();
             settings.power_mode = Some("battery_saver".to_string());
-            settings.audio_transcription_engine = "whisper-tiny".to_string();
         }
     }
 }
@@ -244,6 +319,7 @@ mod tests {
         apply_tier_defaults(&mut settings, DeviceTier::Low);
         assert_eq!(settings.video_quality, "low");
         assert_eq!(settings.power_mode.as_deref(), Some("battery_saver"));
+        assert_eq!(settings.audio_transcription_engine, "whisper-tiny");
     }
 
     #[test]
@@ -252,6 +328,19 @@ mod tests {
         let default_quality = settings.video_quality.clone();
         apply_tier_defaults(&mut settings, DeviceTier::High);
         assert_eq!(settings.video_quality, default_quality);
+    }
+
+    #[test]
+    fn best_engine_low_tier_always_whisper_tiny() {
+        assert_eq!(best_engine_for_platform(DeviceTier::Low), "whisper-tiny");
+    }
+
+    #[test]
+    fn parakeet_unsafe_on_low_tier() {
+        assert!(is_engine_unsafe("parakeet", DeviceTier::Low));
+        assert!(is_engine_unsafe("parakeet-mlx", DeviceTier::Low));
+        assert!(!is_engine_unsafe("whisper-tiny", DeviceTier::Low));
+        assert!(!is_engine_unsafe("whisper-large-v3-turbo-quantized", DeviceTier::High));
     }
 
     #[test]

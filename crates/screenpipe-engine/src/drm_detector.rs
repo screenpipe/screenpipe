@@ -71,6 +71,7 @@ const DRM_APPS: &[&str] = &[
     "hbo max",
     "max",
     "crunchyroll",
+    "dazn",
 ];
 
 /// Check whether `app_name` matches a known DRM streaming app.
@@ -99,6 +100,7 @@ const DRM_DOMAINS: &[&str] = &[
     "paramountplus.com",
     "play.max.com",
     "crunchyroll.com",
+    "dazn.com",
 ];
 
 /// URL path patterns for streaming services on generic domains.

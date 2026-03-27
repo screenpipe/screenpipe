@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsEnterpriseBuild } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 interface EnterprisePolicy {
   hiddenSections: string[];
@@ -69,7 +70,8 @@ export function useEnterprisePolicy() {
 
   const fetchPolicy = useCallback(async (licenseKey: string): Promise<FetchResult> => {
     try {
-      const res = await fetch("https://screenpi.pe/api/enterprise/policy", {
+      const res = await tauriFetch("https://screenpi.pe/api/enterprise/policy", {
+        method: "GET",
         headers: { "X-License-Key": licenseKey },
       });
       if (res.status === 401 || res.status === 402) {

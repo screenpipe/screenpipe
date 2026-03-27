@@ -194,13 +194,16 @@ async isEnterpriseBuildCmd() : Promise<boolean> {
 },
 /**
  * Read the enterprise license key from `enterprise.json`.
- * Checks next to executable (MDM) then ~/.screenpipe/enterprise.json (manual).
+ * Checks in order:
+ * 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
+ * 2. `~/.screenpipe/enterprise.json` (entered manually by employee via in-app prompt)
+ * Returns None if no file is found or is invalid.
  */
 async getEnterpriseLicenseKey() : Promise<string | null> {
     return await TAURI_INVOKE("get_enterprise_license_key");
 },
 /**
- * Save the enterprise license key to ~/.screenpipe/enterprise.json.
+ * Save the enterprise license key to `~/.screenpipe/enterprise.json`.
  * Used by the in-app prompt when enterprise.json is not deployed via MDM.
  */
 async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string>> {
@@ -214,6 +217,22 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_disk_usage", { forceRefresh, dataDir }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listCacheFiles() : Promise<Result<CacheFile[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_cache_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteCacheFiles(paths: string[]) : Promise<Result<bigint, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -936,6 +955,7 @@ export type AIPreset = { id: string; prompt: string; provider: AIProviderType; u
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BrowserLogEntry = { level: string; message: string }
+export type CacheFile = { path: string; label: string; size_bytes: bigint }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string; 
 /**

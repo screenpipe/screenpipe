@@ -139,11 +139,42 @@ export class OpenAIProvider implements AIProvider {
 					role: msg.role,
 					content: Array.isArray(msg.content)
 						? msg.content.map((part) => {
-								if (part.type === 'image') {
+								// OpenAI image_url format (from Pi's convertToLlm)
+								if (part.type === 'image_url' && part.image_url?.url) {
 									return {
 										type: 'image_url',
 										image_url: {
-											url: part.image?.url,
+											url: part.image_url.url,
+											detail: part.image_url.detail || 'auto',
+										},
+									};
+								}
+								// Pi native format: { type: "image", data: "base64...", mimeType: "image/png" }
+								if (part.type === 'image' && part.data && part.mimeType) {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: `data:${part.mimeType};base64,${part.data}`,
+											detail: 'auto',
+										},
+									};
+								}
+								// Anthropic base64 format
+								if (part.type === 'image' && part.source?.type === 'base64') {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: `data:${part.source.media_type || part.source.mediaType || 'image/png'};base64,${part.source.data}`,
+											detail: 'auto',
+										},
+									};
+								}
+								// Legacy: { type: "image", image: { url: "..." } }
+								if (part.type === 'image' && part.image?.url) {
+									return {
+										type: 'image_url',
+										image_url: {
+											url: part.image.url,
 											detail: 'auto',
 										},
 									};

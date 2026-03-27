@@ -156,7 +156,8 @@ EXAMPLES OF GOOD SEARCHES:
 
 Rules for showing videos/audio:
 - Show videos by putting .mp4 file paths in inline code blocks: \`/path/to/video.mp4\`
-- Use the exact, absolute file_path from search results
+- ONLY use the exact, unmodified file_path or audio_file_path from search results. NEVER construct or guess paths.
+- Before showing a video, verify the file exists by checking it with the shell (e.g. ls or Test-Path). If missing, tell the user and retry search with a different time range instead of showing a broken player.
 
 SPEAKER MANAGEMENT (localhost:3030):
 - GET /speakers/unnamed?limit=10 — list unnamed speakers

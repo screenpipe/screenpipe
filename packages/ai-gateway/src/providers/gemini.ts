@@ -639,6 +639,22 @@ export class GeminiProvider implements AIProvider {
 								},
 							});
 						}
+					} else if (part.type === 'image' && part.data && part.mimeType) {
+						// Pi native format
+						parts.push({
+							inlineData: {
+								mimeType: part.mimeType,
+								data: part.data as string,
+							},
+						});
+					} else if (part.type === 'image' && part.source?.type === 'base64') {
+						// Anthropic format
+						parts.push({
+							inlineData: {
+								mimeType: (part.source.media_type || part.source.mediaType || 'image/png') as string,
+								data: part.source.data as string,
+							},
+						});
 					} else if (part.type === 'image' && part.image?.url) {
 						const url = part.image.url;
 						const dataUrlMatch = url.match(/^data:([^;]+);base64,(.+)$/);

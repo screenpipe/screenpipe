@@ -67,6 +67,7 @@ impl PipeStore for SqlitePipeStore {
         exit_code: Option<i32>,
         error_type: Option<&str>,
         error_message: Option<&str>,
+        session_path: Option<&str>,
     ) -> Result<()> {
         use screenpipe_db::write_queue::PipeBindValue;
         let now = Utc::now().to_rfc3339();
@@ -81,6 +82,7 @@ impl PipeStore for SqlitePipeStore {
                    exit_code = ?,
                    error_type = ?,
                    error_message = ?,
+                   session_path = ?,
                    duration_ms = CAST(
                        (julianday(?) - julianday(COALESCE(started_at, ?))) * 86400000
                        AS INTEGER
@@ -94,6 +96,7 @@ impl PipeStore for SqlitePipeStore {
                     PipeBindValue::OptInt32(exit_code),
                     PipeBindValue::OptText(error_type.map(|s| s.to_string())),
                     PipeBindValue::OptText(error_message.map(|s| s.to_string())),
+                    PipeBindValue::OptText(session_path.map(|s| s.to_string())),
                     PipeBindValue::Text(now.clone()),
                     PipeBindValue::Text(now),
                     PipeBindValue::Int(id),
@@ -107,7 +110,7 @@ impl PipeStore for SqlitePipeStore {
         let rows = sqlx::query_as::<_, PipeExecutionRow>(
             r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                       started_at, finished_at, stdout, stderr, exit_code,
-                      error_type, error_message, duration_ms
+                      error_type, error_message, duration_ms, session_path
                FROM pipe_executions
                WHERE pipe_name = ?
                ORDER BY id DESC
@@ -222,7 +225,7 @@ impl PipeStore for SqlitePipeStore {
         let rows = sqlx::query_as::<_, PipeExecutionRow>(
             r#"SELECT id, pipe_name, status, trigger_type, pid, model, provider,
                       started_at, finished_at, stdout, stderr, exit_code,
-                      error_type, error_message, duration_ms
+                      error_type, error_message, duration_ms, session_path
                FROM (
                    SELECT *, ROW_NUMBER() OVER (
                        PARTITION BY pipe_name ORDER BY id DESC
@@ -267,6 +270,7 @@ struct PipeExecutionRow {
     error_type: Option<String>,
     error_message: Option<String>,
     duration_ms: Option<i64>,
+    session_path: Option<String>,
 }
 
 impl From<PipeExecutionRow> for PipeExecution {
@@ -287,6 +291,7 @@ impl From<PipeExecutionRow> for PipeExecution {
             error_type: r.error_type,
             error_message: r.error_message,
             duration_ms: r.duration_ms,
+            session_path: r.session_path,
         }
     }
 }
@@ -471,7 +476,16 @@ mod tests {
             .unwrap();
         store.set_execution_running(id, Some(100)).await.unwrap();
         store
-            .finish_execution(id, "completed", "hello stdout", "", Some(0), None, None)
+            .finish_execution(
+                id,
+                "completed",
+                "hello stdout",
+                "",
+                Some(0),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -500,6 +514,7 @@ mod tests {
                 None,
                 Some("rate_limited"),
                 Some("rate limited by provider"),
+                None,
             )
             .await
             .unwrap();
@@ -530,6 +545,7 @@ mod tests {
                 None,
                 Some("timeout"),
                 Some("timed out after 300s"),
+                None,
             )
             .await
             .unwrap();
@@ -600,7 +616,7 @@ mod tests {
             .unwrap();
         store.set_execution_running(id3, Some(200)).await.unwrap();
         store
-            .finish_execution(id3, "completed", "done", "", Some(0), None, None)
+            .finish_execution(id3, "completed", "done", "", Some(0), None, None, None)
             .await
             .unwrap();
 
@@ -762,7 +778,16 @@ mod tests {
 
         // 3. Complete
         store
-            .finish_execution(id, "completed", "result output", "", Some(0), None, None)
+            .finish_execution(
+                id,
+                "completed",
+                "result output",
+                "",
+                Some(0),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 

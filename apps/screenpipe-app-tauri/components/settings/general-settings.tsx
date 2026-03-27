@@ -9,15 +9,33 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare } from "lucide-react";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare, Trash2 } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
-import { commands } from "@/lib/utils/tauri";
+import { commands, CacheFile } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
 
 export default function GeneralSettings() {
   const isEnterprise = useIsEnterpriseBuild();
@@ -27,6 +45,9 @@ export default function GeneralSettings() {
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+  const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
+  const [showCacheDialog, setShowCacheDialog] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch(() => {});
@@ -190,6 +211,126 @@ export default function GeneralSettings() {
         )}
 
       </div>
+
+      <Separator />
+
+      <div className="space-y-2">
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Clear cache</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Remove AI agent cache, old logs, and recovery artifacts
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-4 h-7 text-xs"
+                disabled={isClearing}
+                onClick={async () => {
+                  try {
+                    const result = await commands.listCacheFiles();
+                    if (result.status === "error") throw new Error(result.error);
+                    if (result.data.length === 0) {
+                      toast({ title: "nothing to clean up" });
+                      return;
+                    }
+                    setCacheFiles(result.data);
+                    setShowCacheDialog(true);
+                  } catch (e: any) {
+                    toast({ title: "failed to scan cache", description: e?.toString(), variant: "destructive" });
+                  }
+                }}
+              >
+                {isClearing ? "clearing..." : "scan"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <AlertDialog open={showCacheDialog} onOpenChange={setShowCacheDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>clear cache?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>the following files will be deleted ({formatBytes(cacheFiles.reduce((s, f) => s + Number(f.size_bytes), 0))} total):</p>
+                <ul className="text-xs space-y-1 max-h-48 overflow-y-auto">
+                  {cacheFiles.map((f) => (
+                    <li key={f.path} className="flex justify-between gap-2">
+                      <span className="truncate">{f.label}</span>
+                      <span className="text-muted-foreground shrink-0">{formatBytes(Number(f.size_bytes))}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground">
+                  AI agent will reinstall automatically on next use.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                setIsClearing(true);
+                setShowCacheDialog(false);
+                try {
+                  const paths = cacheFiles.map((f) => f.path);
+                  const result = await commands.deleteCacheFiles(paths);
+                  if (result.status === "error") throw new Error(result.error);
+                  toast({
+                    title: "cache cleared",
+                    description: `freed ${formatBytes(Number(result.data))}`,
+                  });
+                } catch (e: any) {
+                  toast({ title: "failed to clear cache", description: e?.toString(), variant: "destructive" });
+                } finally {
+                  setIsClearing(false);
+                  setCacheFiles([]);
+                }
+              }}
+            >
+              delete all
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Card className="border-border bg-card">
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Reset onboarding</h3>
+                <p className="text-xs text-muted-foreground">Run the setup wizard again</p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-4 h-7 text-xs"
+              onClick={async () => {
+                try {
+                  await commands.resetOnboarding();
+                  await commands.showOnboardingWindow();
+                } catch (e) {
+                  console.error("failed to open onboarding:", e);
+                }
+              }}
+            >
+              reset
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
     </div>
   );

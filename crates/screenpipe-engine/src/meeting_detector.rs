@@ -332,7 +332,6 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "tuple",
                     "pop",
                     "tandem",
-                    "loom",
                     "riverside",
                     "gather",
                     "butter",
@@ -381,7 +380,6 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "app.chime.aws",
                     "dialpad.com/meetings",
                     "8x8.vc",
-                    "loom.com/share",
                 ],
             },
             call_signals: vec![

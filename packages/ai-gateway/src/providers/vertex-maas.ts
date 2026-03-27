@@ -62,7 +62,7 @@ export function resolveVertexMaasModel(model: string): { vertexId: string; regio
 
 export class VertexMaasProvider implements AIProvider {
 	supportsTools = true;
-	supportsVision = false;
+	supportsVision = true;
 	supportsJson = true;
 
 	private vertexProvider: VertexAIProvider;
@@ -164,6 +164,19 @@ export class VertexMaasProvider implements AIProvider {
 			content: Array.isArray(msg.content)
 				? msg.content.map((part) => {
 						if (part.type === 'text') return { type: 'text', text: part.text || '' };
+						// OpenAI image_url format passthrough
+						if (part.type === 'image_url' && part.image_url?.url) {
+							return { type: 'image_url', image_url: { url: part.image_url.url } };
+						}
+						// Pi native format: { type: "image", data, mimeType }
+						if (part.type === 'image' && part.data && part.mimeType) {
+							return { type: 'image_url', image_url: { url: `data:${part.mimeType};base64,${part.data}` } };
+						}
+						// Anthropic base64 format
+						if (part.type === 'image' && part.source?.type === 'base64') {
+							const mt = part.source.media_type || part.source.mediaType || 'image/png';
+							return { type: 'image_url', image_url: { url: `data:${mt};base64,${part.source.data}` } };
+						}
 						return part;
 				  })
 				: msg.content,

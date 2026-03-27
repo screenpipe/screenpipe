@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { PipeMonitorView } from "@/components/pipe-monitor";
+// PipeMonitorView merged into PipesSection as device dropdown
 import { apiCache } from "@/lib/cache";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -229,13 +229,11 @@ function normalizePipe(raw: any): any {
 // --- Main Unified Component ---
 
 export function PipeStoreView() {
-  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes" | "fleet">("my-pipes");
-  const showFleet = posthog.isFeatureEnabled?.("pipe-monitor");
+  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
 
   const tabs = [
     { key: "my-pipes" as const, label: "My Pipes" },
     { key: "discover" as const, label: "Discover" },
-    ...(showFleet ? [{ key: "fleet" as const, label: "Fleet" }] : []),
   ];
 
   return (
@@ -261,8 +259,6 @@ export function PipeStoreView() {
       {/* Tab content */}
       {activeTab === "discover" ? (
         <DiscoverView />
-      ) : activeTab === "fleet" ? (
-        <PipeMonitorView />
       ) : (
         <PipesSection />
       )}

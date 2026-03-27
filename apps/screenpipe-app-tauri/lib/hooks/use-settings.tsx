@@ -230,8 +230,8 @@ const DEFAULT_IGNORED_WINDOWS_PER_OS: Record<string, string[]> = {
 };
 
 // Default Screenpipe Cloud preset
-const DEFAULT_PI_PRESET: AIPreset = {
-	id: "pi-agent",
+const DEFAULT_CLOUD_PRESET: AIPreset = {
+	id: "screenpipe-cloud",
 	provider: "screenpipe-cloud",
 	url: "",
 	model: "auto",
@@ -240,11 +240,9 @@ const DEFAULT_PI_PRESET: AIPreset = {
 	prompt: "",
 };
 
-// Legacy presets removed — Pi agent is the only default now
-// screenpipe-cloud presets are migrated away for existing users
-
+// Legacy presets removed — screenpipe-cloud is the only default now
 let DEFAULT_SETTINGS: Settings = {
-			aiPresets: [DEFAULT_PI_PRESET as any],
+			aiPresets: [DEFAULT_CLOUD_PRESET as any],
 			deviceId: crypto.randomUUID(),
 			deepgramApiKey: "",
 			isLoading: false,
@@ -404,7 +402,7 @@ function createSettingsStore() {
 
 		// Migration: Add default presets if user has none
 		if (!settings.aiPresets || settings.aiPresets.length === 0) {
-			settings.aiPresets = [DEFAULT_PI_PRESET as any];
+			settings.aiPresets = [DEFAULT_CLOUD_PRESET as any];
 			needsUpdate = true;
 		}
 
@@ -416,15 +414,23 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
-		// Migration: Add screenpipe-cloud preset for existing users and make it default
+		// Migration: Rename "pi-agent" preset id to "screenpipe-cloud"
+		if (settings.aiPresets?.some((p: any) => p.id === "pi-agent")) {
+			settings.aiPresets = settings.aiPresets.map((p: any) =>
+				p.id === "pi-agent" ? { ...p, id: "screenpipe-cloud" } : p
+			);
+			needsUpdate = true;
+		}
+
+		// Migration: Add screenpipe-cloud preset for existing users (without touching their existing presets)
 		const hasCloudPreset = settings.aiPresets?.some(
-			(p: any) => p.id === "pi-agent" || p.provider === "screenpipe-cloud"
+			(p: any) => p.id === "screenpipe-cloud" || p.provider === "screenpipe-cloud"
 		);
 		if (settings.aiPresets && settings.aiPresets.length > 0 && !hasCloudPreset) {
-			// Demote all existing presets from default
-			settings.aiPresets = settings.aiPresets.map((p: any) => ({ ...p, defaultPreset: false }));
-			// Add screenpipe-cloud as default at the front
-			settings.aiPresets = [DEFAULT_PI_PRESET as any, ...settings.aiPresets];
+			// Only set as default if no other preset is already default
+			const hasDefault = settings.aiPresets.some((p: any) => p.defaultPreset);
+			const cloudPreset = { ...DEFAULT_CLOUD_PRESET, defaultPreset: !hasDefault };
+			settings.aiPresets = [cloudPreset as any, ...settings.aiPresets];
 			needsUpdate = true;
 		}
 

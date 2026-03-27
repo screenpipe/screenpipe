@@ -246,6 +246,8 @@ jobs:
 
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
+      env:
+        OPENBLAS_PATH: /usr/lib/x86_64-linux-gnu
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

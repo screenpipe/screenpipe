@@ -15,6 +15,26 @@ const AUTO_WATERFALL = [
   'gemini-3-flash',
 ];
 
+// Vision-capable models for requests containing images
+const AUTO_WATERFALL_VISION = [
+  'kimi-k2.5',       // free (Vertex MaaS), natively multimodal, strong vision
+  'gemini-3-flash',  // near-free, excellent vision
+  'gemini-2.5-flash',
+];
+
+function hasImages(body: RequestBody): boolean {
+  return body.messages.some(
+    (msg) =>
+      Array.isArray(msg.content) &&
+      msg.content.some(
+        (part) =>
+          part.type === 'image' ||
+          part.type === 'image_url' ||
+          (part.type === 'file' && part.mimeType?.startsWith('image/'))
+      )
+  );
+}
+
 function addModelHeader(response: Response, model: string): Response {
   const newResponse = new Response(response.body, response);
   newResponse.headers.set('x-screenpipe-model', model);
@@ -60,7 +80,8 @@ export async function handleChatCompletions(body: RequestBody, env: Env): Promis
   // Auto model: waterfall through free models until one succeeds
   if (body.model === 'auto') {
     let lastError: any = null;
-    for (const model of AUTO_WATERFALL) {
+    const waterfall = hasImages(body) ? AUTO_WATERFALL_VISION : AUTO_WATERFALL;
+    for (const model of waterfall) {
       try {
         const response = await tryModel(model, body, env);
         if (response) {

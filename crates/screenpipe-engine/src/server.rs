@@ -644,6 +644,10 @@ impl SCServer {
                     "/:id/history",
                     axum::routing::delete(crate::pipes_api::clear_pipe_history),
                 )
+                .route(
+                    "/:id/session/:exec_id",
+                    axum::routing::get(crate::pipes_api::get_pipe_session),
+                )
                 // Store/registry routes (nested under /pipes/store)
                 .route(
                     "/store",

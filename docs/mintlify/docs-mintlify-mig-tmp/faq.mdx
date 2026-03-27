@@ -35,10 +35,8 @@ icon: "question"
   - follow [contribution guidelines](https://github.com/screenpipe/screenpipe/blob/main/CONTRIBUTING.md)
 </Expandable>
 
-<Expandable title="what OCR / STT engines are supported?">
-  **OCR**: `apple-native` (macOS), `windows-native` (Windows), `tesseract` (Linux), `unstructured` (cloud), `custom`
-
-  **STT**: `whisper-large-v3-turbo-quantized` (default, local), `whisper-tiny`, `whisper-tiny-quantized`, `whisper-large`, `whisper-large-quantized`, `whisper-large-v3-turbo`, `deepgram` (cloud)
+<Expandable title="what OCR engines are supported?">
+  `apple-native` (macOS), `windows-native` (Windows), `tesseract` (Linux), `unstructured` (cloud), `custom`
 </Expandable>
 
 <Expandable title="is my data private?">
@@ -50,4 +48,20 @@ icon: "question"
   1. **MCP server** — works with Claude Desktop, Cursor ([guide](/mcp-server))
   2. **pipes** — scheduled AI agents ([guide](/pipes))
   3. **REST API** — `curl http://localhost:3030/search?q=your+query`
+</Expandable>
+
+<Expandable title="music sounds bad or keeps pausing with bluetooth headphones">
+  this is a macOS bluetooth limitation, not a screenpipe bug. when any app opens a bluetooth microphone, macOS switches the headset from the high-quality A2DP codec (stereo, full bass) to the low-quality HFP codec (phone quality, 8kHz mono). this affects all audio — music, ANC, everything. the same thing happens with Zoom, Google Meet, or any app that uses your bluetooth mic.
+
+  **fix:** go to screenpipe settings → audio devices, and switch the input device from your bluetooth headset to your MacBook's built-in microphone. screenpipe will stop opening the bluetooth mic, macOS stays on the high-quality codec, and your music sounds normal again. screenpipe still captures your voice through the built-in mic.
+
+  note: AirPods don't have this issue — Apple uses a proprietary codec that handles input and output simultaneously without switching profiles.
+</Expandable>
+
+<Expandable title="what speech-to-text engines are supported?">
+  **local (default)**: `parakeet` (25 languages, fastest), `whisper-large-v3-turbo` (99 languages), `whisper-tiny` (lightweight)
+
+  **cloud**: `deepgram` / `screenpipe-cloud` (highest accuracy)
+
+  on macOS Apple Silicon, parakeet uses Metal GPU acceleration via MLX for 8x faster transcription.
 </Expandable>

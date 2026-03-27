@@ -76,9 +76,9 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             .await
             .unwrap_or(false);
         arr.push(json!({
-            "id": "calendar",
-            "name": "Calendar",
-            "icon": "calendar",
+            "id": "apple-calendar",
+            "name": "Apple Calendar",
+            "icon": "apple-calendar",
             "category": "productivity",
             "description": format!(
                 "Read-only access to your native {} calendar. \

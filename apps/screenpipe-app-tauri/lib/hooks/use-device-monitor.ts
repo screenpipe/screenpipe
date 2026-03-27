@@ -173,12 +173,52 @@ export function useDeviceMonitor() {
     }
 
     let active = true;
+    let localFingerprint: string | null = null;
+    let localHostname: string | null = null;
+
+    // Fetch local machine identity to filter self from device list
+    (async () => {
+      try {
+        const res = await fetchWithTimeout("http://localhost:3030/health", 3_000);
+        if (res.ok) {
+          const h: HealthResponse = await res.json();
+          localHostname = h.hostname?.toLowerCase() || null;
+          const monitors = (h.monitors || []).sort().join("|");
+          const audio = (h.audio_pipeline?.audio_devices || []).sort().join("|");
+          localFingerprint = `${monitors}::${audio}`;
+        }
+      } catch { /* no local instance */ }
+    })();
 
     async function poll() {
       const results = await Promise.all(
         registeredDevices.map((d) => pollDevice(d.address, d.label))
       );
-      if (active) setDevices(results);
+      if (!active) return;
+
+      // Dedup: remove local machine + duplicates by hostname/fingerprint
+      const seenHostnames = new Set<string>();
+      const seenFingerprints = new Set<string>();
+      if (localHostname) seenHostnames.add(localHostname);
+      if (localFingerprint) seenFingerprints.add(localFingerprint);
+
+      const deduped = results.filter((d) => {
+        const hn = d.health?.hostname?.toLowerCase();
+        if (hn && seenHostnames.has(hn)) return false;
+        if (hn) seenHostnames.add(hn);
+
+        if (d.health) {
+          const monitors = (d.health.monitors || []).sort().join("|");
+          const audio = (d.health.audio_pipeline?.audio_devices || []).sort().join("|");
+          const fp = `${monitors}::${audio}`;
+          if (fp !== "::" && seenFingerprints.has(fp)) return false;
+          if (fp !== "::") seenFingerprints.add(fp);
+        }
+
+        return true;
+      });
+
+      setDevices(deduped);
     }
 
     setDevices(

@@ -23,6 +23,8 @@ pub const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
 /// Must stay in sync with packages/ai-gateway/src/handlers/models.ts.
 pub fn screenpipe_cloud_models() -> serde_json::Value {
     json!([
+        // ── Auto — smart routing with fallback (gateway resolves to best free model) ──
+        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000},
         // ── Free models (Vertex AI MaaS — GCP credits, free for users) ──
         {"id": "glm-4.7", "name": "GLM-4.7", "reasoning": true, "input": ["text"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 200000, "maxTokens": 32000},
         {"id": "glm-5", "name": "GLM-5", "reasoning": true, "input": ["text"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000},
@@ -294,10 +296,14 @@ impl PiExecutor {
         };
 
         if should_add_screenpipe {
-            // Use actual token value in apiKey (not env var name) — Pi v0.51.1+ may not
-            // resolve env var names reliably, causing tier=anonymous on the gateway.
-            // Falls back to env var name for backwards compatibility when token is absent.
-            let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
+            // Use actual token value in apiKey — Pi doesn't resolve env var names,
+            // so writing the literal string "SCREENPIPE_API_KEY" causes tier=anonymous.
+            // Resolve from: argument > env var > literal fallback (last resort).
+            let api_key_value = user_token
+                .map(|t| t.to_string())
+                .or_else(|| std::env::var("SCREENPIPE_API_KEY").ok())
+                .unwrap_or_else(|| "SCREENPIPE_API_KEY".to_string());
+            let api_key_value = api_key_value.as_str();
             let screenpipe_provider = json!({
                 "baseUrl": api_url,
                 "api": "openai-completions",

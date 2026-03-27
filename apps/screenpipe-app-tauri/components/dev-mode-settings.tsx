@@ -22,6 +22,7 @@ import { Separator } from "./ui/separator";
 import { Card, CardContent, CardFooter } from "./ui/card";
 
 import { CliCommandDialog } from "./cli-command-dialog";
+import { commands } from "@/lib/utils/tauri";
 
 const getDebuggingCommands = (os: string | null, dataDir: string) => {
   let cliInstructions = "";
@@ -277,6 +278,30 @@ export const DevModeSettings = ({ localDataDir }: { localDataDir: string }) => {
               </CardFooter>
             </Card>
           </div>
+
+          {process.env.TAURI_ENV_DEBUG === "true" && (
+            <Card className="p-8">
+              <CardContent>
+                <div className="flex flex-col items-center space-y-3">
+                  <p className="text-sm font-medium">dev tools</p>
+                  <Button
+                    variant="outline"
+                    className="text-xs w-full"
+                    onClick={async () => {
+                      try {
+                        await commands.resetOnboarding();
+                        await commands.showOnboardingWindow();
+                      } catch (e) {
+                        console.error("failed to open onboarding:", e);
+                      }
+                    }}
+                  >
+                    reset & open onboarding
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </>

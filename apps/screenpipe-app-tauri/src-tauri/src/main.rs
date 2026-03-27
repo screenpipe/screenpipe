@@ -558,6 +558,8 @@ async fn main() {
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
                 commands::get_disk_usage,
+                commands::list_cache_files,
+                commands::delete_cache_files,
                 commands::open_pipe_window,
                 commands::update_show_screenpipe_shortcut,
                 commands::show_window,
@@ -786,6 +788,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
             commands::get_enterprise_license_key,
+            commands::save_enterprise_license_key,
             spawn_screenpipe,
             stop_screenpipe,
             recording::get_monitors,
@@ -807,6 +810,8 @@ async fn main() {
             write_browser_logs,
             commands::update_show_screenpipe_shortcut,
             commands::get_disk_usage,
+            commands::list_cache_files,
+            commands::delete_cache_files,
             commands::open_pipe_window,
             commands::show_window,
             commands::open_login_window,
@@ -1059,6 +1064,25 @@ async fn main() {
                     .to_path_buf();
                 let tessdata_path = exe_dir.join("tessdata");
                 env::set_var("TESSDATA_PREFIX", tessdata_path);
+            }
+
+            // Ensure mlx.metallib is discoverable by MLX (parakeet-mlx).
+            // Tauri bundles it in Contents/Resources/ but MLX looks next to the binary
+            // (Contents/MacOS/). Create a symlink so both paths work.
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(exe) = std::env::current_exe() {
+                    let macos_dir = exe.parent().unwrap_or(std::path::Path::new("."));
+                    let target = macos_dir.join("mlx.metallib");
+                    if !target.exists() {
+                        // Try Contents/Resources/mlx.metallib (Tauri resource)
+                        let resource = macos_dir.parent()
+                            .map(|contents| contents.join("Resources/mlx.metallib"));
+                        if let Some(src) = resource.filter(|p| p.exists()) {
+                            let _ = std::os::unix::fs::symlink(&src, &target);
+                        }
+                    }
+                }
             }
 
             // Autostart setup
@@ -1523,106 +1547,6 @@ async fn main() {
                     error!("Failed to start health check service: {}", e);
                 }
             });
-
-            // Recover webviews after system wake (WKWebView content process dies during sleep)
-            #[cfg(target_os = "macos")]
-            {
-                let app_handle_wake = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut was_asleep = false;
-                    let mut last_tick = std::time::Instant::now();
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        let now = std::time::Instant::now();
-                        let elapsed = now.duration_since(last_tick);
-                        last_tick = now;
-
-                        // Primary: NSWorkspace sleep monitor flag
-                        let woke_flag = screenpipe_engine::sleep_monitor::recently_woke_from_sleep();
-                        // Fallback: if the 2s poll took >30s, the system clearly slept
-                        // (NSWorkspace observer can silently fail to register)
-                        let woke_gap = elapsed.as_secs() > 30;
-                        if woke_gap && !woke_flag {
-                            tracing::info!(
-                                "wake detected via time gap ({}s elapsed, sleep monitor flag=false)",
-                                elapsed.as_secs()
-                            );
-                        }
-                        let woke = woke_flag || woke_gap;
-
-                        if woke && !was_asleep {
-                            // System just woke — wait for display to stabilize
-                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-                            // For main/main-window: try JS reload first, destroy+recreate if dead
-                            for label in &["main", "main-window"] {
-                                if let Some(window) = app_handle_wake.get_webview_window(label) {
-                                    // Probe whether the WKWebView JS runtime is still alive
-                                    match window.eval("void(0)") {
-                                        Ok(_) => {
-                                            // JS runtime alive — simple reload suffices
-                                            let _ = window.eval("window.location.reload()");
-                                            tracing::info!("reloaded webview '{}' after wake (JS alive)", label);
-                                        }
-                                        Err(_) => {
-                                            // JS runtime dead — content process was killed.
-                                            // Destroy the window so show() creates a fresh one.
-                                            tracing::warn!(
-                                                "webview '{}' JS runtime dead after wake — destroying for recreation",
-                                                label
-                                            );
-                                            let _ = window.destroy();
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Recreate main window if it was destroyed
-                            if app_handle_wake.get_webview_window("main").is_none()
-                                && app_handle_wake.get_webview_window("main-window").is_none()
-                            {
-                                // Small delay to let destroy() finish cleanup
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                match ShowRewindWindow::Main.show(&app_handle_wake) {
-                                    Ok(_) => tracing::info!("recreated main window after wake"),
-                                    Err(e) => tracing::error!("failed to recreate main window after wake: {}", e),
-                                }
-                            }
-
-                            // For home/chat: try JS reload (these are simpler windows)
-                            for label in &["home", "chat"] {
-                                if let Some(window) = app_handle_wake.get_webview_window(label) {
-                                    match window.eval("void(0)") {
-                                        Ok(_) => {
-                                            let _ = window.eval("window.location.reload()");
-                                            tracing::info!("reloaded webview '{}' after wake", label);
-                                        }
-                                        Err(_) => {
-                                            tracing::warn!(
-                                                "webview '{}' JS runtime dead after wake — destroying for recreation",
-                                                label
-                                            );
-                                            let _ = window.destroy();
-                                            // Recreate home/chat
-                                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                                            let variant = match label {
-                                                &"home" => ShowRewindWindow::Home { page: None },
-                                                &"chat" => ShowRewindWindow::Chat,
-                                                _ => continue,
-                                            };
-                                            match variant.show(&app_handle_wake) {
-                                                Ok(_) => tracing::info!("recreated '{}' window after wake", label),
-                                                Err(e) => tracing::error!("failed to recreate '{}' after wake: {}", label, e),
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        was_asleep = woke;
-                    }
-                });
-            }
 
             // Start permission monitor (polls permissions and emits events when lost)
             let app_handle_clone = app_handle.clone();

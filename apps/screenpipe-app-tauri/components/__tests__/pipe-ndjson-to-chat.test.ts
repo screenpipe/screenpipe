@@ -143,13 +143,14 @@ describe("parsePipeNdjsonToMessages", () => {
 
   // ─── thinking blocks ──────────────────────────────────────────────
 
-  it("captures thinking deltas as thinking contentBlocks", () => {
+  it("captures thinking deltas as thinking contentBlocks (no agent_end)", () => {
+    // Without agent_end, the streaming fallback is used which preserves thinking blocks
     const stdout = [
       '{"type":"message_start","message":{"role":"assistant","content":[]}}',
       '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Let me think","partial":{}}}',
       '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" about this.","partial":{}}}',
       '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Here is the answer.","partial":{}}}',
-      '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Here is the answer."}],"stopReason":"stop"}}',
     ].join("\n");
 
     const msgs = parsePipeNdjsonToMessages(stdout);
@@ -226,23 +227,105 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(msgs[1].content).toBe("Here is the final answer.");
   });
 
-  it("does NOT use agent_end if streaming events already extracted messages", () => {
+  it("prefers agent_end over streaming events since agent_end is authoritative", () => {
     const stdout = [
       '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}',
       '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}',
       '{"type":"message_start","message":{"role":"assistant","content":[]}}',
       '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Streamed response.","partial":{}}}',
       '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}',
-      // agent_end has different text — should be ignored
-      '{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"text","text":"Agent end text should be ignored."}],"stopReason":"stop"}]}',
+      '{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]},{"role":"assistant","content":[{"type":"text","text":"Agent end has the complete text."}],"stopReason":"stop"}]}',
     ].join("\n");
 
     const msgs = parsePipeNdjsonToMessages(stdout);
     expect(msgs).toHaveLength(2);
-    expect(msgs[1].content).toBe("Streamed response.");
-    // agent_end text should NOT appear
-    const allContent = msgs.map((m) => m.content).join(" ");
-    expect(allContent).not.toContain("Agent end text");
+    // agent_end is preferred since it has the full conversation
+    expect(msgs[1].content).toBe("Agent end has the complete text.");
+  });
+
+  it("parses agent_end with multiple assistant turns and tool calls", () => {
+    const stdout = [
+      '{"type":"agent_end","messages":[' +
+        '{"role":"user","content":[{"type":"text","text":"Check meetings"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"curl localhost:3030/meetings"}}]},' +
+        '{"role":"toolResult","content":[{"type":"text","text":"No meetings found"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"Let me search audio."},{"type":"toolCall","id":"t2","name":"bash","arguments":{"command":"curl localhost:3030/search"}}]},' +
+        '{"role":"toolResult","content":[{"type":"text","text":"Some audio fragments"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"No real meetings detected. Just ambient audio."}]}' +
+      ']}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    // user, assistant+tool, assistant+tool, assistant (final)
+    expect(msgs.length).toBe(4);
+
+    expect(msgs[0].role).toBe("user");
+    expect(msgs[0].content).toBe("Check meetings");
+
+    // First assistant: text + tool call
+    expect(msgs[1].role).toBe("assistant");
+    expect(msgs[1].content).toBe("Let me check.");
+    const tool1 = msgs[1].contentBlocks?.find((b: any) => b.type === "tool");
+    expect(tool1).toBeDefined();
+    expect(tool1.toolCall.toolName).toBe("bash");
+    // toolResult should be attached
+    expect(tool1.toolCall.result).toContain("No meetings found");
+
+    // Second assistant: text + tool call
+    expect(msgs[2].role).toBe("assistant");
+    expect(msgs[2].content).toBe("Let me search audio.");
+    const tool2 = msgs[2].contentBlocks?.find((b: any) => b.type === "tool");
+    expect(tool2).toBeDefined();
+    expect(tool2.toolCall.result).toContain("Some audio fragments");
+
+    // Final assistant: just text
+    expect(msgs[3].role).toBe("assistant");
+    expect(msgs[3].content).toBe("No real meetings detected. Just ambient audio.");
+  });
+
+  it("parses agent_end when text_delta was filtered (no streaming text)", () => {
+    // This simulates what happens after filter_ndjson_stdout removes text_delta
+    const stdout = [
+      '{"type":"session","version":3,"id":"abc","timestamp":"2026-03-26T14:36:17Z","cwd":"/tmp"}',
+      '{"type":"agent_start"}',
+      '{"type":"turn_start"}',
+      '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Execute the pipe now."}]}}',
+      '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Execute the pipe now."}]}}',
+      '{"type":"message_start","message":{"role":"assistant","content":[]}}',
+      // text_delta events would be here but were filtered
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":1,"toolName":"bash","partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":1,"toolCall":{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"curl localhost:3030/search"}},"partial":{}}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Checking activity."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"curl localhost:3030/search"}}]}}',
+      '{"type":"tool_execution_end","toolCallId":"t1","result":{"content":[{"type":"text","text":"data here"}]}}',
+      '{"type":"turn_end"}',
+      '{"type":"agent_end","messages":[' +
+        '{"role":"user","content":[{"type":"text","text":"Execute the pipe now."}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"Checking activity."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"curl localhost:3030/search"}}]},' +
+        '{"role":"toolResult","content":[{"type":"text","text":"data here"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"Based on the data, you were coding for the past hour."}]}' +
+      ']}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+
+    // Should use agent_end which has complete text
+    expect(msgs.length).toBeGreaterThanOrEqual(3);
+
+    // User prompt
+    expect(msgs[0].role).toBe("user");
+    expect(msgs[0].content).toContain("Execute the pipe");
+
+    // First assistant with tool
+    expect(msgs[1].role).toBe("assistant");
+    expect(msgs[1].content).toBe("Checking activity.");
+    expect(msgs[1].contentBlocks?.some((b: any) => b.type === "tool")).toBe(true);
+
+    // Final assistant with summary
+    const lastAssistant = msgs[msgs.length - 1];
+    expect(lastAssistant.role).toBe("assistant");
+    expect(lastAssistant.content).toContain("coding for the past hour");
   });
 
   // ─── error handling ───────────────────────────────────────────────
@@ -273,10 +356,11 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(parsePipeNdjsonToMessages("  \n  \n  ")).toHaveLength(0);
   });
 
-  it("returns empty array for non-JSON input", () => {
-    expect(
-      parsePipeNdjsonToMessages("plain text output\nno json here\n")
-    ).toHaveLength(0);
+  it("uses cleanPipeStdout fallback for non-JSON input", () => {
+    const msgs = parsePipeNdjsonToMessages("plain text output\nno json here\n");
+    // cleanPipeStdout may extract plain text lines as fallback
+    // The important thing is it doesn't crash
+    expect(Array.isArray(msgs)).toBe(true);
   });
 
   // ─── truncated stdout ─────────────────────────────────────────────

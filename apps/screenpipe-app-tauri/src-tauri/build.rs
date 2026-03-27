@@ -358,6 +358,40 @@ fn main() {
         build_shortcut_reminder();
     }
 
+    // Copy mlx.metallib to a known location so Tauri can bundle it as a resource.
+    // MLX compiles Metal shaders into this file during mlx-sys build. Without it,
+    // parakeet-mlx crashes with "Failed to load the default metallib".
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
+        // Navigate from OUT_DIR (target/{profile}/build/{crate}-{hash}/out/)
+        // up to the build/ dir to find mlx-sys's metallib
+        if let Some(build_dir) = std::path::Path::new(&out_dir).ancestors().nth(3) {
+            let mut found = false;
+            if let Ok(entries) = std::fs::read_dir(build_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().starts_with("mlx-sys-") {
+                        let metallib = entry.path().join("out/build/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib");
+                        if metallib.exists() {
+                            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+                            let dest = std::path::Path::new(&manifest_dir).join("mlx.metallib");
+                            if let Err(e) = std::fs::copy(&metallib, &dest) {
+                                println!("cargo:warning=Failed to copy mlx.metallib: {}", e);
+                            } else {
+                                println!("cargo:warning=Copied mlx.metallib to {}", dest.display());
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if !found {
+                println!("cargo:warning=mlx.metallib not found in build artifacts (parakeet-mlx may not be enabled)");
+            }
+        }
+    }
+
     tauri_build::build()
 }
 
