@@ -234,68 +234,9 @@ fn setup_logging(
     Ok(guard)
 }
 
-/// On macOS, ScreenCaptureKit and Metal/MLX frameworks need to dispatch to the
-/// main thread. If tokio owns the main thread (`#[tokio::main]`), `spawn_blocking`
-/// tasks that call SCK deadlock because the main thread is blocked in the tokio
-/// executor. Fix: run tokio on a background thread; keep the main thread free for
-/// macOS framework dispatches via CFRunLoop.
-fn main() -> anyhow::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        // Build a multi-thread tokio runtime on a dedicated thread so that the
-        // process's main thread stays free for macOS run-loop dispatches
-        // (ScreenCaptureKit, Metal/MLX, etc.).
-        let (result_tx, result_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
-
-        std::thread::Builder::new()
-            .name("tokio-main".into())
-            .spawn(move || {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build tokio runtime");
-                let result = rt.block_on(async_main());
-                let _ = result_tx.send(result);
-                // Stop the main-thread CFRunLoop so the process can exit
-                #[link(name = "CoreFoundation", kind = "framework")]
-                extern "C" {
-                    fn CFRunLoopGetMain() -> *const std::ffi::c_void;
-                    fn CFRunLoopStop(rl: *const std::ffi::c_void);
-                }
-                unsafe {
-                    CFRunLoopStop(CFRunLoopGetMain());
-                }
-            })
-            .expect("failed to spawn tokio-main thread");
-
-        // Run the main-thread CFRunLoop so macOS frameworks can dispatch to it.
-        // This blocks until CFRunLoopStop is called from the tokio thread above.
-        #[link(name = "CoreFoundation", kind = "framework")]
-        extern "C" {
-            fn CFRunLoopRun();
-        }
-        unsafe {
-            CFRunLoopRun();
-        }
-
-        return result_rx
-            .recv()
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("tokio-main thread panicked")));
-    }
-
-    // Non-macOS: just use a normal tokio runtime on the main thread
-    #[cfg(not(target_os = "macos"))]
-    {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime");
-        return rt.block_on(async_main());
-    }
-}
-
+#[tokio::main]
 #[tracing::instrument]
-async fn async_main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<()> {
     // dhat heap profiler — must be the first thing in main.
     // Writes dhat-heap.json on drop (Ctrl+C / graceful exit).
     #[cfg(feature = "heap-prof")]
