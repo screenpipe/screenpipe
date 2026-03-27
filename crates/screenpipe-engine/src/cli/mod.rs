@@ -441,6 +441,22 @@ impl RecordArgs {
             }
         }
 
+        // Safety guard: downgrade engine if unsafe for this platform
+        // (Low tier = OOM, macOS < 26 = parakeet-mlx segfault)
+        let tier = settings
+            .device_tier
+            .as_deref()
+            .and_then(screenpipe_config::DeviceTier::from_str_loose)
+            .unwrap_or_else(screenpipe_config::detect_tier);
+        if screenpipe_config::is_engine_unsafe(&settings.audio_transcription_engine, tier) {
+            let safe = screenpipe_config::best_engine_for_platform(tier);
+            eprintln!(
+                "warning: {} is not supported on this platform, using {} instead",
+                settings.audio_transcription_engine, safe
+            );
+            settings.audio_transcription_engine = safe.to_string();
+        }
+
         crate::recording_config::RecordingConfig::from_settings(&settings, data_dir, None)
     }
 }

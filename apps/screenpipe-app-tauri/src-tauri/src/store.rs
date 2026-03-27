@@ -754,18 +754,18 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             should_save = true;
         }
 
-        // Unconditional OOM guard: prevent parakeet/parakeet-mlx on Low tier devices
-        // regardless of whether the tier just changed. The 2.3GB MLX model crashes
-        // 8GB machines (macOS kills the process during Metal buffer allocation).
-        if detected == screenpipe_config::DeviceTier::Low
-            && (store.recording.audio_transcription_engine == "parakeet"
-                || store.recording.audio_transcription_engine == "parakeet-mlx")
-        {
+        // Unconditional safety guard: prevent parakeet/parakeet-mlx on platforms
+        // where it will crash (Low tier = OOM, macOS < 26 = MLX segfault).
+        if screenpipe_config::is_engine_unsafe(&store.recording.audio_transcription_engine, detected) {
+            let safe = screenpipe_config::best_engine_for_platform(detected);
             tracing::warn!(
-                "Low tier device — switching from {} to whisper-tiny to prevent OOM crash (parakeet-mlx requires >8GB RAM)",
-                store.recording.audio_transcription_engine
+                "engine {} is unsafe on this platform (tier={:?}, macOS={:?}) — switching to {}",
+                store.recording.audio_transcription_engine,
+                detected,
+                screenpipe_config::macos_major_version(),
+                safe,
             );
-            store.recording.audio_transcription_engine = "whisper-tiny".to_string();
+            store.recording.audio_transcription_engine = safe.to_string();
             should_save = true;
         }
     }
