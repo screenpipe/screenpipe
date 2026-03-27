@@ -754,21 +754,23 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             );
             if is_new_store || store.recording.device_tier.is_none() {
                 screenpipe_config::apply_tier_defaults(&mut store.recording, detected);
-            } else if stored_tier.is_some() {
-                // Tier boundary changed in update — only fix engine if it would OOM
-                // (user on parakeet/parakeet-mlx but now classified as Low)
-                if detected == screenpipe_config::DeviceTier::Low
-                    && (store.recording.audio_transcription_engine == "parakeet"
-                        || store.recording.audio_transcription_engine == "parakeet-mlx")
-                {
-                    tracing::warn!(
-                        "device reclassified as Low tier — switching from {} to whisper-tiny to prevent OOM",
-                        store.recording.audio_transcription_engine
-                    );
-                    store.recording.audio_transcription_engine = "whisper-tiny".to_string();
-                }
             }
             store.recording.device_tier = Some(detected.as_str().to_string());
+            should_save = true;
+        }
+
+        // Unconditional OOM guard: prevent parakeet/parakeet-mlx on Low tier devices
+        // regardless of whether the tier just changed. The 2.3GB MLX model crashes
+        // 8GB machines (macOS kills the process during Metal buffer allocation).
+        if detected == screenpipe_config::DeviceTier::Low
+            && (store.recording.audio_transcription_engine == "parakeet"
+                || store.recording.audio_transcription_engine == "parakeet-mlx")
+        {
+            tracing::warn!(
+                "Low tier device — switching from {} to whisper-tiny to prevent OOM crash (parakeet-mlx requires >8GB RAM)",
+                store.recording.audio_transcription_engine
+            );
+            store.recording.audio_transcription_engine = "whisper-tiny".to_string();
             should_save = true;
         }
     }
