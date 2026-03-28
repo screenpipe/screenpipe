@@ -106,7 +106,9 @@ export type Settings = SettingsStore & {
 	lockVaultShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
+	/** @deprecated Always true — kept for serde compat */
 	enableInputCapture?: boolean;
+	/** @deprecated Always true — kept for serde compat */
 	enableAccessibility?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
 	enableWorkflowEvents?: boolean;
@@ -175,6 +177,15 @@ export type Settings = SettingsStore & {
 		address: string;
 		label?: string;
 	}>;
+	/** Enable recording schedule — when on, recording only runs during defined time ranges */
+	scheduleEnabled?: boolean;
+	/** Per-day-of-week time ranges defining when recording is active */
+	scheduleRules?: Array<{
+		dayOfWeek: number;
+		startTime: string;
+		endTime: string;
+		recordMode: string;
+	}>;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -187,7 +198,7 @@ export function getEffectiveFilters(settings: Settings) {
 }
 
 export const DEFAULT_PROMPT = `Rules:
-- Videos: use inline code \`/path/to/video.mp4\` (not links or multiline blocks)
+- Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images
 - Diagrams: use \`\`\`mermaid blocks for visual summaries (flowchart, gantt, mindmap, graph)
 - Activity summaries: gantt charts with apps/duration
 - Workflows: flowcharts showing steps taken
@@ -249,7 +260,7 @@ let DEFAULT_SETTINGS: Settings = {
 			userId: "",
 			analyticsId: "",
 			devMode: false,
-			audioTranscriptionEngine: "parakeet",
+			audioTranscriptionEngine: "whisper-large-v3-turbo-quantized",
 			ocrEngine: "default",
 			monitorIds: ["default"],
 			audioDevices: ["default"],
@@ -313,7 +324,7 @@ let DEFAULT_SETTINGS: Settings = {
 				activeConversationId: null,
 				historyEnabled: true,
 			},
-			enableInputCapture: false,
+			enableInputCapture: true,
 			enableAccessibility: true,
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
@@ -343,8 +354,6 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 
 		if (p === "windows") {
-			DEFAULT_SETTINGS.enableAccessibility = true;
-			DEFAULT_SETTINGS.enableInputCapture = true;
 			DEFAULT_SETTINGS.disableOcr = true;
 			DEFAULT_SETTINGS.overlayMode = "window";
 		}
@@ -484,15 +493,20 @@ function createSettingsStore() {
 		// Migration: Auto-detect hardware and adjust engine for weak machines (one-time only)
 		// Migration: Switch to Parakeet as default engine (one-time)
 		// - Paid cloud subscribers → screenpipe-cloud (better accuracy)
-		// - Everyone else → parakeet (lightweight, multilingual, works on all hardware)
+		// - macOS users → whisper-large-v3-turbo-quantized (parakeet/MLX is experimental on macOS)
+		// - Windows/Linux users → parakeet (stable on these platforms)
 		if (!(settings as any)._parakeetDefaultMigrationDone) {
 			const engine = settings.audioTranscriptionEngine;
 			const isWhisperVariant = engine?.includes("whisper");
-			if (isWhisperVariant || engine === "screenpipe-cloud") {
+			if (isWhisperVariant || engine === "screenpipe-cloud" || engine === "parakeet") {
 				if (settings.user?.cloud_subscribed) {
 					settings.audioTranscriptionEngine = "screenpipe-cloud";
 				} else {
-					settings.audioTranscriptionEngine = "parakeet";
+					const { platform: getPlatform } = await import("@tauri-apps/plugin-os");
+					const os = getPlatform();
+					settings.audioTranscriptionEngine = os === "macos"
+						? "whisper-large-v3-turbo-quantized"
+						: "parakeet";
 				}
 				needsUpdate = true;
 			}

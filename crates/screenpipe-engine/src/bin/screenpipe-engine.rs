@@ -420,8 +420,7 @@ async fn main() -> anyhow::Result<()> {
                     map.insert("use_pii_removal".into(), json!(record_args.use_pii_removal));
                     map.insert("disable_vision".into(), json!(record_args.disable_vision));
                     map.insert("vad_engine".into(), json!("Silero"));
-                    map.insert("enable_input_capture".into(), json!(true));
-                    map.insert("enable_accessibility".into(), json!(true));
+                    // enable_input_capture / enable_accessibility always true (removed as settings)
                     map.insert("enable_sync".into(), json!(record_args.enable_sync));
                     map.insert(
                         "sync_interval_secs".into(),
@@ -501,14 +500,21 @@ async fn main() -> anyhow::Result<()> {
                 extern "C" {
                     fn CGRequestScreenCaptureAccess() -> bool;
                 }
-                unsafe { CGRequestScreenCaptureAccess(); }
+                unsafe {
+                    CGRequestScreenCaptureAccess();
+                }
             }
             if need_audio {
-                if let Ok(status) = av::CaptureDevice::authorization_status_for_media_type(av::MediaType::audio()) {
+                if let Ok(status) =
+                    av::CaptureDevice::authorization_status_for_media_type(av::MediaType::audio())
+                {
                     if status == av::AuthorizationStatus::NotDetermined {
                         // Fire-and-forget: triggers the native "Allow microphone" dialog
                         let mut block = cidre::blocks::SendBlock::new1(|_granted: bool| {});
-                        let _ = av::CaptureDevice::request_access_for_media_type_ch(av::MediaType::audio(), &mut block);
+                        let _ = av::CaptureDevice::request_access_for_media_type_ch(
+                            av::MediaType::audio(),
+                            &mut block,
+                        );
                     }
                 }
             }
@@ -524,8 +530,12 @@ async fn main() -> anyhow::Result<()> {
                 let audio_ok = !need_audio || perms.microphone.is_granted();
 
                 if screen_ok && audio_ok {
-                    if need_screen { eprintln!("  screen recording: ok"); }
-                    if need_audio { eprintln!("  microphone: ok"); }
+                    if need_screen {
+                        eprintln!("  screen recording: ok");
+                    }
+                    if need_audio {
+                        eprintln!("  microphone: ok");
+                    }
                     if perms.accessibility.is_granted() {
                         eprintln!("  accessibility: ok");
                     } else {
@@ -546,7 +556,10 @@ async fn main() -> anyhow::Result<()> {
                     printed_waiting = true;
                     let terminal = permissions::detect_terminal();
                     if !screen_ok {
-                        eprintln!("  screen recording: waiting — grant access to \"{}\"", terminal);
+                        eprintln!(
+                            "  screen recording: waiting — grant access to \"{}\"",
+                            terminal
+                        );
                     }
                     if !audio_ok {
                         eprintln!("  microphone: waiting — grant access to \"{}\"", terminal);
@@ -665,6 +678,15 @@ async fn main() -> anyhow::Result<()> {
     let languages = config.languages.clone();
 
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
+    // Start work-hours schedule monitor if enabled
+    if config.schedule_enabled {
+        screenpipe_engine::schedule_monitor::start_schedule_monitor(
+            config.schedule_rules.clone(),
+            shutdown_tx.subscribe(),
+        );
+        info!("work-hours schedule monitor started");
+    }
 
     let vision_handle = Handle::current();
 
@@ -1144,7 +1166,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start v2 meeting detection (UI scanning for call controls)
-    // Independent of enable_input_capture/enable_accessibility — only needs accessibility permission
+    // Independent of UI recorder — only needs accessibility permission
     let _meeting_watcher_handle = {
         let v2_in_meeting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         start_meeting_watcher(

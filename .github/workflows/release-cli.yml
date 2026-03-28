@@ -16,6 +16,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   check_commit:
     runs-on: ubuntu-latest
@@ -204,15 +207,13 @@ jobs:
           cp target/${{ matrix.target }}/release/screenpipe screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/
 
           # Bundle mlx.metallib next to CLI binary (macOS aarch64 only)
-          # MLX searches for mlx.metallib next to the binary at runtime
+          # MLX searches for mlx.metallib next to the binary at runtime.
+          # CI cmake uses JIT mode so metallib isn't compiled — download pre-built from GitHub releases.
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            METALLIB=$(find "target/${{ matrix.target }}/release/build" -path "*/mlx-sys-*/mlx.metallib" -print -quit 2>/dev/null)
-            if [ -n "$METALLIB" ]; then
-              cp "$METALLIB" screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/mlx.metallib
-              echo "✅ Bundled mlx.metallib for CLI"
-            else
-              echo "⚠️ mlx.metallib not found in build artifacts"
-            fi
+            curl -L -f -o screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/mlx.metallib \
+              "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib" \
+              && echo "✅ Bundled mlx.metallib for CLI ($(du -h screenpipe-${{ env.VERSION }}-${{ matrix.target }}/bin/mlx.metallib | cut -f1))" \
+              || echo "⚠️ Failed to download mlx.metallib"
           fi
 
           tar -czf screenpipe-${{ env.VERSION }}-${{ matrix.target }}.tar.gz -C screenpipe-${{ env.VERSION }}-${{ matrix.target }} .
@@ -327,6 +328,9 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
           RUSTFLAGS: "-C link-arg=/LTCG"
+          # Cap MSVC codegen at AVX2 — prevent AVX-512 on Lunar Lake etc.
+          CFLAGS: "/arch:AVX2"
+          CXXFLAGS: "/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas

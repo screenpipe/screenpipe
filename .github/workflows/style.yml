@@ -7,6 +7,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GIT_LFS_SKIP_SMUDGE: 1
   CARGO_TERM_COLOR: always
 
 jobs:

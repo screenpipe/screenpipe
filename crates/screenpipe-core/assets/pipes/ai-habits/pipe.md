@@ -10,6 +10,8 @@ featured: true
 
 Search my recordings from the last 24 hours for AI tool usage. Use app_name filter for each tool separately: ChatGPT, Claude, Copilot, Cursor, Gemini, Perplexity. Use limit=5 per search, max 6 searches total.
 
+Read screenpipe skill first.
+
 Use this exact format:
 
 ## AI Tools Used

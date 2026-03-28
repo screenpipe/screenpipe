@@ -16,7 +16,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { Command } from "@tauri-apps/plugin-shell";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { message } from "@tauri-apps/plugin-dialog";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -169,7 +169,7 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
-function IntegrationIcon({ icon }: { icon: string }) {
+export function IntegrationIcon({ icon }: { icon: string }) {
   const icons: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
@@ -326,6 +326,7 @@ function Tile({ tile, selected, onClick }: {
 function ClaudePanel({ onConnected }: { onConnected?: () => void }) {
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "downloaded">("idle");
   const [versionInfo, setVersionInfo] = useState<McpVersionInfo>({ available: null, installed: null });
+  const [mcpbPath, setMcpbPath] = useState<string>("");
 
   useEffect(() => {
     Promise.all([
@@ -344,11 +345,12 @@ function ClaudePanel({ onConnected }: { onConnected?: () => void }) {
       if (!response.ok) throw new Error("failed to download .mcpb file");
       const data = new Uint8Array(await response.arrayBuffer());
       const tmp = await tempDir();
-      const mcpbPath = await join(tmp, "screenpipe.mcpb");
-      await writeFile(mcpbPath, data);
+      const filePath = await join(tmp, "screenpipe.mcpb");
+      await writeFile(filePath, data);
+      setMcpbPath(filePath);
       const os = platform();
-      if (os === "macos") await Command.create("open", [mcpbPath]).execute();
-      else if (os === "windows") await Command.create("cmd", ["/c", "start", "", mcpbPath]).execute();
+      if (os === "macos") await Command.create("open", [filePath]).execute();
+      else if (os === "windows") await Command.create("cmd", ["/c", "start", "", filePath]).execute();
       setDownloadState("downloaded");
       onConnected?.();
     } catch (error) {
@@ -389,8 +391,21 @@ function ClaudePanel({ onConnected }: { onConnected?: () => void }) {
         </Button>
       </div>
       {downloadState === "downloaded" && (
-        <div className="p-3 bg-muted border border-border rounded-lg">
+        <div className="p-3 bg-muted border border-border rounded-lg space-y-2">
           <p className="text-xs"><strong>connected!</strong> restart claude if it was running. try: &quot;what did I do in the last 5 minutes?&quot;</p>
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer hover:text-foreground">didn&apos;t work? troubleshooting steps</summary>
+            <ol className="mt-1.5 ml-4 list-decimal space-y-1">
+              <li>
+                <button className="underline hover:text-foreground" onClick={() => mcpbPath && revealItemInDir(mcpbPath)}>
+                  show the .mcpb file
+                </button>
+                {" "}then drag and drop it into claude desktop&apos;s window
+              </li>
+              <li>or in claude: developer → extensions → install extension → select the file</li>
+              <li>if nothing works, reinstall claude desktop to fix file associations</li>
+            </ol>
+          </details>
         </div>
       )}
     </div>

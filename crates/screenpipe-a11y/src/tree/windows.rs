@@ -222,13 +222,17 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             }
         }
 
+        // Use adaptive budget overrides when set
+        let effective_timeout = self.config.effective_walk_timeout();
+        let effective_max_nodes = self.config.effective_max_nodes();
+
         // Check timeout budget
-        if start.elapsed() >= self.config.walk_timeout {
+        if start.elapsed() >= effective_timeout {
             return Ok(TreeWalkResult::NotFound);
         }
 
         // Capture the accessibility tree
-        let root = match uia.capture_window_tree(hwnd, self.config.max_nodes) {
+        let root = match uia.capture_window_tree(hwnd, effective_max_nodes) {
             Some(tree) => tree,
             None => return Ok(TreeWalkResult::NotFound),
         };

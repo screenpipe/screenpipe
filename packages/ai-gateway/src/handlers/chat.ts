@@ -17,9 +17,10 @@ const AUTO_WATERFALL = [
 
 // Vision-capable models for requests containing images
 const AUTO_WATERFALL_VISION = [
-  'kimi-k2.5',       // free (Vertex MaaS), natively multimodal, strong vision
-  'gemini-3-flash',  // near-free, excellent vision
-  'gemini-2.5-flash',
+  'llama-4-maverick', // free (Vertex MaaS), 400B MoE, strong vision + reasoning
+  'gemini-3-flash',   // near-free, good vision
+  'llama-4-scout',    // free (Vertex MaaS), 109B MoE, decent vision fallback
+  'gemini-2.5-flash', // backup vision option
 ];
 
 function hasImages(body: RequestBody): boolean {
@@ -72,11 +73,27 @@ async function tryModel(model: string, body: RequestBody, env: Env): Promise<Res
   }
 }
 
+const SCREENPIPE_SYSTEM_HINT = `You have screenpipe skills. At the start of every conversation, read the files in .pi/skills/ directory (e.g. .pi/skills/screenpipe-api/SKILL.md and .pi/skills/screenpipe-cli/SKILL.md) before responding.`;
+
+/** Prepend a screenpipe system hint if no system message already mentions screenpipe */
+function ensureScreenpipeHint(body: RequestBody): RequestBody {
+  const hasScreenpipeContext = body.messages.some(
+    (m) => m.role === 'system' && typeof m.content === 'string' && m.content.toLowerCase().includes('screenpipe')
+  );
+  if (hasScreenpipeContext) return body;
+  return {
+    ...body,
+    messages: [{ role: 'system', content: SCREENPIPE_SYSTEM_HINT }, ...body.messages],
+  };
+}
+
 /**
  * Handles chat completion requests.
  * Logs success/failure per model for health tracking.
  */
 export async function handleChatCompletions(body: RequestBody, env: Env): Promise<Response> {
+  // Ensure free/auto models know about screenpipe capabilities
+  body = ensureScreenpipeHint(body);
   // Auto model: waterfall through free models until one succeeds
   if (body.model === 'auto') {
     let lastError: any = null;

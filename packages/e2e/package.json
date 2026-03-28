@@ -1,0 +1,23 @@
+{
+  "name": "@screenpipe/e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Unified E2E tests for screenpipe — CLI, API, and app UI. Runs locally (Tart VM) or in CI.",
+  "scripts": {
+    "test": "bun run src/runner.ts",
+    "test:api": "bun run src/runner.ts --suite api",
+    "test:cli": "bun run src/runner.ts --suite cli",
+    "test:app": "bun run src/runner.ts --suite app",
+    "test:local": "bun run local/cli.ts test",
+    "test:local:cli": "bun run local/cli.ts test --target cli",
+    "test:local:e2e": "bun run local/cli.ts test --target e2e",
+    "test:local:models": "bun run local/cli.ts test --target models",
+    "vm:setup": "bun run local/cli.ts setup",
+    "vm:ssh": "bun run local/cli.ts ssh",
+    "vm:teardown": "bun run local/cli.ts teardown",
+    "vm:status": "bun run local/cli.ts status"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

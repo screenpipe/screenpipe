@@ -68,7 +68,7 @@ pub async fn start_ffmpeg_process(
 
     info!("Starting FFmpeg process for file: {}", output_file);
     let fps_str = fps.to_string();
-    let mut command = tokio::process::Command::new(find_ffmpeg_path().unwrap());
+    let mut command = screenpipe_core::ffmpeg_cmd_async(find_ffmpeg_path().unwrap());
     let mut args = vec![
         "-f",
         "image2pipe",

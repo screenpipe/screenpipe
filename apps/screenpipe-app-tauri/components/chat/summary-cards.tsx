@@ -234,7 +234,8 @@ export function SummaryCards({
                   transition={{ duration: 0.15, delay: i * 0.04 }}
                   type="button"
                   onClick={() => onSendMessage(s.text)}
-                  className="px-2.5 py-1 font-mono text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+                  className="px-2.5 py-1 font-mono text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px] truncate"
+                  title={s.text}
                 >
                   {s.text}
                 </motion.button>

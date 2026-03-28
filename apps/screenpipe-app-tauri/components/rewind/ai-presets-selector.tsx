@@ -116,9 +116,8 @@ interface OpenAIModel {
 }
 
 export const DEFAULT_PROMPT = `Rules:
-- You can show videos to the user by putting the .mp4 file path in an inline code block like this: \`/absolute/path/to/file.mp4\`
-- Use the exact absolute file_path from the file_path property, do not modify it
-- Do not wrap video paths in markdown links like [](.mp4), just use inline backticks
+- Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images
+- Use the exact absolute file_path from search results, do not modify it
 - Always answer my question/intent, do not make up things
 `;
 

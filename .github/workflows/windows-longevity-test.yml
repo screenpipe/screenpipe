@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
     # Allow manual triggering of the workflow
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   test-windows:
     runs-on: [self-hosted, Windows, X64]

@@ -111,10 +111,10 @@ impl From<CliAudioTranscriptionEngine> for CoreAudioTranscriptionEngine {
 
 #[derive(Clone, Debug, ValueEnum, PartialEq)]
 pub enum CliTranscriptionMode {
-    /// Transcribe immediately as audio is captured (default)
+    /// Transcribe immediately as audio is captured
     #[clap(name = "realtime")]
     Realtime,
-    /// Accumulate longer audio batches for better transcription quality
+    /// Accumulate longer audio batches for better transcription quality (default)
     #[clap(name = "batch", alias = "smart")]
     Batch,
 }
@@ -308,8 +308,8 @@ pub struct RecordArgs {
     #[arg(long, hide = true)]
     pub auto_destruct_pid: Option<u32>,
 
-    /// Audio transcription scheduling mode: realtime (default) or batch (longer chunks for quality)
-    #[arg(long, value_enum, default_value_t = CliTranscriptionMode::Realtime)]
+    /// Audio transcription scheduling mode: batch (default, longer chunks for quality) or realtime
+    #[arg(long, value_enum, default_value_t = CliTranscriptionMode::Batch)]
     pub transcription_mode: CliTranscriptionMode,
 
     /// Disable telemetry
@@ -380,7 +380,9 @@ impl RecordArgs {
             disable_vision: self.disable_vision,
             use_pii_removal: self.use_pii_removal,
             filter_music: self.filter_music,
+            #[allow(deprecated)]
             enable_input_capture: true,
+            #[allow(deprecated)]
             enable_accessibility: true,
             audio_transcription_engine: engine_str.to_string(),
             transcription_mode: mode_str.to_string(),

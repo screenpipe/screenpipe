@@ -312,13 +312,13 @@ fn default_agent() -> String {
     "pi".into()
 }
 fn default_model() -> String {
-    "claude-haiku-4-5".into()
+    "auto".into()
 }
 fn is_default_agent(s: &String) -> bool {
     s == "pi"
 }
 fn is_default_model(s: &String) -> bool {
-    s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+    s == "auto" || s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
 }
 /// Simple FNV-1a 64-bit hash, sufficient for change detection.
 fn simple_hash(content: &str) -> String {
@@ -605,7 +605,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
             "settings": {
                 "aiPresets": [{
                     "id": "default",
-                    "model": "claude-haiku-4-5",
+                    "model": "auto",
                     "provider": "screenpipe-cloud",
                     "defaultPreset": true,
                     "maxContextChars": 200000
@@ -953,6 +953,11 @@ impl PipeManager {
             extra_context: None,
             fallback_registry: registry,
         }
+    }
+
+    /// Returns the pipes directory (e.g. `~/.screenpipe/pipes/`).
+    pub fn pipes_dir(&self) -> &Path {
+        &self.pipes_dir
     }
 
     /// Set extra context that gets appended to every pipe prompt.
@@ -1599,8 +1604,8 @@ impl PipeManager {
                     } else {
                         "failed"
                     };
-                    let session_path = find_latest_pi_session(&pipe_dir)
-                        .map(|p| p.to_string_lossy().to_string());
+                    let session_path =
+                        find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
                             .finish_execution(
@@ -2037,8 +2042,8 @@ impl PipeManager {
                     } else {
                         "failed"
                     };
-                    let session_path = find_latest_pi_session(&pipe_dir)
-                        .map(|p| p.to_string_lossy().to_string());
+                    let session_path =
+                        find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
                             .finish_execution(
@@ -3200,24 +3205,12 @@ impl PipeManager {
                 include_str!("../../assets/pipes/standup-update/pipe.md"),
             ),
             (
-                "top-of-mind",
-                include_str!("../../assets/pipes/top-of-mind/pipe.md"),
-            ),
-            (
                 "ai-habits",
                 include_str!("../../assets/pipes/ai-habits/pipe.md"),
             ),
             (
-                "morning-brief",
-                include_str!("../../assets/pipes/morning-brief/pipe.md"),
-            ),
-            (
                 "time-breakdown",
                 include_str!("../../assets/pipes/time-breakdown/pipe.md"),
-            ),
-            (
-                "collaboration-patterns",
-                include_str!("../../assets/pipes/collaboration-patterns/pipe.md"),
             ),
             (
                 "video-export",
@@ -3921,6 +3914,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
         };
         let body = "Do something useful";
         let serialized = serialize_pipe(&config, body).unwrap();
@@ -4059,6 +4053,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
         // User prompt contains time range and the "Execute" instruction
@@ -4088,6 +4083,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None);
         assert!(sys.contains("http://localhost:3030"));
@@ -4110,6 +4106,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"));
         assert!(sys.starts_with("You are a helpful assistant\n\n"));
@@ -4134,6 +4131,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None);
         assert!(!sys.contains("System prompt:"));
@@ -4160,6 +4158,7 @@ mod tests {
             error_type: None,
             error_message: None,
             duration_ms: Some(60000),
+            session_path: None,
         };
         let json = serde_json::to_string(&exec).unwrap();
         let parsed: PipeExecution = serde_json::from_str(&json).unwrap();
@@ -4203,6 +4202,7 @@ mod tests {
                 source_slug: None,
                 installed_version: None,
                 source_hash: None,
+                trigger: None,
             },
             last_run: None,
             last_success: None,

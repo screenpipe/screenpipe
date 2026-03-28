@@ -199,73 +199,288 @@ fn is_browser(app_name: &str) -> bool {
     BROWSER_APPS.iter().any(|&b| lower.contains(b))
 }
 
-/// Query the current foreground app and check if DRM is still active.
-/// Called from the Tauri health check to decide when to auto-restart recording.
+/// Query the focused app name and (for browsers) its URL using only
+/// Accessibility APIs. No ScreenCaptureKit calls.
 ///
-/// Uses only Accessibility APIs (not ScreenCaptureKit).
-/// Returns `true` if DRM is still active (stay paused).
+/// For browsers, tries AXDocument first, then Arc AppleScript, then
+/// falls back to checking the window title for DRM domain names
+/// (e.g. "Netflix - Comet" → synthesizes "https://netflix.com").
 #[cfg(target_os = "macos")]
-pub fn poll_drm_clear() -> bool {
+fn get_focused_app_info() -> Option<(String, Option<String>)> {
     use cidre::{ax, ns};
 
-    let result = std::panic::catch_unwind(|| -> Option<(String, Option<String>)> {
-        let sys = ax::UiElement::sys_wide();
-        let app = sys.focused_app().ok()?;
-        let pid = app.pid().ok()?;
-        let name = ns::RunningApp::with_pid(pid)
-            .and_then(|app| app.localized_name())
-            .map(|s| s.to_string())?;
+    let sys = ax::UiElement::sys_wide();
+    let app = sys.focused_app().ok()?;
+    let pid = app.pid().ok()?;
+    let name = ns::RunningApp::with_pid(pid)
+        .and_then(|app| app.localized_name())
+        .map(|s| s.to_string())?;
 
-        // For browsers, try to get the URL via AXDocument on the focused window
-        let url = if is_browser(&name) {
-            get_browser_url_ax(&app, &name)
+    let url = if is_browser(&name) {
+        // Try standard URL extraction first
+        let url = get_browser_url_ax(&app, &name);
+        if url.is_some() {
+            url
         } else {
-            None
-        };
+            // Fallback: check window title for DRM domain names.
+            // Many browsers (Comet, etc.) don't expose AXDocument but
+            // set the window title to "<page title> - <browser>".
+            // DRM sites like Netflix often put their name in the title.
+            get_drm_url_from_window_title(&app)
+        }
+    } else {
+        None
+    };
 
-        Some((name, url))
+    Some((name, url))
+}
+
+/// Check the focused window's title for known DRM domain names.
+/// Returns a synthesized URL if a match is found, e.g. "https://netflix.com".
+#[cfg(target_os = "macos")]
+fn get_drm_url_from_window_title(app: &cidre::ax::UiElement) -> Option<String> {
+    use cidre::{ax, cf};
+
+    let window_val = app.attr_value(ax::attr::focused_window()).ok()?;
+    let window: &ax::UiElement = unsafe { std::mem::transmute(&*window_val) };
+
+    let title_val = window.attr_value(ax::attr::title()).ok()?;
+    if title_val.get_type_id() != cf::String::type_id() {
+        return None;
+    }
+    let title: &cf::String = unsafe { std::mem::transmute(&*title_val) };
+    let title_lower = title.to_string().to_lowercase();
+
+    // Check each DRM domain's base name against the window title.
+    // "netflix.com" → check for "netflix", "disneyplus.com" → "disneyplus", etc.
+    for &domain in DRM_DOMAINS {
+        let base = domain.split('.').next().unwrap_or(domain);
+        if title_lower.contains(base) {
+            debug!(
+                "DRM URL from window title: title='{}', matched domain={}",
+                title_lower, domain
+            );
+            return Some(format!("https://{}", domain));
+        }
+    }
+
+    None
+}
+
+/// Pre-capture DRM gate — called BEFORE any ScreenCaptureKit call.
+///
+/// Uses only Accessibility APIs to check if the focused app/URL is
+/// DRM-protected. When DRM is detected, sets the global pause flag
+/// and returns `true` so the caller skips the capture entirely.
+///
+/// When `trigger_app_name` is provided (e.g. from an AppSwitch event),
+/// it is checked first for a fast path. Otherwise the focused app is
+/// queried via AX APIs.
+///
+/// Does NOT clear the DRM pause — that is `poll_drm_clear()`'s job.
+#[cfg(target_os = "macos")]
+pub fn pre_capture_drm_check(pause_on_drm_content: bool, trigger_app_name: Option<&str>) -> bool {
+    if !pause_on_drm_content {
+        return false;
+    }
+
+    // Already paused — stay paused, no need to re-query
+    if drm_content_paused() {
+        return true;
+    }
+
+    let result = std::panic::catch_unwind(|| -> bool {
+        // Fast path: use the trigger app name if available
+        if let Some(app) = trigger_app_name {
+            if is_drm_app(app) {
+                info!("pre-capture DRM check: native DRM app '{}' — blocking", app);
+                set_drm_paused(true);
+                return true;
+            }
+            if is_browser(app) {
+                // Browser switch — need the URL to decide
+                match get_focused_app_info() {
+                    Some((ref name, ref url)) => {
+                        debug!(
+                            "pre-capture DRM check: browser trigger='{}', focused='{}', url={:?}",
+                            app, name, url
+                        );
+                        if let Some(ref u) = url {
+                            if is_drm_url(u) {
+                                info!(
+                                    "pre-capture DRM check: browser '{}' on DRM URL {} — blocking",
+                                    app, u
+                                );
+                                set_drm_paused(true);
+                                return true;
+                            }
+                        }
+                    }
+                    None => {
+                        debug!("pre-capture DRM check: get_focused_app_info returned None for browser '{}'", app);
+                    }
+                }
+            }
+            return false;
+        }
+
+        // No trigger app name (Idle, Click, etc.) — query the focused app
+        if let Some((app_name, url)) = get_focused_app_info() {
+            if is_drm_content(&app_name, url.as_deref()) {
+                info!(
+                    "pre-capture DRM check: focused app='{}', url={:?} — blocking",
+                    app_name, url
+                );
+                set_drm_paused(true);
+                return true;
+            }
+            debug!(
+                "pre-capture DRM check: focused app='{}', url={:?} — no DRM",
+                app_name, url
+            );
+        } else {
+            debug!("pre-capture DRM check: get_focused_app_info returned None (no trigger)");
+        }
+
+        false
     });
+
+    match &result {
+        Ok(blocked) => debug!("pre-capture DRM check result: blocked={}", blocked),
+        Err(_) => warn!("pre-capture DRM check: panic in AX query, returning false"),
+    }
+
+    result.unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn pre_capture_drm_check(_pause_on_drm_content: bool, _trigger_app_name: Option<&str>) -> bool {
+    false
+}
+
+/// Check if any on-screen window belongs to a DRM app or has a DRM-related title.
+///
+/// Uses `CGWindowListCopyWindowInfo` (CoreGraphics) — does NOT touch ScreenCaptureKit.
+/// This catches DRM windows that are visible but not focused (multi-monitor case).
+#[cfg(target_os = "macos")]
+fn any_drm_window_on_screen() -> bool {
+    use cidre::cg;
+
+    let windows = match cg::WindowList::info(cg::WindowListOpt::ON_SCREEN_ONLY, cg::WINDOW_ID_NULL)
+    {
+        Some(w) => w,
+        None => {
+            debug!("CGWindowListCopyWindowInfo returned null");
+            return false;
+        }
+    };
+
+    let key_owner = cg::window_keys::owner_name();
+    let key_name = cg::window_keys::name();
+    let key_layer = cg::window_keys::layer();
+
+    for i in 0..windows.len() {
+        let dict = &windows[i];
+
+        // Skip windows not on layer 0 (menu bar items, overlays, etc.)
+        if let Some(layer_val) = dict.get(key_layer) {
+            if let Some(layer_num) = layer_val.try_as_number() {
+                if let Some(layer) = layer_num.to_i32() {
+                    if layer != 0 {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Check owner (app) name
+        if let Some(owner_val) = dict.get(key_owner) {
+            if let Some(owner_cf) = owner_val.try_as_string() {
+                let owner_str = owner_cf.to_string();
+
+                if is_drm_app(&owner_str) {
+                    debug!(
+                        "DRM window still on screen: app='{}' (native DRM app)",
+                        owner_str
+                    );
+                    return true;
+                }
+
+                // For browsers, check the window title for DRM domain names
+                if is_browser(&owner_str) {
+                    if let Some(name_val) = dict.get(key_name) {
+                        if let Some(name_cf) = name_val.try_as_string() {
+                            let title = name_cf.to_string().to_lowercase();
+
+                            for &domain in DRM_DOMAINS {
+                                let base = domain.split('.').next().unwrap_or(domain);
+                                if title.contains(base) {
+                                    debug!(
+                                        "DRM window still on screen: browser='{}', title contains '{}'",
+                                        owner_str, base
+                                    );
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Query the current foreground app and check if DRM is still active.
+/// Called from the monitor watcher to decide when to auto-restart recording.
+///
+/// Uses only Accessibility APIs and CGWindowList (not ScreenCaptureKit).
+/// Returns `true` if DRM is still active (stay paused).
+///
+/// Multi-monitor aware: even if the focused app is not DRM, checks whether
+/// any DRM window is still visible on any screen. macOS DRM blacks out
+/// protected content whenever ScreenCaptureKit is active on ANY display.
+#[cfg(target_os = "macos")]
+pub fn poll_drm_clear() -> bool {
+    let result =
+        std::panic::catch_unwind(|| -> Option<(String, Option<String>)> { get_focused_app_info() });
 
     match result {
         Ok(Some((app_name, url))) => {
             if is_drm_app(&app_name) {
                 debug!("DRM app still focused: {}", app_name);
-                true
-            } else if is_browser(&app_name) {
-                // Browser focused — check the URL to decide
-                match url {
-                    Some(ref u) if is_drm_url(u) => {
+                return true;
+            }
+            if is_browser(&app_name) {
+                if let Some(ref u) = url {
+                    if is_drm_url(u) {
                         debug!(
                             "browser '{}' still on DRM URL: {} — keeping pause",
                             app_name, u
                         );
-                        true
-                    }
-                    Some(ref u) => {
-                        info!(
-                            "browser '{}' on non-DRM URL: {} — clearing DRM pause",
-                            app_name, u
-                        );
-                        set_drm_paused(false);
-                        false
-                    }
-                    None => {
-                        // Can't determine URL — clear pause to avoid false positives.
-                        // If the tab is still DRM, check_and_update_drm_state will
-                        // re-trigger on the next capture cycle.
-                        info!(
-                            "browser '{}' focused but can't determine URL — clearing DRM pause",
-                            app_name
-                        );
-                        set_drm_paused(false);
-                        false
+                        return true;
                     }
                 }
-            } else {
-                info!("focused app is now '{}' — clearing DRM pause", app_name);
-                set_drm_paused(false);
-                false
             }
+
+            // Focused app is not DRM — but a DRM window may still be visible
+            // on another monitor. macOS DRM blacks out content when SCK is
+            // active on ANY display, so we must stay paused.
+            if any_drm_window_on_screen() {
+                debug!(
+                    "focused app '{}' is not DRM, but a DRM window is still visible — keeping pause",
+                    app_name
+                );
+                return true;
+            }
+
+            info!(
+                "focused app '{}' is not DRM and no DRM windows visible — clearing pause",
+                app_name
+            );
+            set_drm_paused(false);
+            false
         }
         Ok(None) => {
             debug!("could not determine focused app, keeping DRM pause");
@@ -444,6 +659,46 @@ mod tests {
         assert!(!drm_content_paused());
     }
 
+    // ── pre_capture_drm_check unit tests ──────────────────────────────
+
+    #[test]
+    fn test_pre_capture_drm_check_disabled() {
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = pre_capture_drm_check(false, Some("Netflix"));
+        assert!(!result, "should be no-op when setting is off");
+        assert!(!drm_content_paused(), "flag should remain unset");
+    }
+
+    #[test]
+    fn test_pre_capture_drm_check_native_app() {
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = pre_capture_drm_check(true, Some("Netflix"));
+        assert!(result, "should detect native DRM app");
+        assert!(drm_content_paused(), "flag should be set");
+        // cleanup
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_pre_capture_drm_check_non_drm_app() {
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = pre_capture_drm_check(true, Some("Finder"));
+        assert!(!result, "should not flag Finder as DRM");
+        assert!(!drm_content_paused(), "flag should remain unset");
+    }
+
+    #[test]
+    fn test_pre_capture_drm_check_already_paused() {
+        DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+        let result = pre_capture_drm_check(true, Some("Finder"));
+        assert!(result, "should stay paused when already paused");
+        assert!(drm_content_paused(), "flag should remain set");
+        // cleanup
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    // ── live integration tests ──────────────────────────────────────
+
     /// Live test: checks poll_drm_clear against the ACTUAL focused app.
     /// Run with Netflix open in Arc/Chrome: `cargo test --lib -- test_poll_drm_clear_live --ignored`
     #[test]
@@ -468,5 +723,134 @@ mod tests {
             drm_content_paused(),
             "DRM flag should still be set when Netflix is focused"
         );
+    }
+
+    /// End-to-end test: opens Netflix in Comet, verifies pre_capture_drm_check
+    /// blocks BEFORE any SCK call, then cleans up.
+    ///
+    /// **Requires:** Comet installed, and the test binary must have Accessibility
+    /// permissions (System Settings > Privacy & Security > Accessibility).
+    /// If AX is not granted, the test skips with a message.
+    ///
+    /// Run: `cargo test -p screenpipe-engine --lib -- test_pre_capture_blocks_netflix_in_comet --ignored`
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "macos")]
+    fn test_pre_capture_blocks_netflix_in_comet() {
+        use cidre::ax;
+        use std::process::Command;
+        use std::thread;
+        use std::time::Duration;
+
+        // Pre-flight: check if we have Accessibility permissions.
+        // cidre AX requires the binary itself to be in the AX allow list.
+        // If not granted, fall back to osascript-based verification which
+        // inherits permissions from Terminal/WezTerm.
+        let has_ax = std::panic::catch_unwind(|| {
+            let sys = ax::UiElement::sys_wide();
+            sys.focused_app().is_ok()
+        })
+        .unwrap_or(false);
+
+        // 1. Open Netflix in Comet
+        let _ = Command::new("open")
+            .args(["-a", "Comet", "https://netflix.com"])
+            .spawn()
+            .expect("failed to open Comet — is it installed?");
+
+        // Give the browser time to launch, load the page, and take focus
+        thread::sleep(Duration::from_secs(5));
+
+        if has_ax {
+            // Full test: use pre_capture_drm_check directly (cidre AX)
+            println!("Running with direct AX access");
+
+            // 2. Test with trigger_app_name (simulates AppSwitch to Comet)
+            DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+            let blocked = pre_capture_drm_check(true, Some("Comet"));
+            println!(
+                "pre_capture_drm_check(trigger=Comet): blocked={}, flag={}",
+                blocked,
+                drm_content_paused()
+            );
+            assert!(
+                blocked,
+                "pre_capture_drm_check should detect Netflix URL in Comet (with trigger)"
+            );
+            assert!(drm_content_paused(), "DRM flag should be set");
+
+            // 3. Test without trigger (simulates Idle/Click trigger)
+            DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+            let blocked_no_trigger = pre_capture_drm_check(true, None);
+            println!(
+                "pre_capture_drm_check(trigger=None): blocked={}, flag={}",
+                blocked_no_trigger,
+                drm_content_paused()
+            );
+            assert!(
+                blocked_no_trigger,
+                "pre_capture_drm_check should detect Netflix via focused app query"
+            );
+
+            // 4. Verify poll_drm_clear agrees
+            DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+            let still_drm = poll_drm_clear();
+            println!("poll_drm_clear: still_drm={}", still_drm);
+            assert!(still_drm, "poll_drm_clear should also detect DRM");
+        } else {
+            // Fallback: verify the window title detection logic via osascript.
+            // This tests the same code path get_drm_url_from_window_title uses
+            // but via System Events (which inherits terminal AX permissions).
+            println!("No direct AX — verifying via osascript fallback");
+
+            let output = Command::new("osascript")
+                .args([
+                    "-e",
+                    r#"tell application "System Events" to tell process "Comet" to return name of front window"#,
+                ])
+                .output()
+                .expect("osascript failed");
+            let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("Comet front window title: '{}'", title);
+
+            let title_lower = title.to_lowercase();
+            let has_netflix = DRM_DOMAINS.iter().any(|domain| {
+                let base = domain.split('.').next().unwrap_or(domain);
+                title_lower.contains(base)
+            });
+            assert!(
+                has_netflix,
+                "Window title '{}' should contain a DRM domain base name (e.g. 'netflix')",
+                title
+            );
+            println!("✓ Window title contains Netflix — DRM detection would fire");
+
+            // Also verify the pure logic: if we had the URL, would it be detected?
+            assert!(is_drm_content("Comet", Some("https://netflix.com")));
+            println!("✓ is_drm_content('Comet', 'https://netflix.com') = true");
+        }
+
+        // 5. Cleanup: close Comet
+        let _ = Command::new("osascript")
+            .args(["-e", r#"tell application "Comet" to close front window"#])
+            .output();
+        thread::sleep(Duration::from_secs(2));
+
+        let _ = Command::new("osascript")
+            .args(["-e", r#"tell application "Finder" to activate"#])
+            .output();
+        thread::sleep(Duration::from_secs(1));
+
+        if has_ax {
+            DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+            let cleared = !poll_drm_clear();
+            println!("after closing Comet: cleared={}", cleared);
+            assert!(
+                cleared,
+                "DRM should clear after closing the Netflix tab and switching away"
+            );
+        }
+
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
     }
 }

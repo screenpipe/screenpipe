@@ -8,7 +8,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, FlaskConical, ExternalLink, PanelLeft } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
@@ -34,14 +34,6 @@ export function DisplaySection() {
     { value: "dark" as const, label: "Dark", icon: Moon },
   ];
 
-  const handleDownloadBeta = async () => {
-    await open("https://screenpi.pe/beta");
-    toast({
-      title: "Opening beta download",
-      description: "Download the beta app to run it alongside stable",
-      duration: 5000,
-    });
-  };
 
   return (
     <div className="space-y-5">
@@ -225,28 +217,6 @@ export function DisplaySection() {
           </Card>
         )}
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <FlaskConical className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">Beta Version</h3>
-                  <p className="text-xs text-muted-foreground">Runs alongside stable</p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDownloadBeta}
-                className="ml-4 flex items-center gap-1.5 h-7 text-xs"
-              >
-                Download
-                <ExternalLink className="h-3 w-3" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

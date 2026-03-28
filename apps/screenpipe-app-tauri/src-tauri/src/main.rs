@@ -1147,8 +1147,8 @@ async fn main() {
                         map.insert("languages".into(), serde_json::json!(store.recording.languages));
                         map.insert("use_pii_removal".into(), serde_json::json!(store.recording.use_pii_removal));
                         map.insert("disable_vision".into(), serde_json::json!(store.recording.disable_vision));
-                        map.insert("enable_input_capture".into(), serde_json::json!(store.recording.enable_input_capture));
-                        map.insert("enable_accessibility".into(), serde_json::json!(store.recording.enable_accessibility));
+                        map.insert("enable_input_capture".into(), serde_json::json!(true));
+                        map.insert("enable_accessibility".into(), serde_json::json!(true));
                         map.insert("auto_start_enabled".into(), serde_json::json!(store.auto_start_enabled));
                         map.insert("platform".into(), serde_json::json!(store.platform));
                         map.insert("embedded_llm_enabled".into(), serde_json::json!(store.embedded_llm.enabled));

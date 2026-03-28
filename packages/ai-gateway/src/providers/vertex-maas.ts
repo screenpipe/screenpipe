@@ -40,22 +40,30 @@ async function fetchWithRetry(url: string, init: RequestInit, label: string): Pr
 	return fetch(url, init);
 }
 
-// Vertex MaaS model IDs — model names without publisher prefix, all on global endpoint
+// Vertex MaaS model IDs — short name → Vertex publisher/model ID + region
 const VERTEX_MAAS_MODELS: Record<string, { vertexId: string; region: string }> = {
 	'glm-4.7': { vertexId: 'zai-org/glm-4.7-maas', region: 'global' },
 	'glm-5': { vertexId: 'zai-org/glm-5-maas', region: 'global' },
 	'kimi-k2.5': { vertexId: 'moonshotai/kimi-k2-thinking-maas', region: 'global' },
+	'llama-4-maverick': { vertexId: 'meta/llama-4-maverick-17b-128e-instruct-maas', region: 'us-east5' },
+	'llama-4-scout': { vertexId: 'meta/llama-4-scout-17b-16e-instruct-maas', region: 'us-east5' },
 };
 
 export function isVertexMaasModel(model: string): boolean {
 	const lower = model.toLowerCase();
-	return Object.keys(VERTEX_MAAS_MODELS).some((key) => lower.includes(key));
+	// Exact match first (e.g. "llama-4-maverick"), then substring for legacy names.
+	// This prevents "meta-llama/llama-4-maverick" (OpenRouter) from matching.
+	return Object.keys(VERTEX_MAAS_MODELS).some((key) => lower === key) ||
+		['glm-', 'kimi-'].some((prefix) => lower.includes(prefix));
 }
 
 export function resolveVertexMaasModel(model: string): { vertexId: string; region: string } | null {
 	const lower = model.toLowerCase();
+	// Exact match first
+	if (VERTEX_MAAS_MODELS[lower]) return VERTEX_MAAS_MODELS[lower];
+	// Substring fallback for GLM/Kimi variants
 	for (const [key, value] of Object.entries(VERTEX_MAAS_MODELS)) {
-		if (lower.includes(key)) return value;
+		if (lower.includes(key) && !lower.includes('/')) return value;
 	}
 	return null;
 }
@@ -195,6 +203,8 @@ export class VertexMaasProvider implements AIProvider {
 			{ id: 'glm-4.7', name: 'GLM-4.7 (best coding, 200K ctx)', provider: 'vertex-maas' },
 			{ id: 'glm-5', name: 'GLM-5 (top reasoning, 745B)', provider: 'vertex-maas' },
 			{ id: 'kimi-k2.5', name: 'Kimi K2.5 (strong all-rounder)', provider: 'vertex-maas' },
+			{ id: 'llama-4-maverick', name: 'Llama 4 Maverick (vision, 400B MoE)', provider: 'vertex-maas' },
+			{ id: 'llama-4-scout', name: 'Llama 4 Scout (vision, 109B MoE)', provider: 'vertex-maas' },
 		];
 	}
 }

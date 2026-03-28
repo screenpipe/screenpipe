@@ -20,6 +20,7 @@ pub mod pipes_api;
 pub mod recording_config;
 pub mod retention;
 pub mod routes;
+pub mod schedule_monitor;
 
 pub mod event_driven_capture;
 pub mod hot_frame_cache;

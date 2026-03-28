@@ -59,6 +59,7 @@
 //! ```
 
 pub mod activity_feed;
+pub mod budget;
 pub mod config;
 pub mod events;
 pub mod incognito;

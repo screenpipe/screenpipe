@@ -3,6 +3,9 @@ name: Debug macOS M1 (build + crash diagnostics)
 on:
   workflow_dispatch:
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   debug-m1:
     runs-on: macos-14  # Apple Silicon (M1/M2)

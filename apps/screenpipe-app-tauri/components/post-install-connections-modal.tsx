@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Check, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import {
   ConnectionCredentialForm,
+  IntegrationIcon,
   IntegrationInfo,
 } from "@/components/settings/connections-section";
 
@@ -133,13 +134,18 @@ export function PostInstallConnectionsModal({
                     }
                     className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-accent/50 transition-colors"
                   >
-                    {status?.configured ? (
-                      <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
-                        <Check className="h-3 w-3 text-green-600" />
-                      </div>
-                    ) : (
-                      <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30 flex-shrink-0" />
-                    )}
+                    <div className="relative flex-shrink-0">
+                      {integration ? (
+                        <IntegrationIcon icon={integration.icon} />
+                      ) : (
+                        <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30" />
+                      )}
+                      {status?.configured && (
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 flex items-center justify-center">
+                          <Check className="h-2 w-2 text-white" />
+                        </div>
+                      )}
+                    </div>
                     <span className="text-xs font-medium flex-1">
                       {integration?.name || connId}
                     </span>

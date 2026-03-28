@@ -10,6 +10,9 @@ concurrency:
   group: e2e-macos-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   # ── Tier 1: GitHub hosted runner ──────────────────────────────────────────
   # Build CLI from source, start server, test API + health
@@ -80,7 +83,7 @@ jobs:
           ARTIFACTS_DIR: ${{ runner.temp }}/e2e-artifacts
         run: |
           mkdir -p "$ARTIFACTS_DIR"
-          bun .github/scripts/e2e/run-all.ts --suite api 2>&1 | tee "${{ runner.temp }}/e2e-full.log"
+          bun packages/e2e/src/runner.ts --suite api 2>&1 | tee "${{ runner.temp }}/e2e-full.log"
 
       - name: Stop server
         if: always()

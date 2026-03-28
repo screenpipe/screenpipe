@@ -728,7 +728,7 @@ async fn extract_frame(
     // Join frame numbers with commas and wrap in select filter
     let select_filter = format!("select='eq(n,{})'", frame_positions.join(")+eq(n,"));
 
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = screenpipe_core::ffmpeg_cmd_async(&ffmpeg);
     cmd.args([
         "-i",
         &video_file_path,

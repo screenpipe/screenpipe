@@ -40,10 +40,7 @@ impl Integration for Vercel {
             .error_for_status()?
             .json()
             .await?;
-        let count = resp["projects"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let count = resp["projects"].as_array().map(|a| a.len()).unwrap_or(0);
         Ok(format!("connected — {} project(s)", count))
     }
 }

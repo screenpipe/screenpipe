@@ -15,6 +15,9 @@ concurrency:
   group: e2e-windows-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   e2e-windows:
     name: Windows E2E

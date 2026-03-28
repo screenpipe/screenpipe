@@ -5,6 +5,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQueryState } from "nuqs";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -20,7 +21,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
 import { PermissionsReview } from "@/components/pipe-store";
-import { PostInstallConnectionsModal } from "@/components/post-install-connections-modal";
 
 interface PipeInstallRequest {
   url: string;
@@ -49,7 +49,7 @@ export function PipeInstallDialog() {
   const [loading, setLoading] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [registryDetail, setRegistryDetail] = useState<RegistryPipeDetail | null>(null);
-  const [postInstallData, setPostInstallData] = useState<{ pipeName: string; connections: string[] } | null>(null);
+  const [, setSection] = useQueryState("section");
   const { toast } = useToast();
 
   // Listen for install-pipe events from deep link handler
@@ -130,31 +130,21 @@ export function PipeInstallDialog() {
         source: isRegistrySource(url) ? "registry" : "url",
       });
 
-      toast({
-        title: `pipe "${data.name}" installed`,
-        description: "go to settings > pipes to enable it",
-      });
-
-      // Check for required connections
       const pipeConnections: string[] = data.connections || [];
       if (pipeConnections.length > 0) {
-        try {
-          const connRes = await fetch("http://localhost:3030/connections");
-          const connData = await connRes.json();
-          const integrations = connData.data || [];
-          const missingConnections = pipeConnections.filter((connId: string) => {
-            const integration = integrations.find((i: any) => i.id === connId);
-            return !integration?.connected;
-          });
-          if (missingConnections.length > 0) {
-            setPostInstallData({ pipeName: data.name, connections: pipeConnections });
-          }
-        } catch {
-          setPostInstallData({ pipeName: data.name, connections: pipeConnections });
-        }
+        // sessionStorage fallback for when PipesSection isn't mounted yet
+        sessionStorage.setItem(`justInstalled:${data.name}`, "1");
+        // Also fire event in case PipesSection is already mounted
+        window.dispatchEvent(
+          new CustomEvent("screenpipe:pipeInstalled", {
+            detail: { pipeName: data.name, connections: pipeConnections },
+          })
+        );
       }
 
       setRequest(null);
+      // Navigate to pipes tab so user sees installed pipe + connection modal
+      setSection("pipes");
     } catch (err: any) {
       toast({
         title: "failed to install pipe",
@@ -254,14 +244,6 @@ export function PipeInstallDialog() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {postInstallData && (
-        <PostInstallConnectionsModal
-          open={!!postInstallData}
-          onOpenChange={(open) => { if (!open) setPostInstallData(null); }}
-          pipeName={postInstallData.pipeName}
-          connections={postInstallData.connections}
-        />
-      )}
     </>
   );
 }

@@ -1,6 +1,7 @@
 name: E2E Tests
 
 env:
+  GIT_LFS_SKIP_SMUDGE: 1
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
@@ -247,7 +248,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
-        OPENBLAS_PATH: /usr/lib/x86_64-linux-gnu
+        OPENBLAS_PATH: /usr
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

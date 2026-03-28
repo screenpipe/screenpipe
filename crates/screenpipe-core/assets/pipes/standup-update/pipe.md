@@ -10,6 +10,8 @@ featured: true
 
 Based on my recordings from the last 24 hours, generate a standup update. Use limit=10 per search, max 3 searches total.
 
+Read screenpipe skill first.
+
 Use this exact format:
 
 ## Yesterday

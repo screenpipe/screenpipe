@@ -40,10 +40,7 @@ impl Integration for Limitless {
             .error_for_status()?
             .json()
             .await?;
-        let count = resp["lifelogs"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let count = resp["lifelogs"].as_array().map(|a| a.len()).unwrap_or(0);
         Ok(format!("connected, fetched {} lifelog(s)", count))
     }
 }

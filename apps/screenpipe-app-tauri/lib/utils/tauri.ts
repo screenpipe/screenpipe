@@ -1032,6 +1032,26 @@ maxTokens?: number;
  */
 systemPrompt?: string | null }
 export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number }
+/**
+ * A single schedule rule: a day-of-week + time range + what to record.
+ */
+export type ScheduleRule = { 
+/**
+ * Day of week: 0 = Monday, 6 = Sunday
+ */
+dayOfWeek: number; 
+/**
+ * Start time in "HH:MM" (24h format, local time)
+ */
+startTime: string; 
+/**
+ * End time in "HH:MM" (24h format, local time)
+ */
+endTime: string; 
+/**
+ * What to record: "all", "audio_only", "screen_only"
+ */
+recordMode: string }
 export type SettingsStore = 
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
@@ -1193,13 +1213,17 @@ analyticsEnabled: boolean;
  */
 analyticsId: string; 
 /**
- * Enable input event capture (keyboard, mouse, clipboard).
+ * Legacy: input capture is always enabled. Kept for serde compat with
+ * existing store.bin files; deserialized but ignored.
+ * @deprecated input capture is always enabled; will be removed
  */
-enableInputCapture: boolean; 
+enableInputCapture?: boolean; 
 /**
- * Enable accessibility text capture (AX tree walker).
+ * Legacy: accessibility capture is always enabled. Kept for serde compat
+ * with existing store.bin files; deserialized but ignored.
+ * @deprecated accessibility capture is always enabled; will be removed
  */
-enableAccessibility: boolean; 
+enableAccessibility?: boolean; 
 /**
  * Enable AI workflow event detection (cloud feature, requires subscription).
  * When enabled, classifies desktop activity and triggers event-based pipes.
@@ -1209,7 +1233,15 @@ enableWorkflowEvents?: boolean;
  * Detected hardware tier ("high", "mid", "low").
  * Set once on first launch; `None` for existing installs (treated as High).
  */
-deviceTier?: string | null }) & 
+deviceTier?: string | null; 
+/**
+ * Enable work-hours schedule (when false, records 24/7 as usual)
+ */
+scheduleEnabled?: boolean; 
+/**
+ * Per-day schedule rules (only used when schedule_enabled is true)
+ */
+scheduleRules?: ScheduleRule[] }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would

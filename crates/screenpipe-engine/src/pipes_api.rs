@@ -154,6 +154,38 @@ pub async fn run_pipe_now(
         None
     };
 
+    // Validate required connections are configured before running the pipe
+    if let Some(pipe_status) = mgr.get_pipe(&id).await {
+        let required = &pipe_status.config.connections;
+        if !required.is_empty() {
+            let screenpipe_dir = mgr
+                .pipes_dir()
+                .parent()
+                .unwrap_or(mgr.pipes_dir())
+                .to_path_buf();
+            let store = screenpipe_connect::connections::load_store(&screenpipe_dir);
+            let missing: Vec<&str> = required
+                .iter()
+                .filter(|conn_id| {
+                    !store
+                        .get(conn_id.as_str())
+                        .map(|c| c.enabled && !c.credentials.is_empty())
+                        .unwrap_or(false)
+                })
+                .map(|s| s.as_str())
+                .collect();
+            if !missing.is_empty() {
+                return Json(json!({
+                    "error": format!(
+                        "pipe '{}' requires unconfigured connections: {} — set them up in Settings → Connections",
+                        id,
+                        missing.join(", ")
+                    )
+                }));
+            }
+        }
+    }
+
     let result = mgr.start_pipe_background(&id).await;
 
     // Restore previous extra context

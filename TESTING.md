@@ -804,3 +804,25 @@ commits: `cf2dcd5f8`, `ad1d00d8f`, `6f623b30a`, `aaf031169`
 ### 23. Notifications
 
 - [ ] **Restart notifications toggle** — Toggle "restart notifications" in settings. Verify notifications only appear when enabled. (`f82b4f350`)
+
+### 26. Onboarding & Fleet UX
+
+commits: `f6c21a022`, `31e67ae1c`, `8d0a5348d`, `b1c30e99b`
+
+- [ ] **Redesigned Onboarding** — Complete the redesigned onboarding. Verify live feed appears and opinionated pipe setup works. (`f6c21a022`)
+- [ ] **Pipes & Fleet merged UI** — Open Pipes tab. Verify fleet devices appear in the dropdown. Verify local machine is filtered/distinct. (`31e67ae1c`, `8d0a5348d`)
+- [ ] **Scheduled vs Manual pipes** — In My Pipes, verify sub-tabs for scheduled and manual pipes. (`b1c30e99b`)
+
+### 27. Connections (Multi-instance & New Services)
+
+commits: `c8769545b`, `4f522325b`, `54000c295`
+
+- [ ] **Multi-instance connections** — Add two different accounts for the same service (e.g., two Slack workspaces). Verify both work independently. (`c8769545b`)
+- [ ] **Post-install connection modal** — After installing a pipe, verify the connection modal appears if the pipe requires a service connection. (`c8769545b`)
+- [ ] **New service connections** — Verify Brex, Stripe, Sentry, Vercel, Pipedrive, Intercom, and Limitless connections can be authorized and sync data. (`4f522325b`, `54000c295`)
+
+### 28. Deployment & Remote Management
+
+commits: `c6a73b17e`, `945b687ec`
+
+- [ ] **Deploy to offline devices** — Use chat prompt to deploy screenpipe to an offline device. Verify it handles the "Screen Sharing" permission dialog by opening it on the target machine. (`c6a73b17e`, `945b687ec`)

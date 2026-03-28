@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   test-windows:
     runs-on: windows-2019

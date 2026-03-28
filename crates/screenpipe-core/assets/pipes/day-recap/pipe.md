@@ -8,7 +8,9 @@ icon: "📋"
 featured: true
 ---
 
-Analyze my screen and audio recordings from today (last 16 hours only). Use limit=10 per search, max 5 searches total.
+Analyze my screen and audio recordings from today (last 16 hours only). 
+
+Read screenpipe skill first.
 
 Use this exact format:
 

@@ -233,6 +233,10 @@ pub async fn event_driven_capture_loop(
     let poll_interval = Duration::from_millis(50);
     let mut trigger_channel_closed = false;
 
+    // Adaptive accessibility throttle: tracks per-app walk cost and backs off
+    // for expensive apps (e.g., Electron apps whose UIA providers block the UI thread).
+    let mut walk_budget = screenpipe_a11y::budget::AppWalkBudget::new();
+
     // Frame comparer for visual change detection
     let mut frame_comparer = if visual_check_enabled {
         Some(FrameComparer::new(FrameComparisonConfig::max_performance()))
@@ -258,7 +262,10 @@ pub async fn event_driven_capture_loop(
     // Capture immediately on startup so the timeline has a frame right away.
     // Also seeds the frame comparer so subsequent visual-change checks work.
     // Skip if screen is locked — avoids storing black frames from sleep/lock.
-    if !crate::sleep_monitor::screen_is_locked() {
+    // Pre-capture DRM gate: skip if DRM content is focused (AX-only, no SCK).
+    if !crate::sleep_monitor::screen_is_locked()
+        && !crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, None)
+    {
         // Small delay to let the monitor settle after startup
         tokio::time::sleep(Duration::from_millis(500)).await;
         state.last_capture = Instant::now() - Duration::from_millis(500); // allow capture
@@ -276,6 +283,7 @@ pub async fn event_driven_capture_loop(
             None, // first capture — no previous hash
             last_db_write,
             None, // first capture — no elements ref
+            &mut walk_budget,
         )
         .await
         {
@@ -382,9 +390,12 @@ pub async fn event_driven_capture_loop(
         };
 
         // Visual change detection: periodically screenshot + frame diff
+        // Re-check DRM pause before touching SCK — the flag may have been set
+        // between the top-of-loop check and here.
         if trigger.is_none()
             && visual_check_enabled
             && state.can_capture()
+            && !crate::drm_detector::drm_content_paused()
             && last_visual_check.elapsed() >= visual_check_interval
         {
             last_visual_check = Instant::now();
@@ -423,6 +434,24 @@ pub async fn event_driven_capture_loop(
             }
 
             if state.can_capture() {
+                // Pre-capture DRM gate: check BEFORE any SCK call.
+                // Uses AX APIs only — prevents even a single leaked frame.
+                {
+                    let trigger_app = match &trigger {
+                        CaptureTrigger::AppSwitch { app_name } => Some(app_name.as_str()),
+                        _ => None,
+                    };
+                    if crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, trigger_app)
+                    {
+                        debug!(
+                            "pre-capture DRM check blocked capture on monitor {}",
+                            monitor_id
+                        );
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
+                    }
+                }
+
                 // Heartbeat: record that the loop is alive and attempting a capture.
                 // This keeps health "ok" even if the DB write below times out.
                 vision_metrics.record_capture_attempt();
@@ -466,6 +495,7 @@ pub async fn event_driven_capture_loop(
                         last_content_hash,
                         last_db_write,
                         elements_ref,
+                        &mut walk_budget,
                     ),
                 )
                 .await;
@@ -700,6 +730,7 @@ async fn do_capture(
     previous_content_hash: Option<i64>,
     last_db_write: Instant,
     elements_ref_frame_id: Option<i64>,
+    walk_budget: &mut screenpipe_a11y::budget::AppWalkBudget,
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
 
@@ -710,16 +741,62 @@ async fn do_capture(
         capture_dur, monitor_id
     );
 
-    // Walk accessibility tree on blocking thread (AX APIs are synchronous)
-    let config = tree_walker_config.clone();
-    let tree_walk_result = tokio::task::spawn_blocking(move || {
-        crate::paired_capture::walk_accessibility_tree(&config)
-    })
-    .await?;
+    // Walk accessibility tree on blocking thread (AX APIs are synchronous).
+    // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
+    // reduced max_nodes and timeout to avoid blocking their UI thread.
+    let mut config = tree_walker_config.clone();
+
+    // Check if the trigger carries an app name we can use for pre-walk budgeting.
+    // For triggers without an app name, the walk runs at current config limits
+    // and the budget is updated afterwards for future walks.
+    let trigger_app = match trigger {
+        CaptureTrigger::AppSwitch { app_name } => Some(app_name.clone()),
+        _ => None,
+    };
+
+    use screenpipe_a11y::tree::TreeWalkResult;
+    let mut budget_skipped = false;
+    if let Some(ref app) = trigger_app {
+        let decision = walk_budget.should_walk(app);
+        if !decision.walk {
+            debug!(
+                "walk budget: throttling tree walk for {} (tier={:?})",
+                app, decision.tier
+            );
+            budget_skipped = true;
+        } else {
+            config.max_nodes_override = Some(decision.max_nodes);
+            config.walk_timeout_override = Some(decision.timeout);
+        }
+    }
+
+    let tree_walk_result = if budget_skipped {
+        // Budget says skip — don't walk the tree but still proceed with screenshot/OCR
+        TreeWalkResult::NotFound
+    } else {
+        tokio::task::spawn_blocking(move || crate::paired_capture::walk_accessibility_tree(&config))
+            .await?
+    };
 
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
-    use screenpipe_a11y::tree::TreeWalkResult;
+
+    // Record walk cost for adaptive budget before consuming the result
+    if let TreeWalkResult::Found(ref snap) = tree_walk_result {
+        walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
+        if snap.walk_duration > std::time::Duration::from_millis(100) {
+            let next = walk_budget.should_walk(&snap.app_name);
+            debug!(
+                "walk budget: {}ms for {} → tier={:?} (next: max_nodes={}, timeout={}ms)",
+                snap.walk_duration.as_millis(),
+                snap.app_name,
+                next.tier,
+                next.max_nodes,
+                next.timeout.as_millis(),
+            );
+        }
+    }
+
     let tree_snapshot = match tree_walk_result {
         TreeWalkResult::Found(snap) => Some(snap),
         TreeWalkResult::Skipped(reason) => {

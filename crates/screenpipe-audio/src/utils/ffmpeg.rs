@@ -6,11 +6,9 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use screenpipe_core::find_ffmpeg_path;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::process::Stdio;
 use tracing::debug;
 use tracing::error;
 
@@ -22,7 +20,7 @@ fn encode_single_audio(
 ) -> anyhow::Result<()> {
     debug!("Starting FFmpeg process");
 
-    let mut command = Command::new(find_ffmpeg_path().unwrap());
+    let mut command = screenpipe_core::ffmpeg_cmd(find_ffmpeg_path().unwrap());
     command
         .args([
             "-f",
@@ -109,7 +107,7 @@ pub fn get_new_file_path_with_timestamp(
 pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
     let sample_rate: u32 = 16000;
 
-    let mut command = Command::new(find_ffmpeg_path().unwrap());
+    let mut command = screenpipe_core::ffmpeg_cmd(find_ffmpeg_path().unwrap());
     command
         .args([
             "-i",

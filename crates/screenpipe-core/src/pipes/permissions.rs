@@ -866,6 +866,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
             config: std::collections::HashMap::new(),
         };
         let perms = PipePermissions::from_config(&config);
@@ -890,6 +891,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
             config: std::collections::HashMap::new(),
         };
         let perms = PipePermissions::from_config(&config);
@@ -926,6 +928,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
             config: std::collections::HashMap::new(),
         };
         let perms = PipePermissions::from_config(&config);
@@ -975,6 +978,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            trigger: None,
             config: std::collections::HashMap::new(),
         };
         let perms = PipePermissions::from_config(&config);

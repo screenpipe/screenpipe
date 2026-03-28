@@ -396,7 +396,7 @@ async fn start_ffmpeg_lowpri(
         cmd
     };
     #[cfg(not(unix))]
-    let mut command = tokio::process::Command::new(ffmpeg_path);
+    let mut command = screenpipe_core::ffmpeg_cmd_async(ffmpeg_path);
 
     command
         .args([

@@ -29,6 +29,7 @@ import {
   Upload,
   ArrowUpCircle,
   MessageSquare,
+  AlertCircle,
   Copy,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -62,15 +63,17 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
+import { useQueryState } from "nuqs";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { saveConversationFile } from "@/lib/chat-storage";
 import { UpgradeDialog } from "@/components/upgrade-dialog";
 import { PublishDialog } from "@/components/pipe-store";
+import { PostInstallConnectionsModal } from "@/components/post-install-connections-modal";
 import posthog from "posthog-js";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
-import { Monitor, ScanSearch } from "lucide-react";
+import { Monitor, Wifi, WifiOff, ScanSearch } from "lucide-react";
 
 const PIPE_CREATION_PROMPT = `create a screenpipe pipe that does the following.
 
@@ -674,6 +677,7 @@ export function PipesSection() {
   const { settings, updateSettings } = useSettings();
   const team = useTeam();
   const { toast } = useToast();
+  const [, setSection] = useQueryState("section");
   const isTeamAdmin = !!team.team && team.role === "admin";
   const [sharingPipe, setSharingPipe] = useState<string | null>(null);
   const [sharingPublic, setSharingPublic] = useState<string | null>(null);
@@ -687,6 +691,7 @@ export function PipesSection() {
   const [searchQuery, setSearchQuery] = useState("");
   const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "manual">("scheduled");
   const [availableConnections, setAvailableConnections] = useState<AvailableConnection[]>([]);
+  const [connectionModal, setConnectionModal] = useState<{ pipeName: string; connections: string[] } | null>(null);
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
   const [updatingPipe, setUpdatingPipe] = useState<string | null>(null);
   // Live streaming output for running executions: key = "pipeName:executionId"
@@ -903,6 +908,15 @@ export function PipesSection() {
     }
   };
 
+  const disablePipe = async (name: string) => {
+    await fetch(`http://localhost:3030/pipes/${name}/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    fetchPipes();
+  };
+
   const trackedPipesView = useRef(false);
   useEffect(() => {
     fetchConnections();
@@ -921,6 +935,24 @@ export function PipesSection() {
           return current;
         });
       }
+      // Auto-open connection modal for newly installed pipes that have missing connections
+      setPipes((current) => {
+        for (const pipe of current) {
+          const key = `justInstalled:${pipe.config.name}`;
+          if (typeof window !== "undefined" && sessionStorage.getItem(key)) {
+            sessionStorage.removeItem(key);
+            const required: string[] = pipe.config.connections ?? [];
+            if (required.length > 0) {
+              // Defer state update outside render cycle
+              setTimeout(() => {
+                setConnectionModal({ pipeName: pipe.config.name, connections: required });
+              }, 0);
+            }
+            break;
+          }
+        }
+        return current;
+      });
     });
     const interval = setInterval(fetchPipes, 10000);
     return () => clearInterval(interval);
@@ -1051,6 +1083,22 @@ export function PipesSection() {
       if (name in pendingConfigSaves.current) {
         await pendingConfigSaves.current[name];
       }
+
+      // Validate required connections are configured
+      const pipe = pipes.find((p) => p.config.name === name);
+      const requiredConnections: string[] = pipe?.config?.connections ?? [];
+      if (requiredConnections.length > 0) {
+        const missing = requiredConnections.filter((id) => {
+          const conn = availableConnections.find((c) => c.id === id);
+          return !conn || !conn.connected;
+        });
+        if (missing.length > 0) {
+          setConnectionModal({ pipeName: name, connections: requiredConnections });
+          setRunningPipe(null);
+          return;
+        }
+      }
+
       const minDelay = new Promise((r) => setTimeout(r, 2000));
       await fetch(`${apiBase}/pipes/${name}/run`, {
         method: "POST",
@@ -1201,11 +1249,10 @@ export function PipesSection() {
     };
   }, []);
 
-  // Full-page skeleton only on very first load (no pipes ever fetched yet)
-  // Device switches use the inline skeleton in the pipe list instead
-  if (loading && pipes.length === 0 && !selectedDevice && devices.length === 0) {
+  if (loading) {
     return (
       <div className="space-y-4">
+        {/* Header skeleton */}
         <div className="flex items-center justify-between">
           <div>
             <Skeleton className="h-5 w-16" />
@@ -1216,7 +1263,9 @@ export function PipesSection() {
             <Skeleton className="h-8 w-28 rounded-md" />
           </div>
         </div>
+        {/* Input skeleton */}
         <Skeleton className="h-9 w-full rounded-md" />
+        {/* Pipe card skeletons */}
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
             <Card key={i}>
@@ -1228,6 +1277,16 @@ export function PipesSection() {
                   <Skeleton className="h-5 w-20 rounded-full" />
                   <Skeleton className="h-8 w-8 rounded-md" />
                   <Skeleton className="h-5 w-9 rounded-full" />
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  {[1, 2, 3].map((j) => (
+                    <div key={j} className="flex items-center gap-3">
+                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-3 w-10" />
+                      <Skeleton className="h-3 w-8" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>
@@ -1256,7 +1315,7 @@ export function PipesSection() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
-                  onClick={() => { setSelectedDevice(null); setPipes([]); setLoading(true); }}
+                  onClick={() => { setSelectedDevice(null); setLoading(true); }}
                   className={cn("gap-2", !selectedDevice && "font-medium")}
                 >
                   <Monitor className="h-3.5 w-3.5" />
@@ -1267,36 +1326,11 @@ export function PipesSection() {
                 {devices.map((d) => (
                   <DropdownMenuItem
                     key={d.address}
-                    onClick={() => {
-                      if (d.status === "offline") {
-                        const host = d.address.split(":")[0];
-                        navigateHomeAndPrefill({
-                          context: "",
-                          prompt: `deploy screenpipe to ${d.label} (${host}) via SSH.
-
-steps:
-1. SSH into ${host}
-2. install bun if not already installed: curl -fsSL https://bun.sh/install | bash
-3. install and start screenpipe: bunx --bun screenpipe@latest record
-4. set up screenpipe to start on boot (use systemd on Linux, launchd on macOS, or Task Scheduler on Windows)
-5. verify it's running by checking http://${d.address}/health
-6. if macOS permissions are needed (screen recording, microphone, accessibility), open Screen Sharing to the host so the user can click through the permission dialogs: open vnc://${host} (or use "open -a 'Screen Sharing' vnc://${host}")
-
-use the shell tool to do all of this.`,
-                          autoSend: true,
-                          source: "deploy-device",
-                        });
-                        return;
-                      }
-                      setSelectedDevice(d.address); setPipes([]); setLoading(true);
-                    }}
+                    onClick={() => { setSelectedDevice(d.address); setLoading(true); }}
                     className={cn("gap-2", selectedDevice === d.address && "font-medium")}
                   >
                     <Monitor className="h-3.5 w-3.5" />
                     <span className="flex-1">{d.label}</span>
-                    {d.status === "offline" ? (
-                      <span className="text-[10px] text-muted-foreground">deploy</span>
-                    ) : null}
                     <span className={cn(
                       "h-2 w-2 rounded-full shrink-0",
                       d.status === "online" ? "bg-green-500" : d.status === "loading" ? "bg-yellow-500 animate-pulse" : "bg-muted-foreground/40"
@@ -1322,11 +1356,7 @@ use the shell tool to do all of this.`,
             }}>
               {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
             </Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => {
-              const url = new URL(window.location.href);
-              url.searchParams.set("section", "connections");
-              window.location.href = url.toString();
-            }}>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSection("connections")}>
               <Link className="h-3.5 w-3.5 mr-1" />
               connections
             </Button>
@@ -1472,23 +1502,15 @@ use the shell tool to do all of this.`,
               </div>
             );
           })()}
-          {loading && pipes.length === 0 && (
-            Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 px-3 py-3 border-b border-border">
-                <Skeleton className="h-3 w-3 rounded-sm shrink-0" />
-                <Skeleton className="h-4 w-40" />
-                <div className="ml-auto flex gap-4">
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-4 w-16" />
-                </div>
-              </div>
-            ))
-          )}
           {filteredPipes.map((pipe) => {
             const recentExecs = pipeExecutions[pipe.config.name] || [];
             const isRunning = pipe.is_running || runningPipe === pipe.config.name;
             const runningExec = recentExecs.find((e) => e.status === "running");
             const lastExec = recentExecs[0];
+            const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
+              const conn = availableConnections.find((c) => c.id === id);
+              return !conn || !conn.connected;
+            });
             const lastStatus = isRunning
               ? "running"
               : pipe.last_success === false
@@ -1550,6 +1572,20 @@ use the shell tool to do all of this.`,
                   </Badge>
                 )}
 
+                {/* Missing connections badge */}
+                {hasMissingConnections && (
+                  <button
+                    className="text-[10px] text-destructive border border-destructive/40 px-1.5 py-0.5 shrink-0 hover:bg-destructive/10 transition-colors font-mono"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConnectionModal({ pipeName: pipe.config.name, connections: pipe.config.connections ?? [] });
+                    }}
+                    title="required connections are not configured"
+                  >
+                    setup
+                  </button>
+                )}
+
                 {/* Schedule */}
                 <span
                   className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[140px]"
@@ -1598,12 +1634,20 @@ use the shell tool to do all of this.`,
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
-                      onClick={() => runPipe(pipe.config.name)}
+                      className={cn("h-7 w-7", hasMissingConnections && "text-destructive")}
+                      onClick={() => {
+                        if (hasMissingConnections) {
+                          setConnectionModal({ pipeName: pipe.config.name, connections: pipe.config.connections ?? [] });
+                        } else {
+                          runPipe(pipe.config.name);
+                        }
+                      }}
                       disabled={runningPipe === pipe.config.name}
-                      title="run pipe"
+                      title={hasMissingConnections ? "configure required connections first" : "run pipe"}
                     >
-                      <Play className="h-3.5 w-3.5" />
+                      {hasMissingConnections
+                        ? <AlertCircle className="h-3.5 w-3.5" />
+                        : <Play className="h-3.5 w-3.5" />}
                     </Button>
                   )}
 
@@ -1683,9 +1727,19 @@ use the shell tool to do all of this.`,
                 </div>
 
                 {/* Toggle — only visible on hover */}
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                <div
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  title={
+                    hasMissingConnections
+                      ? "configure required connections before enabling auto-run"
+                      : pipe.config.enabled
+                        ? "auto-running on schedule — click to disable"
+                        : "auto-run disabled — pipe can still be run manually"
+                  }
+                >
                   <Switch
                     checked={pipe.config.enabled}
+                    disabled={hasMissingConnections}
                     onCheckedChange={(checked) =>
                       togglePipe(pipe.config.name, checked)
                     }
@@ -1824,10 +1878,10 @@ use the shell tool to do all of this.`,
                                     <button
                                       className="text-destructive hover:underline"
                                       onClick={() => {
-                                        sessionStorage.setItem("openConnection", baseId);
-                                        const url = new URL(window.location.href);
-                                        url.searchParams.set("section", "connections");
-                                        window.location.href = url.toString();
+                                        setConnectionModal({
+                                          pipeName: pipe.config.name,
+                                          connections: pipe.config.connections ?? [],
+                                        });
                                       }}
                                     >
                                       {label} — setup
@@ -2268,6 +2322,30 @@ use the shell tool to do all of this.`,
           />
         </div>
       </form>
+
+      {connectionModal && (
+        <PostInstallConnectionsModal
+          open={!!connectionModal}
+          onOpenChange={(open) => {
+            if (!open) {
+              // If any required connection is still missing, disable the pipe
+              const stillMissing = connectionModal.connections.some((id) => {
+                const conn = availableConnections.find((c) => c.id === id);
+                return !conn || !conn.connected;
+              });
+              if (stillMissing) {
+                disablePipe(connectionModal.pipeName);
+              } else {
+                fetchPipes();
+              }
+              fetchConnections();
+              setConnectionModal(null);
+            }
+          }}
+          pipeName={connectionModal.pipeName}
+          connections={connectionModal.connections}
+        />
+      )}
 
       <UpgradeDialog
         open={showUpgrade}

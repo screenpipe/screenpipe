@@ -242,6 +242,10 @@ pub struct TreeWalkerConfig {
     pub monitor_height: f64,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
+    /// Per-walk override for `max_nodes` (set by adaptive budget, takes precedence).
+    pub max_nodes_override: Option<usize>,
+    /// Per-walk override for `walk_timeout` (set by adaptive budget, takes precedence).
+    pub walk_timeout_override: Option<Duration>,
 }
 
 impl Default for TreeWalkerConfig {
@@ -260,7 +264,21 @@ impl Default for TreeWalkerConfig {
             monitor_width: 0.0,
             monitor_height: 0.0,
             ignore_incognito_windows: true,
+            max_nodes_override: None,
+            walk_timeout_override: None,
         }
+    }
+}
+
+impl TreeWalkerConfig {
+    /// Return the effective max_nodes (override if set, else default).
+    pub fn effective_max_nodes(&self) -> usize {
+        self.max_nodes_override.unwrap_or(self.max_nodes)
+    }
+
+    /// Return the effective walk_timeout (override if set, else default).
+    pub fn effective_walk_timeout(&self) -> Duration {
+        self.walk_timeout_override.unwrap_or(self.walk_timeout)
     }
 }
 

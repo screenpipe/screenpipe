@@ -751,6 +751,7 @@ mod tests {
             audio_pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            drm_content_paused: false,
         })
     }
 
@@ -771,6 +772,7 @@ mod tests {
             audio_pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            drm_content_paused: false,
         })
     }
 

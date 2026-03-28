@@ -123,7 +123,7 @@ char* fm_supported_languages(void) { return make_string("[]"); }
             "-sdk",
             &sdk_path,
             "-target",
-            "arm64-apple-macos26.0",
+            "arm64-apple-macos14.0",
             "-O",
             "-whole-module-optimization",
             "-o",

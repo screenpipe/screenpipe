@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   publish:
     runs-on: ubuntu-latest

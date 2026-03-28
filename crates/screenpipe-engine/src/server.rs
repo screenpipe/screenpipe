@@ -247,6 +247,11 @@ impl SCServer {
         let listener = bind_listener(self.addr).await?;
         info!("Server listening on {}", self.addr);
 
+        // Advertise via mDNS
+        if let Err(e) = screenpipe_connect::mdns::advertise(self.addr.port()) {
+            tracing::warn!("mdns advertisement failed (non-fatal): {}", e);
+        }
+
         // Start serving
         serve(
             listener,

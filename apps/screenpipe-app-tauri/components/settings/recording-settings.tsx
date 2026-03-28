@@ -96,6 +96,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
+import { ScheduleSettings } from "./schedule-settings";
 import { ValidatedInput } from "../ui/validated-input";
 import {
   validateField,
@@ -1148,6 +1149,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </CardContent>
       </Card>
 
+      {/* Recording Schedule */}
+      <ScheduleSettings
+        enabled={settings.scheduleEnabled ?? false}
+        rules={(settings.scheduleRules as any[]) ?? []}
+        onChange={(enabled, rules) => {
+          handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
+        }}
+      />
+
       {/* Data Directory */}
       <div className="space-y-2">
         <Card className="border-border bg-card">
@@ -1308,7 +1318,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <SelectItem value="whisper-tiny">Whisper Tiny</SelectItem>
                     <SelectItem value="whisper-tiny-quantized">Whisper Tiny (fast)</SelectItem>
                     {!isMacOS && <SelectItem value="qwen3-asr">Qwen3-ASR</SelectItem>}
-                    <SelectItem value="parakeet">Parakeet</SelectItem>
+                    <SelectItem value="parakeet">Parakeet{isMacOS ? " (experimental)" : ""}</SelectItem>
                   </SelectGroup>
                   <SelectGroup>
                     <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>

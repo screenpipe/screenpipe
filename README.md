@@ -28,9 +28,9 @@
   <a href="https://www.youtube.com/@screen_pipe">
     <img src="https://img.shields.io/youtube/channel/subscribers/UCwjkpAsb70_mENKvy7hT5bw?style=for-the-badge&logo=youtube&logoColor=white&label=subscribers" alt="youtube">
   </a>
-</p
+</p>
 
-![image](https://github.com/user-attachments/assets/d3c912ac-ac69-45be-bf2f-2972fa792b05)
+![image](https://github.com/user-attachments/assets/5b977f48-0355-498f-a3ba-37e5de3b6c62)
 ![image](https://github.com/user-attachments/assets/dec2e07c-b3d5-46dd-9f36-c0c26a82c9fb)
 
 

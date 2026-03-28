@@ -1,6 +1,9 @@
 {
     "bundle": {
         "publisher": "Mediar, Inc.",
+        "resources": [
+            "assets/*"
+        ],
         "externalBin": [
             "bun"
         ],

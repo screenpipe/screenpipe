@@ -1187,7 +1187,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -4984,6 +4984,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "image"
 version = "0.24.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6097,6 +6107,20 @@ name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "mdns-sd"
+version = "0.13.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "328f4e1041f7cfeb3affccb814ddbe2f004856a2ce769c8bf22080d74c5204c6"
+dependencies = [
+ "fastrand",
+ "flume 0.11.1",
+ "if-addrs",
+ "log",
+ "mio",
+ "socket2 0.5.10",
+]
 
 [[package]]
 name = "memchr"
@@ -9616,7 +9640,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.2.273"
+version = "2.2.291"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9718,7 +9742,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -9773,7 +9797,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -9785,7 +9809,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9795,6 +9819,7 @@ dependencies = [
  "image 0.25.10",
  "lettre",
  "log",
+ "mdns-sd",
  "objc2 0.6.4",
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
@@ -9811,7 +9836,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9855,7 +9880,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9880,7 +9905,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9943,7 +9968,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9959,7 +9984,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -9995,7 +10020,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.234"
+version = "0.3.242"
 dependencies = [
  "argon2",
  "chacha20poly1305",

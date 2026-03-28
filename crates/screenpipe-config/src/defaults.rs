@@ -16,7 +16,7 @@ const PARAKEET_MIN_MACOS_MAJOR: u32 = 26;
 /// Used to select conservative or aggressive default settings on first launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceTier {
-    /// High-end: ≥16 GB RAM and ≥8 cores
+    /// High-end: ≥24 GB RAM and ≥8 cores (safe for parakeet ~2GB)
     High,
     /// Mid-range: ≥12 GB or (≥8 GB and ≥6 cores)
     Mid,
@@ -51,7 +51,7 @@ impl DeviceTier {
 /// (parakeet-mlx) consume too much of the unified memory and cause
 /// silent crashes on macOS.
 pub fn classify_tier(ram_gb: u64, cores: u64) -> DeviceTier {
-    if ram_gb >= 16 && cores >= 8 {
+    if ram_gb >= 24 && cores >= 8 {
         DeviceTier::High
     } else if ram_gb >= 12 || (ram_gb > 8 && cores >= 6) {
         DeviceTier::Mid
@@ -64,7 +64,7 @@ pub fn classify_tier(ram_gb: u64, cores: u64) -> DeviceTier {
 ///
 /// | Tier | Criteria                              |
 /// |------|---------------------------------------|
-/// | High | ≥16 GB RAM and ≥8 cores               |
+/// | High | ≥24 GB RAM and ≥8 cores               |
 /// | Mid  | ≥12 GB or (≥8 GB and ≥6 cores)        |
 /// | Low  | everything else                        |
 pub fn detect_tier() -> DeviceTier {
@@ -198,28 +198,29 @@ pub fn macos_major_version() -> Option<u32> {
 ///
 /// Decision matrix:
 ///
-/// | Tier | macOS ≥ 26  | macOS < 26 / other OS |
-/// |------|-------------|-----------------------|
-/// | High | parakeet    | whisper-large-v3-turbo-quantized |
-/// | Mid  | parakeet    | whisper-large-v3-turbo-quantized |
-/// | Low  | whisper-tiny| whisper-tiny           |
+/// | Tier | macOS              | Windows/Linux |
+/// |------|--------------------|---------------|
+/// | High | whisper-turbo-q    | parakeet      |
+/// | Mid  | whisper-turbo-q    | parakeet      |
+/// | Low  | whisper-tiny       | whisper-tiny  |
 ///
-/// Parakeet requires macOS 26+ for MLX Metal GPU support. On older macOS
-/// or non-Mac platforms, it crashes during model loading. Low-tier devices
-/// (≤8 GB) can't fit the 2.3 GB model regardless of OS version.
+/// Parakeet on macOS uses MLX which is currently experimental and has
+/// stability issues. On macOS we default to the proven Whisper engine.
+/// On Windows/Linux, parakeet is stable and remains the default.
 pub fn best_engine_for_platform(tier: DeviceTier) -> &'static str {
-    if tier == DeviceTier::Low {
+    if tier == DeviceTier::Low || tier == DeviceTier::Mid {
         return "whisper-tiny";
     }
 
-    let macos_ok = macos_major_version()
-        .map(|v| v >= PARAKEET_MIN_MACOS_MAJOR)
-        .unwrap_or(false);
-
-    if macos_ok {
-        "parakeet"
-    } else {
+    // High tier only (≥24GB RAM) — safe for large models
+    #[cfg(target_os = "macos")]
+    {
         "whisper-large-v3-turbo-quantized"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "parakeet"
     }
 }
 
@@ -235,7 +236,7 @@ pub fn is_engine_unsafe(engine: &str, tier: DeviceTier) -> bool {
         return false;
     }
 
-    if tier == DeviceTier::Low {
+    if tier == DeviceTier::Low || tier == DeviceTier::Mid {
         return true;
     }
 
@@ -336,11 +337,17 @@ mod tests {
     }
 
     #[test]
-    fn parakeet_unsafe_on_low_tier() {
+    fn parakeet_unsafe_on_low_and_mid_tier() {
         assert!(is_engine_unsafe("parakeet", DeviceTier::Low));
         assert!(is_engine_unsafe("parakeet-mlx", DeviceTier::Low));
+        assert!(is_engine_unsafe("parakeet", DeviceTier::Mid));
+        assert!(is_engine_unsafe("parakeet-mlx", DeviceTier::Mid));
         assert!(!is_engine_unsafe("whisper-tiny", DeviceTier::Low));
-        assert!(!is_engine_unsafe("whisper-large-v3-turbo-quantized", DeviceTier::High));
+        assert!(!is_engine_unsafe("whisper-tiny", DeviceTier::Mid));
+        assert!(!is_engine_unsafe(
+            "whisper-large-v3-turbo-quantized",
+            DeviceTier::High
+        ));
     }
 
     #[test]
@@ -361,13 +368,17 @@ mod tests {
     fn classify_high_tier() {
         // M4 Max 128GB, 16 cores
         assert_eq!(classify_tier(128, 16), DeviceTier::High);
-        // Boundary: exactly 16 GB, 8 cores
-        assert_eq!(classify_tier(16, 8), DeviceTier::High);
+        // Boundary: exactly 24 GB, 8 cores
+        assert_eq!(classify_tier(24, 8), DeviceTier::High);
+        // 16 GB, 8 cores → Mid now (parakeet too heavy for 16GB)
+        assert_eq!(classify_tier(16, 8), DeviceTier::Mid);
     }
 
     #[test]
     fn classify_mid_tier() {
-        // 16 GB but only 4 cores → not High (needs ≥8 cores), but ≥12 GB → Mid
+        // 16 GB, 8 cores → Mid (not enough RAM for parakeet)
+        assert_eq!(classify_tier(16, 8), DeviceTier::Mid);
+        // 16 GB but only 4 cores → ≥12 GB → Mid
         assert_eq!(classify_tier(16, 4), DeviceTier::Mid);
         // 12 GB, 2 cores → ≥12 GB alone qualifies for Mid
         assert_eq!(classify_tier(12, 2), DeviceTier::Mid);

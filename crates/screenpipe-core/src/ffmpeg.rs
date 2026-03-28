@@ -21,6 +21,30 @@ pub fn find_ffmpeg_path() -> Option<PathBuf> {
     FFMPEG_PATH.as_ref().map(|p| p.clone())
 }
 
+/// Create a `std::process::Command` for ffmpeg with `CREATE_NO_WINDOW` on Windows.
+pub fn ffmpeg_cmd(path: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+/// Create a `tokio::process::Command` for ffmpeg with `CREATE_NO_WINDOW` on Windows.
+pub fn ffmpeg_cmd_async(path: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = tokio::process::Command::new(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     debug!("Starting search for ffmpeg executable");
 

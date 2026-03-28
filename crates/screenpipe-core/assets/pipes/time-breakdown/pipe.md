@@ -10,6 +10,8 @@ featured: false
 
 Analyze my app usage from today (last 12 hours). Use limit=10 per search, max 4 searches. Prefer /raw_sql with COUNT/GROUP BY queries.
 
+Read screenpipe skill first.
+
 Use this exact format with durations and percentages:
 
 ## By Application

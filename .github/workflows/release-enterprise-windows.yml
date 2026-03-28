@@ -11,6 +11,9 @@ name: Release Enterprise (Windows)
 on:
   workflow_dispatch:
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   release-enterprise-windows:
     runs-on: windows-2022

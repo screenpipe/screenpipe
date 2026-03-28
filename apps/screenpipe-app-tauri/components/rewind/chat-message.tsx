@@ -18,6 +18,7 @@ import { ChatMessageActions } from "@/components/rewind/chat-message-actions";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { VideoComponent } from "./video";
 import { MermaidDiagram } from "./mermaid-diagram";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
@@ -170,6 +171,26 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 					components={{
 						p({ children }) {
 							return <p className="mb-2 last:mb-0">{children}</p>;
+						},
+						img({ src, alt, ...props }) {
+							if (!src) return null;
+							// ![](path.mp4) → render video player
+							if (src.toLowerCase().endsWith(".mp4")) {
+								return <VideoComponent filePath={extractMP4Path(src)} />;
+							}
+							// Convert local file paths to Tauri asset URLs
+							const imgSrc = src.startsWith("/")
+								? convertFileSrc(src)
+								: src;
+							return (
+								<img
+									src={imgSrc}
+									alt={alt || ""}
+									className="max-w-full h-auto rounded-md my-2"
+									loading="lazy"
+									{...props}
+								/>
+							);
 						},
 						a({ node, href, children, ...props }) {
 							const isMP4Link = href?.toLowerCase().includes(".mp4");

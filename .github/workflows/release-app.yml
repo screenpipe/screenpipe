@@ -27,6 +27,9 @@ concurrency:
   group: release-app-${{ github.sha }}
   cancel-in-progress: true
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   check_commit:
     runs-on: ubuntu-latest
@@ -802,10 +805,16 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: -C link-arg=/LTCG
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C link-arg=/LTCG' || '' }}
+          # Cap MSVC codegen at AVX2 — prevents LTCG from auto-vectorizing C deps
+          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners. Lunar Lake and other
+          # consumer CPUs lack AVX-512, causing STATUS_ILLEGAL_INSTRUCTION (0xc000001d).
+          # Only set for x86_64 — clang on ARM64 doesn't understand /arch:AVX2.
+          CFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
+          CXXFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
           # Fix whisper.cpp crash on newer CPUs (Lunar Lake, etc.) that lack AVX-512
           # GGML_NATIVE=ON compiles with -march=native, causing illegal instruction on CPUs without AVX-512
-          CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
+          CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF' || '-DGGML_NATIVE=OFF' }}
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}
 

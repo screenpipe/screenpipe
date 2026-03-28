@@ -6,8 +6,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, GenericImageView, Rgba};
 use imageproc::filter::gaussian_blur_f32;
 use oasgen::OaSchema;
-use screenpipe_core::find_ffmpeg_path;
 use screenpipe_core::pii_removal::PiiRegion;
+use screenpipe_core::{ffmpeg_cmd_async, find_ffmpeg_path};
 use screenpipe_db::VideoMetadata as DBVideoMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,7 +16,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -85,7 +84,7 @@ pub async fn extract_frame(file_path: &str, offset_index: i64) -> Result<String>
         file_path, offset_str
     );
 
-    let mut command = Command::new(ffmpeg_path);
+    let mut command = ffmpeg_cmd_async(ffmpeg_path);
     command
         .args([
             "-ss",
@@ -160,7 +159,7 @@ pub async fn validate_media(file_path: &str) -> Result<()> {
     }
 
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
-    let mut cmd = Command::new(ffmpeg_path);
+    let mut cmd = ffmpeg_cmd_async(ffmpeg_path);
     cmd.args(["-v", "error", "-i", file_path, "-f", "null", "-"]);
 
     #[cfg(windows)]
@@ -214,7 +213,7 @@ pub async fn merge_videos(
     }
 
     let ffmpeg_path = find_ffmpeg_path().expect("failed to find ffmpeg path");
-    let mut cmd = Command::new(ffmpeg_path);
+    let mut cmd = ffmpeg_cmd_async(ffmpeg_path);
     cmd.args([
         "-f",
         "concat",
@@ -305,7 +304,7 @@ pub async fn extract_frames_from_video(
     let fps_filter = format!("fps={}", target_fps);
 
     // Extract frames using ffmpeg
-    let mut cmd = Command::new(&ffmpeg_path);
+    let mut cmd = ffmpeg_cmd_async(&ffmpeg_path);
     cmd.args([
         "-i",
         video_path.to_str().unwrap(),
@@ -428,7 +427,7 @@ async fn get_video_fps_and_duration_uncached(
 ) -> Result<(f64, f64)> {
     let ffprobe_path = get_ffprobe_path(ffmpeg_path);
 
-    let mut cmd = Command::new(&ffprobe_path);
+    let mut cmd = ffmpeg_cmd_async(&ffprobe_path);
     cmd.args([
         "-v",
         "quiet",
@@ -514,7 +513,7 @@ pub async fn get_video_metadata(video_path: &str) -> Result<VideoMetadata> {
     let ffprobe_path = get_ffprobe_path(&ffmpeg_path);
 
     // Try ffprobe first
-    let mut cmd = Command::new(&ffprobe_path);
+    let mut cmd = ffmpeg_cmd_async(&ffprobe_path);
     cmd.args([
         "-v",
         "quiet",
@@ -588,7 +587,7 @@ pub async fn get_video_metadata(video_path: &str) -> Result<VideoMetadata> {
 
 // Helper function to get fps and duration
 async fn get_video_technical_metadata(ffprobe_path: &Path, video_path: &str) -> Result<(f64, f64)> {
-    let mut cmd = Command::new(ffprobe_path);
+    let mut cmd = ffmpeg_cmd_async(ffprobe_path);
     cmd.args([
         "-v",
         "quiet",
@@ -787,7 +786,7 @@ pub async fn extract_frame_from_video(
         output_path.display()
     );
 
-    let mut command = Command::new(ffmpeg_path);
+    let mut command = ffmpeg_cmd_async(ffmpeg_path);
     command
         .args([
             "-ss",
@@ -890,7 +889,7 @@ pub async fn extract_high_quality_frame(
     );
     let output_path = output_dir.join(frame_filename);
 
-    let mut command = Command::new(&ffmpeg_path);
+    let mut command = ffmpeg_cmd_async(&ffmpeg_path);
     command.args([
         "-y",
         "-loglevel",

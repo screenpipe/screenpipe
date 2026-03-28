@@ -3,6 +3,9 @@ name: SSH into macOS M1 (immediate tmate)
 on:
   workflow_dispatch:
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   ssh-m1:
     runs-on: macos-14

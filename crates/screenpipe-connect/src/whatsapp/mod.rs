@@ -128,14 +128,18 @@ impl WhatsAppGateway {
             .join("@whiskeysockets");
         if !node_modules.exists() {
             info!("installing @whiskeysockets/baileys, pino, and ws...");
-            let install = Command::new(bun_path)
+            let mut install_cmd = Command::new(bun_path);
+            install_cmd
                 .args(["add", "@whiskeysockets/baileys", "pino", "ws"])
                 .current_dir(&self.screenpipe_dir)
                 .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()?
-                .wait()
-                .await?;
+                .stderr(Stdio::piped());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                install_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            let install = install_cmd.spawn()?.wait().await?;
             if !install.success() {
                 anyhow::bail!("failed to install @whiskeysockets/baileys");
             }
@@ -149,13 +153,20 @@ impl WhatsAppGateway {
         let script_path = self.screenpipe_dir.join("whatsapp-gateway.mjs");
 
         let node_path = which_node().unwrap_or_else(|| "node".to_string());
-        let mut child = Command::new(&node_path)
+        let mut gateway_cmd = Command::new(&node_path);
+        gateway_cmd
             .arg(script_path.to_str().unwrap())
             .env("WHATSAPP_SESSION_DIR", session_dir.to_str().unwrap())
             .stdin(Stdio::piped()) // keep stdin open so gateway doesn't self-terminate
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            gateway_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let mut child = gateway_cmd
             .spawn()
             .context("failed to spawn whatsapp gateway")?;
 
@@ -337,15 +348,20 @@ impl WhatsAppGateway {
                 let script_path = screenpipe_dir.join("whatsapp-gateway.mjs");
                 let node_path = which_node().unwrap_or_else(|| "node".to_string());
 
-                match Command::new(&node_path)
+                let mut respawn_cmd = Command::new(&node_path);
+                respawn_cmd
                     .arg(script_path.to_str().unwrap())
                     .env("WHATSAPP_SESSION_DIR", session_dir.to_str().unwrap())
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()
+                    .kill_on_drop(true);
+                #[cfg(windows)]
                 {
+                    use std::os::windows::process::CommandExt;
+                    respawn_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                }
+                match respawn_cmd.spawn() {
                     Ok(mut new_child) => {
                         let stdin_handle = new_child.stdin.take().expect("stdin piped");
                         let stdout = new_child.stdout.take().expect("stdout piped");
@@ -469,34 +485,34 @@ impl WhatsAppGateway {
 
 /// Find bun executable on PATH.
 pub fn which_bun() -> Option<String> {
-    std::process::Command::new("which")
-        .arg("bun")
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        })
+    which_executable("bun")
 }
 
 /// Find node executable on PATH.
 fn which_node() -> Option<String> {
-    std::process::Command::new("which")
-        .arg("node")
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            } else {
-                None
-            }
-        })
+    which_executable("node")
+}
+
+fn which_executable(name: &str) -> Option<String> {
+    let (cmd_name, args) = if cfg!(windows) {
+        ("where", vec![name.to_string()])
+    } else {
+        ("which", vec![name.to_string()])
+    };
+    let mut cmd = std::process::Command::new(cmd_name);
+    cmd.args(&args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.output().ok().and_then(|o| {
+        if o.status.success() {
+            String::from_utf8(o.stdout)
+                .ok()
+                .map(|s| s.lines().next().unwrap_or("").trim().to_string())
+        } else {
+            None
+        }
+    })
 }

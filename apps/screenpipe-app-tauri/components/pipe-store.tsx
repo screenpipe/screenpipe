@@ -62,8 +62,6 @@ import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { ChatPrefillData } from "@/lib/chat-utils";
-import { PostInstallConnectionsModal } from "@/components/post-install-connections-modal";
-
 // --- Types ---
 
 interface StorePipe {
@@ -258,7 +256,7 @@ export function PipeStoreView() {
 
       {/* Tab content */}
       {activeTab === "discover" ? (
-        <DiscoverView />
+        <DiscoverView onInstalled={() => setActiveTab("my-pipes")} />
       ) : (
         <PipesSection />
       )}
@@ -268,7 +266,7 @@ export function PipeStoreView() {
 
 // --- Discover View ---
 
-function DiscoverView() {
+function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const { settings } = useSettings();
   const { toast } = useToast();
   const token = settings.user?.token;
@@ -310,9 +308,6 @@ function DiscoverView() {
 
   // Source section
   const [sourceExpanded, setSourceExpanded] = useState(false);
-
-  // Post-install connections modal
-  const [postInstallData, setPostInstallData] = useState<{ pipeName: string; connections: string[] } | null>(null);
 
   // Unpublish state
   const [unpublishing, setUnpublishing] = useState(false);
@@ -476,25 +471,13 @@ function DiscoverView() {
       apiCache.invalidate("pipes/installed");
       setInstalledNames((prev) => new Set([...prev, pipeName]));
 
-      // Check if the pipe requires connections
+      // Set sessionStorage so PipesSection picks it up when it mounts on the my-pipes tab
       const pipeConnections: string[] = data.connections || [];
       if (pipeConnections.length > 0) {
-        try {
-          const connRes = await fetch("http://localhost:3030/connections");
-          const connData = await connRes.json();
-          const integrations = connData.data || [];
-          const missingConnections = pipeConnections.filter((connId: string) => {
-            const integration = integrations.find((i: any) => i.id === connId);
-            return !integration?.connected;
-          });
-          if (missingConnections.length > 0) {
-            setPostInstallData({ pipeName, connections: pipeConnections });
-          }
-        } catch {
-          // If we can't check, still show the modal
-          setPostInstallData({ pipeName, connections: pipeConnections });
-        }
+        sessionStorage.setItem(`justInstalled:${pipeName}`, "1");
       }
+      // Switch to my-pipes tab — PipesSection mounts and auto-opens the connection modal
+      onInstalled?.();
     } catch (err: any) {
       toast({
         title: "failed to install pipe",
@@ -755,15 +738,6 @@ function DiscoverView() {
         }}
       />
 
-      {/* Post-install connections modal */}
-      {postInstallData && (
-        <PostInstallConnectionsModal
-          open={!!postInstallData}
-          onOpenChange={(open) => { if (!open) setPostInstallData(null); }}
-          pipeName={postInstallData.pipeName}
-          connections={postInstallData.connections}
-        />
-      )}
     </div>
   );
 }

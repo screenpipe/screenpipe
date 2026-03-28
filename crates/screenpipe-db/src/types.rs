@@ -821,7 +821,10 @@ mod tests {
         assert_eq!(rfc.date_naive(), display.date_naive());
         assert_eq!(rfc.date_naive(), naive.date_naive());
         assert_eq!(rfc, display);
-        assert_eq!(naive.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-03-26 21:07:37");
+        assert_eq!(
+            naive.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-03-26 21:07:37"
+        );
         // None should be epoch
         assert_ne!(rfc, chrono::DateTime::UNIX_EPOCH);
     }

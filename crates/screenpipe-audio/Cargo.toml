@@ -157,4 +157,4 @@ name = "audio_pipeline_benchmark"
 path = "tests/audio_pipeline_benchmark/main.rs"
 
 [package.metadata.cargo-machete]
-ignored = ["ort-sys", "bytes"]
+ignored = ["ort-sys", "bytes", "mlx-rs"]

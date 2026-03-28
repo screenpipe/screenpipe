@@ -20,6 +20,9 @@ on:
         type: boolean
         default: false
 
+env:
+  GIT_LFS_SKIP_SMUDGE: 1
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest

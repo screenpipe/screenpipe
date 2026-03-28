@@ -363,32 +363,43 @@ fn main() {
     // parakeet-mlx crashes with "Failed to load the default metallib".
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
-        // Navigate from OUT_DIR (target/{profile}/build/{crate}-{hash}/out/)
-        // up to the build/ dir to find mlx-sys's metallib
-        if let Some(build_dir) = std::path::Path::new(&out_dir).ancestors().nth(3) {
-            let mut found = false;
-            if let Ok(entries) = std::fs::read_dir(build_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_name().to_string_lossy().starts_with("mlx-sys-") {
-                        let metallib = entry.path().join("out/build/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib");
-                        if metallib.exists() {
-                            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-                            let dest = std::path::Path::new(&manifest_dir).join("mlx.metallib");
-                            if let Err(e) = std::fs::copy(&metallib, &dest) {
-                                println!("cargo:warning=Failed to copy mlx.metallib: {}", e);
-                            } else {
-                                println!("cargo:warning=Copied mlx.metallib to {}", dest.display());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
+        // Download mlx.metallib (pre-compiled MLX Metal shaders) for parakeet-mlx.
+        // MLX needs this file next to the binary at runtime. Tauri bundles it into
+        // Contents/Resources/ and main.rs symlinks it to Contents/MacOS/.
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
+        let min_size = 1_000_000; // real metallib is ~84MB
+
+        let needs_download = !metallib.exists()
+            || std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0) < min_size;
+
+        if needs_download {
+            println!("cargo:warning=mlx-metallib: downloading from GitHub releases...");
+            let url = "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib";
+            let status = std::process::Command::new("curl")
+                .args(["-L", "-f", "-o", metallib.to_str().unwrap(), url])
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
+                    println!("cargo:warning=mlx-metallib: downloaded ({} MB)", size / 1_000_000);
                 }
+                _ => println!("cargo:warning=mlx-metallib: download failed — parakeet-mlx will crash at runtime"),
             }
-            if !found {
-                println!("cargo:warning=mlx.metallib not found in build artifacts (parakeet-mlx may not be enabled)");
-            }
+        } else {
+            let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
+            println!("cargo:warning=mlx-metallib: already present ({} MB)", size / 1_000_000);
+        }
+    }
+
+    // Ensure mlx.metallib exists so Tauri doesn't fail on the resource declaration.
+    // On non-aarch64-macOS builds, create an empty placeholder (it won't be used).
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let metallib = std::path::Path::new(&manifest_dir).join("mlx.metallib");
+        if !metallib.exists() {
+            let _ = std::fs::write(&metallib, b"");
         }
     }
 

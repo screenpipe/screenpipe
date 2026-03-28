@@ -1,16 +1,11 @@
----
-name: brand-style
-description: "Screenpipe brand style guide. Reference this when designing UI components, writing copy, or making visual decisions."
-allowed-tools: Read
----
 
-# Screenpipe Brand Style Guide
+# Screenpipe Design Guide
 
 ## Philosophy
 
 **"Black & White Geometric Minimalism"**
 
-No color. Sharp corners. Clean typography.
+No color. Sharp corners. Clean typography. Escher-inspired mathematical abstractions.
 
 ---
 
@@ -18,11 +13,11 @@ No color. Sharp corners. Clean typography.
 
 | Value | Description |
 |-------|-------------|
-| **Privacy First** | 100% local, data never leaves your machine |
-| **Open Source** | Inspect, modify, own |
-| **Simplicity** | Clean, minimal interface |
-| **Transparency** | "You own your data" |
-| **Developer-Focused** | APIs, extensibility, power users |
+| **Privacy First** | Local-first execution and data by default, cloud optional |
+| **Open Source** | Inspect, modify, own, clean abstractions and readable codebase |
+| **Simplicity** | Clean, minimal interface, powerful abstractions |
+| **Radical optimism** | There is no such thing as impossible |
+| **Progressive disclosure** | Easy, simple for non technical users but power users can still go deep |
 
 ---
 
@@ -75,7 +70,7 @@ No color. Sharp corners. Clean typography.
 
 - No accent colors (no blue, red, green, etc.)
 - Status indicators use grayscale only
-- Success/warning/error differentiated by icons, not color
+- Success/warning/error differentiated by icons, shapes, not color
 
 ---
 
@@ -160,6 +155,10 @@ No color. Sharp corners. Clean typography.
 | Accordion | 200ms |
 | Page transitions | 150ms |
 
+### Iteration
+
+Do at least 10 iterations on your animations, at every turn criticise your own design and improve it until it matches the unique brand style
+
 ---
 
 ## Brand Voice
@@ -167,28 +166,8 @@ No color. Sharp corners. Clean typography.
 ### Tone
 
 - Lowercase, casual, direct
-- Technical but accessible
+- Technical and still very accessible
 - No marketing fluff
-- Developer-oriented
-
-### Examples
-
-**Good:**
-- "24/7 memory for your desktop"
-- "you own your data"
-- "100% local"
-
-**Bad:**
-- "REVOLUTIONARY AI-POWERED SOLUTION!"
-- "Best-in-class enterprise memory platform"
-
----
-
-## Taglines
-
-- "24/7 memory for your desktop"
-- "Rewind but open source. 100% local. You own your data."
-- "Memory infrastructure for your computer"
 
 ---
 
@@ -217,43 +196,6 @@ When creating new UI components:
 | Tailwind config | `screenpipe-app-tauri/tailwind.config.ts` |
 | Color constants | `screenpipe-app-tauri/lib/constants/colors.ts` |
 | UI components | `screenpipe-app-tauri/components/ui/*.tsx` |
-| Website reference | `../screen-pipe-website/app/globals.css` |
 
 ---
 
-## Website Typography Reference
-
-From `screen-pipe-website/app/layout.tsx`:
-
-```typescript
-const fontMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-mono",
-});
-
-const fontSans = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-  variable: "--font-sans",
-});
-
-const fontSerif = Crimson_Text({
-  subsets: ["latin"],
-  weight: ["400", "600", "700"],
-  variable: "--font-serif",
-});
-```
-
-Usage in CSS:
-```css
-body {
-  font-family: var(--font-serif), "Crimson Text", serif;
-}
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-sans), "Space Grotesk", sans-serif;
-}
-code, pre, kbd, .font-mono {
-  font-family: var(--font-mono), "IBM Plex Mono", monospace;
-}
-```

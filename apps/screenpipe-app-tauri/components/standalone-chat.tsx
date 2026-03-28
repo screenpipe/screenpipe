@@ -154,8 +154,8 @@ EXAMPLES OF GOOD SEARCHES:
 - User: "what apps did I use today" → call activity-summary with start_time: today_start, end_time: now → report active_minutes per app
 - User: "what was I reading about X" → search q:"X", start_time:"3h ago" → show text with deep links
 
-Rules for showing videos/audio:
-- Show videos by putting .mp4 file paths in inline code blocks: \`/path/to/video.mp4\`
+Rules for showing media:
+- Show videos/images using standard markdown: ![description](/path/to/file.mp4) or ![description](/path/to/image.jpg)
 - ONLY use the exact, unmodified file_path or audio_file_path from search results. NEVER construct or guess paths.
 - Before showing a video, verify the file exists by checking it with the shell (e.g. ls or Test-Path). If missing, tell the user and retry search with a different time range instead of showing a broken player.
 
@@ -177,7 +177,7 @@ When the user asks for diagrams, flowcharts, or visualizations, generate Mermaid
 DEEP LINKS & MEDIA:
 - Frame (PREFERRED): [10:30 AM — Chrome](screenpipe://frame/12345) — use frame_id from screen text search results. NEVER invent frame IDs.
 - Timeline (audio only): [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from audio search results.
-- Video: show .mp4 paths in inline code: \`/path/to/video.mp4\`
+- Video/Image: use markdown ![description](/path/to/file.mp4)
 NEVER fabricate frame IDs or timestamps — only use values from actual search results.
 
 Current time: ${now.toISOString()}
@@ -3424,7 +3424,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 key={i}
                 type="button"
                 onClick={() => sendMessage(s.text)}
-                className="px-2.5 py-1 text-[11px] bg-muted/20 hover:bg-muted/50 rounded-full border border-border/20 hover:border-border/50 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                className="px-2.5 py-1 text-[11px] bg-muted/20 hover:bg-muted/50 rounded-full border border-border/20 hover:border-border/50 text-muted-foreground hover:text-foreground transition-colors cursor-pointer max-w-[280px] truncate"
+                title={s.text}
               >
                 {s.text}
               </button>

@@ -463,12 +463,16 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
     // This is best-effort — if the DB is locked or doesn't exist, we skip.
     let db_path = data_dir.join("db.sqlite");
     if db_path.exists() {
-        match tokio::process::Command::new("sqlite3")
+        let mut wal_cmd = tokio::process::Command::new("sqlite3");
+        wal_cmd
             .arg(&db_path)
-            .arg("PRAGMA wal_checkpoint(TRUNCATE);")
-            .output()
-            .await
+            .arg("PRAGMA wal_checkpoint(TRUNCATE);");
+        #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
+            wal_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        match wal_cmd.output().await {
             Ok(out) if out.status.success() => {
                 debug!("WAL checkpoint completed before sync");
             }
@@ -617,6 +621,22 @@ pub async fn discover_ssh_hosts() -> Vec<DiscoveredHost> {
     }
 
     hosts.extend(discover_tailscale().await);
+
+    // mDNS discovery — find screenpipe instances advertising on LAN
+    for (host, port) in crate::mdns::browse().await {
+        hosts.push(DiscoveredHost {
+            host: if port != 3030 {
+                format!("{}:{}", host, port)
+            } else {
+                host
+            },
+            port: port,
+            user: None,
+            key_path: None,
+            source: "mdns".into(),
+            alias: None,
+        });
+    }
 
     // Dedup + filter noise
     let mut seen = HashSet::new();
@@ -770,11 +790,14 @@ fn parse_known_hosts(content: &str) -> Vec<DiscoveredHost> {
 }
 
 async fn discover_tailscale() -> Vec<DiscoveredHost> {
-    let out = match tokio::process::Command::new("tailscale")
-        .args(["status", "--json"])
-        .output()
-        .await
+    let mut ts_cmd = tokio::process::Command::new("tailscale");
+    ts_cmd.args(["status", "--json"]);
+    #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        ts_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let out = match ts_cmd.output().await {
         Ok(o) if o.status.success() => o,
         _ => return vec![],
     };

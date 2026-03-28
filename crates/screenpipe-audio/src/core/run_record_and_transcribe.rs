@@ -20,8 +20,10 @@ use super::AudioStream;
 
 /// Timeout for receiving audio data before considering the stream dead.
 /// For input: another app may have hijacked the mic (e.g., Wispr Flow).
-/// For output: ScreenCaptureKit delivers callbacks continuously even during
-/// silence, so a 30s timeout means the OS stream genuinely stopped.
+/// For output on macOS: ScreenCaptureKit delivers callbacks continuously even
+/// during silence, so a 30s timeout means the OS stream genuinely stopped.
+/// For output on Windows: WASAPI loopback produces NO callbacks when nothing is
+/// playing, so timeouts are expected and non-fatal (see recv_audio_chunk).
 const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 30;
 
 /// Grace period after stream start before treating timeouts as fatal.
@@ -153,9 +155,25 @@ async fn recv_audio_chunk(
                 );
                 return Ok(None);
             }
-            // For both input and output: ScreenCaptureKit delivers callbacks
-            // continuously even during silence. A 30s timeout means the OS
-            // stream genuinely stopped producing data.
+
+            // On Windows, WASAPI loopback output devices produce NO callbacks
+            // when nothing is playing (unlike macOS ScreenCaptureKit which
+            // delivers continuous callbacks even during silence). Silence
+            // timeouts are expected and non-fatal — just keep waiting.
+            #[cfg(target_os = "windows")]
+            {
+                use crate::core::device::DeviceType;
+                if audio_stream.device.device_type == DeviceType::Output {
+                    debug!(
+                        "no audio from output device {} for {}s (nothing playing), continuing",
+                        device_name, AUDIO_RECEIVE_TIMEOUT_SECS
+                    );
+                    return Ok(None);
+                }
+            }
+
+            // For input devices (all platforms) and output devices (macOS/Linux):
+            // a 30s timeout means the OS stream genuinely stopped producing data.
             warn!(
                 "no audio received from {} for {}s - stream dead, triggering reconnect",
                 device_name, AUDIO_RECEIVE_TIMEOUT_SECS

@@ -3,6 +3,10 @@
 ## Product vision
 Read `VISION.md` before making product decisions, adding features, or changing UX. Stability over features. Activation over new capabilities. No feature creep.
 
+## Design
+
+Refer to `DESIGN.md` before making design decisions.
+
 ## File Headers
 Every source file (.rs, .ts, .tsx, .js, .jsx, .swift, .py) must include this comment at the top (below any shebangs or `use` directives that must be first):
 

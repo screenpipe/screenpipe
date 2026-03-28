@@ -40,6 +40,7 @@ pub struct EmbeddedServerHandle {
 impl EmbeddedServerHandle {
     pub fn shutdown(&self) {
         info!("Shutting down embedded screenpipe server");
+        screenpipe_connect::mdns::shutdown();
         // Signal the UI recorder to stop its tree walker and event loops
         if let Some(ref ui_handle) = self.ui_recorder_handle {
             ui_handle.stop();
@@ -363,12 +364,8 @@ pub async fn start_embedded_server(
     }
 
     // Start UI event recording (database recording of accessibility events)
-    let ui_enabled = config.enable_input_capture || config.enable_accessibility;
-    info!(
-        "UI events setting: enable_input_capture={}, enable_accessibility={}",
-        config.enable_input_capture, config.enable_accessibility
-    );
-    let ui_recorder_handle = if ui_enabled {
+    // Input capture and accessibility are always enabled.
+    let ui_recorder_handle = {
         let ui_config = config.to_ui_recorder_config();
         let db_clone = db.clone();
         match start_ui_recording(db_clone, ui_config, capture_trigger_tx).await {
@@ -384,15 +381,13 @@ pub async fn start_embedded_server(
                 None
             }
         }
-    } else {
-        None
     };
 
     // Shared manual meeting lock — used by both the HTTP API and the meeting persister
     let manual_meeting = std::sync::Arc::new(tokio::sync::RwLock::new(None::<i64>));
 
     // Start v2 meeting detection (UI scanning for call controls)
-    // Independent of enable_input_capture/enable_accessibility toggles — only needs accessibility permission
+    // Independent of UI recorder — only needs accessibility permission
     {
         let v2_in_meeting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let _meeting_watcher = start_meeting_watcher(
@@ -416,6 +411,15 @@ pub async fn start_embedded_server(
     // Start sleep/wake monitor for telemetry (macOS only)
     // Tracks system sleep/wake events and checks if recording degrades after wake
     start_sleep_monitor();
+
+    // Start work-hours schedule monitor if enabled
+    if config.schedule_enabled {
+        screenpipe_engine::schedule_monitor::start_schedule_monitor(
+            config.schedule_rules.clone(),
+            shutdown_tx_clone.subscribe(),
+        );
+        info!("work-hours schedule monitor started");
+    }
 
     // Start background snapshot compaction (JPEG → MP4)
     screenpipe_engine::start_snapshot_compaction(
@@ -545,6 +549,11 @@ pub async fn start_embedded_server(
     });
 
     info!("Embedded screenpipe server started successfully");
+
+    // Advertise via mDNS so other devices can discover this instance
+    if let Err(e) = screenpipe_connect::mdns::advertise(config.port) {
+        warn!("mdns advertisement failed (non-fatal): {}", e);
+    }
 
     Ok(EmbeddedServerHandle {
         shutdown_tx,

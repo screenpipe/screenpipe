@@ -668,29 +668,18 @@ fn default_max_tokens() -> i32 {
     4096
 }
 
-/// Merge providers into pi's existing config (preserves other providers/auth).
-/// Now supports any OpenAI-compatible provider (OpenAI, Ollama, custom, screenpipe-cloud).
-fn ensure_pi_config(
+/// Build the providers to add/update in models.json for pi-coding-agent.
+///
+/// Returns a map of provider entries to merge into the existing models.json.
+/// We merge instead of rebuilding from scratch to avoid a race condition where
+/// concurrent pipes overwrite each other's providers.
+fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
-) -> Result<(), String> {
-    let config_dir = get_pi_config_dir()?;
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
-
-    // -- models.json: merge providers into existing config --
-    let models_path = config_dir.join("models.json");
-    let mut models_config: serde_json::Value = if models_path.exists() {
-        let content = std::fs::read_to_string(&models_path).unwrap_or_default();
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({"providers": {}}))
-    } else {
-        json!({"providers": {}})
-    };
+) -> serde_json::Value {
+    let mut providers_map = serde_json::Map::new();
 
     // Always add screenpipe cloud provider
-    // Use actual token value in apiKey (not env var name) — Pi v0.51.1+ may not
-    // resolve env var names reliably, causing tier=anonymous on the gateway.
-    // Falls back to env var name for backwards compatibility when token is absent.
     let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
     let screenpipe_provider = json!({
         "baseUrl": SCREENPIPE_API_URL,
@@ -699,15 +688,7 @@ fn ensure_pi_config(
         "authHeader": true,
         "models": screenpipe_cloud_models()
     });
-
-    if let Some(providers) = models_config
-        .get_mut("providers")
-        .and_then(|p| p.as_object_mut())
-    {
-        providers.insert("screenpipe".to_string(), screenpipe_provider);
-    } else {
-        models_config = json!({"providers": {"screenpipe": screenpipe_provider}});
-    }
+    providers_map.insert("screenpipe".to_string(), screenpipe_provider);
 
     // Add the user's selected provider (if not screenpipe-cloud)
     if let Some(config) = provider_config {
@@ -733,23 +714,18 @@ fn ensure_pi_config(
                 config.url.clone()
             };
 
-            // Pi's models.json schema requires baseUrl to have minLength: 1.
-            // Writing an empty baseUrl poisons the entire file and breaks ALL
-            // providers (including screenpipe cloud). Skip the entry instead.
             if base_url.is_empty() {
                 warn!(
                     "skipping pi provider '{}': no baseUrl configured (would invalidate models.json)",
                     provider_name
                 );
             } else {
-                // Pi resolves apiKey values as env var names, so reference the env var
-                // we'll set when spawning the process
                 let api_key = match config.provider.as_str() {
-                    "native-ollama" => "ollama".to_string(), // Ollama ignores API key but Pi requires one
-                    "openai" => "OPENAI_API_KEY".to_string(), // Pi will read from env
-                    "openai-chatgpt" => "OPENAI_CHATGPT_TOKEN".to_string(), // OAuth token from env
-                    "anthropic" => "ANTHROPIC_API_KEY".to_string(), // Pi will read from env
-                    "custom" => "CUSTOM_API_KEY".to_string(), // Pi will read from env
+                    "native-ollama" => "ollama".to_string(),
+                    "openai" => "OPENAI_API_KEY".to_string(),
+                    "openai-chatgpt" => "OPENAI_CHATGPT_TOKEN".to_string(),
+                    "anthropic" => "ANTHROPIC_API_KEY".to_string(),
+                    "custom" => "CUSTOM_API_KEY".to_string(),
                     _ => "".to_string(),
                 };
 
@@ -776,13 +752,44 @@ fn ensure_pi_config(
                     ]
                 });
 
-                if let Some(providers) = models_config
-                    .get_mut("providers")
-                    .and_then(|p| p.as_object_mut())
-                {
-                    providers.insert(provider_name.to_string(), user_provider);
-                }
+                providers_map.insert(provider_name.to_string(), user_provider);
             }
+        }
+    }
+
+    json!({"providers": providers_map})
+}
+
+/// Write pi's provider config (models.json + auth.json).
+fn ensure_pi_config(
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+) -> Result<(), String> {
+    let config_dir = get_pi_config_dir()?;
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
+
+    let new_providers = build_models_json(user_token, provider_config);
+
+    // Merge into existing models.json to avoid race conditions with concurrent pipes
+    let models_path = config_dir.join("models.json");
+    let mut models_config: serde_json::Value = if models_path.exists() {
+        let content = std::fs::read_to_string(&models_path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_else(|_| json!({"providers": {}}))
+    } else {
+        json!({"providers": {}})
+    };
+    if !models_config.get("providers").and_then(|p| p.as_object()).is_some() {
+        models_config = json!({"providers": {}});
+    }
+
+    // Merge new providers into existing ones (add/update, don't remove others)
+    if let (Some(existing), Some(new)) = (
+        models_config.get_mut("providers").and_then(|p| p.as_object_mut()),
+        new_providers.get("providers").and_then(|p| p.as_object()),
+    ) {
+        for (k, v) in new {
+            existing.insert(k.clone(), v.clone());
         }
     }
 
@@ -1108,16 +1115,18 @@ pub async fn pi_start_inner(
             let new_path = format!("{}{}{}", bun_dir.display(), sep, current_path);
 
             // On Windows, ensure bash is available for Pi's bash tool.
-            // Downloads PortableGit on first use if no bash is found (~50MB, one-time).
+            // Uses core crate's ensure_bash_available which downloads PortableGit if needed.
             #[cfg(windows)]
             let new_path = {
                 let mut path = new_path;
-                let bash_result = tokio::task::spawn_blocking(ensure_bash_available)
-                    .await
-                    .unwrap_or_else(|e| {
-                        warn!("bash setup task panicked (non-fatal): {:?}", e);
-                        None
-                    });
+                let bash_result = tokio::task::spawn_blocking(
+                    screenpipe_core::agents::pi::ensure_bash_available,
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    warn!("bash setup task panicked (non-fatal): {:?}", e);
+                    None
+                });
                 match bash_result {
                     Some(bash_dir) => {
                         // Also add the usr/bin dir which has common unix utils (grep, cat, etc.)
@@ -1786,309 +1795,24 @@ fn find_bun_executable() -> Option<String> {
     result
 }
 
-/// Find a bash executable on Windows. Returns None on non-Windows platforms
-/// (where bash is always available). Checks:
-/// 1. Our bundled PortableGit in %LOCALAPPDATA%\screenpipe\git-portable\
-/// 2. Standard Git for Windows install
-/// 3. bash.exe on PATH (Git Bash, MSYS2, WSL, etc.)
-#[cfg(windows)]
-fn find_bash_executable() -> Option<String> {
-    // 1. Bundled PortableGit in screenpipe's data directory
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        let bundled = PathBuf::from(&local_app_data)
-            .join("screenpipe")
-            .join("git-portable")
-            .join("bin")
-            .join("bash.exe");
-        if bundled.exists() {
-            info!("Found bundled bash at: {}", bundled.display());
-            return Some(bundled.to_string_lossy().to_string());
-        }
-    }
-
-    // 2. Standard Git for Windows locations
-    let standard_paths = [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ];
-    for p in &standard_paths {
-        if Path::new(p).exists() {
-            info!("Found system bash at: {}", p);
-            return Some(p.to_string());
-        }
-    }
-
-    // 3. Try `where bash` on PATH
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        if let Ok(output) = std::process::Command::new("where")
-            .arg("bash")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(line) = stdout.lines().next() {
-                    let path = line.trim().to_string();
-                    if !path.is_empty() && Path::new(&path).exists() {
-                        info!("Found bash on PATH: {}", path);
-                        return Some(path);
-                    }
-                }
-            }
-        }
-    }
-
-    debug!("No bash executable found on Windows");
-    None
-}
-
-/// Download and extract PortableGit to provide bash on Windows.
-/// This is a blocking function — call from a background thread.
-/// Returns Ok(path_to_bash_exe) on success.
-#[cfg(windows)]
-fn download_portable_git() -> Result<String, String> {
-    let local_app_data =
-        std::env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA env var not set".to_string())?;
-    let screenpipe_dir = PathBuf::from(&local_app_data).join("screenpipe");
-    let git_dir = screenpipe_dir.join("git-portable");
-    let bash_path = git_dir.join("bin").join("bash.exe");
-
-    // Already downloaded
-    if bash_path.exists() {
-        info!("PortableGit already present at {}", git_dir.display());
-        return Ok(bash_path.to_string_lossy().to_string());
-    }
-
-    // Pinned version for reproducibility
-    const PORTABLE_GIT_VERSION: &str = "2.47.1";
-    const PORTABLE_GIT_URL: &str = "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/PortableGit-2.47.1-64-bit.7z.exe";
-    const PORTABLE_GIT_SHA256: &str =
-        "4f3f21f4effcb659566883ee1ed3ae403e5b3d7a0699cee455f6cd765e1ac39c";
-
-    info!(
-        "Downloading PortableGit {} for bash support...",
-        PORTABLE_GIT_VERSION
-    );
-
-    // Create parent directories
-    std::fs::create_dir_all(&screenpipe_dir)
-        .map_err(|e| format!("Failed to create screenpipe data dir: {}", e))?;
-
-    // Download to temp file
-    let temp_file = std::env::temp_dir().join(format!(
-        "PortableGit-{}-64-bit.7z.exe",
-        PORTABLE_GIT_VERSION
-    ));
-
-    // Use bun or curl to download (bun is always available since we bundle it)
-    let download_result = if let Some(bun) = find_bun_executable() {
-        let script = format!(
-            r#"const r = await fetch("{}"); if (!r.ok) throw new Error(r.statusText); const b = await r.arrayBuffer(); require("fs").writeFileSync("{}", Buffer.from(b));"#,
-            PORTABLE_GIT_URL,
-            temp_file.to_string_lossy().replace('\\', "\\\\")
-        );
-        let mut cmd = std::process::Command::new(&bun);
-        cmd.args(["--eval", &script]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        cmd.output()
-    } else {
-        // Fallback: try curl.exe (ships with Windows 10+)
-        let mut cmd = std::process::Command::new("curl.exe");
-        cmd.args(["-fSL", "-o", &temp_file.to_string_lossy(), PORTABLE_GIT_URL]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        cmd.output()
-    };
-
-    match download_result {
-        Ok(output) if output.status.success() => {
-            info!("PortableGit downloaded to {}", temp_file.display());
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let _ = std::fs::remove_file(&temp_file);
-            return Err(format!("PortableGit download failed: {}", stderr));
-        }
-        Err(e) => {
-            return Err(format!("Failed to run download command: {}", e));
-        }
-    }
-
-    // Verify SHA256 using certutil (built into Windows)
-    let digest = {
-        let mut cmd = std::process::Command::new("certutil");
-        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
-                stdout
-                    .lines()
-                    .nth(1)
-                    .map(|l| l.trim().replace(' ', "").to_lowercase())
-                    .unwrap_or_default()
-            }
-            _ => {
-                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
-                String::new()
-            }
-        }
-    };
-
-    if !digest.is_empty() && digest != PORTABLE_GIT_SHA256 {
-        let _ = std::fs::remove_file(&temp_file);
-        return Err(format!(
-            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
-            PORTABLE_GIT_SHA256, digest
-        ));
-    }
-    if !digest.is_empty() {
-        info!("SHA256 verified: {}", digest);
-    }
-
-    // Extract: PortableGit .7z.exe is a self-extracting archive.
-    // Run it with -o<dir> -y to extract silently.
-    info!("Extracting PortableGit to {}...", git_dir.display());
-
-    // Extract to a temp directory first (atomic: rename on success)
-    let extract_temp = screenpipe_dir.join("git-portable-extracting");
-    let _ = std::fs::remove_dir_all(&extract_temp);
-
-    {
-        let mut cmd = std::process::Command::new(&temp_file);
-        cmd.args([
-            &format!("-o{}", extract_temp.to_string_lossy()),
-            "-y",
-            "-gm2",
-        ]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                info!("PortableGit extracted successfully");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let _ = std::fs::remove_dir_all(&extract_temp);
-                let _ = std::fs::remove_file(&temp_file);
-                return Err(format!("PortableGit extraction failed: {}", stderr));
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&extract_temp);
-                let _ = std::fs::remove_file(&temp_file);
-                return Err(format!("Failed to run PortableGit extractor: {}", e));
-            }
-        }
-    }
-
-    // Verify extraction produced bash.exe
-    let extracted_bash = extract_temp.join("bin").join("bash.exe");
-    if !extracted_bash.exists() {
-        let _ = std::fs::remove_dir_all(&extract_temp);
-        let _ = std::fs::remove_file(&temp_file);
-        return Err("Extraction completed but bash.exe not found in expected location".to_string());
-    }
-
-    // Run post-install.bat if present (required by PortableGit)
-    let post_install = extract_temp.join("post-install.bat");
-    if post_install.exists() {
-        info!("Running PortableGit post-install.bat...");
-        let mut cmd = std::process::Command::new("cmd.exe");
-        cmd.args(["/C", &post_install.to_string_lossy()])
-            .current_dir(&extract_temp);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                info!("post-install.bat completed successfully");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("post-install.bat returned non-zero (non-fatal): {}", stderr);
-            }
-            Err(e) => {
-                warn!("Failed to run post-install.bat (non-fatal): {}", e);
-            }
-        }
-    }
-
-    // Atomic rename: move extracted dir to final location
-    let _ = std::fs::remove_dir_all(&git_dir);
-    std::fs::rename(&extract_temp, &git_dir).map_err(|e| {
-        let _ = std::fs::remove_dir_all(&extract_temp);
-        format!(
-            "Failed to move extracted PortableGit to final location: {}",
-            e
-        )
-    })?;
-
-    // Clean up temp download
-    let _ = std::fs::remove_file(&temp_file);
-
-    let final_bash = git_dir.join("bin").join("bash.exe");
-    info!(
-        "PortableGit setup complete. bash at: {}",
-        final_bash.display()
-    );
-    Ok(final_bash.to_string_lossy().to_string())
-}
-
-/// Ensure bash is available on Windows. If not found, downloads PortableGit.
-/// Safe to call — never crashes, only logs warnings on failure.
-/// Returns the bash bin directory (for PATH injection) or None.
-#[cfg(windows)]
-fn ensure_bash_available() -> Option<String> {
-    if let Some(bash_path) = find_bash_executable() {
-        return Path::new(&bash_path)
-            .parent()
-            .map(|d| d.to_string_lossy().to_string());
-    }
-
-    info!("No bash found on Windows, attempting to download PortableGit...");
-    match download_portable_git() {
-        Ok(bash_path) => {
-            info!("PortableGit installed, bash available at: {}", bash_path);
-            Path::new(&bash_path)
-                .parent()
-                .map(|d| d.to_string_lossy().to_string())
-        }
-        Err(e) => {
-            warn!(
-                "Failed to set up bash for Windows (AI chat may not work correctly): {}. \
-                 Install Git for Windows from https://git-scm.com/download/win to fix this.",
-                e
-            );
-            None
-        }
-    }
-}
-
 /// Background Pi installation — call once from app setup.
 /// Installs pi into `~/.screenpipe/pi-agent/` (local install, not global)
 /// so we fully control the dependency tree and avoid version conflicts.
 /// Runs on a dedicated thread, never panics, never blocks the caller.
 /// Sets `PI_INSTALL_DONE` when finished so `pi_start` can wait for it.
 pub fn ensure_pi_installed_background() {
+    // On Windows, ensure bash is available early (downloads PortableGit if needed).
+    // This runs before Pi install so bash is ready by the time Pi starts,
+    // even if pi_start_inner is interrupted (e.g., by an app update).
+    #[cfg(windows)]
+    {
+        let _ = std::thread::Builder::new()
+            .name("bash-setup".to_string())
+            .spawn(|| {
+                screenpipe_core::agents::pi::ensure_bash_available();
+            });
+    }
+
     // If Pi is already installed locally, check if it needs the lru-cache fix
     // or a version upgrade.
     if find_local_pi_entrypoint().is_some() {
@@ -2720,5 +2444,134 @@ mod tests {
         assert_eq!(v["type"], "still_ok");
 
         assert_eq!(super::read_lines_lossy(&mut reader), None);
+    }
+
+    // -- build_models_json tests --
+
+    use super::{build_models_json, PiProviderConfig};
+
+    fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
+        PiProviderConfig {
+            provider: provider.to_string(),
+            url: String::new(),
+            model: model.to_string(),
+            api_key: None,
+            max_tokens: 4096,
+            system_prompt: None,
+        }
+    }
+
+    #[test]
+    fn test_build_models_json_default_has_screenpipe_provider() {
+        let config = build_models_json(None, None);
+        let providers = config["providers"].as_object().unwrap();
+        assert!(providers.contains_key("screenpipe"));
+        assert_eq!(providers.len(), 1);
+
+        let sp = &providers["screenpipe"];
+        assert_eq!(sp["baseUrl"], "https://api.screenpi.pe/v1");
+        assert_eq!(sp["api"], "openai-completions");
+        assert_eq!(sp["apiKey"], "SCREENPIPE_API_KEY");
+        assert_eq!(sp["authHeader"], true);
+        assert!(sp["models"].as_array().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_build_models_json_with_user_token() {
+        let config = build_models_json(Some("tok_abc123"), None);
+        let sp = &config["providers"]["screenpipe"];
+        assert_eq!(sp["apiKey"], "tok_abc123");
+    }
+
+    #[test]
+    fn test_build_models_json_screenpipe_cloud_no_extra_provider() {
+        let pc = make_provider_config("screenpipe-cloud", "auto");
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        // screenpipe-cloud maps to "" (empty), so only the screenpipe provider is added
+        assert_eq!(providers.len(), 1);
+        assert!(providers.contains_key("screenpipe"));
+    }
+
+    #[test]
+    fn test_build_models_json_openai_adds_second_provider() {
+        let pc = make_provider_config("openai", "gpt-4o");
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        assert_eq!(providers.len(), 2);
+        assert!(providers.contains_key("screenpipe"));
+        assert!(providers.contains_key("openai-byok"));
+
+        let openai = &providers["openai-byok"];
+        assert_eq!(openai["baseUrl"], "https://api.openai.com/v1");
+        assert_eq!(openai["api"], "openai-completions");
+        assert_eq!(openai["apiKey"], "OPENAI_API_KEY");
+        let models = openai["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "gpt-4o");
+    }
+
+    #[test]
+    fn test_build_models_json_ollama_provider() {
+        let pc = make_provider_config("native-ollama", "llama3");
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        assert!(providers.contains_key("ollama"));
+        assert_eq!(providers["ollama"]["baseUrl"], "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn test_build_models_json_anthropic_provider() {
+        let pc = make_provider_config("anthropic", "claude-sonnet-4-5");
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        assert!(providers.contains_key("anthropic-byok"));
+        assert_eq!(
+            providers["anthropic-byok"]["baseUrl"],
+            "https://api.anthropic.com"
+        );
+        assert_eq!(providers["anthropic-byok"]["api"], "anthropic-messages");
+    }
+
+    #[test]
+    fn test_build_models_json_custom_with_empty_url_skipped() {
+        // custom provider with empty URL should be skipped (would invalidate schema)
+        let pc = make_provider_config("custom", "my-model");
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        assert_eq!(providers.len(), 1); // only screenpipe
+        assert!(!providers.contains_key("custom"));
+    }
+
+    #[test]
+    fn test_build_models_json_custom_with_url() {
+        let mut pc = make_provider_config("custom", "my-model");
+        pc.url = "http://my-server:8080/v1".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let providers = config["providers"].as_object().unwrap();
+        assert_eq!(providers.len(), 2);
+        assert!(providers.contains_key("custom"));
+        assert_eq!(providers["custom"]["baseUrl"], "http://my-server:8080/v1");
+    }
+
+    #[test]
+    fn test_build_models_json_no_stale_providers() {
+        // The key regression test: even if an old models.json had a corrupted
+        // provider, build_models_json always produces a clean config with only
+        // the providers we explicitly add. This is a pure function so there is
+        // no file to corrupt — the test verifies the output shape is always valid.
+        let config = build_models_json(Some("tok"), None);
+        let providers = config["providers"].as_object().unwrap();
+
+        // Only "screenpipe" — no leftover providers
+        assert_eq!(providers.len(), 1);
+
+        // Every model has required fields for pi-coding-agent schema
+        let models = providers["screenpipe"]["models"].as_array().unwrap();
+        for m in models {
+            assert!(m["id"].as_str().unwrap().len() > 0, "model missing id");
+            assert!(m["cost"]["input"].is_number(), "model missing cost.input");
+            assert!(m["cost"]["output"].is_number(), "model missing cost.output");
+        }
     }
 }

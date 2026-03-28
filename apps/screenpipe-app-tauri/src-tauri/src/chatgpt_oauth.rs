@@ -166,43 +166,55 @@ pub async fn get_valid_token() -> Result<String, String> {
 // ── Local callback server ──────────────────────────────────────────────
 
 async fn wait_for_callback(listener: tokio::net::TcpListener) -> Result<String, String> {
-    let (mut stream, _) = listener
-        .accept()
-        .await
-        .map_err(|e| format!("failed to accept connection: {}", e))?;
+    // Loop to handle preflight/favicon requests that browsers (especially on
+    // Windows) send before the actual OAuth redirect arrives.
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| format!("failed to accept connection: {}", e))?;
 
-    let mut buf = vec![0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("failed to read request: {}", e))?;
+        let mut buf = vec![0u8; 4096];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(_) => continue, // broken connection, try next
+        };
 
-    let request = String::from_utf8_lossy(&buf[..n]);
+        let request = String::from_utf8_lossy(&buf[..n]);
 
-    // Parse: GET /auth/callback?code=xxx HTTP/1.1
-    let code = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1).map(String::from))
-        .and_then(|path| reqwest::Url::parse(&format!("http://localhost{}", path)).ok())
-        .and_then(|url| {
-            url.query_pairs()
-                .find(|(k, _)| k == "code")
-                .map(|(_, v)| v.to_string())
-        })
-        .ok_or_else(|| "no authorization code in callback".to_string())?;
+        // Parse: GET /auth/callback?code=xxx HTTP/1.1
+        let code = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1).map(String::from))
+            .and_then(|path| reqwest::Url::parse(&format!("http://localhost{}", path)).ok())
+            .and_then(|url| {
+                url.query_pairs()
+                    .find(|(k, _)| k == "code")
+                    .map(|(_, v)| v.to_string())
+            });
 
-    let html = concat!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n",
-        "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">",
-        "<h2>Login successful!</h2>",
-        "<p>You can close this tab and return to screenpipe.</p>",
-        "<script>window.close()</script>",
-        "</body></html>"
-    );
-    let _ = stream.write_all(html.as_bytes()).await;
-
-    Ok(code)
+        match code {
+            Some(code) => {
+                let html = concat!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n",
+                    "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">",
+                    "<h2>Login successful!</h2>",
+                    "<p>You can close this tab and return to screenpipe.</p>",
+                    "<script>window.close()</script>",
+                    "</body></html>"
+                );
+                let _ = stream.write_all(html.as_bytes()).await;
+                return Ok(code);
+            }
+            None => {
+                // Not the callback — respond with 404 and keep listening
+                let _ = stream
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        }
+    }
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────────
@@ -212,13 +224,18 @@ async fn wait_for_callback(listener: tokio::net::TcpListener) -> Result<String, 
 pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> {
     let (code_verifier, code_challenge) = generate_pkce();
 
-    // Bind the local callback server
+    // Bind the local callback server.
+    // Try IPv4 first, then IPv6 (Windows often resolves "localhost" to [::1]),
+    // then any available port as last resort.
     let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT)).await
     {
         Ok(l) => l,
-        Err(_) => tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| format!("failed to start local server: {}", e))?,
+        Err(_) => match tokio::net::TcpListener::bind(format!("[::1]:{}", CALLBACK_PORT)).await {
+            Ok(l) => l,
+            Err(_) => tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| format!("failed to start local server: {}", e))?,
+        },
     };
 
     let port = listener

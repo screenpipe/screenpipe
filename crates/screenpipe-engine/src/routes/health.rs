@@ -73,6 +73,9 @@ pub struct HealthCheckResponse {
     /// True when DRM streaming content is detected and capture should be fully stopped.
     #[serde(default)]
     pub drm_content_paused: bool,
+    /// True when recording is paused due to work-hours schedule.
+    #[serde(default)]
+    pub schedule_paused: bool,
     /// Device hostname for remote monitoring
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
@@ -270,11 +273,19 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             && now_ts.saturating_sub(vision_snap.last_db_write_ts) > threshold_secs;
         let stalled = capture_fresh && db_stale;
         if stalled {
-            warn!(
-                "health_check: vision DB writes stalled — capture heartbeat {}s ago but last DB write {}s ago (pool exhaustion likely)",
-                now_ts.saturating_sub(vision_snap.last_capture_attempt_ts),
-                now_ts.saturating_sub(vision_snap.last_db_write_ts),
-            );
+            // throttle to once per 60s to avoid log spam (health runs every ~1s)
+            static LAST_VISION_STALL_LOG: AtomicU64 = AtomicU64::new(0);
+            let prev = LAST_VISION_STALL_LOG.load(Ordering::Relaxed);
+            if now_ts.saturating_sub(prev) >= 60 {
+                LAST_VISION_STALL_LOG.store(now_ts, Ordering::Relaxed);
+                let (rs, ri, ws, wi) = state.db.pool_stats();
+                warn!(
+                    "health_check: vision DB writes stalled — capture heartbeat {}s ago but last DB write {}s ago (pool exhaustion likely) | pool: read={}/{} idle, write={}/{} idle",
+                    now_ts.saturating_sub(vision_snap.last_capture_attempt_ts),
+                    now_ts.saturating_sub(vision_snap.last_db_write_ts),
+                    ri, rs, wi, ws,
+                );
+            }
         }
         stalled
     } else {
@@ -294,10 +305,18 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             || now_ts.saturating_sub(audio_snap.last_db_write_ts) > threshold_secs;
         let stalled = transcription_fresh && db_stale;
         if stalled {
-            warn!(
-                "health_check: audio DB writes stalled — transcription active but last DB write {}s ago (pool exhaustion/lock contention likely)",
-                if audio_snap.last_db_write_ts > 0 { now_ts.saturating_sub(audio_snap.last_db_write_ts) } else { 0 },
-            );
+            // throttle to once per 60s to avoid log spam (health runs every ~1s)
+            static LAST_AUDIO_STALL_LOG: AtomicU64 = AtomicU64::new(0);
+            let prev = LAST_AUDIO_STALL_LOG.load(Ordering::Relaxed);
+            if now_ts.saturating_sub(prev) >= 60 {
+                LAST_AUDIO_STALL_LOG.store(now_ts, Ordering::Relaxed);
+                let (rs, ri, ws, wi) = state.db.pool_stats();
+                warn!(
+                    "health_check: audio DB writes stalled — transcription active but last DB write {}s ago (pool exhaustion/lock contention likely) | pool: read={}/{} idle, write={}/{} idle",
+                    if audio_snap.last_db_write_ts > 0 { now_ts.saturating_sub(audio_snap.last_db_write_ts) } else { 0 },
+                    ri, rs, wi, ws,
+                );
+            }
         }
         stalled
     } else {
@@ -642,6 +661,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         vision_db_write_stalled,
         audio_db_write_stalled,
         drm_content_paused: crate::drm_detector::drm_content_paused(),
+        schedule_paused: crate::schedule_monitor::schedule_paused(),
         hostname: hostname::get().ok().and_then(|h| h.into_string().ok()),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
     }
@@ -771,6 +791,9 @@ mod tests {
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
             drm_content_paused: false,
+            schedule_paused: false,
+            hostname: None,
+            version: None,
         }
     }
 
