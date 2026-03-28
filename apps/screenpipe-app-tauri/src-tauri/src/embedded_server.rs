@@ -412,6 +412,15 @@ pub async fn start_embedded_server(
     // Tracks system sleep/wake events and checks if recording degrades after wake
     start_sleep_monitor();
 
+    // Start work-hours schedule monitor if enabled
+    if config.schedule_enabled {
+        screenpipe_engine::schedule_monitor::start_schedule_monitor(
+            config.schedule_rules.clone(),
+            shutdown_tx_clone.subscribe(),
+        );
+        info!("work-hours schedule monitor started");
+    }
+
     // Start background snapshot compaction (JPEG → MP4)
     screenpipe_engine::start_snapshot_compaction(
         db.clone(),

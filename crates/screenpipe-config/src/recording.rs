@@ -17,6 +17,21 @@ pub struct VocabEntry {
     pub replace_with: Option<String>,
 }
 
+/// A single schedule rule: a day-of-week + time range + what to record.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleRule {
+    /// Day of week: 0 = Monday, 6 = Sunday
+    pub day_of_week: u8,
+    /// Start time in "HH:MM" (24h format, local time)
+    pub start_time: String,
+    /// End time in "HH:MM" (24h format, local time)
+    pub end_time: String,
+    /// What to record: "all", "audio_only", "screen_only"
+    pub record_mode: String,
+}
+
 /// The single source of truth for recording/capture configuration.
 ///
 /// Used by:
@@ -218,6 +233,14 @@ pub struct RecordingSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub device_tier: Option<String>,
+
+    /// Enable work-hours schedule (when false, records 24/7 as usual)
+    #[serde(rename = "scheduleEnabled", default)]
+    pub schedule_enabled: bool,
+
+    /// Per-day schedule rules (only used when schedule_enabled is true)
+    #[serde(rename = "scheduleRules", default)]
+    pub schedule_rules: Vec<ScheduleRule>,
 }
 
 impl RecordingSettings {
@@ -288,6 +311,8 @@ impl Default for RecordingSettings {
             enable_accessibility: true,
             enable_workflow_events: false,
             device_tier: None,
+            schedule_enabled: false,
+            schedule_rules: vec![],
         }
     }
 }

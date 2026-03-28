@@ -679,6 +679,15 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
+    // Start work-hours schedule monitor if enabled
+    if config.schedule_enabled {
+        screenpipe_engine::schedule_monitor::start_schedule_monitor(
+            config.schedule_rules.clone(),
+            shutdown_tx.subscribe(),
+        );
+        info!("work-hours schedule monitor started");
+    }
+
     let vision_handle = Handle::current();
 
     let db_clone = Arc::clone(&db);

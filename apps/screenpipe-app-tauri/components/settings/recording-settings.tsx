@@ -96,6 +96,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
+import { ScheduleSettings } from "./schedule-settings";
 import { ValidatedInput } from "../ui/validated-input";
 import {
   validateField,
@@ -1147,6 +1148,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           <BatterySaverSection />
         </CardContent>
       </Card>
+
+      {/* Recording Schedule */}
+      <ScheduleSettings />
 
       {/* Data Directory */}
       <div className="space-y-2">

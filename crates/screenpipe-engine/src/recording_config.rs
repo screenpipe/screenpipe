@@ -100,6 +100,12 @@ pub struct RecordingConfig {
 
     /// Audio channel capacities derived from device tier.
     pub channel_config: ChannelConfig,
+
+    /// Enable work-hours schedule (when false, records 24/7 as usual).
+    pub schedule_enabled: bool,
+
+    /// Per-day schedule rules (only used when schedule_enabled is true).
+    pub schedule_rules: Vec<screenpipe_config::ScheduleRule>,
 }
 
 impl RecordingConfig {
@@ -184,6 +190,8 @@ impl RecordingConfig {
                 .and_then(screenpipe_config::DeviceTier::from_str_loose)
                 .map(ChannelConfig::for_tier)
                 .unwrap_or_default(),
+            schedule_enabled: settings.schedule_enabled,
+            schedule_rules: settings.schedule_rules.clone(),
         }
     }
 

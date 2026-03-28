@@ -177,6 +177,15 @@ export type Settings = SettingsStore & {
 		address: string;
 		label?: string;
 	}>;
+	/** Enable recording schedule — when on, recording only runs during defined time ranges */
+	scheduleEnabled?: boolean;
+	/** Per-day-of-week time ranges defining when recording is active */
+	scheduleRules?: Array<{
+		dayOfWeek: number;
+		startTime: string;
+		endTime: string;
+		recordMode: string;
+	}>;
 }
 
 export function getEffectiveFilters(settings: Settings) {
