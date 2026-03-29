@@ -790,6 +790,30 @@ async chatgptOauthModels() : Promise<Result<string[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async notionOauthConnect() : Promise<Result<NotionOAuthStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("notion_oauth_connect") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async notionOauthStatus() : Promise<Result<NotionOAuthStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("notion_oauth_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async notionOauthDisconnect() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("notion_oauth_disconnect") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Get current pipe suggestions settings.
  */
@@ -988,6 +1012,7 @@ export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
+export type NotionOAuthStatus = { connected: boolean; workspace_name: string | null }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }

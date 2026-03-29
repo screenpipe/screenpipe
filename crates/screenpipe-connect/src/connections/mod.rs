@@ -178,10 +178,14 @@ impl ConnectionManager {
             .iter()
             .map(|i| {
                 let def = i.def();
-                let connected = store
-                    .get(def.id)
-                    .map(|c| c.enabled && !c.credentials.is_empty())
-                    .unwrap_or(false);
+                let connected = if def.id == "notion" {
+                    notion::get_notion_token().is_some()
+                } else {
+                    store
+                        .get(def.id)
+                        .map(|c| c.enabled && !c.credentials.is_empty())
+                        .unwrap_or(false)
+                };
                 ConnectionInfo { def, connected }
             })
             .collect()
@@ -300,7 +304,8 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
         })
         .collect();
 
-    if connected.is_empty() {
+    let notion_token = notion::get_notion_token();
+    if connected.is_empty() && notion_token.is_none() {
         return String::new();
     }
 
@@ -313,6 +318,14 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
                 out.push_str(&format!("  {}: {}\n", key, s));
             }
         }
+    }
+    // Notion uses OAuth — inject token from notion-oauth.json
+    if let Some(token) = notion_token {
+        let def = notion::Notion.def();
+        out.push_str(&format!("\n## {} ({})\n", def.name, def.id));
+        out.push_str(&format!("{}\n", def.description));
+        out.push_str(&format!("  api_key: {}\n", token));
+        out.push_str("  (connected via OAuth — no database_id needed, use /v1/search to find databases)\n");
     }
     out
 }

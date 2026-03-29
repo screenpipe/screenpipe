@@ -925,6 +925,72 @@ function ChatGptPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Notion OAuth panel
+// ---------------------------------------------------------------------------
+
+function NotionPanel() {
+  const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+
+  useEffect(() => {
+    commands.notionOauthStatus().then(res => {
+      if (res.status === "ok" && res.data.connected) {
+        setStatus("connected");
+        setWorkspaceName(res.data.workspace_name ?? null);
+      }
+    });
+  }, []);
+
+  const handleConnect = async () => {
+    setStatus("loading");
+    try {
+      const res = await commands.notionOauthConnect();
+      if (res.status === "ok" && res.data.connected) {
+        setStatus("connected");
+        setWorkspaceName(res.data.workspace_name ?? null);
+      } else {
+        setStatus("idle");
+      }
+    } catch {
+      setStatus("idle");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await commands.notionOauthDisconnect();
+    setStatus("idle");
+    setWorkspaceName(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Connect your Notion workspace. AI can create pages and update databases on your behalf.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {status === "connected" ? (
+          <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <LogOut className="h-3 w-3" />disconnect
+          </Button>
+        ) : (
+          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {status === "loading"
+              ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
+              : (<><LogIn className="h-3 w-3" />connect with Notion</>)}
+          </Button>
+        )}
+      </div>
+      {status === "connected" && workspaceName && (
+        <div className="p-3 bg-muted border border-border rounded-lg">
+          <p className="text-xs font-medium text-foreground">connected</p>
+          <p className="text-xs text-muted-foreground">{workspaceName}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // API integration panel (Telegram, Slack, etc.)
 // ---------------------------------------------------------------------------
 
@@ -1385,6 +1451,7 @@ export function ConnectionsSection() {
       case "cursor": return <CursorPanel />;
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
+      case "notion": return <NotionPanel />;
       case "browser-extension": return <BrowserExtensionPanel connected={browserExtConnected} onRefresh={refreshStatus} />;
       case "browser-url": return <BrowserUrlCard />;
       case "voice-memos": return <VoiceMemosCard />;
