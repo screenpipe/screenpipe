@@ -1089,7 +1089,8 @@ export function PipesSection() {
       const requiredConnections: string[] = pipe?.config?.connections ?? [];
       if (requiredConnections.length > 0) {
         const missing = requiredConnections.filter((id) => {
-          const conn = availableConnections.find((c) => c.id === id);
+          const baseId = id.includes(":") ? id.split(":")[0] : id;
+          const conn = availableConnections.find((c) => c.id === baseId);
           return !conn || !conn.connected;
         });
         if (missing.length > 0) {
@@ -1508,7 +1509,8 @@ export function PipesSection() {
             const runningExec = recentExecs.find((e) => e.status === "running");
             const lastExec = recentExecs[0];
             const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
-              const conn = availableConnections.find((c) => c.id === id);
+              const baseId = id.includes(":") ? id.split(":")[0] : id;
+              const conn = availableConnections.find((c) => c.id === baseId);
               return !conn || !conn.connected;
             });
             const lastStatus = isRunning
@@ -2326,11 +2328,31 @@ export function PipesSection() {
       {connectionModal && (
         <PostInstallConnectionsModal
           open={!!connectionModal}
-          onOpenChange={(open) => {
+          onOpenChange={async (open) => {
             if (!open) {
+              // Re-check against fresh connection state.
+              // Required IDs can be named instances like "notion:crm", while
+              // availableConnections are keyed by base ID ("notion").
+              let latestConnections = availableConnections;
+              try {
+                const res = await fetch(`${apiBase}/connections`);
+                const data = await res.json();
+                if (data.data) {
+                  latestConnections = data.data.map((c: any) => ({
+                    id: c.id,
+                    name: c.name,
+                    icon: c.icon,
+                    connected: c.connected,
+                  }));
+                }
+              } catch {
+                // Fall back to current in-memory state if fetch fails.
+              }
+
               // If any required connection is still missing, disable the pipe
               const stillMissing = connectionModal.connections.some((id) => {
-                const conn = availableConnections.find((c) => c.id === id);
+                const baseId = id.includes(":") ? id.split(":")[0] : id;
+                const conn = latestConnections.find((c) => c.id === baseId);
                 return !conn || !conn.connected;
               });
               if (stillMissing) {

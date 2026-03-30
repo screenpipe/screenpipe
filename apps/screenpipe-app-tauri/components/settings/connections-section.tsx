@@ -925,29 +925,29 @@ function ChatGptPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// Notion OAuth panel
+// Generic OAuth panel — used for any integration with is_oauth: true
 // ---------------------------------------------------------------------------
 
-function NotionPanel() {
+function OAuthPanel({ integrationId, integrationName }: { integrationId: string; integrationName: string }) {
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
-  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
 
   useEffect(() => {
-    commands.notionOauthStatus().then(res => {
+    commands.oauthStatus(integrationId).then(res => {
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
-        setWorkspaceName(res.data.workspace_name ?? null);
+        setDisplayName(res.data.display_name ?? null);
       }
     });
-  }, []);
+  }, [integrationId]);
 
   const handleConnect = async () => {
     setStatus("loading");
     try {
-      const res = await commands.notionOauthConnect();
+      const res = await commands.oauthConnect(integrationId);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
-        setWorkspaceName(res.data.workspace_name ?? null);
+        setDisplayName(res.data.display_name ?? null);
       } else {
         setStatus("idle");
       }
@@ -957,15 +957,15 @@ function NotionPanel() {
   };
 
   const handleDisconnect = async () => {
-    await commands.notionOauthDisconnect();
+    await commands.oauthDisconnect(integrationId);
     setStatus("idle");
-    setWorkspaceName(null);
+    setDisplayName(null);
   };
 
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Connect your Notion workspace. AI can create pages and update databases on your behalf.
+        Connect your {integrationName} account. AI can act on your behalf once connected.
       </p>
       <div className="flex flex-wrap gap-2">
         {status === "connected" ? (
@@ -976,14 +976,14 @@ function NotionPanel() {
           <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "loading"
               ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
-              : (<><LogIn className="h-3 w-3" />connect with Notion</>)}
+              : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
           </Button>
         )}
       </div>
-      {status === "connected" && workspaceName && (
+      {status === "connected" && displayName && (
         <div className="p-3 bg-muted border border-border rounded-lg">
           <p className="text-xs font-medium text-foreground">connected</p>
-          <p className="text-xs text-muted-foreground">{workspaceName}</p>
+          <p className="text-xs text-muted-foreground">{displayName}</p>
         </div>
       )}
     </div>
@@ -1010,6 +1010,7 @@ export interface IntegrationInfo {
   description: string;
   fields: IntegrationField[];
   connected: boolean;
+  is_oauth: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1451,7 +1452,6 @@ export function ConnectionsSection() {
       case "cursor": return <CursorPanel />;
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
-      case "notion": return <NotionPanel />;
       case "browser-extension": return <BrowserExtensionPanel connected={browserExtConnected} onRefresh={refreshStatus} />;
       case "browser-url": return <BrowserUrlCard />;
       case "voice-memos": return <VoiceMemosCard />;
@@ -1467,6 +1467,9 @@ export function ConnectionsSection() {
       case "msty": return <MstyPanel />;
       default:
         if (selectedIntegration) {
+          if (selectedIntegration.is_oauth) {
+            return <OAuthPanel integrationId={selectedIntegration.id} integrationName={selectedIntegration.name} />;
+          }
           return <ApiIntegrationPanel integration={selectedIntegration} onRefresh={fetchIntegrations} />;
         }
         return null;

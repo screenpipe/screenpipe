@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Check, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { commands } from "@/lib/utils/tauri";
 import {
   ConnectionCredentialForm,
   IntegrationIcon,
@@ -58,7 +59,9 @@ export function PostInstallConnectionsModal({
         const newStatuses: Record<string, ConnectionStatus> = {};
 
         for (const connId of connections) {
-          const integration = integrations.find((i) => i.id === connId) || null;
+          // connId may be "notion:crm" (named instance) — base id is before the colon
+          const baseId = connId.includes(":") ? connId.split(":")[0] : connId;
+          const integration = integrations.find((i) => i.id === baseId) || null;
           const configured = integration?.connected ?? false;
           newStatuses[connId] = {
             integration,
@@ -94,6 +97,30 @@ export function PostInstallConnectionsModal({
       (c) => c !== connId && !statuses[c]?.configured
     );
     setExpanded(nextUnconfigured || null);
+  };
+
+  const handleOAuthConnect = async (connId: string, integrationId: string) => {
+    setStatuses((prev) => ({
+      ...prev,
+      [connId]: { ...prev[connId], loading: true },
+    }));
+
+    try {
+      const res = await commands.oauthConnect(integrationId);
+      if (res.status === "ok" && res.data.connected) {
+        handleSaved(connId);
+      } else {
+        setStatuses((prev) => ({
+          ...prev,
+          [connId]: { ...prev[connId], loading: false },
+        }));
+      }
+    } catch {
+      setStatuses((prev) => ({
+        ...prev,
+        [connId]: { ...prev[connId], loading: false },
+      }));
+    }
   };
 
   const allConfigured = connections.every((c) => statuses[c]?.configured);
@@ -165,7 +192,7 @@ export function PostInstallConnectionsModal({
                     )}
                   </button>
 
-                  {isExpanded && integration && (
+                  {isExpanded && integration && integration.fields.length > 0 && (
                     <div className="px-3 pb-3 border-t border-border pt-3">
                       <ConnectionCredentialForm
                         integrationId={integration.id}
@@ -175,6 +202,35 @@ export function PostInstallConnectionsModal({
                         }
                         onSaved={() => handleSaved(connId)}
                       />
+                    </div>
+                  )}
+
+                  {isExpanded && integration && integration.is_oauth && (
+                    <div className="px-3 pb-3 border-t border-border pt-3">
+                      <Button
+                        size="sm"
+                        className="text-xs"
+                        disabled={status?.loading}
+                        onClick={() => handleOAuthConnect(connId, integration.id)}
+                      >
+                        {status?.loading ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            connecting...
+                          </>
+                        ) : (
+                          <>connect with {integration.name}</>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+
+                  {isExpanded && integration && !integration.is_oauth && integration.fields.length === 0 && (
+                    <div className="px-3 pb-3 border-t border-border pt-3">
+                      <p className="text-xs text-muted-foreground">
+                        connect {integration.name} in{" "}
+                        <strong>settings &gt; connections</strong> then come back here.
+                      </p>
                     </div>
                   )}
 

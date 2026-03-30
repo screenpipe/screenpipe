@@ -42,7 +42,7 @@ mod icons;
 use crate::analytics::start_analytics;
 mod calendar;
 mod chatgpt_oauth;
-mod notion_oauth;
+mod oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
@@ -628,10 +628,10 @@ async fn main() {
                 chatgpt_oauth::chatgpt_oauth_get_token,
                 chatgpt_oauth::chatgpt_oauth_logout,
                 chatgpt_oauth::chatgpt_oauth_models,
-                // Notion OAuth commands
-                notion_oauth::notion_oauth_connect,
-                notion_oauth::notion_oauth_status,
-                notion_oauth::notion_oauth_disconnect,
+                // Generic OAuth commands (works for any OAuth integration)
+                oauth::oauth_connect,
+                oauth::oauth_status,
+                oauth::oauth_disconnect,
                 // Pipe suggestions scheduler commands
                 pipe_suggestions_scheduler::pipe_suggestions_get_settings,
                 pipe_suggestions_scheduler::pipe_suggestions_update_settings,
@@ -667,7 +667,7 @@ async fn main() {
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
-            .typ::<notion_oauth::NotionOAuthStatus>();
+            .typ::<oauth::OAuthStatus>();
 
         // Export to a temp file first, then only overwrite if content changed.
         // This avoids triggering the Tauri dev watcher on every launch which
@@ -891,10 +891,10 @@ async fn main() {
             chatgpt_oauth::chatgpt_oauth_get_token,
             chatgpt_oauth::chatgpt_oauth_logout,
             chatgpt_oauth::chatgpt_oauth_models,
-            // Notion OAuth commands
-            notion_oauth::notion_oauth_connect,
-            notion_oauth::notion_oauth_status,
-            notion_oauth::notion_oauth_disconnect,
+            // Generic OAuth commands (works for any OAuth integration)
+            oauth::oauth_connect,
+            oauth::oauth_status,
+            oauth::oauth_disconnect,
             // Pipe suggestions scheduler commands
             pipe_suggestions_scheduler::pipe_suggestions_get_settings,
             pipe_suggestions_scheduler::pipe_suggestions_update_settings,
