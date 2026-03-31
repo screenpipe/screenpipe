@@ -230,9 +230,15 @@ fn create_error_callback(
                 "audio device {} disconnected. stopping recording.",
                 device_name
             );
-            stream_control_tx
+            if stream_control_tx
                 .send(StreamControl::Stop(oneshot::channel().0))
-                .unwrap();
+                .is_err()
+            {
+                warn!(
+                    "stream control channel closed for {}, stream already stopping",
+                    device_name
+                );
+            }
             is_disconnected.store(true, Ordering::Relaxed);
         } else {
             error!("an error occurred on the audio stream: {}", err);
