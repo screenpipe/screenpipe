@@ -9,68 +9,17 @@
 //! Adding a new OAuth provider requires zero changes here.
 
 use screenpipe_connect::connections::all_integrations;
-use screenpipe_connect::oauth;
+use screenpipe_connect::oauth::{self, OAUTH_REDIRECT_URI, PENDING_OAUTH};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::oneshot;
 use tracing::{error, info};
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
 pub struct OAuthStatus {
     pub connected: bool,
     pub display_name: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Localhost callback helpers
-// ---------------------------------------------------------------------------
-
-async fn wait_for_callback(listener: tokio::net::TcpListener) -> Result<String, String> {
-    loop {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .map_err(|e| format!("accept failed: {}", e))?;
-
-        let mut buf = vec![0u8; 4096];
-        let n = match stream.read(&mut buf).await {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-
-        let request = String::from_utf8_lossy(&buf[..n]);
-        let code = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|path| reqwest::Url::parse(&format!("http://localhost{}", path)).ok())
-            .and_then(|url| {
-                url.query_pairs()
-                    .find(|(k, _)| k == "code")
-                    .map(|(_, v)| v.to_string())
-            });
-
-        match code {
-            Some(code) => {
-                let html = concat!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n",
-                    "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">",
-                    "<h2>Connected!</h2>",
-                    "<p>You can close this tab and return to screenpipe.</p>",
-                    "<script>window.close()</script>",
-                    "</body></html>"
-                );
-                let _ = stream.write_all(html.as_bytes()).await;
-                return Ok(code);
-            }
-            None => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
-                    .await;
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,20 +44,14 @@ pub async fn oauth_connect(
         .oauth_config()
         .ok_or_else(|| format!("{} does not use OAuth", integration_id))?;
 
-    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.callback_port)).await {
-        Ok(l) => l,
-        Err(_) => tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| format!("failed to start local server: {}", e))?,
-    };
-
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("local_addr: {}", e))?
-        .port();
-
-    let redirect_uri = format!("http://localhost:{}/callback", port);
+    // Register a oneshot channel in the global map so the HTTP callback handler
+    // can deliver the authorization code back to this waiting task.
     let state = uuid::Uuid::new_v4().simple().to_string();
+    let (tx, rx) = oneshot::channel::<String>();
+    {
+        let mut map = PENDING_OAUTH.lock().unwrap();
+        map.insert(state.clone(), tx);
+    }
 
     let mut auth_url = reqwest::Url::parse(config.auth_url)
         .map_err(|e| format!("bad auth_url: {}", e))?;
@@ -117,7 +60,7 @@ pub async fn oauth_connect(
         pairs
             .append_pair("client_id", config.client_id)
             .append_pair("response_type", "code")
-            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("redirect_uri", OAUTH_REDIRECT_URI)
             .append_pair("state", &state);
         for (k, v) in config.extra_auth_params {
             pairs.append_pair(k, v);
@@ -127,24 +70,34 @@ pub async fn oauth_connect(
     app_handle
         .opener()
         .open_url(auth_url.as_str(), None::<&str>)
-        .map_err(|e| format!("failed to open browser: {}", e))?;
+        .map_err(|e| {
+            // Clean up the pending entry if we can't open the browser
+            let mut map = PENDING_OAUTH.lock().unwrap();
+            map.remove(&state);
+            format!("failed to open browser: {}", e)
+        })?;
 
-    info!("waiting for OAuth callback on port {} ({})", port, integration_id);
+    info!(
+        "waiting for OAuth callback via /connections/oauth/callback ({})",
+        integration_id
+    );
 
-    let code = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        wait_for_callback(listener),
-    )
-    .await
-    .map_err(|_| format!("{} OAuth timed out (120s)", integration_id))?
-    .map_err(|e| format!("callback error: {}", e))?;
+    let code = tokio::time::timeout(std::time::Duration::from_secs(120), rx)
+        .await
+        .map_err(|_| {
+            // Timed out — remove the stale pending entry
+            let mut map = PENDING_OAUTH.lock().unwrap();
+            map.remove(&state);
+            format!("{} OAuth timed out (120s)", integration_id)
+        })?
+        .map_err(|_| "OAuth channel closed before code was received".to_string())?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let token_data = oauth::exchange_code(&client, config, &code, &redirect_uri)
+    let token_data = oauth::exchange_code(&client, config, &code, OAUTH_REDIRECT_URI)
         .await
         .map_err(|e| {
             error!("token exchange failed for {}: {}", integration_id, e);
@@ -168,14 +121,32 @@ pub async fn oauth_connect(
     })
 }
 
-/// Check whether an OAuth token exists for the given integration.
+/// Check whether a valid (non-expired) OAuth token exists for the given integration.
 #[tauri::command]
 #[specta::specta]
 pub async fn oauth_status(integration_id: String) -> Result<OAuthStatus, String> {
-    let token_exists = oauth::read_oauth_token(&integration_id).is_some();
+    // read_oauth_token checks expiry — returns None if token is missing or expired
+    let token = oauth::read_oauth_token(&integration_id);
+
+    // Try to read a display name from the stored token file
+    let display_name = if token.is_some() {
+        let path = oauth::oauth_token_path(&integration_id);
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                v["workspace_name"]
+                    .as_str()
+                    .or_else(|| v["name"].as_str())
+                    .map(String::from)
+            })
+    } else {
+        None
+    };
+
     Ok(OAuthStatus {
-        connected: token_exists,
-        display_name: None,
+        connected: token.is_some(),
+        display_name,
     })
 }
 

@@ -16,8 +16,8 @@ static OAUTH: OAuthConfig = OAuthConfig {
     token_url: "https://api.notion.com/v1/oauth/token",
     client_id: NOTION_CLIENT_ID,
     client_secret: NOTION_CLIENT_SECRET,
-    callback_port: 1456,
     extra_auth_params: &[("owner", "user")],
+    token_refresh_url: None,
 };
 
 static DEF: IntegrationDef = IntegrationDef {
