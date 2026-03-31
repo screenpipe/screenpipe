@@ -118,3 +118,11 @@ bunx screenpipe@latest connection list
 Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`
 
 Credentials are stored locally at `~/.screenpipe/connections.json`.
+
+## Publishing pipes to the store
+
+```bash
+screenpipe pipe publish <pipe-name>
+```
+
+Reads `~/.screenpipe/pipes/<pipe-name>/pipe.md`, extracts title/description/icon/category from YAML frontmatter, and publishes to the screenpipe pipe store. Requires auth (SCREENPIPE_API_KEY env var or `~/.screenpipe/auth.json`).

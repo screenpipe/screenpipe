@@ -180,38 +180,47 @@ async function copyBunBinary() {
 		}
 		return;
 	} else if (platform === 'macos') {
-		const possibleBunPaths = [
-			path.join(os.homedir(), '.bun', 'bin', 'bun'),
-		];
-
-		// Try to find bun via `which`
-		try {
-			const whichBun = (await $`which bun`.text()).trim();
-			if (whichBun) {
-				possibleBunPaths.unshift(whichBun);
-			}
-		} catch {
-			// which failed, rely on default paths
-		}
-
-		bunSrc = null;
-		for (const possiblePath of possibleBunPaths) {
-			try {
-				await fs.access(possiblePath);
-				console.log('found bun at:', possiblePath);
-				bunSrc = possiblePath;
-				break;
-			} catch {
-				continue;
-			}
-		}
-
-		if (!bunSrc) {
-			throw new Error('Could not find bun binary. Please check if bun is installed correctly');
-		}
-
 		bunDest1 = path.join(cwd, 'bun-aarch64-apple-darwin');
 		bunDest2 = path.join(cwd, 'bun-x86_64-apple-darwin');
+
+		if (await fs.exists(bunDest1) && await fs.exists(bunDest2)) {
+			console.log('bun binaries already exist for both macOS architectures.');
+			return;
+		}
+
+		// Download arch-specific bun binaries so both Intel and Apple Silicon Macs
+		// get a native binary (previously the build-machine's bun was copied to both
+		// paths, causing "Bad CPU type in executable" on the other architecture).
+		const bunVersion = '1.3.10';
+		const archMap = [
+			{ url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-aarch64.zip`, dest: bunDest1, label: 'aarch64' },
+			{ url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-x64.zip`, dest: bunDest2, label: 'x64' },
+		];
+
+		for (const { url, dest, label } of archMap) {
+			if (await fs.exists(dest)) {
+				console.log(`bun ${label} binary already exists, skipping download.`);
+				continue;
+			}
+			console.log(`downloading bun v${bunVersion} for macOS ${label}...`);
+			const tmpZip = path.join(cwd, `bun-darwin-${label}.zip`);
+			const tmpDir = path.join(cwd, `bun-darwin-${label}-tmp`);
+			try {
+				await $`curl -L -o ${tmpZip} ${url}`;
+				await $`unzip -o ${tmpZip} -d ${tmpDir}`;
+				// The zip contains a folder like bun-darwin-aarch64/bun or bun-darwin-x64/bun
+				const entries = await fs.readdir(tmpDir);
+				const extractedBun = path.join(tmpDir, entries[0], 'bun');
+				await copyFile(extractedBun, dest);
+				console.log(`bun ${label} binary installed to ${dest}`);
+				await fs.rm(tmpZip, { force: true });
+				await fs.rm(tmpDir, { recursive: true, force: true });
+			} catch (error) {
+				console.error(`failed to download bun ${label}:`, error);
+				process.exit(1);
+			}
+		}
+		return;
 	}
 
 	if (await fs.exists(bunDest1)) {
@@ -223,11 +232,6 @@ async function copyBunBinary() {
 		await fs.access(bunSrc);
 		await copyFile(bunSrc, bunDest1);
 		console.log(`bun binary copied successfully from ${bunSrc} to ${bunDest1}`);
-
-		if (platform === 'macos') {
-			await copyFile(bunSrc, bunDest2);
-			console.log(`bun binary also copied to ${bunDest2}`);
-		}
 	} catch (error) {
 		console.error('failed to copy bun binary:', error);
 		console.error('source path:', bunSrc);

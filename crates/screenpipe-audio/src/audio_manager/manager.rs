@@ -37,6 +37,7 @@ use crate::{
         engine::TranscriptionEngine,
         handle_new_transcript,
         stt::{process_audio_input, SAMPLE_RATE},
+        whisper::model::get_cached_whisper_model_path,
     },
     utils::{
         audio::resample,
@@ -111,7 +112,13 @@ impl AudioManager {
         let segmentation_manager = Arc::new(SegmentationManager::new().await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
         let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = match options.vad_engine {
-            VadEngineEnum::Silero => Arc::new(Mutex::new(Box::new(SileroVad::new().await?))),
+            VadEngineEnum::Silero => match SileroVad::new().await {
+                Ok(vad) => Arc::new(Mutex::new(Box::new(vad))),
+                Err(e) => {
+                    warn!("silero vad unavailable, falling back to webrtc: {}", e);
+                    Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+                }
+            },
             VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
         };
 
@@ -411,9 +418,17 @@ impl AudioManager {
     async fn start_audio_receiver_handler(&self) -> Result<JoinHandle<()>> {
         let transcription_sender = self.transcription_sender.clone();
         let segmentation_manager = self.segmentation_manager.clone();
-        let segmentation_model_path = segmentation_manager.segmentation_model_path.clone();
+        let segmentation_model_path = segmentation_manager
+            .segmentation_model_path
+            .lock()
+            .await
+            .clone();
         let embedding_manager = segmentation_manager.embedding_manager.clone();
-        let embedding_extractor = segmentation_manager.embedding_extractor.clone();
+        let embedding_extractor = segmentation_manager
+            .embedding_extractor
+            .lock()
+            .await
+            .clone();
         let options = self.options.read().await;
         let output_path = options.output_path.clone();
         let languages = options.languages.clone();
@@ -793,6 +808,162 @@ impl AudioManager {
     /// Returns the current vocabulary.
     pub async fn vocabulary(&self) -> Vec<crate::transcription::VocabularyEntry> {
         self.options.read().await.vocabulary.clone()
+    }
+
+    /// Attempt to move disabled components to ready state after background model
+    /// downloads finish. Returns `true` when any runtime-capability state changed.
+    pub async fn refresh_model_capabilities(&self) -> bool {
+        let options = self.options.read().await;
+        let audio_transcription_engine = options.transcription_engine.clone();
+        let deepgram_api_key = options.deepgram_api_key.clone();
+        let openai_compatible_config = options.openai_compatible_config.clone();
+        let languages = options.languages.clone();
+        let vocabulary = options.vocabulary.clone();
+        drop(options);
+
+        let mut changed = false;
+
+        // Re-initialize whisper transcription when the model becomes available.
+        let should_try_transcription_refresh =
+            matches!(
+                audio_transcription_engine.as_ref(),
+                AudioTranscriptionEngine::WhisperTiny
+                    | AudioTranscriptionEngine::WhisperTinyQuantized
+                    | AudioTranscriptionEngine::WhisperLargeV3Turbo
+                    | AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+                    | AudioTranscriptionEngine::WhisperLargeV3
+                    | AudioTranscriptionEngine::WhisperLargeV3Quantized
+            ) && get_cached_whisper_model_path(audio_transcription_engine.as_ref()).is_some();
+
+        if should_try_transcription_refresh {
+            let mut engine = self.engine.write().await;
+            if engine
+                .as_ref()
+                .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
+            {
+                match TranscriptionEngine::new(
+                    audio_transcription_engine.clone(),
+                    deepgram_api_key.clone(),
+                    openai_compatible_config.clone(),
+                    languages.clone(),
+                    vocabulary.clone(),
+                )
+                .await
+                {
+                    Ok(updated_engine) => {
+                        if updated_engine.config() != AudioTranscriptionEngine::Disabled {
+                            *engine = Some(updated_engine);
+                            changed = true;
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            "whisper refresh still unavailable while creating transcription engine: {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        #[cfg(any(feature = "qwen3-asr", feature = "parakeet", feature = "parakeet-mlx"))]
+        {
+            let should_try_audiopipe_refresh = matches!(
+                audio_transcription_engine.as_ref(),
+                AudioTranscriptionEngine::Qwen3Asr
+                    | AudioTranscriptionEngine::Parakeet
+                    | AudioTranscriptionEngine::ParakeetMlx
+            );
+
+            if should_try_audiopipe_refresh {
+                let mut engine = self.engine.write().await;
+                if engine
+                    .as_ref()
+                    .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
+                {
+                    match TranscriptionEngine::new(
+                        audio_transcription_engine.clone(),
+                        deepgram_api_key.clone(),
+                        openai_compatible_config.clone(),
+                        languages.clone(),
+                        vocabulary.clone(),
+                    )
+                    .await
+                    {
+                        Ok(updated_engine) => {
+                            if updated_engine.config() != AudioTranscriptionEngine::Disabled {
+                                *engine = Some(updated_engine);
+                                changed = true;
+                            }
+                        }
+                        Err(e) => {
+                            debug!("audiopipe transcription refresh still unavailable: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        let segmentation_changed = self.segmentation_manager.refresh_models().await;
+        changed = changed || segmentation_changed;
+
+        changed
+    }
+
+    /// Restart central handlers regardless of whether they are dead.
+    pub async fn restart_central_handlers(&self) -> CentralHandlerRestartResult {
+        let mut result = CentralHandlerRestartResult::default();
+        {
+            let mut recording_guard = self.recording_receiver_handle.write().await;
+            if let Some(handle) = recording_guard.take() {
+                handle.abort();
+            }
+            match self.start_audio_receiver_handler().await {
+                Ok(handle) => {
+                    *recording_guard = Some(handle);
+                    result.recording_restarted = true;
+                    info!("central audio-receiver handler restarted for capability refresh");
+                }
+                Err(e) => {
+                    error!("failed to restart audio-receiver handler: {}", e);
+                    result.recording_error = Some(e.to_string());
+                }
+            }
+        }
+
+        {
+            let mut transcription_guard = self.transcription_receiver_handle.write().await;
+            if let Some(handle) = transcription_guard.take() {
+                handle.abort();
+            }
+            match self.start_transcription_receiver_handler().await {
+                Ok(handle) => {
+                    *transcription_guard = Some(handle);
+                    result.transcription_restarted = true;
+                    info!(
+                        "central transcription-receiver handler restarted for capability refresh"
+                    );
+                }
+                Err(e) => {
+                    error!("failed to restart transcription-receiver handler: {}", e);
+                    result.transcription_error = Some(e.to_string());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Backfill missing speaker IDs for recently transcribed chunks if
+    /// segmentation models have become available.
+    pub async fn reconcile_missing_speakers(&self, lookback_hours: i64, limit: i64) -> usize {
+        super::reconciliation::backfill_missing_speakers(
+            &self.db,
+            self.segmentation_manager.clone(),
+            lookback_hours,
+            limit,
+        )
+        .await
     }
 
     /// Check for recording handles that have finished (crashed or timed out)

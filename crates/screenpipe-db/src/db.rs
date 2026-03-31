@@ -844,6 +844,29 @@ impl DatabaseManager {
         Ok(rows)
     }
 
+    /// Returns recently transcribed chunks that still have no assigned speaker.
+    /// Used for speaker backfill after segmentation models become available.
+    pub async fn get_recent_transcriptions_without_speaker(
+        &self,
+        since: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<UntranscribedChunk>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, UntranscribedChunk>(
+            "SELECT ac.id, ac.file_path, ac.timestamp
+             FROM audio_transcriptions at
+             INNER JOIN audio_chunks ac ON ac.id = at.audio_chunk_id
+             WHERE at.speaker_id IS NULL
+               AND at.timestamp >= ?1
+             ORDER BY at.timestamp DESC
+             LIMIT ?2",
+        )
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Delete an audio chunk and its transcriptions (cascade via FK).
     /// Used by batch reconciliation to merge multiple 30s chunks into one.
     pub async fn delete_audio_chunk(&self, chunk_id: i64) -> Result<(), sqlx::Error> {

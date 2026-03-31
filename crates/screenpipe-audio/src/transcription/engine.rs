@@ -7,7 +7,7 @@ use crate::transcription::deepgram::batch::transcribe_with_deepgram;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
 use crate::transcription::whisper::batch::process_with_whisper;
 use crate::transcription::whisper::model::{
-    create_whisper_context_parameters, download_whisper_model,
+    create_whisper_context_parameters, download_whisper_model, get_cached_whisper_model_path,
 };
 use crate::transcription::VocabularyEntry;
 use anyhow::{anyhow, Result};
@@ -16,7 +16,7 @@ use screenpipe_core::Language;
 use std::sync::Arc;
 #[cfg(any(feature = "qwen3-asr", feature = "parakeet", feature = "parakeet-mlx"))]
 use std::sync::Mutex as StdMutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use whisper_rs::{WhisperContext, WhisperState};
 
 /// Unified transcription engine that owns the runtime state for whatever backend is configured.
@@ -101,17 +101,29 @@ impl TranscriptionEngine {
             AudioTranscriptionEngine::Qwen3Asr => {
                 #[cfg(feature = "qwen3-asr")]
                 {
-                    let model = tokio::task::spawn_blocking(|| {
-                        audiopipe::Model::from_pretrained("qwen3-asr-0.6b-antirez")
+                    const MODEL_NAME: &str = "qwen3-asr-0.6b-antirez";
+                    let load_result = tokio::task::spawn_blocking(|| {
+                        audiopipe::Model::from_pretrained_cache_only(MODEL_NAME)
                     })
                     .await
-                    .map_err(|e| anyhow!("qwen3-asr model loading task panicked: {}", e))?
-                    .map_err(|e| anyhow!("failed to load qwen3-asr model: {}", e))?;
-                    info!("qwen3-asr (OpenBLAS) model loaded successfully");
-                    Ok(Self::Qwen3Asr {
-                        model: Arc::new(StdMutex::new(model)),
-                        vocabulary,
-                    })
+                    .map_err(|e| anyhow!("qwen3-asr model loading task panicked: {}", e))?;
+                    match load_result {
+                        Ok(model) => {
+                            info!("qwen3-asr (OpenBLAS) model loaded successfully");
+                            Ok(Self::Qwen3Asr {
+                                model: Arc::new(StdMutex::new(model)),
+                                vocabulary,
+                            })
+                        }
+                        Err(e) if e.is_model_not_cached() => {
+                            warn!(
+                                "qwen3-asr weights not in Hugging Face cache yet; transcription disabled until download completes"
+                            );
+                            audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
+                            Ok(Self::Disabled)
+                        }
+                        Err(e) => Err(anyhow!("failed to load qwen3-asr model: {}", e)),
+                    }
                 }
                 #[cfg(not(feature = "qwen3-asr"))]
                 {
@@ -126,31 +138,55 @@ impl TranscriptionEngine {
                 #[cfg(feature = "parakeet-mlx")]
                 {
                     info!("parakeet selected — auto-upgrading to parakeet-mlx (Metal GPU)");
-                    let model = tokio::task::spawn_blocking(|| {
-                        audiopipe::Model::from_pretrained("parakeet-tdt-0.6b-v3-mlx")
+                    const MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+                    let load_result = tokio::task::spawn_blocking(|| {
+                        audiopipe::Model::from_pretrained_cache_only(MODEL_NAME)
                     })
                     .await
-                    .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?
-                    .map_err(|e| anyhow!("failed to load parakeet-mlx model: {}", e))?;
-                    info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
-                    Ok(Self::ParakeetMlx {
-                        model: Arc::new(StdMutex::new(model)),
-                        vocabulary,
-                    })
+                    .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?;
+                    match load_result {
+                        Ok(model) => {
+                            info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
+                            Ok(Self::ParakeetMlx {
+                                model: Arc::new(StdMutex::new(model)),
+                                vocabulary,
+                            })
+                        }
+                        Err(e) if e.is_model_not_cached() => {
+                            warn!(
+                                "parakeet-mlx weights not in Hugging Face cache yet; transcription disabled until download completes"
+                            );
+                            audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
+                            Ok(Self::Disabled)
+                        }
+                        Err(e) => Err(anyhow!("failed to load parakeet-mlx model: {}", e)),
+                    }
                 }
                 #[cfg(all(feature = "parakeet", not(feature = "parakeet-mlx")))]
                 {
-                    let model = tokio::task::spawn_blocking(|| {
-                        audiopipe::Model::from_pretrained("parakeet-tdt-0.6b-v3")
+                    const MODEL_NAME: &str = "parakeet-tdt-0.6b-v3";
+                    let load_result = tokio::task::spawn_blocking(|| {
+                        audiopipe::Model::from_pretrained_cache_only(MODEL_NAME)
                     })
                     .await
-                    .map_err(|e| anyhow!("parakeet model loading task panicked: {}", e))?
-                    .map_err(|e| anyhow!("failed to load parakeet model: {}", e))?;
-                    info!("parakeet-tdt-0.6b-v3 (multilingual) model loaded successfully");
-                    Ok(Self::Parakeet {
-                        model: Arc::new(StdMutex::new(model)),
-                        vocabulary,
-                    })
+                    .map_err(|e| anyhow!("parakeet model loading task panicked: {}", e))?;
+                    match load_result {
+                        Ok(model) => {
+                            info!("parakeet-tdt-0.6b-v3 (multilingual) model loaded successfully");
+                            Ok(Self::Parakeet {
+                                model: Arc::new(StdMutex::new(model)),
+                                vocabulary,
+                            })
+                        }
+                        Err(e) if e.is_model_not_cached() => {
+                            warn!(
+                                "parakeet weights not in Hugging Face cache yet; transcription disabled until download completes"
+                            );
+                            audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
+                            Ok(Self::Disabled)
+                        }
+                        Err(e) => Err(anyhow!("failed to load parakeet model: {}", e)),
+                    }
                 }
                 #[cfg(not(any(feature = "parakeet", feature = "parakeet-mlx")))]
                 {
@@ -163,17 +199,29 @@ impl TranscriptionEngine {
             AudioTranscriptionEngine::ParakeetMlx => {
                 #[cfg(feature = "parakeet-mlx")]
                 {
-                    let model = tokio::task::spawn_blocking(|| {
-                        audiopipe::Model::from_pretrained("parakeet-tdt-0.6b-v3-mlx")
+                    const MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+                    let load_result = tokio::task::spawn_blocking(|| {
+                        audiopipe::Model::from_pretrained_cache_only(MODEL_NAME)
                     })
                     .await
-                    .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?
-                    .map_err(|e| anyhow!("failed to load parakeet-mlx model: {}", e))?;
-                    info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
-                    Ok(Self::ParakeetMlx {
-                        model: Arc::new(StdMutex::new(model)),
-                        vocabulary,
-                    })
+                    .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?;
+                    match load_result {
+                        Ok(model) => {
+                            info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
+                            Ok(Self::ParakeetMlx {
+                                model: Arc::new(StdMutex::new(model)),
+                                vocabulary,
+                            })
+                        }
+                        Err(e) if e.is_model_not_cached() => {
+                            warn!(
+                                "parakeet-mlx weights not in Hugging Face cache yet; transcription disabled until download completes"
+                            );
+                            audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
+                            Ok(Self::Disabled)
+                        }
+                        Err(e) => Err(anyhow!("failed to load parakeet-mlx model: {}", e)),
+                    }
                 }
                 #[cfg(not(feature = "parakeet-mlx"))]
                 {
@@ -185,13 +233,35 @@ impl TranscriptionEngine {
 
             // All Whisper variants
             _ => {
-                let engine_for_download = config.clone();
-                let quantized_path = tokio::task::spawn_blocking(move || {
-                    download_whisper_model(engine_for_download)
-                })
-                .await
-                .map_err(|e| anyhow!("whisper model download task panicked: {}", e))?
-                .map_err(|e| anyhow!("failed to download whisper model: {}", e))?;
+                let quantized_path = match get_cached_whisper_model_path(&config) {
+                    Some(path) => path,
+                    None => {
+                        warn!(
+                            "whisper model is not available locally yet for {:?}; audio transcription disabled until download completes",
+                            config
+                        );
+                        let config_for_download = config.clone();
+                        tokio::spawn(async move {
+                            match tokio::task::spawn_blocking(move || {
+                                download_whisper_model(config_for_download)
+                            })
+                            .await
+                            {
+                                Ok(Ok(path)) => {
+                                    info!("whisper model downloaded in background: {:?}", path)
+                                }
+                                Ok(Err(error)) => {
+                                    warn!("whisper background download failed: {}", error)
+                                }
+                                Err(join_error) => warn!(
+                                    "whisper background download task panicked: {}",
+                                    join_error
+                                ),
+                            }
+                        });
+                        return Ok(Self::Disabled);
+                    }
+                };
 
                 info!("whisper model available: {:?}", quantized_path);
 

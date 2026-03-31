@@ -541,6 +541,110 @@ pub fn request_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
     }
 }
 
+/// Per-browser automation status: "granted", "denied", or "not_asked".
+/// Also includes whether the browser is currently running.
+#[derive(Serialize, Deserialize, Type, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAutomationStatus {
+    pub name: String,
+    pub status: String,  // "granted" | "denied" | "not_asked"
+    pub running: bool,
+}
+
+/// Returns per-browser automation permission status for all installed Chromium browsers.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn get_browsers_automation_status() -> Vec<BrowserAutomationStatus> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        CHROMIUM_BROWSERS
+            .iter()
+            .filter(|b| std::path::Path::new(b.app_path).exists())
+            .map(|b| {
+                let running = Command::new("pgrep")
+                    .args(["-x", b.process_name])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                let status = if is_app_bundle() {
+                    match ae_check_automation_direct(b.bundle_id, false) {
+                        0 => "granted",
+                        -1744 => "denied",
+                        _ => "not_asked",
+                    }
+                } else {
+                    "not_asked" // can't reliably check in dev mode
+                };
+
+                BrowserAutomationStatus {
+                    name: b.name.to_string(),
+                    status: status.to_string(),
+                    running,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// Request automation permission for a single browser by name.
+/// Returns the new status: "granted", "denied", or "not_asked".
+#[tauri::command(async)]
+#[specta::specta]
+pub fn request_single_browser_automation(browser_name: String) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        let browser = CHROMIUM_BROWSERS
+            .iter()
+            .find(|b| b.name == browser_name);
+
+        let Some(browser) = browser else {
+            return "not_asked".to_string();
+        };
+
+        if !std::path::Path::new(browser.app_path).exists() {
+            return "not_asked".to_string();
+        }
+
+        let running = Command::new("pgrep")
+            .args(["-x", browser.process_name])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !running {
+            // Can't prompt — open System Settings as fallback
+            open_permission_settings(OSPermission::Automation);
+            return "not_asked".to_string();
+        }
+
+        if is_app_bundle() {
+            match ae_check_automation_direct(browser.bundle_id, true) {
+                0 => "granted".to_string(),
+                -1744 => "denied".to_string(),
+                _ => "not_asked".to_string(),
+            }
+        } else {
+            open_permission_settings(OSPermission::Automation);
+            "not_asked".to_string()
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "not_asked".to_string()
+    }
+}
+
 /// Check if Automation permission for Arc is already granted.
 /// In production (.app bundle): uses direct FFI check (correct identity, no Terminal).
 /// In dev mode: runs the binary itself via launchctl (detached from Terminal) so

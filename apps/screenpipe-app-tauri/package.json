@@ -90,6 +90,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/cli": "=2.10.0",
     "@testing-library/jest-dom": "^6.9.1",

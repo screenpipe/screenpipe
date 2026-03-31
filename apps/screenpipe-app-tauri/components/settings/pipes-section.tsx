@@ -565,8 +565,9 @@ function PipePresetSelector({
       ? [pipe.config.preset]
       : [];
 
-  const primaryPreset = presetList[0] || null;
-  const fallbackPreset = presetList[1] || null;
+  // "auto" is a legacy/special value meaning "use default" — treat as no selection
+  const primaryPreset = presetList[0] && presetList[0] !== "auto" ? presetList[0] : null;
+  const fallbackPreset = presetList[1] && presetList[1] !== "auto" ? presetList[1] : null;
   const [showFallback, setShowFallback] = useState(!!fallbackPreset);
 
   const savePresets = (primary: string | null, fallback: string | null) => {
@@ -1509,6 +1510,7 @@ export function PipesSection() {
             const runningExec = recentExecs.find((e) => e.status === "running");
             const lastExec = recentExecs[0];
             const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
+              // support instance keys like "notion:crm" — match on base id
               const baseId = id.includes(":") ? id.split(":")[0] : id;
               const conn = availableConnections.find((c) => c.id === baseId);
               return !conn || !conn.connected;
