@@ -328,9 +328,11 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
           RUSTFLAGS: "-C link-arg=/LTCG"
-          # Cap MSVC codegen at AVX2 — prevent AVX-512 on Lunar Lake etc.
+          # Cap MSVC codegen at AVX2 — prevent AVX-512 on Lunar Lake, Arrow Lake etc.
           CFLAGS: "/arch:AVX2"
           CXXFLAGS: "/arch:AVX2"
+          # Also cap CMake-built deps (whisper.cpp/GGML) — CFLAGS doesn't reach cmake crate
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas

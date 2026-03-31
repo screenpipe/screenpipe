@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     let ctrl_c_future = signal::ctrl_c();
     pin_mut!(ctrl_c_future);
 
-    let db = DatabaseManager::new("sqlite::memory:").await?;
+    let db = DatabaseManager::new("sqlite::memory:", Default::default()).await?;
 
     let mut builder = AudioManagerBuilder::new()
         .languages(languages)

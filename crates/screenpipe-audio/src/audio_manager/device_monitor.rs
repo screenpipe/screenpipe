@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::Result;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     core::device::{default_input_device, default_output_device, parse_audio_device, DeviceType},
@@ -174,6 +174,9 @@ pub async fn start_device_monitor(
         // Central handler restart cooldown: max 3 restarts in a 5-minute window
         let mut central_restart_times: Vec<Instant> = Vec::new();
         let central_restart_exhausted = std::sync::atomic::AtomicBool::new(false);
+        let mut model_restart_pending = false;
+        let model_refresh_cooldown = Duration::from_secs(30);
+        let mut last_model_refresh = Instant::now() - model_refresh_cooldown;
 
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
@@ -626,6 +629,17 @@ pub async fn start_device_monitor(
                 }
 
                 // Check central handler health (audio-receiver + transcription-receiver)
+                let mut central_restarted_this_cycle = false;
+                if central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
+                    let now = Instant::now();
+                    let window = Duration::from_secs(300);
+                    central_restart_times.retain(|t| now.duration_since(*t) < window);
+                    if central_restart_times.len() < 3 {
+                        central_restart_exhausted
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+
                 if !central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
                     let result = audio_manager.check_and_restart_central_handlers().await;
                     if result.recording_restarted || result.transcription_restarted {
@@ -634,6 +648,7 @@ pub async fn start_device_monitor(
                         // Evict entries older than 5 minutes
                         let window = Duration::from_secs(300);
                         central_restart_times.retain(|t| now.duration_since(*t) < window);
+                        central_restarted_this_cycle = true;
                         if central_restart_times.len() >= 3 {
                             error!(
                                 "central audio handlers restarted {} times in 5 min — stopping recovery to avoid restart storm",
@@ -642,6 +657,113 @@ pub async fn start_device_monitor(
                             central_restart_exhausted
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                         }
+                    }
+                }
+
+                if last_model_refresh.elapsed() >= model_refresh_cooldown {
+                    last_model_refresh = Instant::now();
+                    let model_capabilities_changed =
+                        audio_manager.refresh_model_capabilities().await;
+                    if model_capabilities_changed {
+                        if central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
+                            info!("model capabilities changed after background download; handler restart deferred due to cooldown");
+                            model_restart_pending = true;
+                        } else {
+                            info!("model capabilities changed after background download; restarting central handlers");
+                        }
+                        if !central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
+                            if central_restarted_this_cycle {
+                                // Avoid duplicate hard restarts in the same monitor iteration.
+                                // A capability-aware restart is still needed; do it now to avoid
+                                // carrying a deferred restart into the next pass.
+                                let result = audio_manager.restart_central_handlers().await;
+                                if result.recording_restarted || result.transcription_restarted {
+                                    let now = Instant::now();
+                                    // We already restarted once this iteration, so we still
+                                    // track this additional capability-aware restart for storm
+                                    // detection.
+                                    central_restart_times.push(now);
+                                    let window = Duration::from_secs(300);
+                                    central_restart_times
+                                        .retain(|t| now.duration_since(*t) < window);
+                                    if central_restart_times.len() >= 3 {
+                                        error!(
+                                            "central handlers restarted {} times (including same-cycle capability update) in 5 min — stopping recovery to avoid restart storm",
+                                            central_restart_times.len()
+                                        );
+                                        central_restart_exhausted
+                                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    } else {
+                                        model_restart_pending = false;
+                                    }
+                                    debug!(
+                                        "model capability refresh requested; handlers were already restarted earlier this cycle, and restarted again to pick up updated model state"
+                                    );
+                                } else {
+                                    warn!(
+                                        "model capability restart requested but no handlers restarted; keeping request pending"
+                                    );
+                                    model_restart_pending = true;
+                                }
+                            } else {
+                                let result = audio_manager.restart_central_handlers().await;
+                                if result.recording_restarted || result.transcription_restarted {
+                                    central_restarted_this_cycle = true;
+                                    let now = Instant::now();
+                                    central_restart_times.push(now);
+                                    let window = Duration::from_secs(300);
+                                    central_restart_times
+                                        .retain(|t| now.duration_since(*t) < window);
+                                    if central_restart_times.len() >= 3 {
+                                        error!(
+                                            "central handlers restarted {} times in 5 min (including model refresh path) — stopping recovery to avoid restart storm",
+                                            central_restart_times.len()
+                                        );
+                                        central_restart_exhausted
+                                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    } else {
+                                        model_restart_pending = false;
+                                    }
+                                } else {
+                                    warn!(
+                                        "model capability restart requested but no handlers restarted; keeping request pending"
+                                    );
+                                    model_restart_pending = true;
+                                }
+                            }
+                        } else {
+                            info!(
+                                "model capabilities changed, but central handler restart is temporarily suspended"
+                            );
+                        }
+                        let _ = audio_manager.reconcile_missing_speakers(24, 50).await;
+                    }
+                }
+
+                if model_restart_pending
+                    && !central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed)
+                    && !central_restarted_this_cycle
+                {
+                    let result = audio_manager.restart_central_handlers().await;
+                    if result.recording_restarted || result.transcription_restarted {
+                        let now = Instant::now();
+                        central_restart_times.push(now);
+                        let window = Duration::from_secs(300);
+                        central_restart_times.retain(|t| now.duration_since(*t) < window);
+                        if central_restart_times.len() >= 3 {
+                            error!(
+                                "central handlers restarted {} times while applying pending model changes — stopping recovery to avoid restart storm",
+                                central_restart_times.len()
+                            );
+                            central_restart_exhausted
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        } else {
+                            model_restart_pending = false;
+                        }
+                    } else {
+                        warn!(
+                            "model capability restart was requested but handlers did not restart; keeping request pending"
+                        );
                     }
                 }
 

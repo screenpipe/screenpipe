@@ -92,6 +92,12 @@ async checkBrowsersAutomationPermission() : Promise<boolean> {
 async requestBrowsersAutomationPermission() : Promise<boolean> {
     return await TAURI_INVOKE("request_browsers_automation_permission");
 },
+async getBrowsersAutomationStatus() : Promise<{ name: string; status: string; running: boolean }[]> {
+    return await TAURI_INVOKE("get_browsers_automation_status");
+},
+async requestSingleBrowserAutomation(browserName: string) : Promise<string> {
+    return await TAURI_INVOKE("request_single_browser_automation", { browserName });
+},
 async getEnv(name: string) : Promise<string> {
     return await TAURI_INVOKE("get_env", { name });
 },

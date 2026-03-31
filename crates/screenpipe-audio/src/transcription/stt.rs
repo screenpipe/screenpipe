@@ -263,9 +263,9 @@ pub async fn stt(
 pub async fn process_audio_input(
     audio: AudioInput,
     vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
-    segmentation_model_path: PathBuf,
+    segmentation_model_path: Option<PathBuf>,
     embedding_manager: Arc<StdMutex<EmbeddingManager>>,
-    embedding_extractor: Arc<StdMutex<EmbeddingExtractor>>,
+    embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,
     output_path: &PathBuf,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     deepgram_api_key: Option<String>,
@@ -300,7 +300,7 @@ pub async fn process_audio_input(
     let (mut segments, speech_ratio_ok, speech_ratio) = prepare_segments(
         &audio_data,
         vad_engine,
-        &segmentation_model_path,
+        segmentation_model_path.as_ref(),
         embedding_manager,
         embedding_extractor,
         &audio.device.to_string(),

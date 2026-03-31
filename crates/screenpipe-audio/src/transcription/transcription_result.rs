@@ -77,9 +77,14 @@ pub async fn process_transcription_result(
         return Ok(None);
     }
 
-    let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
-
-    debug!("detected speaker id={}", speaker.id);
+    let speaker_id = if result.speaker_embedding.is_empty() {
+        debug!("empty speaker embedding; storing transcript without speaker");
+        None
+    } else {
+        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
+        debug!("detected speaker id={}", speaker.id);
+        Some(speaker.id)
+    };
 
     let raw_transcription = result.transcription.unwrap();
     // Apply PII removal if enabled
@@ -89,7 +94,6 @@ pub async fn process_transcription_result(
         raw_transcription
     };
     let transcription_engine = audio_transcription_engine.to_string();
-    let speaker_id = Some(speaker.id);
     let mut chunk_id: Option<i64> = None;
 
     debug!("device {} inserting audio chunk", result.input.device);
@@ -138,7 +142,7 @@ pub async fn process_transcription_result(
                         }
                     },
                 },
-                Some(speaker.id),
+                speaker_id,
                 Some(result.start_time),
                 Some(result.end_time),
                 capture_ts,
@@ -346,5 +350,58 @@ mod tests {
             "PII removal too slow: {:?} for 1000 iterations",
             duration
         );
+    }
+
+    #[tokio::test]
+    async fn test_empty_speaker_embedding_stores_no_speaker() {
+        use chrono::{Duration, Utc};
+        use std::sync::Arc;
+
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let timestamp = Utc::now().timestamp();
+        let file_path = format!("/tmp/speaker-none-{}.wav", timestamp);
+
+        let result = TranscriptionResult {
+            path: file_path.clone(),
+            input: AudioInput {
+                data: Arc::new(vec![]),
+                sample_rate: 16_000,
+                channels: 1,
+                device: Arc::new(crate::core::device::AudioDevice::new(
+                    "test-mic (input)".to_string(),
+                    crate::core::device::DeviceType::Input,
+                )),
+                capture_timestamp: timestamp as u64,
+            },
+            speaker_embedding: vec![],
+            transcription: Some("hello world".to_string()),
+            timestamp: timestamp as u64,
+            error: None,
+            start_time: 0.0,
+            end_time: 1.0,
+        };
+
+        let insert_result = process_transcription_result(
+            &db,
+            result,
+            Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(insert_result.speaker_id.is_none());
+
+        let rows = db
+            .get_recent_transcriptions_without_speaker(Utc::now() - Duration::minutes(5), 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_path, file_path);
     }
 }

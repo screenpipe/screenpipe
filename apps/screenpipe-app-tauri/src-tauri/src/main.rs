@@ -540,6 +540,8 @@ async fn main() {
                 permissions::get_installed_browsers,
                 permissions::check_browsers_automation_permission,
                 permissions::request_browsers_automation_permission,
+                permissions::get_browsers_automation_status,
+                permissions::request_single_browser_automation,
                 // Commands from main.rs
                 get_env,
                 get_e2e_seed_flags,

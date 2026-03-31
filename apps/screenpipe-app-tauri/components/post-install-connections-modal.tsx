@@ -58,8 +58,31 @@ export function PostInstallConnectionsModal({
         const newStatuses: Record<string, ConnectionStatus> = {};
 
         for (const connId of connections) {
-          const integration = integrations.find((i) => i.id === connId) || null;
-          const configured = integration?.connected ?? false;
+          // support instance keys like "notion:crm" — match on base id
+          const baseId = connId.includes(":") ? connId.split(":")[0] : connId;
+          const instanceName = connId.includes(":") ? connId.split(":").slice(1).join(":") : null;
+          const integration = integrations.find((i) => i.id === baseId) || null;
+
+          let configured = integration?.connected ?? false;
+
+          // for instance connections, check the specific instance status
+          if (integration && instanceName) {
+            try {
+              const instRes = await fetch(
+                `http://localhost:3030/connections/${baseId}/instances`
+              );
+              if (instRes.ok) {
+                const instData = await instRes.json();
+                const instances: { instance: string; enabled: boolean }[] =
+                  instData.instances || [];
+                const inst = instances.find((i) => i.instance === instanceName);
+                configured = inst?.enabled ?? false;
+              }
+            } catch {
+              // fall back to base integration status
+            }
+          }
+
           newStatuses[connId] = {
             integration,
             configured,
@@ -148,6 +171,11 @@ export function PostInstallConnectionsModal({
                     </div>
                     <span className="text-xs font-medium flex-1">
                       {integration?.name || connId}
+                      {connId.includes(":") && (
+                        <span className="text-muted-foreground font-normal ml-1">
+                          ({connId.split(":").slice(1).join(":")})
+                        </span>
+                      )}
                     </span>
                     {status?.configured ? (
                       <span className="text-[10px] text-green-600">

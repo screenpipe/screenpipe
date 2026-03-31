@@ -53,6 +53,7 @@ import {
   ArrowLeft,
   ExternalLink,
   GitFork,
+  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -559,8 +560,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     });
   }, [pipes, category]);
 
-  const featuredPipes = filteredPipes.filter((p) => p.featured);
-
   // If showing detail view, render full-width detail panel
   if (showDetail) {
     return (
@@ -661,28 +660,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         </div>
       </div>
 
-      {/* Featured Section */}
-      {featuredPipes.length > 0 && !debouncedQuery && category === "All" && (
-        <div>
-          <h4 className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-widest">
-            Featured
-          </h4>
-          <div className="flex gap-4 overflow-x-auto pb-3 -mx-1 px-1 snap-x">
-            {featuredPipes.map((pipe) => (
-              <FeaturedCard
-                key={pipe.slug}
-                pipe={pipe}
-                isInstalled={installedNames.has(pipe.slug)}
-                hasUpdate={!!availableUpdates[pipe.slug]}
-                onInstall={() => handleInstall(pipe.slug)}
-                installing={installing === pipe.slug}
-                onClick={() => openDetail(pipe.slug)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Pipe Grid */}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -713,7 +690,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredPipes.filter((p) => !p.featured || !!debouncedQuery || category !== "All").map((pipe) => (
+          {[...filteredPipes].sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0)).map((pipe) => (
             <PipeCard
               key={pipe.slug}
               pipe={pipe}
@@ -743,85 +720,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 }
 
 // --- Sub-components ---
-
-function FeaturedCard({
-  pipe,
-  isInstalled,
-  hasUpdate,
-  onInstall,
-  installing,
-  onClick,
-}: {
-  pipe: StorePipe;
-  isInstalled: boolean;
-  hasUpdate?: boolean;
-  onInstall: () => void;
-  installing: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div
-      className="flex-shrink-0 w-[300px] snap-start group cursor-pointer"
-      onClick={onClick}
-    >
-      <div className="border border-border bg-card hover:bg-accent/50 transition-colors duration-150 rounded-none p-5 h-full flex flex-col">
-        {/* Header: icon + action */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="text-3xl bg-muted rounded-none h-12 w-12 flex items-center justify-center flex-shrink-0">
-            {pipe.icon || "🔧"}
-          </div>
-          <Button
-            size="sm"
-            variant={isInstalled && !hasUpdate ? "outline" : "default"}
-            className={cn(
-              "h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
-              isInstalled && !hasUpdate && "pointer-events-none",
-              hasUpdate && "bg-amber-500 hover:bg-amber-600 text-white"
-            )}
-            disabled={installing || (isInstalled && !hasUpdate)}
-            onClick={(e) => {
-              e.stopPropagation();
-              onInstall();
-            }}
-          >
-            {installing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : hasUpdate ? (
-              "UPDATE"
-            ) : isInstalled ? (
-              "INSTALLED"
-            ) : (
-              "GET"
-            )}
-          </Button>
-        </div>
-
-        {/* Title — full width, no truncation */}
-        <h4 className="text-sm font-semibold mt-3 line-clamp-2 leading-snug">{pipe.title}</h4>
-        <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-          <span className="truncate">{pipe.author}</span>
-          {pipe.author_verified && (
-            <BadgeCheck className="h-3 w-3 text-foreground flex-shrink-0" />
-          )}
-        </div>
-
-        <p className="text-xs text-muted-foreground line-clamp-2 mt-2 leading-relaxed flex-1">
-          {pipe.description}
-        </p>
-
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-          <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
-            {pipe.category}
-          </Badge>
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Download className="h-3 w-3" />
-            {formatCount(pipe.install_count ?? 0)}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function PipeCard({
   pipe,
@@ -895,9 +793,14 @@ function PipeCard({
 
       {/* Footer: category + stats */}
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-        <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
-          {pipe.category}
-        </Badge>
+        <div className="flex items-center gap-1.5">
+          {pipe.featured && (
+            <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
+          )}
+          <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
+            {pipe.category}
+          </Badge>
+        </div>
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           <Download className="h-3 w-3" />
           {formatCount(pipe.install_count ?? 0)}

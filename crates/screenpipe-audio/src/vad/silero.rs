@@ -72,41 +72,25 @@ impl SileroVad {
             return Ok(path);
         }
 
-        // Use atomic flag instead of Once — allows retry if download fails
-        if DOWNLOADING
+        if !DOWNLOADING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            info!("initiating silero vad model download...");
-            tokio::spawn(async move {
-                match Self::download_model().await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("error downloading silerovad model: {}", e);
-                        // Reset flag so a retry is possible
-                        DOWNLOADING.store(false, Ordering::SeqCst);
-                    }
-                }
-            });
+            return Err(anyhow::anyhow!(
+                "silero vad model download already in progress"
+            ));
         }
 
-        // Wait for download to complete, with timeout
-        let timeout = tokio::time::Duration::from_secs(120);
-        let start = tokio::time::Instant::now();
-        while !path.exists() {
-            if start.elapsed() > timeout {
-                DOWNLOADING.store(false, Ordering::SeqCst);
-                return Err(anyhow::anyhow!(
-                    "timed out waiting for silero vad model download after {:?}",
-                    timeout
-                ));
+        tokio::spawn(async move {
+            if let Err(e) = Self::download_model().await {
+                warn!("error downloading silero vad model: {}", e);
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
+            DOWNLOADING.store(false, Ordering::SeqCst);
+        });
 
-        let mut cached = MODEL_PATH.lock().await;
-        *cached = Some(path.clone());
-        Ok(path)
+        Err(anyhow::anyhow!(
+            "silero vad model not available yet; download started in background"
+        ))
     }
 
     async fn download_model() -> anyhow::Result<()> {

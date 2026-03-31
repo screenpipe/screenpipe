@@ -43,64 +43,69 @@ const server = new Server(
 );
 
 // ---------------------------------------------------------------------------
-// Tools — minimal descriptions, no behavioral guidance (that belongs in resources)
+// Tools
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
   {
     name: "search-content",
     description:
       "Search screen text, audio transcriptions, input events, and memories. " +
-      "Returns timestamped results with app context. Call with no params for recent activity.",
-    annotations: { title: "Search Content", readOnlyHint: true },
+      "Returns timestamped results with app context. " +
+      "IMPORTANT: prefer activity-summary for broad questions ('what was I doing?'). " +
+      "Use search-content only when you need specific text/content. " +
+      "Start with limit=5, increase only if needed. Results can be large — use max_content_length=500 to truncate.",
+    annotations: { title: "Search Content", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
         q: {
           type: "string",
-          description: "Full-text search query. Omit to return all content in time range.",
+          description: "Full-text search query. Omit to return all content in time range. Avoid for audio — transcriptions are noisy, q filters too aggressively.",
         },
         content_type: {
           type: "string",
           enum: ["all", "ocr", "audio", "input", "accessibility", "memory"],
-          description: "Filter by content type. Default: 'all'.",
+          description: "Filter by content type. 'accessibility' is preferred for screen text (OS-native). 'ocr' is fallback for apps without accessibility support. Default: 'all'.",
           default: "all",
         },
-        limit: { type: "integer", description: "Max results (default 10)", default: 10 },
-        offset: { type: "integer", description: "Pagination offset", default: 0 },
+        limit: { type: "integer", description: "Max results (default 10, max 20). Start with 5 for exploration.", default: 10 },
+        offset: { type: "integer", description: "Pagination offset. Use when results say 'use offset=N for more'.", default: 0 },
         start_time: {
           type: "string",
-          description: "ISO 8601 UTC or relative (e.g. '2h ago')",
+          description: "ISO 8601 UTC or relative (e.g. '2h ago', '1d ago'). Always provide to avoid scanning entire history.",
         },
         end_time: {
           type: "string",
-          description: "ISO 8601 UTC or relative (e.g. 'now')",
+          description: "ISO 8601 UTC or relative (e.g. 'now'). Defaults to now.",
         },
-        app_name: { type: "string", description: "Filter by app name" },
-        window_name: { type: "string", description: "Filter by window title" },
-        min_length: { type: "integer", description: "Min content length" },
-        max_length: { type: "integer", description: "Max content length" },
+        app_name: { type: "string", description: "Filter by app name (e.g. 'Google Chrome', 'Slack', 'zoom.us'). Case-sensitive." },
+        window_name: { type: "string", description: "Filter by window title substring" },
+        min_length: { type: "integer", description: "Min content length in characters" },
+        max_length: { type: "integer", description: "Max content length in characters" },
         include_frames: {
           type: "boolean",
-          description: "Include base64 screenshots (OCR only)",
+          description: "Include base64 screenshots (OCR only). Warning: large response.",
           default: false,
         },
-        speaker_ids: { type: "string", description: "Comma-separated speaker IDs" },
-        speaker_name: { type: "string", description: "Filter audio by speaker name" },
+        speaker_ids: { type: "string", description: "Comma-separated speaker IDs to filter audio" },
+        speaker_name: { type: "string", description: "Filter audio by speaker name (case-insensitive partial match)" },
         max_content_length: {
           type: "integer",
-          description: "Truncate each result via middle-truncation",
+          description: "Truncate each result's text via middle-truncation. Use 200-500 to keep responses compact.",
         },
       },
     },
   },
   {
     name: "list-meetings",
-    description: "List detected meetings (Zoom, Teams, Meet, etc.) with duration, app, and attendees.",
-    annotations: { title: "List Meetings", readOnlyHint: true },
+    description:
+      "List detected meetings (Zoom, Teams, Meet, etc.) with duration, app, and attendees. " +
+      "Only available when screenpipe runs in smart transcription mode.",
+    annotations: { title: "List Meetings", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '1d ago')" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
@@ -111,14 +116,15 @@ const TOOLS: Tool[] = [
     name: "activity-summary",
     description:
       "Lightweight activity overview (~200-500 tokens): app usage with active minutes, audio speakers, recent texts. " +
-      "Use for 'how long on X?', 'which apps?', 'what was I doing?' questions.",
-    annotations: { title: "Activity Summary", readOnlyHint: true },
+      "USE THIS FIRST for broad questions: 'what was I doing?', 'how long on X?', 'which apps?'. " +
+      "Only escalate to search-content if you need specific text content.",
+    annotations: { title: "Activity Summary", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        app_name: { type: "string", description: "Optional app name filter" },
+        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '3h ago')" },
+        end_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. 'now')" },
+        app_name: { type: "string", description: "Optional app name filter to focus on one app" },
       },
       required: ["start_time", "end_time"],
     },
@@ -127,23 +133,24 @@ const TOOLS: Tool[] = [
     name: "search-elements",
     description:
       "Search UI elements (buttons, links, text fields) from the accessibility tree. " +
-      "Lighter than search-content for targeted UI lookups.",
-    annotations: { title: "Search Elements", readOnlyHint: true },
+      "Lighter than search-content for targeted UI lookups. " +
+      "Use when you need to find specific UI controls or page structure, not general content.",
+    annotations: { title: "Search Elements", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
         q: { type: "string", description: "Full-text search on element text" },
-        frame_id: { type: "integer", description: "Filter to specific frame" },
+        frame_id: { type: "integer", description: "Filter to specific frame ID from search results" },
         source: {
           type: "string",
           enum: ["accessibility", "ocr"],
-          description: "Element source filter",
+          description: "Element source. 'accessibility' is preferred (OS-native tree). 'ocr' for apps without a11y.",
         },
-        role: { type: "string", description: "Element role (e.g. AXButton, AXLink)" },
+        role: { type: "string", description: "Element role filter (e.g. 'AXButton', 'AXLink', 'AXTextField')" },
         start_time: { type: "string", description: "ISO 8601 UTC or relative" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
         app_name: { type: "string", description: "Filter by app name" },
-        limit: { type: "integer", description: "Max results (default 50)", default: 50 },
+        limit: { type: "integer", description: "Max results (default 50). Start with 10-20.", default: 50 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
       },
     },
@@ -151,26 +158,29 @@ const TOOLS: Tool[] = [
   {
     name: "frame-context",
     description:
-      "Get accessibility text, parsed tree nodes, and URLs for a specific frame ID.",
-    annotations: { title: "Frame Context", readOnlyHint: true },
+      "Get full accessibility text, parsed tree nodes, and URLs for a specific frame ID. " +
+      "Use after search-content to get detailed context for a specific moment.",
+    annotations: { title: "Frame Context", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        frame_id: { type: "integer", description: "Frame ID from search results" },
+        frame_id: { type: "integer", description: "Frame ID from search-content results (content.frame_id field)" },
       },
       required: ["frame_id"],
     },
   },
   {
     name: "export-video",
-    description: "Export an MP4 video of screen recordings for a time range.",
-    annotations: { title: "Export Video", destructiveHint: true },
+    description:
+      "Export an MP4 video of screen recordings for a time range. " +
+      "Returns the file path. Can take a few minutes for long ranges.",
+    annotations: { title: "Export Video", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
         start_time: { type: "string", description: "ISO 8601 UTC or relative" },
         end_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        fps: { type: "number", description: "Output FPS (default 1.0)", default: 1.0 },
+        fps: { type: "number", description: "Output FPS (default 1.0). Higher = smoother but larger file.", default: 1.0 },
       },
       required: ["start_time", "end_time"],
     },
@@ -178,37 +188,38 @@ const TOOLS: Tool[] = [
   {
     name: "update-memory",
     description:
-      "Create, update, or delete a persistent memory (facts, preferences, decisions). " +
-      "Retrieve memories via search-content with content_type='memory'.",
-    annotations: { title: "Update Memory", destructiveHint: false },
+      "Create, update, or delete a persistent memory (facts, preferences, decisions the user wants to remember). " +
+      "To retrieve memories, use search-content with content_type='memory'. " +
+      "To create: provide content + tags. To update: provide id + fields to change. To delete: provide id + delete=true.",
+    annotations: { title: "Update Memory", readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "integer", description: "Memory ID (omit to create new)" },
-        content: { type: "string", description: "Memory text" },
-        tags: { type: "array", items: { type: "string" }, description: "Categorization tags" },
-        importance: { type: "number", description: "0.0-1.0 (default 0.5)" },
-        source_context: { type: "object", description: "Optional source data links" },
-        delete: { type: "boolean", description: "Delete the memory identified by id" },
+        id: { type: "integer", description: "Memory ID — omit to create new, provide to update/delete" },
+        content: { type: "string", description: "Memory text (required for creation)" },
+        tags: { type: "array", items: { type: "string" }, description: "Categorization tags (e.g. ['work', 'project-x'])" },
+        importance: { type: "number", description: "0.0 (trivial) to 1.0 (critical). Default 0.5." },
+        source_context: { type: "object", description: "Optional metadata linking to source (app, timestamp, etc.)" },
+        delete: { type: "boolean", description: "Set true to delete the memory identified by id" },
       },
     },
   },
   {
     name: "send-notification",
     description:
-      "Send a notification to the screenpipe desktop UI with optional action buttons. " +
-      "Actions can re-run pipes with context, call API endpoints, or open deep links.",
-    annotations: { title: "Send Notification", destructiveHint: false },
+      "Send a notification to the screenpipe desktop UI. " +
+      "Use to alert the user about findings, completed tasks, or actions needing attention.",
+    annotations: { title: "Send Notification", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     inputSchema: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Notification title" },
+        title: { type: "string", description: "Notification title (short, descriptive)" },
         body: { type: "string", description: "Notification body (markdown supported)" },
-        pipe_name: { type: "string", description: "Name of the pipe sending this notification" },
-        timeout_secs: { type: "integer", description: "Auto-dismiss seconds (default 20)", default: 20 },
+        pipe_name: { type: "string", description: "Name of the pipe/tool sending this notification" },
+        timeout_secs: { type: "integer", description: "Auto-dismiss after N seconds (default 20). Use 0 for persistent.", default: 20 },
         actions: {
           type: "array",
-          description: "Up to 5 action buttons",
+          description: "Up to 5 action buttons. Each needs id, label, type ('pipe'|'api'|'deeplink'|'dismiss').",
           items: {
             type: "object",
             properties: {
@@ -242,6 +253,12 @@ const RESOURCES = [
     name: "Current Context",
     description: "Current date/time, timezone, and pre-computed timestamps for common time ranges",
     mimeType: "application/json",
+  },
+  {
+    uri: "screenpipe://guide",
+    name: "Usage Guide",
+    description: "How to use screenpipe tools effectively — search strategy, progressive disclosure, and common patterns",
+    mimeType: "text/markdown",
   },
 ];
 
@@ -282,6 +299,52 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
             null,
             2
           ),
+        },
+      ],
+    };
+  }
+
+  if (uri === "screenpipe://guide") {
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: "text/markdown",
+          text: `# Screenpipe Usage Guide
+
+## Progressive Disclosure — start light, escalate only when needed
+
+| Step | Tool | When to use |
+|------|------|-------------|
+| 1 | activity-summary | Broad questions: "what was I doing?", "which apps?", "how long on X?" |
+| 2 | search-content | Need specific text, transcriptions, or content |
+| 3 | search-elements | Need UI structure — buttons, links, form fields |
+| 4 | frame-context | Need full detail for a specific moment (use frame_id from step 2) |
+
+## Search Strategy
+
+- **Always provide start_time** — without it, search scans the entire history
+- **Start with limit=5** — increase only if you need more results
+- **Use max_content_length=500** to keep responses compact
+- **Don't use q for audio** — transcriptions are noisy, q filters too aggressively. Search audio by time range and speaker instead
+- **app_name is case-sensitive** — use exact names: "Google Chrome" not "chrome"
+- **content_type=accessibility is preferred** for screen text (OS-native). ocr is fallback for apps without accessibility support
+
+## Common Patterns
+
+- "What was I doing for the last 2 hours?" → activity-summary with start_time='2h ago'
+- "What did I discuss in my meeting?" → list-meetings to find it, then search-content with audio + that time range
+- "Find when I was on Twitter" → search-content with app_name='Arc' (or the browser name), q='twitter'
+- "Remember that I prefer X" → update-memory with content describing the preference
+- "What do you remember about X?" → search-content with content_type='memory', q='X'
+
+## Deep Links
+
+When referencing specific moments in results, create clickable links:
+- Frame: [10:30 AM — Chrome](screenpipe://frame/{frame_id}) — use frame_id from search results
+- Timeline: [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from results
+Never fabricate IDs or timestamps — only use values from actual results.
+`,
         },
       ],
     };

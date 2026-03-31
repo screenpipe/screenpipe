@@ -2822,28 +2822,46 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   // Keep ref in sync so useEffect callbacks can call sendMessage
   sendMessageRef.current = sendMessage;
 
+  const formatMessageAsMarkdown = (m: Message) => {
+    const role = m.role === "user" ? "**User**" : "**Assistant**";
+    const ts = new Date(m.timestamp).toLocaleString();
+    let body = m.content || "";
+
+    if (m.contentBlocks && m.contentBlocks.length > 0) {
+      const sections: string[] = [];
+      for (const block of m.contentBlocks) {
+        if (block.type === "text" && block.text) {
+          sections.push(block.text);
+        } else if (block.type === "tool") {
+          const tc = block.toolCall;
+          const argsStr = tc.args ? JSON.stringify(tc.args, null, 2) : "";
+          let section = `\n**Tool: ${tc.toolName}**\n\`\`\`json\n${argsStr}\n\`\`\``;
+          if (tc.result !== undefined) {
+            section += `\n**Result:**\n\`\`\`\n${tc.result}\n\`\`\``;
+          }
+          sections.push(section);
+        } else if (block.type === "thinking" && block.text) {
+          sections.push(`<details><summary>Thinking${block.durationMs ? ` (${(block.durationMs / 1000).toFixed(1)}s)` : ""}</summary>\n\n${block.text}\n\n</details>`);
+        }
+      }
+      if (sections.length > 0) {
+        body = sections.join("\n\n");
+      }
+    }
+
+    return `### ${role} — ${ts}\n\n${body}`;
+  };
+
   const copyFullChatAsMarkdown = async () => {
     if (messages.length === 0) return;
-    const md = messages
-      .map((m) => {
-        const role = m.role === "user" ? "**User**" : "**Assistant**";
-        const ts = new Date(m.timestamp).toLocaleString();
-        return `### ${role} — ${ts}\n\n${m.content}`;
-      })
-      .join("\n\n---\n\n");
+    const md = messages.map(formatMessageAsMarkdown).join("\n\n---\n\n");
     await navigator.clipboard.writeText(md);
     toast({ title: "copied full chat as markdown" });
   };
 
   const exportChatAsMarkdownFile = async () => {
     if (messages.length === 0) return;
-    const md = messages
-      .map((m) => {
-        const role = m.role === "user" ? "**User**" : "**Assistant**";
-        const ts = new Date(m.timestamp).toLocaleString();
-        return `### ${role} — ${ts}\n\n${m.content}`;
-      })
-      .join("\n\n---\n\n");
+    const md = messages.map(formatMessageAsMarkdown).join("\n\n---\n\n");
     try {
       const filePath = await saveDialog({
         filters: [{ name: "Markdown", extensions: ["md"] }],

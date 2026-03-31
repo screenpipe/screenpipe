@@ -19,6 +19,7 @@ pub mod limitless;
 pub mod linear;
 pub mod logseq;
 pub mod make;
+pub mod monday;
 pub mod n8n;
 pub mod notion;
 pub mod ntfy;
@@ -121,6 +122,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(vercel::Vercel),
         Box::new(pipedrive::Pipedrive),
         Box::new(intercom::Intercom),
+        Box::new(monday::Monday),
     ]
 }
 

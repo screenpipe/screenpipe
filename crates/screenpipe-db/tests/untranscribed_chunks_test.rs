@@ -160,6 +160,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_returns_transcriptions_without_speaker() {
+        let db = setup_test_db().await;
+
+        let speaker_embedding = vec![0.0_f32; 512];
+        let speaker = db.insert_speaker(&speaker_embedding).await.unwrap();
+
+        let chunk_with_speaker = db
+            .insert_audio_chunk("with_speaker.mp4", None)
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            chunk_with_speaker,
+            "has speaker",
+            0,
+            "whisper",
+            &test_device(),
+            Some(speaker.id),
+            None,
+            None,
+            Some(Utc::now()),
+        )
+        .await
+        .unwrap();
+
+        let chunk_without_speaker = db
+            .insert_audio_chunk("without_speaker.mp4", None)
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            chunk_without_speaker,
+            "no speaker",
+            0,
+            "whisper",
+            &test_device(),
+            None,
+            None,
+            None,
+            Some(Utc::now()),
+        )
+        .await
+        .unwrap();
+
+        let since = Utc::now() - Duration::hours(1);
+        let rows = db
+            .get_recent_transcriptions_without_speaker(since, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file_path, "without_speaker.mp4");
+    }
+
+    #[tokio::test]
     async fn test_returns_empty_on_empty_db() {
         let db = setup_test_db().await;
 

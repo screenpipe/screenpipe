@@ -258,9 +258,9 @@ mod tests {
         let (mut segments, _, _) = prepare_segments(
             &audio_input.data,
             vad_engine.clone(),
-            &segmentation_model_path,
+            Some(&segmentation_model_path),
             embedding_manager,
-            embedding_extractor,
+            Some(embedding_extractor),
             &audio_input.device.to_string(),
             false,
             false,
@@ -358,9 +358,9 @@ mod tests {
         let (mut segments, _, _) = prepare_segments(
             &audio_input.data,
             vad_engine.clone(),
-            &segmentation_model_path,
+            Some(&segmentation_model_path),
             embedding_manager,
-            embedding_extractor,
+            Some(embedding_extractor),
             &audio_input.device.to_string(),
             false,
             false,

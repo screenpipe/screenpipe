@@ -44,6 +44,10 @@ pub struct AppIdentifiers {
     pub windows_process_names: &'static [&'static str],
     /// URL substrings to match in browser window titles/AXDocument.
     pub browser_url_patterns: &'static [&'static str],
+    /// Page title patterns to match when the URL isn't in the window title.
+    /// Browsers like Arc show the page title (e.g. "Meet") instead of the URL.
+    /// These are matched as exact case-insensitive window title equality.
+    pub browser_title_patterns: &'static [&'static str],
 }
 
 /// A signal that indicates a call is in progress.
@@ -110,6 +114,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["microsoft teams", "teams"],
                 windows_process_names: &["ms-teams.exe", "teams.exe"],
                 browser_url_patterns: &["teams.microsoft.com", "teams.live.com", "Microsoft Teams"],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::AutomationId("hangup-button"),
@@ -158,6 +163,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     // Browser page title during a Zoom web meeting (URL not in title)
                     "zoom meeting",
                 ],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 // macOS menu bar signals (Zoom only exposes AXMenuBar, no AXWindow)
@@ -201,6 +207,8 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &[],
                 windows_process_names: &[],
                 browser_url_patterns: &["meet.google.com"],
+                // Arc and other browsers show just "Meet" as the page title
+                browser_title_patterns: &["Meet"],
             },
             call_signals: vec![
                 CallSignal::RoleWithName {
@@ -222,6 +230,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["slack"],
                 windows_process_names: &["slack.exe"],
                 browser_url_patterns: &["app.slack.com/huddle"],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::RoleWithName {
@@ -241,6 +250,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["facetime"],
                 windows_process_names: &[],
                 browser_url_patterns: &[],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::RoleWithName {
@@ -260,6 +270,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["webex", "cisco webex meetings"],
                 windows_process_names: &["webexmta.exe", "ciscowebex.exe"],
                 browser_url_patterns: &["webex.com"],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::AutomationIdContains("leave"),
@@ -285,6 +296,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["discord"],
                 windows_process_names: &["discord.exe"],
                 browser_url_patterns: &[],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 // macOS native: menu items only present during voice channel
@@ -311,6 +323,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &[],
                 windows_process_names: &[],
                 browser_url_patterns: &["discord.com", "discordapp.com"],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::NameContains("Voice Connected"),
@@ -381,6 +394,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "dialpad.com/meetings",
                     "8x8.vc",
                 ],
+                browser_title_patterns: &[],
             },
             call_signals: vec![
                 CallSignal::RoleWithName {
@@ -1820,7 +1834,9 @@ pub fn find_running_meeting_apps(
     ];
 
     for (idx, profile) in profiles.iter().enumerate() {
-        if profile.app_identifiers.browser_url_patterns.is_empty() {
+        if profile.app_identifiers.browser_url_patterns.is_empty()
+            && profile.app_identifiers.browser_title_patterns.is_empty()
+        {
             continue;
         }
 
@@ -1842,12 +1858,17 @@ pub fn find_running_meeting_apps(
             }
 
             let title_lower = title.to_lowercase();
-            if profile
+            let url_match = profile
                 .app_identifiers
                 .browser_url_patterns
                 .iter()
-                .any(|p| title_lower.contains(&p.to_lowercase()))
-            {
+                .any(|p| title_lower.contains(&p.to_lowercase()));
+            let title_match = profile
+                .app_identifiers
+                .browser_title_patterns
+                .iter()
+                .any(|p| title_lower == p.to_lowercase());
+            if url_match || title_match {
                 results.push(RunningMeetingApp {
                     pid: *pid,
                     app_name: proc_name.unwrap_or_default(),
@@ -1902,27 +1923,43 @@ async fn db_find_browser_meetings(
     profiles: &[MeetingDetectionProfile],
 ) -> Result<Vec<RunningMeetingApp>, sqlx::Error> {
     let mut results = Vec::new();
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT app_name, window_name FROM frames \
+    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT app_name, window_name, browser_url FROM frames \
          WHERE timestamp > datetime('now', '-30 seconds') \
          AND app_name IS NOT NULL AND window_name IS NOT NULL",
     )
     .fetch_all(&db.pool)
     .await?;
 
-    for (app_name, window_name) in &rows {
+    for (app_name, window_name, browser_url) in &rows {
         let window_lower = window_name.to_lowercase();
         let app_lower = app_name.to_lowercase();
+        let url_lower = browser_url.as_deref().unwrap_or("").to_lowercase();
         for (idx, profile) in profiles.iter().enumerate() {
-            if profile.app_identifiers.browser_url_patterns.is_empty() {
+            let has_url_patterns = !profile.app_identifiers.browser_url_patterns.is_empty();
+            let has_title_patterns = !profile.app_identifiers.browser_title_patterns.is_empty();
+            if !has_url_patterns && !has_title_patterns {
                 continue;
             }
-            let matches = profile
-                .app_identifiers
-                .browser_url_patterns
-                .iter()
-                .any(|p| window_lower.contains(&p.to_lowercase()));
-            if matches {
+            // Check URL patterns against window_name AND browser_url
+            let url_match = has_url_patterns
+                && profile
+                    .app_identifiers
+                    .browser_url_patterns
+                    .iter()
+                    .any(|p| {
+                        let p_lower = p.to_lowercase();
+                        window_lower.contains(&p_lower) || url_lower.contains(&p_lower)
+                    });
+            // Check title patterns as exact match against window_name
+            // (e.g. window title "Meet" matches pattern "Meet")
+            let title_match = has_title_patterns
+                && profile
+                    .app_identifiers
+                    .browser_title_patterns
+                    .iter()
+                    .any(|p| window_lower == p.to_lowercase());
+            if url_match || title_match {
                 #[cfg(target_os = "macos")]
                 let pid = cidre::objc::ar_pool(|| -> i32 {
                     let ws = cidre::ns::Workspace::shared();
@@ -1978,10 +2015,11 @@ pub async fn run_meeting_detection_loop(
     let mut current_interval = base_interval;
     let mut idle_scan_count: u64 = 0;
 
-    // Check if any profile uses browser URL patterns (to gate DB query)
-    let has_browser_profiles = profiles
-        .iter()
-        .any(|p| !p.app_identifiers.browser_url_patterns.is_empty());
+    // Check if any profile uses browser URL or title patterns (to gate DB query)
+    let has_browser_profiles = profiles.iter().any(|p| {
+        !p.app_identifiers.browser_url_patterns.is_empty()
+            || !p.app_identifiers.browser_title_patterns.is_empty()
+    });
 
     // Close any orphaned meetings from a prior crash
     match db.close_orphaned_meetings().await {

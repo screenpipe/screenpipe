@@ -1321,6 +1321,7 @@ export const TimelineSlider = ({
 					(containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
 					if (scrubberRef) (scrubberRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
 				}}
+				data-testid="timeline-slider"
 				tabIndex={0}
 				className="w-full overflow-x-auto overflow-y-visible scrollbar-hide bg-gradient-to-t from-foreground/5 to-transparent outline-none"
 				style={{
