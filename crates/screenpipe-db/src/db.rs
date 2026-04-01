@@ -4254,11 +4254,57 @@ impl DatabaseManager {
         // Group by name so duplicate names (e.g. multiple "Louis" rows from
         // separate voice embeddings) appear as a single entry in the dropdown.
         // Pick the lowest id per name so reassignment targets a stable speaker.
+        // Include recent audio samples so the UI can display voice clips.
         sqlx::query_as::<_, Speaker>(
-            "SELECT MIN(id) as id, name, metadata FROM speakers \
-             WHERE name LIKE ? || '%' AND hallucination = 0 AND name IS NOT NULL AND name != '' \
-             GROUP BY name \
-             ORDER BY name",
+            r#"
+            WITH NamedSpeakers AS (
+                SELECT MIN(id) as id, name
+                FROM speakers
+                WHERE name LIKE ? || '%' AND hallucination = 0 AND name IS NOT NULL AND name != ''
+                GROUP BY name
+            ),
+            RecentAudioPaths AS (
+                SELECT DISTINCT
+                    ns.id as speaker_id,
+                    ac.file_path,
+                    at2.transcription,
+                    at2.start_time,
+                    at2.end_time
+                FROM NamedSpeakers ns
+                JOIN audio_transcriptions at2 ON at2.speaker_id IN (
+                    SELECT s2.id FROM speakers s2 WHERE s2.name = ns.name AND s2.hallucination = 0
+                )
+                JOIN audio_chunks ac ON at2.audio_chunk_id = ac.id
+                WHERE ac.file_path NOT LIKE 'cloud://%'
+                AND at2.timestamp IN (
+                    SELECT at3.timestamp
+                    FROM audio_transcriptions at3
+                    JOIN speakers s3 ON at3.speaker_id = s3.id
+                    WHERE s3.name = ns.name AND s3.hallucination = 0
+                    ORDER BY at3.timestamp DESC
+                    LIMIT 3
+                )
+            )
+            SELECT
+                ns.id,
+                ns.name,
+                CASE
+                    WHEN rap.file_path IS NULL THEN COALESCE(s.metadata, '{}')
+                    ELSE json_object('audio_samples', json_group_array(
+                        DISTINCT json_object(
+                            'path', rap.file_path,
+                            'transcript', rap.transcription,
+                            'start_time', rap.start_time,
+                            'end_time', rap.end_time
+                        )
+                    ))
+                END as metadata
+            FROM NamedSpeakers ns
+            JOIN speakers s ON s.id = ns.id
+            LEFT JOIN RecentAudioPaths rap ON ns.id = rap.speaker_id
+            GROUP BY ns.id, ns.name
+            ORDER BY ns.name
+            "#,
         )
         .bind(name_prefix)
         .fetch_all(&self.pool)

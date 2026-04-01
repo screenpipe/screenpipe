@@ -33,6 +33,7 @@ mod resource_monitor;
 pub mod server;
 pub mod sleep_monitor;
 pub mod snapshot_compaction;
+pub mod stats;
 mod sync_api;
 pub mod sync_provider;
 pub mod ui_recorder;

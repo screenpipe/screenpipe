@@ -19,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { VideoComponent } from "@/components/rewind/video";
 import { MermaidDiagram } from "@/components/rewind/mermaid-diagram";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -581,6 +582,39 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" {...props}>
               {children}
             </a>
+          );
+        },
+        img({ src, alt, ...props }) {
+          if (!src) return null;
+          if (src.toLowerCase().endsWith(".mp4")) {
+            return <VideoComponent filePath={src} className="my-2" />;
+          }
+          // try asset protocol for local paths, fall back to http serve
+          let imgSrc = src;
+          if (src.startsWith("/")) {
+            try {
+              imgSrc = convertFileSrc(src);
+            } catch {
+              imgSrc = `http://localhost:3030/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
+            }
+          }
+          return (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imgSrc}
+              alt={alt || ""}
+              className="max-w-full h-auto rounded-md my-2 border border-border"
+              loading="lazy"
+              onError={(e) => {
+                // fallback: if asset protocol fails, try convertFileSrc or raw path
+                const target = e.currentTarget;
+                if (src.startsWith("/") && !target.dataset.retried) {
+                  target.dataset.retried = "1";
+                  target.src = convertFileSrc(src);
+                }
+              }}
+              {...props}
+            />
           );
         },
         pre({ children, ...props }) {
@@ -2924,6 +2958,22 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         {!isMac && !className && (
           <div className="absolute top-0 left-0 w-8 h-8 border-l-2 border-t-2 border-foreground/10 rounded-tl-lg" />
         )}
+        <Button
+          variant={showHistory ? "secondary" : "ghost"}
+          size="icon"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={async (e) => {
+            e.stopPropagation();
+            if (!showHistory) {
+              await reloadStore();
+            }
+            setShowHistory(!showHistory);
+          }}
+          className="relative z-10 h-7 w-7"
+          title="Chat history"
+        >
+          <History size={14} />
+        </Button>
         <div className="relative z-10 p-1.5 rounded-lg bg-foreground/5 border border-border/50">
           <PipeAIIcon size={18} animated={false} className="text-foreground" />
         </div>
@@ -2931,24 +2981,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           <h2 className="font-semibold text-sm tracking-tight">Pipe AI</h2>
           <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Screen Activity Assistant</p>
         </div>
-        <Button
-          variant={showHistory ? "secondary" : "ghost"}
-          size="sm"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={async (e) => {
-            e.stopPropagation();
-            if (!showHistory) {
-              // Refresh settings from store to ensure we have latest conversations
-              await reloadStore();
-            }
-            setShowHistory(!showHistory);
-          }}
-          className="relative z-10 h-7 px-2 gap-1 text-xs"
-          title="Chat history"
-        >
-          <History size={14} />
-          <span className="hidden sm:inline">History</span>
-        </Button>
         <Button
           variant="default"
           size="sm"

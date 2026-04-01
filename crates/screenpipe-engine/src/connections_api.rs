@@ -6,9 +6,11 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use screenpipe_connect::connections::ConnectionManager;
+use screenpipe_connect::oauth::PENDING_OAUTH;
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -376,6 +378,68 @@ fn is_native_calendar_available() -> bool {
     false
 }
 
+// ---------------------------------------------------------------------------
+// OAuth callback route
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct OAuthCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
+
+/// GET /connections/oauth/callback — receives the provider redirect after user approves.
+///
+/// The `state` parameter is used to look up the waiting `oauth_connect` Tauri command
+/// via the `PENDING_OAUTH` channel map, then delivers the `code` through the channel.
+async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode, Html<String>) {
+    if let Some(err) = params.error {
+        let html = format!(
+            "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+            <h2>Connection failed</h2><p>{}</p></body></html>",
+            err
+        );
+        return (StatusCode::BAD_REQUEST, Html(html));
+    }
+
+    let (code, state) = match (params.code, params.state) {
+        (Some(c), Some(s)) => (c, s),
+        _ => {
+            let html = "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+                <h2>Invalid callback</h2><p>Missing code or state parameter.</p></body></html>"
+                .to_string();
+            return (StatusCode::BAD_REQUEST, Html(html));
+        }
+    };
+
+    let sender = {
+        let mut map = PENDING_OAUTH.lock().unwrap();
+        map.remove(&state)
+    };
+
+    match sender {
+        Some(tx) => {
+            let _ = tx.send(code);
+            let html = "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+                <h2>Connected!</h2>\
+                <p>You can close this tab and return to screenpipe.</p>\
+                <script>window.close()</script>\
+                </body></html>"
+                .to_string();
+            (StatusCode::OK, Html(html))
+        }
+        None => {
+            let html = "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+                <h2>Session expired</h2>\
+                <p>The authorization session was not found or already completed. Please try again.</p>\
+                </body></html>"
+                .to_string();
+            (StatusCode::BAD_REQUEST, Html(html))
+        }
+    }
+}
+
 pub fn router<S>(cm: SharedConnectionManager, wa: SharedWhatsAppGateway) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -383,6 +447,8 @@ where
     let state = ConnectionsState { cm, wa };
     Router::new()
         .route("/", get(list_connections))
+        // OAuth callback (must be before /:id to avoid conflict)
+        .route("/oauth/callback", get(oauth_callback))
         // Calendar routes (must be before /:id to avoid conflict)
         .route("/calendar/events", get(calendar_events))
         .route("/calendar/status", get(calendar_status))

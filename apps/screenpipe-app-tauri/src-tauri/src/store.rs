@@ -447,7 +447,7 @@ Rules:
 "#.to_string(),
             provider: AIProviderType::ScreenpipeCloud,
             url: "https://api.screenpi.pe/v1".to_string(),
-            model: "qwen/qwen3.5-flash-02-23".to_string(),
+            model: "auto".to_string(),
             default_preset: true,
             api_key: None,
             max_context_chars: 128000,

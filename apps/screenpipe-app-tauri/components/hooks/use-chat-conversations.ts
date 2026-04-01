@@ -7,6 +7,7 @@ import {
   useRef,
   useEffect,
   useMemo,
+  useCallback,
   type Dispatch,
   type SetStateAction,
   type RefObject,
@@ -95,7 +96,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     settings,
   } = opts;
 
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistoryRaw] = useState(() => {
+    try { return localStorage.getItem("screenpipe:chat-history-open") === "true"; } catch { return false; }
+  });
+  const setShowHistory = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setShowHistoryRaw((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      try { localStorage.setItem("screenpipe:chat-history-open", String(next)); } catch {}
+      return next;
+    });
+  }, []);
   const [historySearch, setHistorySearch] = useState("");
   const [fileConversations, setFileConversations] = useState<ChatConversation[]>([]);
 

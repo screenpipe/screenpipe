@@ -268,7 +268,7 @@ pub async fn event_driven_capture_loop(
     {
         // Small delay to let the monitor settle after startup
         tokio::time::sleep(Duration::from_millis(500)).await;
-        state.last_capture = Instant::now() - Duration::from_millis(500); // allow capture
+        state.last_capture = Instant::now().checked_sub(Duration::from_millis(500)).unwrap_or(Instant::now()); // allow capture
         match do_capture(
             &db,
             &monitor,
@@ -979,7 +979,7 @@ mod tests {
         assert!(!state.needs_idle_capture());
 
         // Simulate waiting
-        state.last_capture = Instant::now() - Duration::from_millis(150);
+        state.last_capture = Instant::now().checked_sub(Duration::from_millis(150)).unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
     }
 
@@ -991,7 +991,7 @@ mod tests {
         };
         let mut state = EventDrivenCapture::new(config);
 
-        state.last_capture = Instant::now() - Duration::from_millis(150);
+        state.last_capture = Instant::now().checked_sub(Duration::from_millis(150)).unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
 
         state.mark_captured();

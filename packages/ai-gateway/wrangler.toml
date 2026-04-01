@@ -37,12 +37,12 @@ enabled = true
 VERTEX_REGION = "us-east5"
 # Transcription A/B/C test: 60% Deepgram, 20% Parakeet, 20% Whisper
 # Dual-send 10% of requests to ALL providers for WER dataset building
-DEEPGRAM_TRAFFIC_PCT = "40"
-WHISPER_TRAFFIC_PCT = "20"
-PARAKEET_TRAFFIC_PCT = "40"
-DUAL_SEND_PCT = "10"
+DEEPGRAM_TRAFFIC_PCT = "20"
+WHISPER_TRAFFIC_PCT = "0"
+PARAKEET_TRAFFIC_PCT = "80"
+DUAL_SEND_PCT = "0"
 PARAKEET_URL = "https://audio.screenpi.pe"
-WHISPER_URL = "https://whisper.screenpi.pe"
+WHISPER_URL = ""
 # Legacy compat
 SELF_HOSTED_TRANSCRIPTION_URL = "https://audio.screenpi.pe"
 

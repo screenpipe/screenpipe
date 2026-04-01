@@ -38,6 +38,7 @@ pub mod vercel;
 pub mod whatsapp;
 pub mod zapier;
 
+use crate::oauth;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,12 @@ pub trait Integration: Send + Sync {
 
     /// Verify credentials work. Returns a human-readable success message.
     async fn test(&self, client: &reqwest::Client, creds: &Map<String, Value>) -> Result<String>;
+
+    /// Return OAuth config if this integration uses OAuth instead of manual fields.
+    /// Default is `None` (manual credential entry).
+    fn oauth_config(&self) -> Option<&'static oauth::OAuthConfig> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,11 +187,20 @@ impl ConnectionManager {
             .iter()
             .map(|i| {
                 let def = i.def();
-                let connected = store
-                    .get(def.id)
-                    .map(|c| c.enabled && !c.credentials.is_empty())
-                    .unwrap_or(false);
-                ConnectionInfo { def, connected }
+                let is_oauth = i.oauth_config().is_some();
+                let connected = if is_oauth {
+                    oauth::read_oauth_token(def.id).is_some()
+                } else {
+                    store
+                        .get(def.id)
+                        .map(|c| c.enabled && !c.credentials.is_empty())
+                        .unwrap_or(false)
+                };
+                ConnectionInfo {
+                    def,
+                    connected,
+                    is_oauth,
+                }
             })
             .collect()
     }
@@ -281,6 +297,8 @@ pub struct ConnectionInfo {
     #[serde(flatten)]
     pub def: &'static IntegrationDef,
     pub connected: bool,
+    /// True if this integration authenticates via OAuth (no manual fields).
+    pub is_oauth: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -291,8 +309,10 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
     let store = load_store(screenpipe_dir);
     let integrations = all_integrations();
 
-    let connected: Vec<_> = integrations
+    // Credential-based integrations
+    let cred_connected: Vec<_> = integrations
         .iter()
+        .filter(|i| i.oauth_config().is_none())
         .filter_map(|i| {
             let def = i.def();
             store
@@ -302,12 +322,23 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
         })
         .collect();
 
-    if connected.is_empty() {
+    // OAuth integrations with a stored token
+    let oauth_connected: Vec<_> = integrations
+        .iter()
+        .filter(|i| i.oauth_config().is_some())
+        .filter_map(|i| {
+            let def = i.def();
+            oauth::read_oauth_token(def.id).map(|token| (def, token))
+        })
+        .collect();
+
+    if cred_connected.is_empty() && oauth_connected.is_empty() {
         return String::new();
     }
 
     let mut out = String::from("\nConnected integrations (use these credentials directly):\n");
-    for (def, creds) in &connected {
+
+    for (def, creds) in &cred_connected {
         out.push_str(&format!("\n## {} ({})\n", def.name, def.id));
         out.push_str(&format!("{}\n", def.description));
         for (key, value) in *creds {
@@ -316,6 +347,14 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
             }
         }
     }
+
+    for (def, token) in &oauth_connected {
+        out.push_str(&format!("\n## {} ({})\n", def.name, def.id));
+        out.push_str(&format!("{}\n", def.description));
+        out.push_str(&format!("  api_key: {}\n", token));
+        out.push_str("  (connected via OAuth)\n");
+    }
+
     out
 }
 

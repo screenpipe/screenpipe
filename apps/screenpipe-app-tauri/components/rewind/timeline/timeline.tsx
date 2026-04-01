@@ -4,7 +4,7 @@
 import { StreamTimeSeriesResponse, TimeRange } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { getStore, type ChatConversation } from "@/lib/hooks/use-settings";
-import { isAfter, subDays, addDays, startOfDay, format } from "date-fns";
+import { isAfter, subDays, addDays, startOfDay, format, formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
 import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw, Phone, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import type { Meeting } from "@/lib/hooks/use-meetings";
@@ -345,6 +345,12 @@ export const TimelineSlider = ({
 			});
 	}, []);
 
+	// Memory markers — diamonds above frame bars
+	const [memories, setMemories] = useState<{ id: number; content: string; tags: string[]; created_at: string }[]>([]);
+	const [hoveredMemoryId, setHoveredMemoryId] = useState<number | null>(null);
+	const [hoveredMemoryRect, setHoveredMemoryRect] = useState<{ x: number; y: number } | null>(null);
+	const memoriesFetchedRangeRef = useRef<string>("");
+
 	// Chat history overlay — show PipeAI icon on timeline where chats occurred
 	const [chatConversations, setChatConversations] = useState<ChatConversation[]>([]);
 	const [hoveredChatConv, setHoveredChatConv] = useState<{ conv: ChatConversation; x: number; y: number } | null>(null);
@@ -500,6 +506,28 @@ export const TimelineSlider = ({
 		frozenFramesRef.current = latestVisibleFrames;
 	}
 	const visibleFrames = isUserInteracting ? frozenFramesRef.current : latestVisibleFrames;
+
+	// Fetch memories for the visible time range
+	useEffect(() => {
+		if (!visibleFrames || visibleFrames.length === 0) return;
+		const firstTs = visibleFrames[visibleFrames.length - 1]?.timestamp;
+		const lastTs = visibleFrames[0]?.timestamp;
+		if (!firstTs || !lastTs) return;
+
+		const rangeKey = `${firstTs.slice(0, 13)}|${lastTs.slice(0, 13)}`;
+		if (memoriesFetchedRangeRef.current === rangeKey) return;
+		memoriesFetchedRangeRef.current = rangeKey;
+
+		const params = new URLSearchParams({
+			start_time: firstTs,
+			end_time: lastTs,
+			limit: "50",
+		});
+		fetch(`http://localhost:3030/memories?${params}`)
+			.then((r) => (r.ok ? r.json() : { data: [] }))
+			.then((res) => setMemories(res.data || []))
+			.catch(() => {});
+	}, [visibleFrames]);
 
 	// Dynamically compute app names from the current viewport, sorted by frequency
 	const viewportAppNames = useMemo(() => {
@@ -1334,6 +1362,98 @@ export const TimelineSlider = ({
 					onMouseUp={handleDragEnd}
 					onMouseLeave={handleDragEnd}
 				>
+					{/* Memory markers — diamonds above frame bars */}
+					{memories.length > 0 && (() => {
+						const stepPx = frameWidth + frameMargin * 2;
+						// Build flat list of all frame timestamps in render order
+						const allFrameTimestamps: string[] = [];
+						for (const g of appGroups) {
+							if (g.dayBoundaryDate) allFrameTimestamps.push("__boundary__");
+							for (const f of g.frames) allFrameTimestamps.push(f.timestamp);
+						}
+						return (
+							<div className="absolute top-0 left-0 right-0 h-5 pointer-events-auto" style={{ direction: "ltr", zIndex: 40 }}>
+								{memories.map((mem) => {
+									const memTime = new Date(mem.created_at).getTime();
+									let bestIdx = -1;
+									let bestDist = Infinity;
+									let boundaryOffset = 0;
+									for (let i = 0; i < allFrameTimestamps.length; i++) {
+										if (allFrameTimestamps[i] === "__boundary__") {
+											boundaryOffset += 16; // day boundary divider width
+											continue;
+										}
+										const dist = Math.abs(new Date(allFrameTimestamps[i]).getTime() - memTime);
+										if (dist < bestDist) {
+											bestDist = dist;
+											bestIdx = i;
+										}
+									}
+									if (bestIdx < 0) return null;
+									// Count actual frames before this index (exclude boundaries)
+									let frameCount = 0;
+									for (let i = 0; i < bestIdx; i++) {
+										if (allFrameTimestamps[i] !== "__boundary__") frameCount++;
+									}
+									// 50vw padding + 1px forward observer + boundary offsets + frame positions
+									const xOffset = frameCount * stepPx + stepPx / 2 + boundaryOffset;
+									return (
+										<div
+											key={mem.id}
+											className="absolute pointer-events-auto cursor-default"
+											style={{ left: `calc(50vw + ${xOffset}px)`, top: "2px" }}
+											onMouseEnter={(e) => {
+												const rect = e.currentTarget.getBoundingClientRect();
+												setHoveredMemoryId(mem.id);
+												setHoveredMemoryRect({ x: rect.left + rect.width / 2, y: rect.top - 8 });
+											}}
+											onMouseLeave={() => {
+												setHoveredMemoryId(null);
+												setHoveredMemoryRect(null);
+											}}
+										>
+											<div
+												className="w-2 h-2 bg-foreground/50 rotate-45 hover:bg-foreground hover:scale-150 transition-all duration-150"
+												title={mem.content.slice(0, 60)}
+											/>
+										</div>
+									);
+								})}
+							</div>
+						);
+					})()}
+
+					{/* Memory tooltip portal */}
+					{hoveredMemoryId !== null && hoveredMemoryRect && createPortal(
+						<div
+							className="fixed z-[9999] max-w-[240px] bg-popover border border-border rounded-lg px-3 py-2 text-xs shadow-2xl pointer-events-none"
+							style={{
+								left: `${hoveredMemoryRect.x}px`,
+								top: `${hoveredMemoryRect.y}px`,
+								transform: "translate(-50%, -100%)",
+							}}
+						>
+							{(() => {
+								const mem = memories.find((m) => m.id === hoveredMemoryId);
+								if (!mem) return null;
+								const truncated = mem.content.length > 120 ? mem.content.slice(0, 120) + "…" : mem.content;
+								const usefulTags = mem.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t));
+								return (
+									<>
+										<p className="text-foreground mb-1 line-clamp-3">{truncated}</p>
+										<div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
+											<span>{formatDistanceToNow(new Date(mem.created_at), { addSuffix: true })}</span>
+											{usefulTags.slice(0, 3).map((t) => (
+												<span key={t} className="px-1 py-0.5 bg-foreground/10 rounded text-[9px]">{t}</span>
+											))}
+										</div>
+									</>
+								);
+							})()}
+						</div>,
+						document.body
+					)}
+
 					<div ref={forwardObserverTargetRef} className="h-full w-1" />
 					{appGroups.map((group, groupIndex) => {
 						const groupWidth = getGroupWidth(group);

@@ -12,7 +12,7 @@ import { scheduleFirstRunNotification } from "@/lib/notifications";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 
-const PIPE_SLUG = "day-recap";
+const PIPE_SLUG = "follow-up-reminders";
 
 type Phase = "prompt" | "enabling" | "done";
 
@@ -80,20 +80,24 @@ export default function PickPipe() {
       try { await completeOnboarding(); } catch {}
       try { scheduleFirstRunNotification(); } catch {}
 
-      const { showChatWithPrefill } = await import("@/lib/chat-utils");
+      // Send a deterministic welcome notification showing what reminders look like
+      try {
+        await fetch("http://localhost:3030/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "🔔 reminders enabled",
+            body: "screenpipe will remind you to:\n\n" +
+              "- reply to emails you opened but didn't respond to\n" +
+              "- follow up on meetings where you said \"I'll send that over\"\n" +
+              "- revisit tabs you bookmarked but never read\n\n" +
+              "first reminder in about 1 hour.",
+          }),
+        });
+      } catch {}
 
-      // Show Main window first (Chat overlays on top of it)
+      // Show Main window and close onboarding
       await commands.showWindow("Main");
-
-      // Open chat overlay with auto-sent summary request
-      await showChatWithPrefill({
-        context: "user just finished onboarding",
-        prompt: "give me a quick summary of what i've been doing in the last 30 minutes, then send me a notification with the highlights",
-        autoSend: true,
-        source: "onboarding",
-      });
-
-      // Close onboarding window
       try { window.close(); } catch {}
     } catch (err) {
       console.error("failed to enable pipe:", err);
@@ -158,7 +162,7 @@ export default function PickPipe() {
         >
           <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
           <p className="font-mono text-sm text-muted-foreground">
-            enabling day recap...
+            enabling reminders...
           </p>
         </motion.div>
       </div>
@@ -183,19 +187,19 @@ export default function PickPipe() {
           animate={{ scale: 1 }}
           transition={{ delay: 0.3, type: "spring", stiffness: 300, damping: 20 }}
         >
-          📋
+          🔔
         </motion.span>
 
         {/* Pitch */}
         <div className="text-center space-y-3">
           <h2 className="font-sans text-lg font-bold lowercase leading-snug">
-            every day at 6pm, screenpipe will summarize what you did today.
+            screenpipe will remind you about things you forgot to follow up on.
           </h2>
           <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
-            <span>apps you used</span>
-            <span>meetings you had</span>
-            <span>topics you worked on</span>
-            <span>time breakdown</span>
+            <span>unreplied emails</span>
+            <span>meeting follow-ups</span>
+            <span>forgotten tabs</span>
+            <span>promised actions</span>
           </div>
         </div>
 
@@ -204,7 +208,7 @@ export default function PickPipe() {
           onClick={handleSoundsGood}
           className="w-full border border-foreground bg-foreground text-background py-3 font-mono text-sm uppercase tracking-widest hover:bg-background hover:text-foreground transition-colors duration-150"
         >
-          sounds good
+          enable reminders
         </button>
 
         {/* Error */}

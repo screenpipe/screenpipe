@@ -138,7 +138,7 @@ mod tests {
         // Simulate being idle: set threshold very high and backdate last_above_threshold
         let detector = IdleDetector::new(100.0);
         *detector.last_above_threshold.write().unwrap() =
-            Instant::now() - std::time::Duration::from_secs(60);
+            Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or(Instant::now());
         assert!(
             detector.is_idle(),
             "should be idle after stable period exceeds threshold"

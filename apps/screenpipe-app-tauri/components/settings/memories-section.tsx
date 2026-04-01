@@ -95,6 +95,10 @@ export function MemoriesSection() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -156,17 +160,22 @@ export function MemoriesSection() {
         const data: MemoryListResponse = await res.json();
         const sorted = sortMemories(data.data);
 
-        // collect all unique tags
+        // collect all unique tags, filtering out ISO timestamps and date-like strings
+        const isUsefulTag = (t: string) =>
+          t.length > 0 &&
+          !/^\d{4}-\d{2}-\d{2}/.test(t) && // ISO date or timestamp
+          !/^\d+$/.test(t); // pure numbers
+
         if (offset === 0) {
           const tags = new Set<string>();
-          data.data.forEach((m) => m.tags.forEach((t) => tags.add(t)));
+          data.data.forEach((m) => m.tags.filter(isUsefulTag).forEach((t) => tags.add(t)));
           setAllTags((prev) => {
             const merged = new Set([...prev, ...tags]);
             return Array.from(merged).sort();
           });
         } else {
           data.data.forEach((m) =>
-            m.tags.forEach((t) =>
+            m.tags.filter(isUsefulTag).forEach((t) =>
               setAllTags((prev) =>
                 prev.includes(t) ? prev : [...prev, t].sort(),
               ),
@@ -245,6 +254,43 @@ export function MemoriesSection() {
       });
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const startEditing = (memory: MemoryRecord) => {
+    setEditingId(memory.id);
+    setEditContent(memory.content);
+    setTimeout(() => editRef.current?.focus(), 0);
+  };
+
+  const saveEdit = async (id: number) => {
+    const trimmed = editContent.trim();
+    const memory = memories.find((m) => m.id === id);
+    if (!trimmed || trimmed === memory?.content) {
+      setEditingId(null);
+      return;
+    }
+    setSavingId(id);
+    try {
+      const res = await fetch(`http://localhost:3030/memories/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: trimmed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMemories((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, content: trimmed } : m)),
+      );
+      toast({ title: "memory updated" });
+    } catch (err) {
+      toast({
+        title: "failed to update memory",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingId(null);
+      setEditingId(null);
     }
   };
 
@@ -376,8 +422,39 @@ export function MemoriesSection() {
                 key={memory.id}
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground">{memory.content}</p>
+                <div
+                  className="flex-1 min-w-0 cursor-text"
+                  onClick={() => {
+                    if (editingId !== memory.id) startEditing(memory);
+                  }}
+                >
+                  {editingId === memory.id ? (
+                    <textarea
+                      ref={editRef}
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      onBlur={() => saveEdit(memory.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          saveEdit(memory.id);
+                        }
+                        if (e.key === "Escape") {
+                          setEditingId(null);
+                        }
+                      }}
+                      disabled={savingId === memory.id}
+                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
+                      rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
+                    />
+                  ) : (
+                    <p className="text-sm text-foreground">
+                      {memory.content}
+                      {savingId === memory.id && (
+                        <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                      )}
+                    </p>
+                  )}
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -389,7 +466,7 @@ export function MemoriesSection() {
                       {memory.source}
                     </Badge>
                     {memory.tags.length > 0 &&
-                      memory.tags.map((tag) => (
+                      memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
                         <Badge
                           key={tag}
                           variant="secondary"

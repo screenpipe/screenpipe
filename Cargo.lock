@@ -242,7 +242,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=ac4c8851c5b076a54937a892b974f00b449dde94#ac4c8851c5b076a54937a892b974f00b449dde94"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "cc",
 ]
@@ -540,7 +540,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=ac4c8851c5b076a54937a892b974f00b449dde94#ac4c8851c5b076a54937a892b974f00b449dde94"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -3192,6 +3192,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls 0.23.37",
+ "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
@@ -5904,7 +5905,7 @@ checksum = "640c9bd8497b02465aeef5375144c26062e0dcd5939dfcbb0f5db76cb8c17c73"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=ac4c8851c5b076a54937a892b974f00b449dde94#ac4c8851c5b076a54937a892b974f00b449dde94"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "cc",
  "cmake",
@@ -6194,6 +6195,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.37",
+ "rustls-native-certs",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
  "serde",
@@ -6512,6 +6514,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-native-certs"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
+dependencies = [
+ "openssl-probe",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
 name = "rustls-pemfile"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6717,7 +6731,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6777,7 +6791,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6790,10 +6804,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
@@ -6804,6 +6819,7 @@ dependencies = [
  "objc2",
  "objc2-event-kit",
  "objc2-foundation",
+ "once_cell",
  "reqwest",
  "russh",
  "russh-sftp",
@@ -6817,7 +6833,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6862,7 +6878,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6888,7 +6904,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6958,7 +6974,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6976,7 +6992,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7016,7 +7032,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.243"
+version = "0.3.245"
 dependencies = [
  "argon2",
  "chacha20poly1305",

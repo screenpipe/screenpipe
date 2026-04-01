@@ -6,7 +6,7 @@ exclude = ["apps/screenpipe-app-tauri/src-tauri", "crates/screenpipe-integration
 resolver = "2"
 
 [workspace.package]
-version = "0.3.244"
+version = "0.3.245"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -37,7 +37,7 @@ sentry = { version = "0.36.0", features = ["tracing"] }
 tracing-oslog = "0.3.0"
 
 http-cache-reqwest = "0.15.0"
-reqwest = { version = "=0.12.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
+reqwest = { version = "=0.12.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls", "rustls-tls-native-roots"] }
 reqwest-middleware = "0.4.1"
 
 

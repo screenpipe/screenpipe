@@ -170,13 +170,16 @@ pub async fn start_device_monitor(
         let mut failed_devices: HashMap<String, (u32, Instant)> = HashMap::new();
         let mut output_recovery_backoff = OutputRecoveryBackoff::new();
         let mut no_input_retry_count: u32 = 0;
+        let mut last_no_input_log: Option<Instant> = None;
 
         // Central handler restart cooldown: max 3 restarts in a 5-minute window
         let mut central_restart_times: Vec<Instant> = Vec::new();
         let central_restart_exhausted = std::sync::atomic::AtomicBool::new(false);
         let mut model_restart_pending = false;
         let model_refresh_cooldown = Duration::from_secs(30);
-        let mut last_model_refresh = Instant::now() - model_refresh_cooldown;
+        let mut last_model_refresh = Instant::now()
+            .checked_sub(model_refresh_cooldown)
+            .unwrap_or(Instant::now());
 
         // Initialize tracker with current defaults
         let _ = default_tracker.check_input_changed();
@@ -509,13 +512,29 @@ pub async fn start_device_monitor(
 
                         if !has_input {
                             no_input_retry_count += 1;
+
+                            // Throttle logging after many retries to avoid spamming logs
+                            // (e.g. Bluetooth device disconnected permanently)
+                            let should_log = if no_input_retry_count <= 10 {
+                                true // always log first 10 attempts
+                            } else {
+                                // After 10 attempts, log once per 60s
+                                match last_no_input_log {
+                                    Some(t) => t.elapsed().as_secs() >= 60,
+                                    None => true,
+                                }
+                            };
+
                             match default_input_device() {
                                 Ok(default_input) => {
                                     let device_name = default_input.to_string();
-                                    warn!(
-                                        "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
-                                        no_input_retry_count, device_name
-                                    );
+                                    if should_log {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] no input device running (attempt {}), starting default: {}",
+                                            no_input_retry_count, device_name
+                                        );
+                                        last_no_input_log = Some(Instant::now());
+                                    }
                                     match audio_manager.start_device(&default_input).await {
                                         Ok(()) => {
                                             failed_devices.remove(&device_name);
@@ -526,18 +545,24 @@ pub async fn start_device_monitor(
                                             );
                                         }
                                         Err(e) => {
-                                            warn!(
-                                                "[DEVICE_RECOVERY] failed to start input device {} (attempt {}): {}",
-                                                device_name, no_input_retry_count, e
-                                            );
+                                            if should_log {
+                                                warn!(
+                                                    "[DEVICE_RECOVERY] failed to start input device {} (attempt {}): {}",
+                                                    device_name, no_input_retry_count, e
+                                                );
+                                                last_no_input_log = Some(Instant::now());
+                                            }
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    warn!(
-                                        "[DEVICE_RECOVERY] no input device running and default_input_device() failed (attempt {}): {}",
-                                        no_input_retry_count, e
-                                    );
+                                    if should_log {
+                                        warn!(
+                                            "[DEVICE_RECOVERY] no input device running and default_input_device() failed (attempt {}): {}",
+                                            no_input_retry_count, e
+                                        );
+                                        last_no_input_log = Some(Instant::now());
+                                    }
                                 }
                             }
                         } else {

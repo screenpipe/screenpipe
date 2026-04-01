@@ -398,12 +398,14 @@ function ClaudePanel({ onConnected }: { onConnected?: () => void }) {
             <summary className="cursor-pointer hover:text-foreground">didn&apos;t work? troubleshooting steps</summary>
             <ol className="mt-1.5 ml-4 list-decimal space-y-1">
               <li>
-                <button className="underline hover:text-foreground" onClick={() => mcpbPath && revealItemInDir(mcpbPath)}>
-                  show the .mcpb file
-                </button>
-                {" "}then drag and drop it into claude desktop&apos;s window
+                open claude desktop → developer → extensions
               </li>
-              <li>or in claude: developer → extensions → install extension → select the file</li>
+              <li>
+                <button className="underline hover:text-foreground" onClick={() => mcpbPath && revealItemInDir(mcpbPath)}>
+                  click here to show the .mcpb file
+                </button>
+                {" "}then drag it into the extensions panel
+              </li>
               <li>if nothing works, reinstall claude desktop to fix file associations</li>
             </ol>
           </details>
@@ -702,7 +704,7 @@ function BrowserExtensionPanel({ connected, onRefresh }: { connected: boolean; o
       </div>
 
       <div className="flex items-center gap-2">
-        <div className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+        <div className={`w-2 h-2 rounded-full ${connected ? "bg-foreground" : "bg-muted-foreground/30"}`} />
         <span className="text-sm">{connected ? "connected" : "not connected"}</span>
       </div>
 
@@ -926,6 +928,72 @@ function ChatGptPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Generic OAuth panel — used for any integration with is_oauth: true
+// ---------------------------------------------------------------------------
+
+function OAuthPanel({ integrationId, integrationName }: { integrationId: string; integrationName: string }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
+  const [displayName, setDisplayName] = useState<string | null>(null);
+
+  useEffect(() => {
+    commands.oauthStatus(integrationId).then(res => {
+      if (res.status === "ok" && res.data.connected) {
+        setStatus("connected");
+        setDisplayName(res.data.display_name ?? null);
+      }
+    });
+  }, [integrationId]);
+
+  const handleConnect = async () => {
+    setStatus("loading");
+    try {
+      const res = await commands.oauthConnect(integrationId);
+      if (res.status === "ok" && res.data.connected) {
+        setStatus("connected");
+        setDisplayName(res.data.display_name ?? null);
+      } else {
+        setStatus("idle");
+      }
+    } catch {
+      setStatus("idle");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await commands.oauthDisconnect(integrationId);
+    setStatus("idle");
+    setDisplayName(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Connect your {integrationName} account. AI can act on your behalf once connected.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {status === "connected" ? (
+          <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <LogOut className="h-3 w-3" />disconnect
+          </Button>
+        ) : (
+          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {status === "loading"
+              ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
+              : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
+          </Button>
+        )}
+      </div>
+      {status === "connected" && displayName && (
+        <div className="p-3 bg-muted border border-border rounded-lg">
+          <p className="text-xs font-medium text-foreground">connected</p>
+          <p className="text-xs text-muted-foreground">{displayName}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // API integration panel (Telegram, Slack, etc.)
 // ---------------------------------------------------------------------------
 
@@ -945,6 +1013,7 @@ export interface IntegrationInfo {
   description: string;
   fields: IntegrationField[];
   connected: boolean;
+  is_oauth: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1401,6 +1470,9 @@ export function ConnectionsSection() {
       case "msty": return <MstyPanel />;
       default:
         if (selectedIntegration) {
+          if (selectedIntegration.is_oauth) {
+            return <OAuthPanel integrationId={selectedIntegration.id} integrationName={selectedIntegration.name} />;
+          }
           return <ApiIntegrationPanel integration={selectedIntegration} onRefresh={fetchIntegrations} />;
         }
         return null;

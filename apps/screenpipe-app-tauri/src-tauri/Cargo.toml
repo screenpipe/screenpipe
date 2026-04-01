@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.2.296"
+version = "2.3.1"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -61,7 +61,7 @@ dark-light = "2.0.0"
 tokio = { version = "1.36.0", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "=0.12.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
+reqwest = { version = "=0.12.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls", "rustls-tls-native-roots"] }
 
 # tracing
 tracing = "0.1.40"

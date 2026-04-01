@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { open } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 
 export function DisplaySection() {
   const { settings, updateSettings } = useSettings();
@@ -216,6 +217,34 @@ export function DisplaySection() {
             </CardContent>
           </Card>
         )}
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Show shortcut reminder</h3>
+                  <p className="text-xs text-muted-foreground">Overlay showing the screenpipe shortcut</p>
+                </div>
+              </div>
+              <Switch
+                id="shortcut-overlay"
+                checked={settings?.showShortcutOverlay ?? false}
+                onCheckedChange={async (checked) => {
+                  handleSettingsChange({ showShortcutOverlay: checked });
+                  try {
+                    if (checked) {
+                      await invoke("show_shortcut_reminder", { shortcut: settings.showScreenpipeShortcut });
+                    } else {
+                      await invoke("hide_shortcut_reminder");
+                    }
+                  } catch (e) {}
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
 
       </div>
     </div>

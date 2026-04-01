@@ -186,11 +186,33 @@ function humanizeSchedule(schedule: string | undefined): string {
     if (min.startsWith("*/") && hour !== "*") {
       const interval = `${min.slice(2)}min`;
       // Try to humanize hour range
-      const humanHours = hour.replace(/(\d+)/g, (_, h) => {
+      const humanHours = hour.replace(/(\d+)/g, (_, h: string) => {
         const n = parseInt(h);
         return n === 0 ? "12am" : n < 12 ? `${n}am` : n === 12 ? "12pm" : `${n - 12}pm`;
       }).replace("-", "–");
-      return `${interval} · ${humanHours}`;
+      let label = `${interval} · ${humanHours}`;
+      // Add day info if not every day
+      if (dow !== "*") {
+        const dayMap: Record<string, string> = { "0": "Su", "1": "M", "2": "T", "3": "W", "4": "T", "5": "F", "6": "Sa" };
+        if (dow === "1-5") {
+          label += " · Mon–Fri";
+        } else {
+          const days = dow.split(",").map((d: string) => dayMap[d] || d).join("");
+          label += ` · ${days}`;
+        }
+      }
+      return label;
+    }
+    // */N or 0 */N with day restriction
+    if (dow !== "*") {
+      let interval = "";
+      if (min.startsWith("*/")) interval = `${min.slice(2)}min`;
+      else if (min === "0" && hour.startsWith("*/")) interval = `${hour.slice(2)}h`;
+      if (interval) {
+        const dayMap: Record<string, string> = { "0": "Su", "1": "M", "2": "T", "3": "W", "4": "T", "5": "F", "6": "Sa" };
+        const dayLabel = dow === "1-5" ? "Mon–Fri" : dow.split(",").map((d: string) => dayMap[d] || d).join("");
+        return `${interval} · ${dayLabel}`;
+      }
     }
   }
   // Fallback: truncate long crons
@@ -1090,7 +1112,8 @@ export function PipesSection() {
       const requiredConnections: string[] = pipe?.config?.connections ?? [];
       if (requiredConnections.length > 0) {
         const missing = requiredConnections.filter((id) => {
-          const conn = availableConnections.find((c) => c.id === id);
+          const baseId = id.includes(":") ? id.split(":")[0] : id;
+          const conn = availableConnections.find((c) => c.id === baseId);
           return !conn || !conn.connected;
         });
         if (missing.length > 0) {
@@ -1299,9 +1322,8 @@ export function PipesSection() {
 
   return (
     <div className="space-y-4" data-testid="section-pipes">
-      <div className="space-y-1">
+      <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-medium">My Pipes</h3>
           <div className="flex items-center gap-2">
             {/* Device selector dropdown — always visible */}
             <DropdownMenu>
@@ -1856,6 +1878,157 @@ export function PipesSection() {
                           })()}
                         </SelectContent>
                       </Select>
+
+                          {/* Day-of-week picker */}
+                          {pipe.config.schedule && pipe.config.schedule !== "manual" && (() => {
+                            const schedule = pipe.config.schedule;
+                            const cronParts = schedule.trim().split(/\s+/);
+                            const isCron = cronParts.length === 5;
+                            // Extract current day-of-week from cron (field 5, 0=Sun, 1=Mon..6=Sat)
+                            const currentDow = isCron ? cronParts[4] : "*";
+                            const allDays = currentDow === "*";
+                            // Parse active days into a Set
+                            const activeDays = new Set<number>();
+                            if (allDays) {
+                              for (let i = 0; i < 7; i++) activeDays.add(i);
+                            } else {
+                              // Handle ranges (1-5) and lists (1,3,5)
+                              for (const part of currentDow.split(",")) {
+                                if (part.includes("-")) {
+                                  const [a, b] = part.split("-").map(Number);
+                                  for (let i = a; i <= b; i++) activeDays.add(i);
+                                } else {
+                                  activeDays.add(Number(part));
+                                }
+                              }
+                            }
+                            const dayLabels = [
+                              { key: 1, label: "M" },
+                              { key: 2, label: "T" },
+                              { key: 3, label: "W" },
+                              { key: 4, label: "T" },
+                              { key: 5, label: "F" },
+                              { key: 6, label: "S" },
+                              { key: 0, label: "S" },
+                            ];
+
+                            const toggleDay = (dayNum: number) => {
+                              const next = new Set(activeDays);
+                              if (next.has(dayNum)) {
+                                next.delete(dayNum);
+                              } else {
+                                next.add(dayNum);
+                              }
+                              if (next.size === 0 || next.size === 7) {
+                                // All days or none → use "*"
+                                const baseParts = isCron ? cronParts.slice(0, 4) : ["*/30", "*", "*", "*"];
+                                // For "every Xm" format, convert to cron first
+                                let newSchedule: string;
+                                if (!isCron) {
+                                  // Can't add days to simple "every 30m" — keep as is
+                                  if (next.size === 7) return; // already all days
+                                  const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
+                                  if (everyMatch) {
+                                    const n = parseInt(everyMatch[1]);
+                                    const unit = everyMatch[2].toLowerCase();
+                                    if (unit === "m") {
+                                      newSchedule = `*/${n} * * * *`;
+                                    } else {
+                                      newSchedule = `0 */${n} * * *`;
+                                    }
+                                  } else {
+                                    return;
+                                  }
+                                } else {
+                                  newSchedule = [...baseParts, "*"].join(" ");
+                                }
+                                const pipeName = pipe.config.name;
+                                setPipes((prev) =>
+                                  prev.map((p) =>
+                                    p.config.name === pipeName
+                                      ? { ...p, config: { ...p.config, schedule: newSchedule } }
+                                      : p
+                                  )
+                                );
+                                const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ schedule: newSchedule }),
+                                }).then(() => {
+                                  delete pendingConfigSaves.current[pipeName];
+                                  fetchPipes();
+                                }).catch(() => {
+                                  delete pendingConfigSaves.current[pipeName];
+                                });
+                                pendingConfigSaves.current[pipeName] = savePromise;
+                                return;
+                              }
+                              // Build day-of-week field
+                              const sorted = Array.from(next).sort((a, b) => a - b);
+                              // Try to compress into range
+                              let dowStr: string;
+                              const isContiguous = sorted.every((v, i) => i === 0 || v === sorted[i - 1] + 1);
+                              if (isContiguous && sorted.length > 2) {
+                                dowStr = `${sorted[0]}-${sorted[sorted.length - 1]}`;
+                              } else {
+                                dowStr = sorted.join(",");
+                              }
+                              let baseParts: string[];
+                              if (isCron) {
+                                baseParts = cronParts.slice(0, 4);
+                              } else {
+                                // Convert "every Xm/h" to cron base
+                                const everyMatch = schedule.match(/every\s+(\d+)\s*(m|h)/i);
+                                if (everyMatch) {
+                                  const n = parseInt(everyMatch[1]);
+                                  const unit = everyMatch[2].toLowerCase();
+                                  baseParts = unit === "m" ? [`*/${n}`, "*", "*", "*"] : ["0", `*/${n}`, "*", "*"];
+                                } else {
+                                  return;
+                                }
+                              }
+                              const newSchedule = [...baseParts, dowStr].join(" ");
+                              const pipeName = pipe.config.name;
+                              setPipes((prev) =>
+                                prev.map((p) =>
+                                  p.config.name === pipeName
+                                    ? { ...p, config: { ...p.config, schedule: newSchedule } }
+                                    : p
+                                )
+                              );
+                              const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ schedule: newSchedule }),
+                              }).then(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                                fetchPipes();
+                              }).catch(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                              });
+                              pendingConfigSaves.current[pipeName] = savePromise;
+                            };
+
+                            return (
+                              <div className="flex items-center gap-1 mt-2">
+                                <span className="text-[10px] text-muted-foreground mr-1">days</span>
+                                {dayLabels.map((d, i) => (
+                                  <button
+                                    key={`${d.key}-${i}`}
+                                    onClick={() => toggleDay(d.key)}
+                                    className={cn(
+                                      "w-6 h-6 text-[10px] font-mono border transition-colors",
+                                      activeDays.has(d.key)
+                                        ? "bg-foreground text-background border-foreground"
+                                        : "border-border text-muted-foreground hover:border-foreground/40"
+                                    )}
+                                  >
+                                    {d.label}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Connections */}
@@ -2329,11 +2502,31 @@ export function PipesSection() {
       {connectionModal && (
         <PostInstallConnectionsModal
           open={!!connectionModal}
-          onOpenChange={(open) => {
+          onOpenChange={async (open) => {
             if (!open) {
+              // Re-check against fresh connection state.
+              // Required IDs can be named instances like "notion:crm", while
+              // availableConnections are keyed by base ID ("notion").
+              let latestConnections = availableConnections;
+              try {
+                const res = await fetch(`${apiBase}/connections`);
+                const data = await res.json();
+                if (data.data) {
+                  latestConnections = data.data.map((c: any) => ({
+                    id: c.id,
+                    name: c.name,
+                    icon: c.icon,
+                    connected: c.connected,
+                  }));
+                }
+              } catch {
+                // Fall back to current in-memory state if fetch fails.
+              }
+
               // If any required connection is still missing, disable the pipe
               const stillMissing = connectionModal.connections.some((id) => {
-                const conn = availableConnections.find((c) => c.id === id);
+                const baseId = id.includes(":") ? id.split(":")[0] : id;
+                const conn = latestConnections.find((c) => c.id === baseId);
                 return !conn || !conn.connected;
               });
               if (stillMissing) {

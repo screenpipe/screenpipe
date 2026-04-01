@@ -98,6 +98,12 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
+      // Push hidden sections to Rust so tray menu can use them
+      try {
+        await commands.setEnterprisePolicy(result.hiddenSections);
+      } catch (e) {
+        console.warn("[enterprise] failed to push policy to Rust:", e);
+      }
       return { ok: true, policy: result };
     } catch (e) {
       console.error("[enterprise] policy fetch error:", e);

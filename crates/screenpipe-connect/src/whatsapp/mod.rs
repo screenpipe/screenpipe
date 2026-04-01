@@ -4,9 +4,8 @@
 
 //! WhatsApp integration via Baileys (WhatsApp Web multi-device protocol).
 //!
-//! Manages a node child process running the Baileys gateway script.
-//! Uses node instead of bun because Baileys requires full ws WebSocket support.
-//! Bun is used only for `bun add` to install npm packages.
+//! Manages a bun child process running the Baileys gateway script.
+//! Bun is used for both installing npm packages and running the gateway.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -67,6 +66,8 @@ pub struct WhatsAppGateway {
     generation: Arc<std::sync::atomic::AtomicU64>,
     /// Whether auto-restart is enabled (set to true after successful pairing).
     auto_restart: Arc<AtomicBool>,
+    /// Cached bun path for watchdog restarts.
+    bun_path: Arc<Mutex<String>>,
 }
 
 impl WhatsAppGateway {
@@ -78,6 +79,7 @@ impl WhatsAppGateway {
             http_port: Arc::new(Mutex::new(None)),
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             auto_restart: Arc::new(AtomicBool::new(false)),
+            bun_path: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -91,8 +93,6 @@ impl WhatsAppGateway {
     }
 
     /// Start the Baileys gateway process for QR pairing.
-    /// Uses node (not bun) because Baileys requires a full ws implementation
-    /// and bun's built-in WebSocket is missing 'upgrade'/'unexpected-response' events.
     pub async fn start_pairing(&self, bun_path: &str) -> Result<()> {
         // Bump generation so any existing watchdog exits on its next check
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -100,8 +100,11 @@ impl WhatsAppGateway {
         // Stop any existing process
         self.stop_process().await;
 
+        // Cache bun path for watchdog restarts
+        *self.bun_path.lock().await = bun_path.to_string();
+
         self.ensure_deps(bun_path).await?;
-        self.spawn_gateway().await?;
+        self.spawn_gateway(bun_path).await?;
 
         // Enable auto-restart now that we've successfully started
         self.auto_restart.store(true, Ordering::SeqCst);
@@ -147,13 +150,12 @@ impl WhatsAppGateway {
         Ok(())
     }
 
-    /// Spawn the node gateway process, wire up stdout/stderr readers.
-    async fn spawn_gateway(&self) -> Result<()> {
+    /// Spawn the bun gateway process, wire up stdout/stderr readers.
+    async fn spawn_gateway(&self, bun_path: &str) -> Result<()> {
         let session_dir = self.screenpipe_dir.join("whatsapp-session");
         let script_path = self.screenpipe_dir.join("whatsapp-gateway.mjs");
 
-        let node_path = which_node().unwrap_or_else(|| "node".to_string());
-        let mut gateway_cmd = Command::new(&node_path);
+        let mut gateway_cmd = Command::new(bun_path);
         gateway_cmd
             .arg(script_path.to_str().unwrap())
             .env("WHATSAPP_SESSION_DIR", session_dir.to_str().unwrap())
@@ -263,6 +265,7 @@ impl WhatsAppGateway {
         let auto_restart = self.auto_restart.clone();
         let generation = self.generation.clone();
         let screenpipe_dir = self.screenpipe_dir.clone();
+        let bun_path = self.bun_path.clone();
 
         tokio::spawn(async move {
             loop {
@@ -346,9 +349,9 @@ impl WhatsAppGateway {
                 // Re-spawn
                 let session_dir = screenpipe_dir.join("whatsapp-session");
                 let script_path = screenpipe_dir.join("whatsapp-gateway.mjs");
-                let node_path = which_node().unwrap_or_else(|| "node".to_string());
+                let bun = bun_path.lock().await.clone();
 
-                let mut respawn_cmd = Command::new(&node_path);
+                let mut respawn_cmd = Command::new(&bun);
                 respawn_cmd
                     .arg(script_path.to_str().unwrap())
                     .env("WHATSAPP_SESSION_DIR", session_dir.to_str().unwrap())
@@ -486,11 +489,6 @@ impl WhatsAppGateway {
 /// Find bun executable on PATH.
 pub fn which_bun() -> Option<String> {
     which_executable("bun")
-}
-
-/// Find node executable on PATH.
-fn which_node() -> Option<String> {
-    which_executable("node")
 }
 
 fn which_executable(name: &str) -> Option<String> {

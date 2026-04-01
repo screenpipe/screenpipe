@@ -854,7 +854,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           body: args.body || "",
           type: "pipe",
         };
-        if (args.timeout_secs) notifBody.timeout = args.timeout_secs * 1000;
+        if (args.timeout_secs) notifBody.timeout = Number(args.timeout_secs) * 1000;
         if (args.actions) notifBody.actions = args.actions;
         const notifResponse = await fetch("http://localhost:11435/notify", {
           method: "POST",
