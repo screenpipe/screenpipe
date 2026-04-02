@@ -445,11 +445,13 @@ const AISection = ({
   useEffect(() => {
     const model = settingsPreset?.model;
     if (!model) return;
+    // Screenpipe Cloud uses per-model max output from the gateway catalog — do not infer from model name.
+    if (settingsPreset?.provider === "screenpipe-cloud") return;
     const tokens = getDefaultMaxTokens(model);
     if (tokens && (settingsPreset as any)?.maxTokens !== tokens) {
       updateSettingsPreset({ maxTokens: tokens } as any);
     }
-  }, [settingsPreset?.model]);
+  }, [settingsPreset?.model, settingsPreset?.provider, getDefaultMaxTokens, updateSettingsPreset]);
 
   const handleCustomPromptChange = useCallback((value: string, isValid: boolean) => {
     updateSettingsPreset({ prompt: value });

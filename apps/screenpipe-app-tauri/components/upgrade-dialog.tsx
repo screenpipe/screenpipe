@@ -65,17 +65,14 @@ export function UpgradeDialog({
       return;
     }
     try {
-      const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+      const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${settings.user.token}`,
         },
         body: JSON.stringify({
-          tier: "pro",
-          billingPeriod: isAnnual ? "yearly" : "monthly",
-          userId: settings.user.id,
-          email: settings.user.email,
+          plan: isAnnual ? "annual" : "monthly",
+          origin: "desktop-app",
         }),
       });
       const data = await response.json();
@@ -143,9 +140,9 @@ export function UpgradeDialog({
               >
                 <Zap className="h-4 w-4 shrink-0" />
                 <div className="text-left flex-1 min-w-0">
-                  <div className="font-medium">screenpipe pro — $39/mo</div>
+                  <div className="font-medium">screenpipe — $99/mo</div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
-                    cloud transcription + claude opus 4.6 + encrypted sync
+                    everything included — cloud, AI, sync
                   </div>
                 </div>
               </Button>
@@ -158,13 +155,13 @@ export function UpgradeDialog({
                 <Star className="h-4 w-4 shrink-0" />
                 <div className="text-left flex-1 min-w-0">
                   <div className="font-medium flex items-center gap-1.5">
-                    $312/year
+                    $600/year
                     <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                      save 33%
+                      save 50%
                     </Badge>
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
-                    everything in pro, billed annually
+                    everything included, billed annually
                   </div>
                 </div>
               </Button>

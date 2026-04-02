@@ -20,14 +20,20 @@ pub struct SyncScheduler {
     last_error: Arc<Mutex<Option<String>>>,
 }
 
-impl SyncScheduler {
-    pub fn new() -> Self {
+impl Default for SyncScheduler {
+    fn default() -> Self {
         Self {
             running: Arc::new(AtomicBool::new(false)),
             config: Arc::new(Mutex::new(None)),
             last_sync: Arc::new(Mutex::new(None)),
             last_error: Arc::new(Mutex::new(None)),
         }
+    }
+}
+
+impl SyncScheduler {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Start the background sync loop. If already running, updates the config

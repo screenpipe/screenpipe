@@ -177,7 +177,7 @@ export function ReferralCard() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono bg-muted rounded-full w-5 h-5 flex items-center justify-center shrink-0">3</span>
-          you get <span className="font-medium text-foreground">1 month free pro</span> when they subscribe
+          you get <span className="font-medium text-foreground">1 month free</span> when they subscribe
         </div>
       </div>
 

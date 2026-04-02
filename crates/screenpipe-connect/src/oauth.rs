@@ -27,7 +27,8 @@
 //!   2. Implement `oauth_config()` on the `Integration` trait impl.
 //!   3. Register the redirect URI `http://localhost:3030/connections/oauth/callback`
 //!      in the provider's developer console.
-//!   That's it — all Tauri commands and frontend rendering are automatic.
+//!
+//! That's it -- all Tauri commands and frontend rendering are automatic.
 
 use anyhow::Result;
 use once_cell::sync::Lazy;

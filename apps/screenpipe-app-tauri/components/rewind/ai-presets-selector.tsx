@@ -866,6 +866,7 @@ export function AIProviderConfig({
 
         {showAdvanced && (
           <div className="space-y-1.5">
+            {selectedProvider !== "screenpipe-cloud" && (
             <div className="space-y-1">
               <Label htmlFor="maxTokens" className="text-xs">max output tokens</Label>
               <Input
@@ -881,6 +882,7 @@ export function AIProviderConfig({
                 className="h-6 text-[10px]"
               />
             </div>
+            )}
             <div className="space-y-1">
               <Label htmlFor="prompt" className="text-xs">prompt</Label>
               <Textarea
@@ -956,9 +958,14 @@ export const AIPresetDialog = ({
       model: providerData.model,  // Fixed: was providerData.modelName
       id: providerData.id,
       maxContextChars: providerData.maxContextChars,
-      maxTokens: (providerData as any).maxTokens ?? 4096,
       prompt: providerData.prompt,
     };
+
+    // Screenpipe Cloud: max output is defined per model in the gateway catalog (see screenpipe_cloud_models in Rust).
+    // Do not persist or override maxTokens from this dialog — avoids defaulting to 4096 and matches Settings.
+    if (providerData.provider !== "screenpipe-cloud") {
+      (newPreset as any).maxTokens = (providerData as any).maxTokens ?? 4096;
+    }
 
     // Add apiKey for providers that require it
     if (
@@ -979,7 +986,9 @@ export const AIPresetDialog = ({
         url: preset.url,
         model: preset.model,
         maxContextChars: preset.maxContextChars,
-        maxTokens: (preset as any).maxTokens ?? 4096,
+        ...(preset.provider !== "screenpipe-cloud"
+          ? { maxTokens: (preset as any).maxTokens ?? 4096 }
+          : {}),
         prompt: preset.prompt,
         defaultPreset: preset.defaultPreset,
         apiKey: preset.apiKey || null,

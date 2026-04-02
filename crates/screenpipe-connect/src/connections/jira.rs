@@ -51,7 +51,7 @@ impl Integration for Jira {
         let email = require_str(creds, "email")?;
         let api_token = require_str(creds, "api_token")?;
         let resp: Value = client
-            .get(&format!("https://{}/rest/api/3/myself", domain))
+            .get(format!("https://{}/rest/api/3/myself", domain))
             .basic_auth(email, Some(api_token))
             .send()
             .await?

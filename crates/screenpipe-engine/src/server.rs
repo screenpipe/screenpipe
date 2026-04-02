@@ -168,7 +168,10 @@ async fn stats_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     query: axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::Json<crate::stats::UserStats> {
-    let force = query.get("force_refresh").map(|v| v == "true").unwrap_or(false);
+    let force = query
+        .get("force_refresh")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     let stats = if force {
         crate::stats::refresh_stats(&state.db).await
     } else {

@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { LockedSetting } from "@/components/enterprise-locked-setting";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -114,6 +115,7 @@ export default function GeneralSettings() {
       </div>
 
       <div className="space-y-2">
+        <LockedSetting settingKey="auto_start">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -135,6 +137,7 @@ export default function GeneralSettings() {
             </div>
           </CardContent>
         </Card>
+        </LockedSetting>
 
         {!isEnterprise && (
           <Card className="border-border bg-card">

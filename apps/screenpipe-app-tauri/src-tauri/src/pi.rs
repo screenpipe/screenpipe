@@ -411,20 +411,22 @@ fn pi_local_install_dir() -> Option<PathBuf> {
     Some(screenpipe_core::paths::default_screenpipe_data_dir().join("pi-agent"))
 }
 
-/// Seed the pi-agent package.json with overrides to fix dependency resolution.
+/// Seed the pi-agent package.json with overrides and dependencies to fix resolution.
 /// `hosted-git-info` requires `lru-cache@^10`, but bun on Windows can hoist
 /// an ESM-only lru-cache@7.x that breaks CJS `require()`.
-/// Writing overrides before `bun add` ensures the correct version is used.
+/// `@mariozechner/pi-ai` requires `@anthropic-ai/sdk`, but bun on Windows
+/// fails to hoist it from the transitive dependency tree.
+/// Writing these before `bun add` ensures correct versions are used.
 fn seed_pi_package_json(install_dir: &std::path::Path) {
     let pkg_path = install_dir.join("package.json");
     // Only seed if package.json doesn't exist yet — don't overwrite user/bun changes
     if pkg_path.exists() {
-        // If it exists, check if overrides are already present
         if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
-            if !contents.contains("overrides") {
-                // Merge overrides into existing package.json
-                if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
-                    pkg.as_object_mut().map(|obj| {
+            let mut changed = false;
+            if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(obj) = pkg.as_object_mut() {
+                    // Ensure overrides are present
+                    if !contents.contains("overrides") {
                         obj.insert(
                             "overrides".to_string(),
                             json!({
@@ -433,10 +435,26 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                                 }
                             }),
                         );
-                    });
+                        changed = true;
+                    }
+                    // Ensure @anthropic-ai/sdk is a direct dependency (Windows bun fix)
+                    if !contents.contains("@anthropic-ai/sdk") {
+                        let deps = obj
+                            .entry("dependencies")
+                            .or_insert_with(|| json!({}));
+                        if let Some(deps_obj) = deps.as_object_mut() {
+                            deps_obj.insert(
+                                "@anthropic-ai/sdk".to_string(),
+                                json!("^0.73.0"),
+                            );
+                        }
+                        changed = true;
+                    }
+                }
+                if changed {
                     if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
                         let _ = std::fs::write(&pkg_path, new_contents);
-                        info!("Added lru-cache overrides to existing pi-agent package.json");
+                        info!("Patched pi-agent package.json (overrides + anthropic sdk)");
                     }
                 }
             }
@@ -444,6 +462,9 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
         return;
     }
     let pkg_json = json!({
+        "dependencies": {
+            "@anthropic-ai/sdk": "^0.73.0"
+        },
         "overrides": {
             "hosted-git-info": {
                 "lru-cache": "^10.0.0"
@@ -1813,20 +1834,27 @@ pub fn ensure_pi_installed_background() {
             });
     }
 
-    // If Pi is already installed locally, check if it needs the lru-cache fix
+    // If Pi is already installed locally, check if it needs dependency fixes
     // or a version upgrade.
     if find_local_pi_entrypoint().is_some() {
         if let Some(install_dir) = pi_local_install_dir() {
             let pkg_path = install_dir.join("package.json");
-            let needs_lru_fix = pkg_path.exists()
-                && std::fs::read_to_string(&pkg_path)
-                    .map(|c| !c.contains("overrides"))
-                    .unwrap_or(false);
+            let pkg_contents = pkg_path
+                .exists()
+                .then(|| std::fs::read_to_string(&pkg_path).ok())
+                .flatten()
+                .unwrap_or_default();
+            let needs_lru_fix = !pkg_contents.is_empty() && !pkg_contents.contains("overrides");
+            let needs_anthropic_sdk = !pkg_contents.is_empty()
+                && !pkg_contents.contains("@anthropic-ai/sdk");
             let needs_upgrade = !is_local_pi_version_current(&install_dir);
 
-            if needs_lru_fix || needs_upgrade {
+            if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {
                 if needs_lru_fix {
                     info!("Pi installed but missing lru-cache overrides — patching");
+                }
+                if needs_anthropic_sdk {
+                    info!("Pi installed but missing @anthropic-ai/sdk dependency — patching");
                 }
                 if needs_upgrade {
                     info!(
@@ -1835,8 +1863,8 @@ pub fn ensure_pi_installed_background() {
                     );
                 }
                 seed_pi_package_json(&install_dir);
-                if needs_lru_fix {
-                    // Delete bun.lock so bun resolves deps with new overrides
+                if needs_lru_fix || needs_anthropic_sdk {
+                    // Delete bun.lock so bun resolves deps with new overrides/deps
                     let _ = std::fs::remove_file(install_dir.join("bun.lock"));
                     let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
                 }

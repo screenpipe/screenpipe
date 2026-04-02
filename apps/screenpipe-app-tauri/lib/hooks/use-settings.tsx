@@ -645,7 +645,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		attemptLoad();
 		return () => { cancelled = true; };
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isSettingsLoaded]);
+	}, [isSettingsLoaded, settings.user?.token]);
 
 	// Identify with persistent analyticsId for consistent tracking across frontend/backend
 	useEffect(() => {

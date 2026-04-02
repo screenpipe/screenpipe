@@ -43,7 +43,7 @@ impl Integration for Sentry {
         let auth_token = require_str(creds, "auth_token")?;
         let org = require_str(creds, "organization")?;
         let resp: Value = client
-            .get(&format!(
+            .get(format!(
                 "https://sentry.io/api/0/organizations/{}/projects/",
                 org
             ))

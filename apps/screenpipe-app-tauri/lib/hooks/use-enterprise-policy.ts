@@ -230,15 +230,20 @@ export function useEnterprisePolicy() {
 
   // Consumer builds: stable no-op function (no re-renders)
   const noop = useCallback(() => false, []);
-  const check = useCallback(
+  const checkHidden = useCallback(
     (sectionId: string) => policy.hiddenSections.includes(sectionId),
     [policy.hiddenSections]
+  );
+  const checkLocked = useCallback(
+    (settingKey: string) => settingKey in policy.lockedSettings,
+    [policy.lockedSettings]
   );
 
   return {
     policy: isEnterprise ? policy : EMPTY_POLICY,
     isEnterprise,
-    isSectionHidden: isEnterprise ? check : noop,
+    isSectionHidden: isEnterprise ? checkHidden : noop,
+    isSettingLocked: isEnterprise ? checkLocked : noop,
     needsLicenseKey: isEnterprise ? needsLicenseKey : false,
     submitLicenseKey,
   };

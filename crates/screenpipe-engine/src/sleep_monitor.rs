@@ -198,6 +198,10 @@ pub fn start_sleep_monitor() {
             let was_locked = SCREEN_IS_LOCKED.swap(false, Ordering::SeqCst);
             if was_locked {
                 // State change logged via safety-net poll below if needed.
+                // Request invalidation of persistent SCStream handles so
+                // the capture loop recreates them with fresh frames.
+                #[cfg(target_os = "macos")]
+                screenpipe_screen::stream_invalidation::request();
             }
         }
 
@@ -256,6 +260,8 @@ pub fn start_sleep_monitor() {
                 info!("Screen locked (CGSession safety-net poll)");
             } else {
                 info!("Screen unlocked (CGSession safety-net poll)");
+                #[cfg(target_os = "macos")]
+                screenpipe_screen::stream_invalidation::request();
             }
         }
     });
@@ -333,6 +339,11 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
         // CFNotification missed the unlock — we're fixing it here
     }
 
+    // Invalidate persistent SCStream handles so the capture loop
+    // recreates them with fresh frames after wake.
+    #[cfg(target_os = "macos")]
+    screenpipe_screen::stream_invalidation::request();
+
     // Spawn a task on the captured tokio runtime handle to check recording
     // health after a short delay. We can't use bare tokio::spawn() here
     // because this callback runs on an NSRunLoop thread, not a tokio thread.
@@ -345,6 +356,8 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
         let was_locked = SCREEN_IS_LOCKED.swap(locked, Ordering::SeqCst);
         if was_locked && !locked {
             info!("Screen unlocked after wake (CGSession safety-net cleared SCREEN_IS_LOCKED)");
+            #[cfg(target_os = "macos")]
+            screenpipe_screen::stream_invalidation::request();
         }
 
         // Check if recording is healthy

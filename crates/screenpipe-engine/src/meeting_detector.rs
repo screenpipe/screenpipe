@@ -2628,7 +2628,9 @@ mod tests {
     #[test]
     fn test_confirming_to_idle_timeout() {
         let state = MeetingState::Confirming {
-            since: Instant::now().checked_sub(CONFIRM_TIMEOUT + Duration::from_secs(1)).unwrap_or(Instant::now()),
+            since: Instant::now()
+                .checked_sub(CONFIRM_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
             app: "Zoom".to_string(),
             profile_index: 0,
         };
@@ -2742,7 +2744,9 @@ mod tests {
             meeting_id: 42,
             app: "Zoom".to_string(),
             started_at: Utc::now(),
-            since: Instant::now().checked_sub(ENDING_TIMEOUT + Duration::from_secs(1)).unwrap_or(Instant::now()),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2795,7 +2799,9 @@ mod tests {
             meeting_id: 42,
             app: "Zoom".to_string(),
             started_at: Utc::now(),
-            since: Instant::now().checked_sub(ENDING_TIMEOUT + Duration::from_secs(1)).unwrap_or(Instant::now()),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
         };
         let (state, action) = advance_state(state, &[]);
         assert!(matches!(state, MeetingState::Idle));
@@ -2870,7 +2876,9 @@ mod tests {
             meeting_id: 42,
             app: "Zoom".to_string(),
             started_at: Utc::now(),
-            since: Instant::now().checked_sub(ENDING_TIMEOUT + Duration::from_secs(1)).unwrap_or(Instant::now()),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Idle));
@@ -2897,7 +2905,9 @@ mod tests {
             meeting_id: -1,
             app: "Zoom".to_string(),
             started_at: Utc::now(),
-            since: Instant::now().checked_sub(ENDING_TIMEOUT + Duration::from_secs(1)).unwrap_or(Instant::now()),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
         };
         let (_, ended_id) = handle_no_apps_running(state);
         assert!(ended_id.is_none(), "should not end meeting with id=-1");

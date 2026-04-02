@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useState, useCallback, useMemo } from "react";
+import { LockedSetting } from "@/components/enterprise-locked-setting";
 import {
   Eye,
   EyeOff,
@@ -386,6 +387,7 @@ export function PrivacySection() {
       </div>
 
       {/* Offline Mode */}
+      <LockedSetting settingKey="offline_mode">
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Network
@@ -419,8 +421,10 @@ export function PrivacySection() {
           </CardContent>
         </Card>
       </div>
+      </LockedSetting>
 
       {/* PII Removal */}
+      <LockedSetting settingKey="pii_removal">
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Redaction
@@ -449,6 +453,7 @@ export function PrivacySection() {
           </CardContent>
         </Card>
       </div>
+      </LockedSetting>
 
       {/* Incognito Detection */}
       <Card className="border-border bg-card">
@@ -1035,6 +1040,7 @@ export function PrivacySection() {
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Telemetry
         </h2>
+        <LockedSetting settingKey="telemetry">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -1058,6 +1064,7 @@ export function PrivacySection() {
             </div>
           </CardContent>
         </Card>
+        </LockedSetting>
       </div>
 
       {/* Floating apply & restart button */}

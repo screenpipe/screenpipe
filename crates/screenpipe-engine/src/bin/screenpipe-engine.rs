@@ -922,7 +922,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\n\n{}", DISPLAY.truecolor(147, 112, 219).bold());
     println!(
         "\n{}",
-        "build ai apps that have the full context"
+        "power AI by everything you've seen, said or heard"
             .bright_yellow()
             .italic()
     );

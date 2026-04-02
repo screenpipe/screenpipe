@@ -238,6 +238,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     ntfy: <img src="/images/ntfy.png" alt="ntfy" className="w-5 h-5 rounded" />,
     toggl: <img src="/images/toggl.png" alt="Toggl" className="w-5 h-5 rounded" />,
     monday: <img src="/images/monday.png" alt="Monday.com" className="w-5 h-5 rounded" />,
+    asana: <img src="/images/asana.svg" alt="Asana" className="w-5 h-5" />,
     "browser-url": <img src="/images/browser-url.svg" alt="Browser URL" className="w-5 h-5 rounded" />,
     "browser-extension": (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

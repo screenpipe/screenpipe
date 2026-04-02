@@ -90,19 +90,16 @@ export function AccountSection() {
       return;
     }
     if (!settings.user?.cloud_subscribed) {
-      posthog.capture("cloud_plan_selected", { billing: isAnnual ? "yearly" : "monthly" });
+      posthog.capture("cloud_plan_selected", { billing: isAnnual ? "annual" : "monthly" });
       try {
-        const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+        const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${settings.user?.token}`,
           },
           body: JSON.stringify({
-            tier: "pro",
-            billingPeriod: isAnnual ? "yearly" : "monthly",
-            userId: settings.user?.id,
-            email: settings.user?.email,
+            plan: isAnnual ? "annual" : "monthly",
+            origin: "desktop-app",
           }),
         });
         const data = await response.json();
@@ -197,7 +194,7 @@ export function AccountSection() {
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  updateSettings({ user: undefined });
+                  updateSettings({ user: null as any });
                   // Restart Pi with null token so it stops using the old
                   // account's quota. Next message will auto-start as anonymous.
                   try {
@@ -348,16 +345,16 @@ export function AccountSection() {
                     <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-bold">{isAnnual ? "$26" : "$39"}</span>
+                    <span className="text-2xl font-bold">{isAnnual ? "$50" : "$99"}</span>
                     <span className="text-muted-foreground text-sm">/month</span>
                     {isAnnual && (
                       <span className="text-xs border border-foreground/20 text-foreground px-2 py-0.5 rounded-full font-medium">
-                        save 33%
+                        save 50%
                       </span>
                     )}
                   </div>
                   {isAnnual && (
-                    <p className="text-xs text-muted-foreground mt-0.5">$312/year, billed annually</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">$600/year, billed annually</p>
                   )}
                 </div>
                 <PricingToggle isAnnual={isAnnual} onToggle={setIsAnnual} />
@@ -440,16 +437,16 @@ export function AccountSection() {
                     <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
                   </div>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-bold">{isAnnual ? "$26" : "$39"}</span>
+                    <span className="text-2xl font-bold">{isAnnual ? "$50" : "$99"}</span>
                     <span className="text-muted-foreground text-sm">/month</span>
                     {isAnnual && (
                       <span className="text-xs border border-foreground/20 text-foreground px-2 py-0.5 rounded-full font-medium">
-                        save 33%
+                        save 50%
                       </span>
                     )}
                   </div>
                   {isAnnual && (
-                    <p className="text-xs text-muted-foreground mt-0.5">$312/year, billed annually</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">$600/year, billed annually</p>
                   )}
                 </div>
                 <PricingToggle isAnnual={isAnnual} onToggle={setIsAnnual} />

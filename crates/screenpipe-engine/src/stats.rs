@@ -306,7 +306,9 @@ async fn compute_all_time_stats(db: &screenpipe_db::DatabaseManager) -> AllTimeS
             streak += 1;
             // Compute previous day
             if let Ok(parsed) = chrono::NaiveDate::parse_from_str(&expected, "%Y-%m-%d") {
-                expected = (parsed - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+                expected = (parsed - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
             } else {
                 break;
             }
@@ -327,11 +329,10 @@ async fn compute_all_time_stats(db: &screenpipe_db::DatabaseManager) -> AllTimeS
     .unwrap_or(0);
 
     // Total meetings
-    let total_meetings: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM meetings")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let total_meetings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meetings")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
     // Total distinct apps
     let total_apps: i64 = sqlx::query_scalar(
@@ -342,13 +343,11 @@ async fn compute_all_time_stats(db: &screenpipe_db::DatabaseManager) -> AllTimeS
     .unwrap_or(0);
 
     // Recording since
-    let first_frame: Option<String> = sqlx::query_scalar(
-        "SELECT date(MIN(timestamp)) FROM frames",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let first_frame: Option<String> = sqlx::query_scalar("SELECT date(MIN(timestamp)) FROM frames")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
 
     AllTimeStats {
         recording_streak: streak,

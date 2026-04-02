@@ -43,7 +43,7 @@ impl Integration for Pipedrive {
         let api_token = require_str(creds, "api_token")?;
         let domain = require_str(creds, "domain")?;
         let resp: Value = client
-            .get(&format!(
+            .get(format!(
                 "https://{}.pipedrive.com/api/v1/users/me?api_token={}",
                 domain, api_token
             ))

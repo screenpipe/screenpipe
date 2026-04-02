@@ -630,7 +630,7 @@ pub async fn discover_ssh_hosts() -> Vec<DiscoveredHost> {
             } else {
                 host
             },
-            port: port,
+            port,
             user: None,
             key_path: None,
             source: "mdns".into(),

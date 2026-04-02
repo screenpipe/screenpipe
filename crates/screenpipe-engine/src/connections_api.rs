@@ -406,9 +406,10 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     let (code, state) = match (params.code, params.state) {
         (Some(c), Some(s)) => (c, s),
         _ => {
-            let html = "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+            let html =
+                "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
                 <h2>Invalid callback</h2><p>Missing code or state parameter.</p></body></html>"
-                .to_string();
+                    .to_string();
             return (StatusCode::BAD_REQUEST, Html(html));
         }
     };
@@ -421,12 +422,13 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     match sender {
         Some(tx) => {
             let _ = tx.send(code);
-            let html = "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
+            let html =
+                "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
                 <h2>Connected!</h2>\
                 <p>You can close this tab and return to screenpipe.</p>\
                 <script>window.close()</script>\
                 </body></html>"
-                .to_string();
+                    .to_string();
             (StatusCode::OK, Html(html))
         }
         None => {

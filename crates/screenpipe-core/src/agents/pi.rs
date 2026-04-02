@@ -291,10 +291,10 @@ impl PiExecutor {
             json!({"providers": {}})
         };
         // Ensure providers key exists and is an object
-        if !models_config
+        if models_config
             .get("providers")
             .and_then(|p| p.as_object())
-            .is_some()
+            .is_none()
         {
             models_config = json!({"providers": {}});
         }

@@ -142,7 +142,7 @@ pub enum OutputFormat {
 #[command(
     author,
     version,
-    about = "screenpipe: build ai apps that have the full context",
+    about = "screenpipe: power AI by everything you've seen, said or heard",
     long_about = None,
     name = "screenpipe"
 )]

@@ -478,15 +478,13 @@ async fn execute_batch(
                 *result = Err(sqlx::Error::WorkerCrashed);
             }
         }
-    } else {
-        if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
-            warn!("write_queue: COMMIT failed: {}", e);
-            // All results become the commit error
-            for pw in batch.drain(..) {
-                let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
-            }
-            return;
+    } else if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
+        warn!("write_queue: COMMIT failed: {}", e);
+        // All results become the commit error
+        for pw in batch.drain(..) {
+            let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
         }
+        return;
     }
 
     // Send results to callers
@@ -1172,18 +1170,18 @@ async fn execute_single_write(
                    VALUES (?, 'queued', ?, ?, ?, ?)
                    RETURNING id"#,
             )
-            .bind(&pipe_name)
-            .bind(&trigger_type)
-            .bind(&model)
-            .bind(&provider)
-            .bind(&started_at)
+            .bind(pipe_name)
+            .bind(trigger_type)
+            .bind(model)
+            .bind(provider)
+            .bind(started_at)
             .fetch_one(&mut **conn)
             .await?;
             Ok(WriteResult::Id(row))
         }
 
         WriteOp::PipeUpdateExecution { sql, binds } => {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sql);
             for bind in binds {
                 match bind {
                     PipeBindValue::Text(v) => {

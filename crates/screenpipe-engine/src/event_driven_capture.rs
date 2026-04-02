@@ -268,7 +268,9 @@ pub async fn event_driven_capture_loop(
     {
         // Small delay to let the monitor settle after startup
         tokio::time::sleep(Duration::from_millis(500)).await;
-        state.last_capture = Instant::now().checked_sub(Duration::from_millis(500)).unwrap_or(Instant::now()); // allow capture
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(500))
+            .unwrap_or(Instant::now()); // allow capture
         match do_capture(
             &db,
             &monitor,
@@ -332,6 +334,17 @@ pub async fn event_driven_capture_loop(
         if crate::sleep_monitor::screen_is_locked() {
             tokio::time::sleep(poll_interval).await;
             continue;
+        }
+
+        // After unlock or wake, invalidate persistent SCStream handles so
+        // the next capture picks up fresh frames instead of stale ones.
+        #[cfg(target_os = "macos")]
+        if screenpipe_screen::stream_invalidation::take() {
+            info!(
+                "invalidating persistent streams after unlock/wake for monitor {}",
+                monitor_id
+            );
+            screenpipe_screen::stream_invalidation::invalidate_streams();
         }
 
         // Skip capture while DRM streaming content is focused
@@ -979,7 +992,9 @@ mod tests {
         assert!(!state.needs_idle_capture());
 
         // Simulate waiting
-        state.last_capture = Instant::now().checked_sub(Duration::from_millis(150)).unwrap_or(Instant::now());
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(150))
+            .unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
     }
 
@@ -991,7 +1006,9 @@ mod tests {
         };
         let mut state = EventDrivenCapture::new(config);
 
-        state.last_capture = Instant::now().checked_sub(Duration::from_millis(150)).unwrap_or(Instant::now());
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(150))
+            .unwrap_or(Instant::now());
         assert!(state.needs_idle_capture());
 
         state.mark_captured();

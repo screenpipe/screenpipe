@@ -7,6 +7,7 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { LockedSetting } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -1159,6 +1160,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       />
 
       {/* Data Directory */}
+      <LockedSetting settingKey="data_directory">
       <div className="space-y-2">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -1205,10 +1207,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
       </div>
-
-      
+      </LockedSetting>
 
       {/* Audio */}
+      <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio</h2>
 
@@ -1859,10 +1861,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
       </div>
-
-      
+      </LockedSetting>
 
       {/* Screen */}
+      <LockedSetting settingKey="screen_recording">
       <div className="space-y-2 pt-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Screen</h2>
 
@@ -1970,7 +1972,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
-        {/* Text extraction — accessibility and input capture are always enabled (defaults in store.rs) */}
+      </div>
+      </LockedSetting>
 
         {/* Workflow event detection (cloud) */}
         {settings.user?.cloud_subscribed && (
@@ -1995,8 +1998,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
         )}
-
-      </div>
 
       {/* System */}
       <div className="space-y-2 pt-2">

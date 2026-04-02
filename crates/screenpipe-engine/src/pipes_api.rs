@@ -47,6 +47,8 @@ pub struct ExecutionsQuery {
 #[derive(Deserialize)]
 pub struct ListPipesQuery {
     pub include_executions: Option<bool>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,7 @@ pub struct ListPipesQuery {
 /// GET /pipes — list all pipes with status.
 /// Re-scans disk so pipes installed externally (e.g. via CLI) are picked up.
 /// Pass `?include_executions=true` to get recent executions inline (avoids N+1 requests).
+/// Pass `?limit=N&offset=M` for pagination (default: limit=20, offset=0).
 pub async fn list_pipes(
     State(pm): State<SharedPipeManager>,
     Query(query): Query<ListPipesQuery>,
@@ -64,10 +67,15 @@ pub async fn list_pipes(
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(20);
     if query.include_executions.unwrap_or(false) {
         let pipes_with_execs = mgr.list_pipes_with_executions(5).await;
+        let total = pipes_with_execs.len();
         let data: Vec<Value> = pipes_with_execs
             .into_iter()
+            .skip(offset)
+            .take(limit)
             .map(|(status, execs)| {
                 let mut obj = serde_json::to_value(&status).unwrap_or(json!({}));
                 if let Some(map) = obj.as_object_mut() {
@@ -76,10 +84,12 @@ pub async fn list_pipes(
                 obj
             })
             .collect();
-        Json(json!({ "data": data }))
+        Json(json!({ "data": data, "total": total, "offset": offset, "limit": limit }))
     } else {
         let pipes = mgr.list_pipes().await;
-        Json(json!({ "data": pipes }))
+        let total = pipes.len();
+        let data: Vec<_> = pipes.into_iter().skip(offset).take(limit).collect();
+        Json(json!({ "data": data, "total": total, "offset": offset, "limit": limit }))
     }
 }
 

@@ -8,6 +8,7 @@
 //! Pi receives credentials directly in its context and makes API calls itself.
 
 pub mod airtable;
+pub mod asana;
 pub mod brex;
 pub mod discord;
 pub mod email;
@@ -130,6 +131,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(pipedrive::Pipedrive),
         Box::new(intercom::Intercom),
         Box::new(monday::Monday),
+        Box::new(asana::Asana),
     ]
 }
 

@@ -1,0 +1,9 @@
+HEALTH_CHECK_START
+--- PROCESSES ---
+screenpipe-app PID=26840 Mem=1263.7MB
+--- HEALTH_API ---
+API_UNREACHABLE: The operation has timed out.
+--- DISK ---
+Total: 970.42 MB
+DB: 249.38 MB
+HEALTH_CHECK_END

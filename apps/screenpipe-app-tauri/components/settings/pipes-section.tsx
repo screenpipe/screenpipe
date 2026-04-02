@@ -683,6 +683,7 @@ export function PipesSection() {
   const expandedRef = useRef<string | null>(null);
   const [logs, setLogs] = useState<PipeRunLog[]>([]);
   const [executions, setExecutions] = useState<PipeExecution[]>([]);
+  const [executionsLoading, setExecutionsLoading] = useState(false);
   // Per-pipe recent executions (always fetched for all pipes)
   const [pipeExecutions, setPipeExecutions] = useState<Record<string, PipeExecution[]>>({});
   const [loading, setLoading] = useState(true);
@@ -816,7 +817,8 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`);
+      // First load: skip executions for speed. Executions load lazily per-pipe.
+      const res = await fetch(`${apiBase}/pipes`);
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -981,41 +983,16 @@ export function PipesSection() {
     return () => clearInterval(interval);
   }, [fetchPipes]);
 
-  const fetchAllExecutions = useCallback(async () => {
+  const pollRunningPipe = useCallback(async () => {
+    // Lightweight poll: only refresh pipe statuses + expanded pipe's executions
     try {
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`);
-      const data = await res.json();
-      const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
-      const fetched: PipeStatus[] = [];
-      const results: Record<string, PipeExecution[]> = {};
-      for (const item of rawItems) {
-        const { recent_executions, ...pipe } = item;
-        fetched.push(pipe);
-        results[item.config.name] = recent_executions || [];
-      }
-      setPipeExecutions(results);
-      // Also sync pipe status (is_running) to keep summary consistent
-      const pendingNames = Object.keys(pendingConfigSaves.current);
-      if (pendingNames.length > 0) {
-        setPipes((prev) => {
-          const prevByName = new Map(prev.map((p) => [p.config.name, p]));
-          return fetched.map((p) =>
-            pendingNames.includes(p.config.name) && prevByName.has(p.config.name)
-              ? prevByName.get(p.config.name)!
-              : p
-          );
-        });
-      } else {
-        setPipes(fetched);
-      }
-      // Refresh execution history for the currently expanded pipe
+      await fetchPipes();
       const exp = expandedRef.current;
       if (exp) {
         try {
           const execRes = await fetch(`${apiBase}/pipes/${exp}/executions?limit=20`);
           const execData = await execRes.json();
           setExecutions(execData.data || []);
-          // Clean up live output for executions that are no longer running
           const finishedKeys = (execData.data || [])
             .filter((e: PipeExecution) => e.status !== "running")
             .map((e: PipeExecution) => `${e.pipe_name}:${e.id}`);
@@ -1037,15 +1014,15 @@ export function PipesSection() {
     } catch {
       // ignore — next poll will retry
     }
-  }, []);
+  }, [fetchPipes, apiBase]);
 
-  // Poll executions faster (3s) when any pipe is running, otherwise on pipe fetch (10s)
+  // Poll faster (3s) when any pipe is running to update status + expanded executions
   useEffect(() => {
     const anyRunning = pipes.some((p) => p.is_running) || runningPipe !== null;
     if (!anyRunning) return;
-    const id = setInterval(() => fetchAllExecutions(), 3000);
+    const id = setInterval(() => pollRunningPipe(), 3000);
     return () => clearInterval(id);
-  }, [pipes, runningPipe, fetchAllExecutions]);
+  }, [pipes, runningPipe, pollRunningPipe]);
 
   // Note: executions are fetched inside fetchPipes to avoid waterfall
 
@@ -1060,6 +1037,7 @@ export function PipesSection() {
   };
 
   const fetchExecutions = async (name: string) => {
+    setExecutionsLoading(true);
     try {
       const res = await fetch(`${apiBase}/pipes/${name}/executions?limit=20`);
       const data = await res.json();
@@ -1067,6 +1045,8 @@ export function PipesSection() {
     } catch (e) {
       // Executions endpoint may not exist on older servers — fall back silently
       setExecutions([]);
+    } finally {
+      setExecutionsLoading(false);
     }
   };
 
@@ -1136,7 +1116,7 @@ export function PipesSection() {
     } finally {
       setRunningPipe(null);
       fetchPipes();
-      fetchAllExecutions();
+      pollRunningPipe();
     }
   };
 
@@ -1154,7 +1134,7 @@ export function PipesSection() {
     } finally {
       setStoppingPipe(null);
       fetchPipes();
-      fetchAllExecutions();
+      pollRunningPipe();
     }
   };
 
@@ -2190,7 +2170,19 @@ export function PipesSection() {
                       {/* ═══ RUNS TAB ═══ */}
                       <TabsContent value="runs" className="mt-3">
                         <div className="space-y-2 max-h-80 overflow-y-auto">
-                          {executions.length === 0 && logs.length === 0 ? (
+                          {executionsLoading && executions.length === 0 ? (
+                            <div className="space-y-2 py-2">
+                              {[...Array(3)].map((_, i) => (
+                                <div key={i} className="border p-2 space-y-1.5 animate-pulse">
+                                  <div className="flex items-center gap-2">
+                                    <div className="h-3 w-28 bg-muted rounded" />
+                                    <div className="h-5 w-16 bg-muted rounded" />
+                                    <div className="h-3 w-12 bg-muted rounded" />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : executions.length === 0 && logs.length === 0 ? (
                             <p className="text-xs text-muted-foreground py-4 text-center">
                               no runs yet — click ▶ to run manually
                             </p>
