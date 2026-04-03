@@ -338,13 +338,27 @@ pub async fn event_driven_capture_loop(
 
         // After unlock or wake, invalidate persistent SCStream handles so
         // the next capture picks up fresh frames instead of stale ones.
+        // Use spawn_blocking to avoid blocking the tokio thread — the
+        // underlying sck_rs::stop_all_streams() is a synchronous C call
+        // that can block on system I/O and previously caused deadlocks.
         #[cfg(target_os = "macos")]
         if screenpipe_screen::stream_invalidation::take() {
             info!(
                 "invalidating persistent streams after unlock/wake for monitor {}",
                 monitor_id
             );
-            screenpipe_screen::stream_invalidation::invalidate_streams();
+            let invalidate_result = tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::task::spawn_blocking(|| {
+                    screenpipe_screen::stream_invalidation::invalidate_streams();
+                }),
+            )
+            .await;
+            match invalidate_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => warn!("stream invalidation task failed: {}", e),
+                Err(_) => warn!("stream invalidation timed out after 5s, continuing"),
+            }
         }
 
         // Skip capture while DRM streaming content is focused
@@ -555,12 +569,13 @@ pub async fn event_driven_capture_loop(
                             }
 
                             debug!(
-                                "event capture: trigger={}, frame_id={}, text_source={:?}, dur={}ms, elements_deduped={}",
+                                "event capture: trigger={}, frame_id={}, text_source={:?}, dur={}ms, elements_deduped={}, monitor={}",
                                 trigger.as_str(),
                                 result.frame_id,
                                 result.text_source,
                                 result.duration_ms,
-                                output.elements_deduped
+                                output.elements_deduped,
+                                monitor_id
                             );
                         } else {
                             // Content dedup or window filter — capture skipped

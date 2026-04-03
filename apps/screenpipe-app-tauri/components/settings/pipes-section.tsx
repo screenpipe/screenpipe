@@ -2011,6 +2011,54 @@ export function PipesSection() {
                           })()}
                         </div>
 
+                        {/* Timeout */}
+                        <div>
+                          <Label className="text-xs mb-2 block cursor-help" title="max execution time before the pipe is killed — increase for slow LLMs or complex pipes">timeout</Label>
+                          <Select
+                            value={String(pipe.config.timeout || 600)}
+                            onValueChange={(value) => {
+                              const pipeName = pipe.config.name;
+                              const timeout = Number(value);
+                              setPipes((prev) =>
+                                prev.map((p) =>
+                                  p.config.name === pipeName
+                                    ? { ...p, config: { ...p.config, timeout } }
+                                    : p
+                                )
+                              );
+                              const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ timeout }),
+                              }).then(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                                fetchPipes();
+                              }).catch(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                              });
+                              pendingConfigSaves.current[pipeName] = savePromise;
+                            }}
+                          >
+                            <SelectTrigger className="mt-1 h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {[
+                                { value: "120", label: "2 minutes" },
+                                { value: "300", label: "5 minutes" },
+                                { value: "600", label: "10 minutes" },
+                                { value: "900", label: "15 minutes" },
+                                { value: "1800", label: "30 minutes" },
+                                { value: "3600", label: "1 hour" },
+                              ].map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
                         {/* Connections */}
                         <div>
                           <Label className="text-xs mb-2 block cursor-help" title="give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime">connections</Label>

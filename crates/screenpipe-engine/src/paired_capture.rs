@@ -113,14 +113,14 @@ pub async fn paired_capture(
         let n = name.to_lowercase();
         // Terminal emulators whose AX text is raw buffer and not useful
         // for bounding-box overlay. OCR produces better results.
+        // Note: Ghostty, iTerm2, and Terminal.app were removed — they have
+        // full AX support and the thin-detection heuristic handles them
+        // correctly. See https://github.com/screenpipe/screenpipe/issues/2685
         n.contains("wezterm")
-            || n.contains("iterm")
-            || n.contains("terminal")
             || n.contains("alacritty")
             || n.contains("kitty")
             || n.contains("hyper")
             || n.contains("warp")
-            || n.contains("ghostty")
     });
     let has_accessibility_text = !app_prefers_ocr
         && tree_snapshot

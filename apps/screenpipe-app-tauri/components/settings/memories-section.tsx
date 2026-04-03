@@ -148,6 +148,8 @@ export function MemoriesSection() {
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
           offset: String(offset),
+          order_by: sortField,
+          order_dir: sortDir,
         });
         if (debouncedQuery) params.set("q", debouncedQuery);
         if (activeTag) params.set("tags", activeTag);
@@ -201,7 +203,7 @@ export function MemoriesSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTag, sortMemories],
+    [toast, debouncedQuery, activeTag, sortField, sortDir, sortMemories],
   );
 
   // fetch on mount + refetch when search/tag filter changes
@@ -209,10 +211,10 @@ export function MemoriesSection() {
     fetchPage(0, false);
   }, [debouncedQuery, activeTag]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // re-sort locally when sort changes (no refetch needed)
+  // refetch when sort changes so the API returns correctly ordered data
   useEffect(() => {
-    setMemories((prev) => (prev.length > 0 ? sortMemories(prev) : prev));
-  }, [sortField, sortDir, sortMemories]);
+    fetchPage(0, false);
+  }, [sortField, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // infinite scroll via IntersectionObserver
   useEffect(() => {

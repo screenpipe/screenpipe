@@ -48,14 +48,18 @@ function useMeetingState() {
         await fetch("http://localhost:3030/meetings/stop", { method: "POST" });
         setActive(false);
       } else {
-        await fetch("http://localhost:3030/meetings/start", {
+        const res = await fetch("http://localhost:3030/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "manual meeting" }),
+          body: JSON.stringify({ app: "manual" }),
         });
-        setActive(true);
+        if (res.ok) {
+          setActive(true);
+        }
       }
-    } catch {}
+    } catch (e) {
+      console.error("meeting toggle failed:", e);
+    }
     setLoading(false);
   }, [active]);
 
@@ -268,10 +272,6 @@ export default function ShortcutReminderPage() {
               onClick={(e) => {
                 e.stopPropagation();
                 meeting.toggle();
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
               }}
               disabled={meeting.loading}
               className="relative flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer p-0.5"

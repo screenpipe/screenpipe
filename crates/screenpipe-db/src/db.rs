@@ -2620,6 +2620,8 @@ impl DatabaseManager {
                         end_str.as_deref(),
                         limit,
                         offset,
+                        None,
+                        None,
                     )
                     .await?;
                 results.extend(memory_results.into_iter().map(SearchResult::Memory));
@@ -6987,6 +6989,8 @@ LIMIT ? OFFSET ?
         end_time: Option<&str>,
         limit: u32,
         offset: u32,
+        order_by: Option<&str>,
+        order_dir: Option<&str>,
     ) -> Result<Vec<MemoryRecord>, SqlxError> {
         let use_fts = query.is_some_and(|q| !q.is_empty());
 
@@ -7025,7 +7029,16 @@ LIMIT ? OFFSET ?
             sql.push_str(" AND created_at <= ?6");
         }
 
-        sql.push_str(" ORDER BY importance DESC, created_at DESC LIMIT ?7 OFFSET ?8");
+        // Allow caller to control sort order; default to newest first
+        let order_col = match order_by {
+            Some("importance") => "importance",
+            _ => "created_at",
+        };
+        let order_direction = match order_dir {
+            Some("asc") => "ASC",
+            _ => "DESC",
+        };
+        sql.push_str(&format!(" ORDER BY {} {} LIMIT ?7 OFFSET ?8", order_col, order_direction));
 
         let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);
 

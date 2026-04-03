@@ -8,7 +8,6 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import {
   UserCog,
   ExternalLinkIcon,
-  CreditCard,
   Sparkles,
   Zap,
   Shield,
@@ -221,38 +220,11 @@ export function AccountSection() {
       {/* Subscribed view */}
       {settings.user?.cloud_subscribed ? (
         <Card className="p-5">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
               <h3 className="text-lg font-semibold">Screenpipe Pro</h3>
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">active</span>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openUrl("https://screenpi.pe/billing")}
-              >
-                <CreditCard className="w-3.5 h-3.5 mr-1.5" />
-                Billing <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
-              </Button>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <span>✓</span> encrypted cloud archive
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> cloud transcription — higher quality
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> 100x more AI queries
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> priority support
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✓</span> encrypted pipe sync across devices
             </div>
           </div>
 

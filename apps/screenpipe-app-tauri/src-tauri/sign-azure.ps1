@@ -25,6 +25,7 @@ AzureSignTool sign `
     -kvt $env:AZURE_TENANT_ID `
     -kvi $env:AZURE_CLIENT_ID `
     -kvs $env:AZURE_CLIENT_SECRET `
+    -fd sha256 `
     -tr http://timestamp.digicert.com `
     -td sha256 `
     $FilePath

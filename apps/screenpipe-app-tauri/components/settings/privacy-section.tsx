@@ -4,7 +4,7 @@
 "use client";
 
 import React, { useState, useCallback, useMemo } from "react";
-import { LockedSetting } from "@/components/enterprise-locked-setting";
+import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import {
   Eye,
   EyeOff,
@@ -407,7 +407,8 @@ export function PrivacySection() {
                   </p>
                 </div>
               </div>
-              <Switch
+              <ManagedSwitch
+                settingKey="offlineMode"
                 id="offlineMode"
                 checked={Boolean(settings.offlineMode)}
                 onCheckedChange={handleOfflineModeToggle}
@@ -444,7 +445,8 @@ export function PrivacySection() {
                   </p>
                 </div>
               </div>
-              <Switch
+              <ManagedSwitch
+                settingKey="usePiiRemoval"
                 id="usePiiRemoval"
                 checked={settings.usePiiRemoval}
                 onCheckedChange={handlePiiRemovalChange}
@@ -1055,7 +1057,8 @@ export function PrivacySection() {
                   </p>
                 </div>
               </div>
-              <Switch
+              <ManagedSwitch
+                settingKey="analyticsEnabled"
                 id="analyticsEnabled"
                 checked={settings.offlineMode ? false : settings.analyticsEnabled}
                 onCheckedChange={handleAnalyticsToggle}

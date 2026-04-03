@@ -780,8 +780,8 @@ pub type OnPipeRunComplete = Arc<dyn Fn(&str, bool, f64, Option<&str>) + Send + 
 /// Args: (pipe_name, execution_id, line)
 pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, &str) + Send + Sync>;
 
-/// Default execution timeout: 5 minutes.
-const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Default execution timeout: 10 minutes.
+const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
@@ -2211,6 +2211,11 @@ impl PipeManager {
         config.enabled = enabled;
         let new_content = serialize_pipe(&config, &body)?;
         std::fs::write(&pipe_md, &new_content)?;
+
+        // Persist to local overrides so reload_pipes() doesn't revert this
+        if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
+            warn!("failed to save local enabled override for '{}': {}", name, e);
+        }
 
         // Update in-memory
         let mut pipes = self.pipes.lock().await;

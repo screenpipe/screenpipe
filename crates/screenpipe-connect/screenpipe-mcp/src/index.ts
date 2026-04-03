@@ -238,6 +238,167 @@ const TOOLS: Tool[] = [
       required: ["title", "pipe_name"],
     },
   },
+  {
+    name: "health-check",
+    description:
+      "Check if screenpipe is running and healthy. Returns recording status, frame/audio stats, timestamps.",
+    annotations: { title: "Health Check", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list-audio-devices",
+    description: "List available audio input/output devices for recording.",
+    annotations: { title: "List Audio Devices", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list-monitors",
+    description: "List available monitors/screens for capture.",
+    annotations: { title: "List Monitors", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "add-tags",
+    description:
+      "Add tags to a content item (vision frame or audio chunk) for organization and retrieval.",
+    annotations: { title: "Add Tags", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        content_type: { type: "string", enum: ["vision", "audio"], description: "Type of content to tag" },
+        id: { type: "integer", description: "Content item ID" },
+        tags: { type: "array", items: { type: "string" }, description: "Tags to add" },
+      },
+      required: ["content_type", "id", "tags"],
+    },
+  },
+  {
+    name: "search-speakers",
+    description: "Search for speakers by name prefix. Returns speaker ID, name, and metadata.",
+    annotations: { title: "Search Speakers", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Speaker name prefix to search for (case-insensitive)" },
+      },
+    },
+  },
+  {
+    name: "list-unnamed-speakers",
+    description: "List speakers that haven't been named yet. Useful for speaker identification workflow.",
+    annotations: { title: "List Unnamed Speakers", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "Max results (default 10)", default: 10 },
+        offset: { type: "integer", description: "Pagination offset", default: 0 },
+      },
+    },
+  },
+  {
+    name: "update-speaker",
+    description: "Rename a speaker or update their metadata.",
+    annotations: { title: "Update Speaker", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "Speaker ID" },
+        name: { type: "string", description: "New speaker name" },
+        metadata: { type: "string", description: "JSON metadata string" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "merge-speakers",
+    description: "Merge two speakers into one (e.g. when the same person was detected as different speakers).",
+    annotations: { title: "Merge Speakers", readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        speaker_to_keep: { type: "integer", description: "Speaker ID to keep" },
+        speaker_to_merge: { type: "integer", description: "Speaker ID to merge into the kept one" },
+      },
+      required: ["speaker_to_keep", "speaker_to_merge"],
+    },
+  },
+  {
+    name: "start-meeting",
+    description: "Manually start a meeting recording session.",
+    annotations: { title: "Start Meeting", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        app: { type: "string", description: "App name (default 'manual')", default: "manual" },
+        title: { type: "string", description: "Meeting title" },
+        attendees: { type: "string", description: "Comma-separated attendee names" },
+      },
+    },
+  },
+  {
+    name: "stop-meeting",
+    description: "Stop the current manual meeting recording session.",
+    annotations: { title: "Stop Meeting", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "get-meeting",
+    description: "Get details of a specific meeting by ID, including transcription and attendees.",
+    annotations: { title: "Get Meeting", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "Meeting ID" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "keyword-search",
+    description:
+      "Fast keyword search using FTS index. Faster than search-content for exact keyword matching. " +
+      "Returns frame IDs and matched text.",
+    annotations: { title: "Keyword Search", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", description: "Keyword search query" },
+        content_type: { type: "string", enum: ["ocr", "audio", "all"], description: "Content type filter", default: "all" },
+        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        app_name: { type: "string", description: "Filter by app name" },
+        limit: { type: "integer", description: "Max results (default 20)", default: 20 },
+        offset: { type: "integer", description: "Pagination offset", default: 0 },
+      },
+      required: ["q"],
+    },
+  },
+  {
+    name: "get-frame-elements",
+    description:
+      "Get all UI elements for a specific frame. More targeted than search-elements when you already have a frame_id.",
+    annotations: { title: "Get Frame Elements", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame_id: { type: "integer", description: "Frame ID" },
+      },
+      required: ["frame_id"],
+    },
+  },
+  {
+    name: "control-recording",
+    description:
+      "Start or stop audio/screen recording. Use to pause/resume capture.",
+    annotations: { title: "Control Recording", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["start-audio", "stop-audio"], description: "Recording action" },
+      },
+      required: ["action"],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -865,6 +1026,235 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const notifResult = await notifResponse.json();
         return {
           content: [{ type: "text", text: `Notification sent: ${notifResult.message}` }],
+        };
+      }
+
+      case "health-check": {
+        const response = await fetchAPI("/health");
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const data = await response.json();
+        return {
+          content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+        };
+      }
+
+      case "list-audio-devices": {
+        const response = await fetchAPI("/audio/list");
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const devices = await response.json();
+        if (!Array.isArray(devices) || devices.length === 0) {
+          return { content: [{ type: "text", text: "No audio devices found." }] };
+        }
+        const formatted = devices.map(
+          (d: { name: string; is_default: boolean; device_type?: string }) =>
+            `${d.is_default ? "* " : "  "}${d.name}${d.device_type ? ` (${d.device_type})` : ""}`
+        );
+        return {
+          content: [{ type: "text", text: `Audio devices:\n${formatted.join("\n")}` }],
+        };
+      }
+
+      case "list-monitors": {
+        const response = await fetchAPI("/vision/list");
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const monitors = await response.json();
+        if (!Array.isArray(monitors) || monitors.length === 0) {
+          return { content: [{ type: "text", text: "No monitors found." }] };
+        }
+        const formatted = monitors.map(
+          (m: { id: number; name?: string; width?: number; height?: number; is_default?: boolean }) =>
+            `${m.is_default ? "* " : "  "}Monitor ${m.id}${m.name ? `: ${m.name}` : ""}${m.width ? ` (${m.width}x${m.height})` : ""}`
+        );
+        return {
+          content: [{ type: "text", text: `Monitors:\n${formatted.join("\n")}` }],
+        };
+      }
+
+      case "add-tags": {
+        const contentType = args.content_type as string;
+        const id = args.id as number;
+        const tags = args.tags as string[];
+        if (!contentType || !id || !tags) {
+          return { content: [{ type: "text", text: "Error: content_type, id, and tags are required" }] };
+        }
+        const response = await fetchAPI(`/tags/${contentType}/${id}`, {
+          method: "POST",
+          body: JSON.stringify({ tags }),
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return {
+          content: [{ type: "text", text: `Tags added to ${contentType}/${id}: ${tags.join(", ")}` }],
+        };
+      }
+
+      case "search-speakers": {
+        const nameQuery = args.name as string;
+        if (!nameQuery) {
+          return { content: [{ type: "text", text: "Error: name is required" }] };
+        }
+        const response = await fetchAPI(`/speakers/search?name=${encodeURIComponent(nameQuery)}`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const speakers = await response.json();
+        if (!Array.isArray(speakers) || speakers.length === 0) {
+          return { content: [{ type: "text", text: "No speakers found." }] };
+        }
+        const formatted = speakers.map(
+          (s: { id: number; name: string; metadata?: string }) =>
+            `#${s.id} ${s.name}${s.metadata ? ` — ${s.metadata}` : ""}`
+        );
+        return {
+          content: [{ type: "text", text: `Speakers:\n${formatted.join("\n")}` }],
+        };
+      }
+
+      case "list-unnamed-speakers": {
+        const limit = (args.limit as number) || 10;
+        const offset = (args.offset as number) || 0;
+        const response = await fetchAPI(`/speakers/unnamed?limit=${limit}&offset=${offset}`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const speakers = await response.json();
+        if (!Array.isArray(speakers) || speakers.length === 0) {
+          return { content: [{ type: "text", text: "No unnamed speakers found." }] };
+        }
+        const formatted = speakers.map(
+          (s: { id: number; name: string }) => `#${s.id} ${s.name}`
+        );
+        return {
+          content: [{ type: "text", text: `Unnamed speakers:\n${formatted.join("\n")}` }],
+        };
+      }
+
+      case "update-speaker": {
+        const speakerId = args.id as number;
+        if (!speakerId) {
+          return { content: [{ type: "text", text: "Error: id is required" }] };
+        }
+        const body: Record<string, unknown> = { id: speakerId };
+        if (args.name !== undefined) body.name = args.name;
+        if (args.metadata !== undefined) body.metadata = args.metadata;
+        const response = await fetchAPI("/speakers/update", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return {
+          content: [{ type: "text", text: `Speaker ${speakerId} updated.` }],
+        };
+      }
+
+      case "merge-speakers": {
+        const keepId = args.speaker_to_keep as number;
+        const mergeId = args.speaker_to_merge as number;
+        if (!keepId || !mergeId) {
+          return { content: [{ type: "text", text: "Error: speaker_to_keep and speaker_to_merge are required" }] };
+        }
+        const response = await fetchAPI("/speakers/merge", {
+          method: "POST",
+          body: JSON.stringify({ speaker_to_keep: keepId, speaker_to_merge: mergeId }),
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return {
+          content: [{ type: "text", text: `Merged speaker ${mergeId} into ${keepId}.` }],
+        };
+      }
+
+      case "start-meeting": {
+        const body: Record<string, unknown> = {};
+        if (args.app) body.app = args.app;
+        if (args.title) body.title = args.title;
+        if (args.attendees) body.attendees = args.attendees;
+        const response = await fetchAPI("/meetings/start", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const meeting = await response.json();
+        return {
+          content: [{ type: "text", text: `Meeting started (id: ${meeting.id || "ok"}).` }],
+        };
+      }
+
+      case "stop-meeting": {
+        const response = await fetchAPI("/meetings/stop", { method: "POST" });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return {
+          content: [{ type: "text", text: "Meeting stopped." }],
+        };
+      }
+
+      case "get-meeting": {
+        const meetingId = args.id as number;
+        if (!meetingId) {
+          return { content: [{ type: "text", text: "Error: id is required" }] };
+        }
+        const response = await fetchAPI(`/meetings/${meetingId}`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const meeting = await response.json();
+        return {
+          content: [{ type: "text", text: JSON.stringify(meeting, null, 2) }],
+        };
+      }
+
+      case "keyword-search": {
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(args)) {
+          if (value !== null && value !== undefined) {
+            params.append(key, String(value));
+          }
+        }
+        const response = await fetchAPI(`/search/keyword?${params.toString()}`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const data = await response.json();
+        const results = data.data || [];
+        if (results.length === 0) {
+          return { content: [{ type: "text", text: "No keyword search results found." }] };
+        }
+        const formatted = results.map((r: Record<string, unknown>) => {
+          const content = r.content as Record<string, unknown> | undefined;
+          return `[${r.type}] ${content?.app_name || "?"} | ${content?.timestamp || ""}\n${content?.text || content?.transcription || ""}`;
+        });
+        return {
+          content: [{ type: "text", text: `Results: ${results.length}\n\n${formatted.join("\n---\n")}` }],
+        };
+      }
+
+      case "get-frame-elements": {
+        const frameId = args.frame_id as number;
+        if (!frameId) {
+          return { content: [{ type: "text", text: "Error: frame_id is required" }] };
+        }
+        const response = await fetchAPI(`/frames/${frameId}/elements`);
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        const elements = await response.json();
+        if (!Array.isArray(elements) || elements.length === 0) {
+          return { content: [{ type: "text", text: `No elements found for frame ${frameId}.` }] };
+        }
+        const formatted = elements.map(
+          (e: { role: string; text: string | null; depth: number; source: string }) => {
+            const indent = "  ".repeat(Math.min(e.depth, 5));
+            return `${indent}[${e.source}:${e.role}] ${e.text || "(no text)"}`;
+          }
+        );
+        return {
+          content: [{ type: "text", text: `Frame ${frameId} elements (${elements.length}):\n${formatted.join("\n")}` }],
+        };
+      }
+
+      case "control-recording": {
+        const action = args.action as string;
+        if (!action) {
+          return { content: [{ type: "text", text: "Error: action is required" }] };
+        }
+        let endpoint: string;
+        if (action === "start-audio") endpoint = "/audio/start";
+        else if (action === "stop-audio") endpoint = "/audio/stop";
+        else {
+          return { content: [{ type: "text", text: `Error: unknown action '${action}'` }] };
+        }
+        const response = await fetchAPI(endpoint, { method: "POST" });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        return {
+          content: [{ type: "text", text: `Recording action '${action}' executed.` }],
         };
       }
 

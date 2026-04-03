@@ -228,8 +228,10 @@ export function useEnterprisePolicy() {
     };
   }, [isEnterprise, initWithKey, stopPolling]);
 
-  // Consumer builds: stable no-op function (no re-renders)
+  // Consumer builds: stable no-op functions (no network calls, no re-renders)
   const noop = useCallback(() => false, []);
+  const noopGet = useCallback((): undefined => undefined, []);
+
   const checkHidden = useCallback(
     (sectionId: string) => policy.hiddenSections.includes(sectionId),
     [policy.hiddenSections]
@@ -238,12 +240,20 @@ export function useEnterprisePolicy() {
     (settingKey: string) => settingKey in policy.lockedSettings,
     [policy.lockedSettings]
   );
+  const getManagedValue = useCallback(
+    (settingKey: string): string | undefined => {
+      const val = policy.lockedSettings[settingKey];
+      return typeof val === "string" ? val : undefined;
+    },
+    [policy.lockedSettings]
+  );
 
   return {
     policy: isEnterprise ? policy : EMPTY_POLICY,
     isEnterprise,
     isSectionHidden: isEnterprise ? checkHidden : noop,
     isSettingLocked: isEnterprise ? checkLocked : noop,
+    getManagedValue: isEnterprise ? getManagedValue : noopGet,
     needsLicenseKey: isEnterprise ? needsLicenseKey : false,
     submitLicenseKey,
   };

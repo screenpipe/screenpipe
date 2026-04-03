@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ChevronUp,
   GripVertical,
+  Share2,
 } from "lucide-react";
 import {
   DndContext,
@@ -75,6 +76,7 @@ import { toast } from "../ui/use-toast";
 import { Card, CardContent } from "../ui/card";
 import { AIProviderType } from "@/lib/hooks/use-settings";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useTeam } from "@/lib/hooks/use-team";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -104,6 +106,16 @@ const formatPresetName = (name: string): string => {
     return `Preset ${name.slice(0, 8)}...`;
   }
   return name;
+};
+
+const isLocalhostUrl = (url?: string): boolean => {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
 };
 
 type DiagnosticStatus = "pass" | "fail" | "skip" | "pending" | "running";
@@ -442,13 +454,17 @@ const AISection = ({
     return null; // unknown model, don't change
   }, []);
 
+  // Only auto-set max tokens when the user actually changes the model name,
+  // not on mount — otherwise the saved maxTokens value gets overwritten.
+  const prevModelRef = useRef(settingsPreset?.model);
   useEffect(() => {
     const model = settingsPreset?.model;
     if (!model) return;
-    // Screenpipe Cloud uses per-model max output from the gateway catalog — do not infer from model name.
+    if (model === prevModelRef.current) return; // no change — preserve saved value
+    prevModelRef.current = model;
     if (settingsPreset?.provider === "screenpipe-cloud") return;
     const tokens = getDefaultMaxTokens(model);
-    if (tokens && (settingsPreset as any)?.maxTokens !== tokens) {
+    if (tokens) {
       updateSettingsPreset({ maxTokens: tokens } as any);
     }
   }, [settingsPreset?.model, settingsPreset?.provider, getDefaultMaxTokens, updateSettingsPreset]);
@@ -585,7 +601,11 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      const modelsFetchFn = fetch;
+      // Local custom providers often do not implement browser CORS preflight on /models.
+      const modelsFetchFn =
+        settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
+          ? tauriFetch
+          : fetch;
       try {
         modelsResponse = await modelsFetchFn(modelsUrl, {
           headers,
@@ -832,7 +852,8 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customResponse = await fetch(
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetch : fetch;
+            const customResponse = await customFetchFn(
               `${settingsPreset?.url}/models`,
               {
                 headers: settingsPreset.apiKey
@@ -1659,7 +1680,9 @@ function SortablePresetCard({
   onDuplicate,
   onSetDefault,
   onDelete,
+  onShareToTeam,
   isLoading,
+  isTeamAdmin,
 }: {
   preset: AIPreset;
   isDefault: boolean;
@@ -1668,7 +1691,9 @@ function SortablePresetCard({
   onDuplicate: () => void;
   onSetDefault: () => void;
   onDelete: () => void;
+  onShareToTeam?: () => void;
   isLoading: boolean;
+  isTeamAdmin?: boolean;
 }) {
   const {
     attributes,
@@ -1744,6 +1769,18 @@ function SortablePresetCard({
           <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onSetDefault(); }} disabled={isLoading || isDefault}>
             <Star className="w-3 h-3 mr-1" />{isDefault ? "default" : "set default"}
           </Button>
+          {isTeamAdmin && onShareToTeam && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); onShareToTeam(); }} disabled={isLoading}>
+                    <Share2 className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>share to team (e2e encrypted)</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           {!isDefault && (
             <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto" onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={isLoading}>
               <Trash2 className="w-3 h-3" />
@@ -1767,6 +1804,17 @@ export const AIPresets = () => {
   const [isDuplicating, setIsDuplicating] = useState(false);
   const isEnterprise = useIsEnterpriseBuild();
   const [piAvailable, setPiAvailable] = useState(false);
+  const team = useTeam();
+  const isTeamAdmin = !!team.team && team.role === "admin";
+
+  const sharePresetToTeam = async (preset: AIPreset) => {
+    try {
+      await team.pushConfig("ai_provider", preset.id, preset);
+      toast({ title: "shared to team", description: `"${formatPresetName(preset.id)}" is now available to all team members (e2e encrypted)` });
+    } catch (err: any) {
+      toast({ title: "failed to share to team", description: err.message, variant: "destructive" });
+    }
+  };
 
   // Drag-and-drop sensors with activation distance to avoid conflicts with clicks
   const sensors = useSensors(
@@ -2021,7 +2069,9 @@ export const AIPresets = () => {
                 onDuplicate={() => duplicatePreset(preset.id)}
                 onSetDefault={() => setPresetToSetDefault(preset.id)}
                 onDelete={() => setPresetToDelete(preset.id)}
+                onShareToTeam={isTeamAdmin ? () => sharePresetToTeam(preset) : undefined}
                 isLoading={isLoading}
+                isTeamAdmin={isTeamAdmin}
               />
             ))}
           </div>

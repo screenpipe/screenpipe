@@ -161,7 +161,8 @@ fn setup_logging(
             .add_directive("rusty_tesseract=error".parse().unwrap())
             .add_directive("symphonia=error".parse().unwrap())
             .add_directive("hf_hub=error".parse().unwrap())
-            .add_directive("whisper_rs=error".parse().unwrap());
+            .add_directive("whisper_rs=error".parse().unwrap())
+            .add_directive("audiopipe=warn".parse().unwrap());
 
         #[cfg(target_os = "windows")]
         let filter = filter

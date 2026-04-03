@@ -7,7 +7,7 @@
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { LockedSetting } from "@/components/enterprise-locked-setting";
+import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -1225,7 +1225,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-muted-foreground">Capture audio from microphone and system</p>
                 </div>
               </div>
-              <Switch id="disableAudio" checked={!settings.disableAudio} onCheckedChange={(checked) => handleDisableAudioChange(!checked)} />
+              <ManagedSwitch settingKey="disableAudio" id="disableAudio" checked={!settings.disableAudio} onCheckedChange={(checked) => handleDisableAudioChange(!checked)} />
             </div>
           </CardContent>
         </Card>
@@ -1879,7 +1879,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-muted-foreground">Capture screenshots from your monitors</p>
                 </div>
               </div>
-              <Switch id="disableVision" checked={!settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: !checked }, true)} />
+              <ManagedSwitch settingKey="disableVision" id="disableVision" checked={!settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: !checked }, true)} />
             </div>
           </CardContent>
         </Card>

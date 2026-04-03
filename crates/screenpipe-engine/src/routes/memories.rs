@@ -79,6 +79,10 @@ pub(crate) struct ListMemoriesQuery {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
+    /// "created_at" (default) or "importance"
+    pub order_by: Option<String>,
+    /// "desc" (default) or "asc"
+    pub order_dir: Option<String>,
 }
 
 fn default_limit() -> u32 {
@@ -165,6 +169,8 @@ pub(crate) async fn list_memories_handler(
             query.end_time.as_deref(),
             query.limit,
             query.offset,
+            query.order_by.as_deref(),
+            query.order_dir.as_deref(),
         ),
         state.db.count_memories(
             query.q.as_deref(),

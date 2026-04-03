@@ -110,7 +110,25 @@ export function GoogleCalendarCard() {
         }
       );
       if (res.ok) {
-        const events: CalendarEventItem[] = await res.json();
+        const raw: CalendarEventItem[] = await res.json();
+        // format display times in user's local timezone
+        const events = raw.map((e) => ({
+          ...e,
+          startDisplay: e.start
+            ? new Date(e.start).toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              })
+            : "",
+          endDisplay: e.end
+            ? new Date(e.end).toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              })
+            : "",
+        }));
         setUpcomingEvents(events.filter((e) => !e.isAllDay).slice(0, 5));
       } else {
         setUpcomingEvents([]);
