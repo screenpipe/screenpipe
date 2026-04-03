@@ -198,6 +198,14 @@ pub async fn start_device_monitor(
         #[cfg(target_os = "macos")]
         let mut legacy_migrated = false;
 
+        // Periodic preventive restart for macOS: cycle all audio devices every
+        // 20 hours to prevent the silent stalling that occurs after ~48h of
+        // continuous ScreenCaptureKit / CoreAudio capture sessions.
+        #[cfg(target_os = "macos")]
+        const PREVENTIVE_RESTART_INTERVAL: Duration = Duration::from_secs(20 * 60 * 60);
+        #[cfg(target_os = "macos")]
+        let mut last_preventive_restart = Instant::now();
+
         loop {
             if audio_manager.status().await == AudioManagerStatus::Running {
                 let currently_available_devices = device_manager.devices().await;
@@ -879,6 +887,56 @@ pub async fn start_device_monitor(
                     }
                 }
             }
+            // macOS periodic preventive restart: cycle all audio devices to
+            // prevent silent stream stalling after long-running sessions.
+            // ScreenCaptureKit / CoreAudio sessions can silently stop delivering
+            // audio callbacks after ~48h; restarting every 20h prevents this.
+            #[cfg(target_os = "macos")]
+            if audio_manager.status().await == AudioManagerStatus::Running
+                && last_preventive_restart.elapsed() >= PREVENTIVE_RESTART_INTERVAL
+            {
+                info!(
+                    "[DEVICE_RECOVERY] periodic preventive restart triggered after {}h of continuous capture",
+                    last_preventive_restart.elapsed().as_secs() / 3600
+                );
+
+                let enabled = audio_manager.enabled_devices().await;
+                let devices_to_restart: Vec<_> = enabled
+                    .iter()
+                    .filter_map(|name| parse_audio_device(name).ok())
+                    .collect();
+
+                // Stop all devices first (creates a brief gap in recording)
+                for device_name in &enabled {
+                    let _ = audio_manager.stop_device(device_name).await;
+                }
+
+                // Restart each device with a fresh OS audio stream
+                for device in &devices_to_restart {
+                    match audio_manager.start_device(device).await {
+                        Ok(()) => {
+                            info!(
+                                "[DEVICE_RECOVERY] preventive restart succeeded for {}",
+                                device
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "[DEVICE_RECOVERY] preventive restart failed for {}: {}, will retry next cycle",
+                                device, e
+                            );
+                            disconnected_devices.insert(device.to_string());
+                        }
+                    }
+                }
+
+                last_preventive_restart = Instant::now();
+                info!(
+                    "[DEVICE_RECOVERY] periodic preventive restart completed for {} device(s)",
+                    enabled.len()
+                );
+            }
+
             sleep(Duration::from_secs(2)).await;
         }
     }));
