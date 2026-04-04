@@ -8,6 +8,8 @@ use anyhow::Result;
 use image::DynamicImage;
 use once_cell::sync::Lazy;
 use std::fmt;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use tracing;
 
@@ -82,6 +84,12 @@ pub struct SafeMonitor {
     /// Lazy-initialized on first capture_image() call.
     #[cfg(target_os = "windows")]
     persistent_capture: Arc<std::sync::Mutex<Option<crate::wgc_capture::PersistentCapture>>>,
+    /// If true, skip persistent capture and use per-frame fallback for this session.
+    #[cfg(target_os = "windows")]
+    persistent_capture_disabled: Arc<AtomicBool>,
+    /// Consecutive persistent init failures for this monitor.
+    #[cfg(target_os = "windows")]
+    persistent_capture_failures: Arc<AtomicU32>,
 }
 
 #[derive(Clone, Debug)]
@@ -199,6 +207,10 @@ impl SafeMonitor {
             cached_monitor_index: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(target_os = "windows")]
             persistent_capture: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_os = "windows")]
+            persistent_capture_disabled: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "windows")]
+            persistent_capture_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -292,7 +304,13 @@ impl SafeMonitor {
         #[cfg(target_os = "windows")]
         {
             let persistent = self.persistent_capture.clone();
+            let persistent_disabled = self.persistent_capture_disabled.clone();
+            let persistent_failures = self.persistent_capture_failures.clone();
             let result = tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
+                if persistent_disabled.load(Ordering::Relaxed) {
+                    return Self::per_frame_capture(monitor_id);
+                }
+
                 // Try existing persistent session
                 {
                     let guard = persistent
@@ -300,7 +318,10 @@ impl SafeMonitor {
                         .map_err(|e| anyhow::anyhow!("persistent capture mutex poisoned: {}", e))?;
                     if let Some(ref capture) = *guard {
                         match capture.get_latest_image(std::time::Duration::from_millis(200)) {
-                            Ok(img) => return Ok(img),
+                            Ok(img) => {
+                                persistent_failures.store(0, Ordering::Relaxed);
+                                return Ok(img);
+                            }
                             Err(e) => {
                                 tracing::debug!(
                                     "persistent capture failed for monitor {}, will reinit: {}",
@@ -331,23 +352,26 @@ impl SafeMonitor {
                                     anyhow::anyhow!("persistent capture mutex poisoned: {}", e)
                                 })?;
                                 *guard = Some(capture);
+                                persistent_failures.store(0, Ordering::Relaxed);
                                 return Ok(img);
                             }
                             Err(e) => {
-                                tracing::warn!(
-                                    "persistent capture init got no first frame for monitor {}: {}",
+                                Self::record_persistent_init_failure(
                                     monitor_id,
-                                    e
+                                    &persistent_disabled,
+                                    &persistent_failures,
+                                    &e.to_string(),
                                 );
                                 // capture dropped here, session cleaned up
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "failed to create persistent capture for monitor {}, falling back to per-frame: {}",
+                        Self::record_persistent_init_failure(
                             monitor_id,
-                            e
+                            &persistent_disabled,
+                            &persistent_failures,
+                            &e.to_string(),
                         );
                     }
                 }
@@ -501,6 +525,9 @@ impl SafeMonitor {
                     capture.stop();
                 }
             }
+            self.persistent_capture_disabled
+                .store(false, Ordering::Relaxed);
+            self.persistent_capture_failures.store(0, Ordering::Relaxed);
         }
 
         let monitor_id = self.monitor_id;
@@ -565,6 +592,33 @@ impl SafeMonitor {
     /// Monitor Y position in the virtual desktop coordinate space (points)
     pub fn y(&self) -> i32 {
         self.monitor_data.y
+    }
+
+    #[cfg(target_os = "windows")]
+    fn record_persistent_init_failure(
+        monitor_id: u32,
+        persistent_disabled: &Arc<AtomicBool>,
+        persistent_failures: &Arc<AtomicU32>,
+        reason: &str,
+    ) {
+        let failures = persistent_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if failures >= 3 {
+            if !persistent_disabled.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "persistent capture disabled for monitor {} after {} init failures; falling back to per-frame for this session (last error: {})",
+                    monitor_id,
+                    failures,
+                    reason
+                );
+            }
+        } else {
+            tracing::debug!(
+                "persistent capture init failed for monitor {} (attempt {}/3): {}",
+                monitor_id,
+                failures,
+                reason
+            );
+        }
     }
 
     /// A deterministic identifier derived from stable monitor properties
@@ -854,6 +908,10 @@ mod tests {
             cached_monitor_index: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(target_os = "windows")]
             persistent_capture: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_os = "windows")]
+            persistent_capture_disabled: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "windows")]
+            persistent_capture_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -897,5 +955,24 @@ mod tests {
         let sid2 = "DELL U2718Q_3840x2160_0,0";
         let prefix2 = &sid2[..sid2.rfind('_').unwrap()];
         assert_eq!(prefix, prefix2);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_persistent_capture_disables_after_three_failures() {
+        let disabled = Arc::new(AtomicBool::new(false));
+        let failures = Arc::new(AtomicU32::new(0));
+
+        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 1");
+        assert!(!disabled.load(Ordering::Relaxed));
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+
+        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 2");
+        assert!(!disabled.load(Ordering::Relaxed));
+        assert_eq!(failures.load(Ordering::Relaxed), 2);
+
+        SafeMonitor::record_persistent_init_failure(1, &disabled, &failures, "err 3");
+        assert!(disabled.load(Ordering::Relaxed));
+        assert_eq!(failures.load(Ordering::Relaxed), 3);
     }
 }
