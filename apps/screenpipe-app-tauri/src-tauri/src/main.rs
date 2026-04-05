@@ -6,7 +6,6 @@
 #![allow(deprecated)] // cocoa/objc crate deprecations — will migrate to objc2 later
 #![allow(unused_imports)]
 
-
 use analytics::AnalyticsManager;
 use commands::show_main_window;
 use serde_json::json;
@@ -42,7 +41,6 @@ mod icons;
 use crate::analytics::start_analytics;
 mod calendar;
 mod chatgpt_oauth;
-mod oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
@@ -53,6 +51,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod oauth;
 mod permissions;
 mod pi;
 mod pi_command_queue;
