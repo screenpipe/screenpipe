@@ -712,10 +712,7 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     let (mut store, mut should_save) = match SettingsStore::get(app) {
         Ok(Some(store)) => {
             is_new_store = false;
-            (
-                store,
-                should_persist_restart_notification_migration,
-            )
+            (store, should_persist_restart_notification_migration)
         }
         Ok(None) => {
             is_new_store = true;
@@ -742,13 +739,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     // (e.g. tier boundaries changed in an update).
     {
         let detected = screenpipe_config::detect_tier();
-        let stored_tier = store.recording.device_tier.as_deref()
+        let stored_tier = store
+            .recording
+            .device_tier
+            .as_deref()
             .and_then(screenpipe_config::DeviceTier::from_str_loose);
         if stored_tier != Some(detected) {
-            tracing::info!(
-                "hardware tier changed: {:?} -> {:?}",
-                stored_tier, detected
-            );
+            tracing::info!("hardware tier changed: {:?} -> {:?}", stored_tier, detected);
             if is_new_store || store.recording.device_tier.is_none() {
                 screenpipe_config::apply_tier_defaults(&mut store.recording, detected);
             }
@@ -758,7 +755,10 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
 
         // Unconditional safety guard: prevent parakeet/parakeet-mlx on platforms
         // where it will crash (Low tier = OOM, macOS < 26 = MLX segfault).
-        if screenpipe_config::is_engine_unsafe(&store.recording.audio_transcription_engine, detected) {
+        if screenpipe_config::is_engine_unsafe(
+            &store.recording.audio_transcription_engine,
+            detected,
+        ) {
             let safe = screenpipe_config::best_engine_for_platform(detected);
             tracing::warn!(
                 "engine {} is unsafe on this platform (tier={:?}, macOS={:?}) — switching to {}",
