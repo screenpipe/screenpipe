@@ -24,6 +24,9 @@ chrono = "0.4"
 async-trait = "0.1"
 base64 = "0.22"
 once_cell = "1"
+
+[package.metadata.cargo-machete]
+ignored = ["base64"]
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mdns-sd = "0.13"
 

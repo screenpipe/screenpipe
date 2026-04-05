@@ -2145,22 +2145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "email-encoding"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9298e6504d9b9e780ed3f7dfd43a61be8cd0e09eb07f7706a945b0072b6670b6"
-dependencies = [
- "base64 0.22.1",
- "memchr",
-]
-
-[[package]]
-name = "email_address"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
-
-[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3378,16 +3362,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "if-addrs"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
-dependencies = [
- "libc",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3762,33 +3736,6 @@ name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
-
-[[package]]
-name = "lettre"
-version = "0.11.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "471816f3e24b85e820dee02cde962379ea1a669e5242f19c61bcbcffedf4c4fb"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "email-encoding",
- "email_address",
- "fastrand",
- "futures-io",
- "futures-util",
- "httpdate",
- "idna",
- "mime",
- "nom 8.0.0",
- "percent-encoding",
- "quoted_printable",
- "rustls 0.23.37",
- "socket2 0.6.3",
- "tokio",
- "tokio-rustls",
- "url",
- "webpki-roots 1.0.6",
-]
 
 [[package]]
 name = "libc"
@@ -4170,20 +4117,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
-name = "mdns-sd"
-version = "0.13.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "328f4e1041f7cfeb3affccb814ddbe2f004856a2ce769c8bf22080d74c5204c6"
-dependencies = [
- "fastrand",
- "flume",
- "if-addrs",
- "log",
- "mio",
- "socket2 0.5.10",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4262,7 +4195,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50b7e5b27aa02a74bac8c3f23f448f8d87ff11f92d3aac1a6ed369ee08cc56c1"
 dependencies = [
  "libc",
- "log",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -5903,12 +5835,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quoted_printable"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
-
-[[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
 source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
@@ -6737,7 +6663,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6797,7 +6723,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6810,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6819,9 +6745,7 @@ dependencies = [
  "dirs 6.0.0",
  "eventkit-rs",
  "image",
- "lettre",
  "log",
- "mdns-sd",
  "objc2",
  "objc2-event-kit",
  "objc2-foundation",
@@ -6839,7 +6763,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6884,7 +6808,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6910,7 +6834,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6980,7 +6904,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6998,7 +6922,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7038,7 +6962,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.255"
+version = "0.3.256"
 dependencies = [
  "argon2",
  "chacha20poly1305",
