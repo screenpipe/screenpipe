@@ -7,6 +7,9 @@ repository = { workspace = true }
 license = { workspace = true }
 edition = { workspace = true }
 
+[package.metadata.cargo-machete]
+ignored = ["base64"]
+
 [dependencies]
 image = { workspace = true }
 reqwest = { workspace = true }
