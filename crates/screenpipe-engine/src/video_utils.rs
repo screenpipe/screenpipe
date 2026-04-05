@@ -747,34 +747,34 @@ pub async fn extract_frame_from_video(
     }
 
     // Get video FPS and duration - if this fails, the video is likely corrupted
-    let (source_fps, video_duration) =
-        match get_video_fps_and_duration(&ffmpeg_path, file_path).await {
-            Ok((fps, duration)) => (fps, duration),
-            Err(e) => {
-                // Check if this is a corrupted video (moov atom missing, invalid data, etc)
-                let err_str = e.to_string().to_lowercase();
-                if err_str.contains("moov") || err_str.contains("invalid data") {
-                    return Err(anyhow::anyhow!(
-                        "VIDEO_CORRUPTED: cannot read metadata from {} - {}",
-                        file_path,
-                        e
-                    ));
-                }
-                // "no such file" from cmd.output() means ffprobe binary not found,
-                // not the video file (we already checked that above). Don't misreport
-                // as VIDEO_CORRUPTED — surface the real cause so it can be fixed.
-                if err_str.contains("no such file") || err_str.contains("os error 2") {
-                    return Err(anyhow::anyhow!(
-                        "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. \
-                         Ensure ffprobe is installed alongside ffmpeg. Error: {}",
-                        file_path,
-                        e
-                    ));
-                }
-                error!("failed to get video metadata, using defaults: {}", e);
-                (1.0, f64::MAX) // Use MAX duration to disable validation on error
+    let (source_fps, video_duration) = match get_video_fps_and_duration(&ffmpeg_path, file_path)
+        .await
+    {
+        Ok((fps, duration)) => (fps, duration),
+        Err(e) => {
+            // Check if this is a corrupted video (moov atom missing, invalid data, etc)
+            let err_str = e.to_string().to_lowercase();
+            if err_str.contains("moov") || err_str.contains("invalid data") {
+                return Err(anyhow::anyhow!(
+                    "VIDEO_CORRUPTED: cannot read metadata from {} - {}",
+                    file_path,
+                    e
+                ));
             }
-        };
+            // "no such file" from cmd.output() means ffprobe binary not found,
+            // not the video file (we already checked that above). Don't misreport
+            // as VIDEO_CORRUPTED — surface the real cause so it can be fixed.
+            if err_str.contains("no such file") || err_str.contains("os error 2") {
+                return Err(anyhow::anyhow!(
+                        "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. Ensure ffprobe is installed alongside ffmpeg. Error: {}",
+                        file_path,
+                        e
+                    ));
+            }
+            error!("failed to get video metadata, using defaults: {}", e);
+            (1.0, f64::MAX) // Use MAX duration to disable validation on error
+        }
+    };
 
     // Convert frame index to seconds: frame_time = frame_index / fps
     let mut offset_seconds = offset_index as f64 / source_fps;
