@@ -336,6 +336,7 @@ export function PipeStoreView() {
         {tabs.map(({ key, label }) => (
           <button
             key={key}
+            data-testid={`tab-${key}`}
             onClick={() => setActiveTab(key)}
             className={cn(
               "pb-3 text-sm font-medium transition-colors duration-150 border-b-2 -mb-px",
@@ -687,6 +688,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             currentUserId={settings.user?.id}
             onUnpublish={handleUnpublish}
             unpublishing={unpublishing}
+            onRefresh={() => openDetail(selectedPipe.slug)}
           />
         ) : null}
       </div>
@@ -836,6 +838,7 @@ function PipeCard({
 
   return (
     <div
+      data-testid={`pipe-card-${pipe.slug}`}
       onClick={onClick}
       className="border border-border bg-card hover:bg-accent/50 transition-colors duration-150 rounded-none p-5 cursor-pointer group flex flex-col"
     >
@@ -846,6 +849,7 @@ function PipeCard({
         </div>
         <Button
           size="sm"
+          data-testid="pipe-install-btn"
           variant={isInstalled && !hasUpdate ? "outline" : "default"}
           className={cn(
             "h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
@@ -931,16 +935,104 @@ function PipeDetailPanel({
   currentUserId?: string | null;
   onUnpublish?: (slug: string) => void;
   unpublishing?: boolean;
+  onRefresh?: () => void;
 }) {
+  const { toast } = useToast();
   const unrestricted = isUnrestricted(pipe.permissions);
   const needsReview = unrestricted && !pipe.author_verified;
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
+
+  const [editing, setEditing] = useState(false);
+  const [editReadme, setEditReadme] = useState("");
+  const [editSource, setEditSource] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [previewReadme, setPreviewReadme] = useState(false);
 
   const readmeContent = pipe.readme_md
     ? pipe.readme_md
     : pipe.source
       ? getReadmeFromPipeMd(pipe.source)
       : (pipe.full_description || pipe.description);
+
+  const isDirty = editing && (
+    editReadme !== (readmeContent || "") ||
+    editSource !== (pipe.source || "")
+  );
+
+  const startEditing = () => {
+    setEditReadme(readmeContent || "");
+    setEditSource(pipe.source || "");
+    setPreviewReadme(false);
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    if (isDirty) {
+      if (!confirm("discard unsaved changes?")) return;
+    }
+    setEditing(false);
+    setEditReadme("");
+    setEditSource("");
+  };
+
+  const republish = async () => {
+    if (!isDirty) {
+      toast({ title: "no changes to publish" });
+      return;
+    }
+    setPublishing(true);
+    try {
+      const settingsRes = await fetch("http://localhost:3030/settings");
+      const settingsData = await settingsRes.json();
+      const token = settingsData?.user?.token;
+      if (!token) throw new Error("not logged in — go to account settings");
+
+      const res = await fetch("http://localhost:3030/pipes/store/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          slug: pipe.slug,
+          title: pipe.title,
+          description: pipe.description,
+          icon: pipe.icon,
+          category: pipe.category,
+          source_md: editSource,
+          readme_md: editReadme || undefined,
+          permissions: pipe.permissions || {},
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "unknown error" }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      toast({ title: "pipe updated and published" });
+      setEditing(false);
+    } catch (err) {
+      toast({
+        title: "failed to publish",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  // Cmd/Ctrl+S to save while editing
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        republish();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editing, editReadme, editSource]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-8">
@@ -1014,7 +1106,46 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
                 <GitFork className="h-4 w-4 mr-1.5" />
                 FORK
               </Button>
-              {isOwner && onUnpublish && (
+              {isOwner && !editing && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                  onClick={startEditing}
+                >
+                  EDIT
+                </Button>
+              )}
+              {isOwner && editing && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                    onClick={cancelEditing}
+                    disabled={publishing}
+                  >
+                    CANCEL
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                    onClick={republish}
+                    disabled={publishing}
+                  >
+                    {publishing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                        PUBLISHING...
+                      </>
+                    ) : (
+                      "PUBLISH UPDATE"
+                    )}
+                  </Button>
+                </>
+              )}
+              {isOwner && onUnpublish && !editing && (
                 <Button
                   size="sm"
                   variant="destructive"
@@ -1069,32 +1200,77 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
       {/* README section */}
       <div className="space-y-3">
         <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-          README
+          README {editing && <span className="text-foreground/50">(editing)</span>}
         </h4>
-        <div className="border border-border rounded-none p-6">
-          {readmeContent ? (
-            <MemoizedReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
-              components={{
-                a: ({ href, children }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {readmeContent}
-            </MemoizedReactMarkdown>
-          ) : (
-            <p className="text-sm text-muted-foreground">no description available</p>
-          )}
-        </div>
+        {editing ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPreviewReadme(false)}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 transition-colors ${!previewReadme ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                edit
+              </button>
+              <button
+                onClick={() => setPreviewReadme(true)}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 transition-colors ${previewReadme ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                preview
+              </button>
+              <span className="text-[9px] text-muted-foreground/50 ml-auto">cmd+s to publish</span>
+            </div>
+            {previewReadme ? (
+              <div className="border border-border rounded-none p-6">
+                <MemoizedReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+                  components={{
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {editReadme || "nothing to preview"}
+                </MemoizedReactMarkdown>
+              </div>
+            ) : (
+              <textarea
+                value={editReadme}
+                onChange={(e) => setEditReadme(e.target.value)}
+                className="w-full border border-border rounded-none p-4 text-sm font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[200px]"
+                rows={15}
+                placeholder="write your README in markdown..."
+              />
+            )}
+          </div>
+        ) : (
+          <div className="border border-border rounded-none p-6">
+            {readmeContent ? (
+              <MemoizedReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+                components={{
+                  a: ({ href, children }) => (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {readmeContent}
+              </MemoizedReactMarkdown>
+            ) : (
+              <p className="text-sm text-muted-foreground">no description available</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Permissions */}
@@ -1171,23 +1347,31 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
       {/* Source */}
       <div className="space-y-3">
         <button
-          onClick={onToggleSource}
+          onClick={editing ? undefined : onToggleSource}
           className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-widest hover:text-foreground transition-colors"
         >
-          {sourceExpanded ? (
+          {editing || sourceExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
           ) : (
             <ChevronRight className="h-3.5 w-3.5" />
           )}
-          Source (pipe.md)
+          Source (pipe.md) {editing && <span className="text-foreground/50">(editing)</span>}
         </button>
-        {sourceExpanded && pipe.source && (
+        {editing ? (
+          <textarea
+            value={editSource}
+            onChange={(e) => setEditSource(e.target.value)}
+            className="w-full border border-border rounded-none p-4 text-xs font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[300px]"
+            rows={20}
+            placeholder="pipe.md source..."
+          />
+        ) : sourceExpanded && pipe.source ? (
           <div className="border border-border rounded-none overflow-hidden">
             <pre className="p-4 text-xs leading-relaxed whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-muted/50">
               {pipe.source}
             </pre>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -1259,16 +1443,76 @@ export function PublishDialog({
       .finally(() => setLoadingPipes(false));
   }, [open, defaultPipe]);
 
+  const helpMePublish = () => {
+    const pipeName = selectedPipe || defaultPipe;
+    if (!pipeName) return;
+    const pipe = localPipes.find((p: any) => p.name === pipeName);
+    const sourceMd = pipe?.raw_content as string | undefined;
+    if (!sourceMd) {
+      toast({ title: "could not read pipe content", variant: "destructive" });
+      return;
+    }
+    onOpenChange(false);
+    navigateHomeAndPrefill({
+      context: `the user wants to publish their pipe "${pipeName}" to the screenpipe store. here is their current pipe.md:
+
+\`\`\`
+${sourceMd}
+\`\`\`
+
+IMPORTANT — follow these steps exactly:
+
+STEP 1: READ THE SKILL FILE
+- read the screenpipe pipe skill file first to understand how pipes, connections, permissions, and the store work
+
+STEP 2: CREATE A GENERIC VERSION
+- DO NOT modify the user's existing installed pipe
+- create the store-ready version as a separate output
+- review for personal/machine-specific content:
+  - hardcoded file paths (~/Documents/..., /Users/name/...) → replace with env vars or connection settings
+  - personal names in prompts → replace with "the user"
+  - hardcoded API keys or tokens → remove, use connections instead
+  - machine-specific config (specific ports, paths) → make configurable
+- set permissions preset appropriately (e.g. "reader", "writer", "none" — NOT left undefined)
+- if the pipe needs external services (Obsidian, Notion, Slack, etc.), use screenpipe connections properly
+- keep ALL original functionality intact
+
+STEP 3: PREPARE STORE METADATA
+generate all of these:
+- **title**: clear, concise name (e.g. "Daily Activity Summary")
+- **description**: 1-2 sentence explanation of what it does
+- **icon**: single emoji that represents the pipe
+- **category**: one of: Productivity, Dev, Health, Social, Other
+- **readme_md**: full markdown README with sections:
+  - what it does (bullet points)
+  - who it's for
+  - how to use (setup steps)
+  - configuration options (if any env vars or connections needed)
+
+STEP 4: SHOW THE USER AND ASK CONFIRMATION
+- show the complete final pipe.md source
+- show the title, description, icon, category, and README
+- explicitly ask: "does this look good? should I publish it?"
+- DO NOT publish until the user confirms
+
+STEP 5: PUBLISH (only after user says yes)
+- call POST http://localhost:3030/pipes/store/publish with JSON body:
+  { "source_md": "<the generic pipe.md>", "title": "<title>", "description": "<description>", "icon": "<emoji>", "category": "<category>", "readme_md": "<readme>" }
+- include Authorization header with Bearer token from settings (read settings first to get user.token)
+- tell the user the result`,
+      prompt: `help me publish my pipe "${pipeName}" to the store. make it generic and ready for anyone to use.`,
+      autoSend: true,
+    });
+  };
+
   const handlePublish = async () => {
     if (!selectedPipe || !title) return;
     setPublishing(true);
     try {
-      // Get pipe content from local pipes list
       const pipe = localPipes.find((p: any) => p.name === selectedPipe);
       let sourceMd = pipe?.raw_content as string | undefined;
       if (!sourceMd) throw new Error("could not read pipe content");
 
-      // Redact secrets if enabled
       if (redactEnabled) {
         const { redacted, count } = redactSecrets(sourceMd);
         if (count > 0) {
@@ -1331,6 +1575,27 @@ export function PublishDialog({
           </p>
         ) : (
           <div className="space-y-3">
+            {/* AI help banner */}
+            <button
+              onClick={helpMePublish}
+              disabled={!selectedPipe && !defaultPipe}
+              className="w-full flex items-center gap-3 p-3 border-2 border-dashed border-foreground/20 hover:border-foreground/40 hover:bg-muted/30 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="text-2xl">🤖</span>
+              <div>
+                <p className="text-sm font-medium">help me publish</p>
+                <p className="text-[11px] text-muted-foreground">
+                  ai will make your pipe generic, write a README, and publish it for you
+                </p>
+              </div>
+            </button>
+
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <div className="flex-1 h-px bg-border" />
+              or publish manually
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
             <div>
               <Label className="text-xs">pipe</Label>
               {loadingPipes ? (
@@ -1402,7 +1667,6 @@ export function PublishDialog({
               </div>
             </div>
 
-            {/* Redact secrets checkbox */}
             <div className="flex items-center gap-2 pt-1">
               <Checkbox
                 id="redact-secrets"

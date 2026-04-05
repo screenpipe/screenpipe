@@ -454,7 +454,7 @@ export function AIProviderConfig({
             }}
           >
             <Icons.openai className="h-3.5 w-3.5" />
-            <span>openai</span>
+            <span>openai api</span>
           </Button>
 
           <Button
@@ -528,8 +528,8 @@ export function AIProviderConfig({
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/claude-ai.svg" alt="Claude.ai" className="h-3.5 w-3.5 rounded-sm" />
-            <span>claude.ai</span>
+            <img src="/images/claude-ai.svg" alt="Claude API" className="h-3.5 w-3.5 rounded-sm" />
+            <span>claude api</span>
           </Button>
 
           {piAvailable && (

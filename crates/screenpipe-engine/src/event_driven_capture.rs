@@ -774,12 +774,22 @@ async fn do_capture(
     // reduced max_nodes and timeout to avoid blocking their UI thread.
     let mut config = tree_walker_config.clone();
 
-    // Check if the trigger carries an app name we can use for pre-walk budgeting.
-    // For triggers without an app name, the walk runs at current config limits
-    // and the budget is updated afterwards for future walks.
+    // Get the focused app name for budget decisions. AppSwitch triggers carry
+    // the name directly; for all other triggers (visual change, idle, manual)
+    // we do a lightweight AX query to get the focused app. This ensures the
+    // walk budget applies to ALL captures, not just app switches.
     let trigger_app = match trigger {
         CaptureTrigger::AppSwitch { app_name } => Some(app_name.clone()),
-        _ => None,
+        _ => {
+            #[cfg(target_os = "macos")]
+            {
+                get_focused_app_name_lightweight()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                None
+            }
+        }
     };
 
     use screenpipe_a11y::tree::TreeWalkResult;
@@ -1070,4 +1080,19 @@ mod tests {
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
     }
+}
+
+/// Cheaply get the focused app name via AX APIs without walking the tree.
+/// Used to apply the walk budget to non-AppSwitch triggers (visual change,
+/// idle, manual) so that expensive apps like Chrome get throttled even
+/// when the capture wasn't triggered by an app switch.
+#[cfg(target_os = "macos")]
+fn get_focused_app_name_lightweight() -> Option<String> {
+    use cidre::{ax, ns};
+    let sys = ax::UiElement::sys_wide();
+    let app = sys.focused_app().ok()?;
+    let pid = app.pid().ok()?;
+    ns::RunningApp::with_pid(pid)
+        .and_then(|app| app.localized_name())
+        .map(|s| s.to_string())
 }

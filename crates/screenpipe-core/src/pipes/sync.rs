@@ -309,13 +309,23 @@ pub fn apply_manifest_to_disk(
                         // Force enabled: false for newly imported pipes
                         force_disabled(&synced.raw_content)
                     } else {
-                        // For updates, preserve device-local enabled override
+                        // For updates, ALWAYS preserve the local enabled state.
+                        // The enabled flag is device-local — syncing it across
+                        // machines causes one device's toggle to flip others.
                         let local_overrides = load_local_overrides(pipes_dir);
-                        if let Some(&local_enabled) = local_overrides.get(name) {
-                            override_enabled(&synced.raw_content, local_enabled)
+                        let local_enabled = if let Some(&ov) = local_overrides.get(name) {
+                            ov
+                        } else if pipe_md.exists() {
+                            // No explicit override — read current enabled from disk
+                            std::fs::read_to_string(&pipe_md)
+                                .ok()
+                                .and_then(|c| parse_frontmatter(&c).ok())
+                                .map(|(cfg, _)| cfg.enabled)
+                                .unwrap_or(false)
                         } else {
-                            synced.raw_content.clone()
-                        }
+                            false
+                        };
+                        override_enabled(&synced.raw_content, local_enabled)
                     };
 
                     if let Err(e) = std::fs::write(&pipe_md, &content) {

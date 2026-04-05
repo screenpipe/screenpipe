@@ -17,6 +17,16 @@ the app manages recording, settings, and search — no terminal needed.
 npx screenpipe@latest record
 ```
 
+this starts the screenpipe daemon in the background and continuously records your screen. data is stored in `~/.screenpipe/` on your local machine.
+
+### access your recorded timeline
+
+after starting the CLI, you have three ways to access your screen history:
+
+1. **Desktop app (easiest)** — download the [screenpipe app](https://screenpi.pe/onboarding) for a visual timeline and built-in search
+2. **REST API** — query recorded content directly via curl or code (see below)
+3. **AI assistants** — connect Claude, Cursor, or other tools via MCP
+
 ## verify it's running
 
 once screenpipe starts, it serves an API on `localhost:3030`:

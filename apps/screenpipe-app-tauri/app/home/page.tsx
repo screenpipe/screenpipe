@@ -52,8 +52,8 @@ import { MemoriesSection } from "@/components/settings/memories-section";
 import { NotificationsSettings } from "@/components/settings/notifications-settings";
 import { UsageSection } from "@/components/settings/usage-section";
 import { SpeakersSection } from "@/components/settings/speakers-section";
-// HomeStatsBadge is rendered inside SummaryCards (chat empty state)
 import { StandaloneChat } from "@/components/standalone-chat";
+import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -71,7 +71,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type MainSection = "home" | "timeline" | "pipes" | "help";
+type MainSection = "home" | "timeline" | "memories" | "pipes" | "help";
 
 type SettingsModalSection =
   | "account"
@@ -84,7 +84,6 @@ type SettingsModalSection =
   | "privacy"
   | "storage"
   | "meetings"
-  | "memories"
   | "team"
   | "notifications"
   | "referral"
@@ -109,7 +108,7 @@ const ALL_SECTIONS = [
 
 const MODAL_SECTIONS = new Set<string>([
   "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "connections", "privacy", "storage", "meetings", "memories", "team", "referral", "usage",
+  "connections", "privacy", "storage", "meetings", "team", "referral", "usage",
 ]);
 
 function SettingsPageContent() {
@@ -342,6 +341,8 @@ function SettingsPageContent() {
         return <StandaloneChat className="h-full" />;
       case "timeline":
         return <Timeline embedded />;
+      case "memories":
+        return <MemoriesSection />;
       case "pipes":
         return <PipeStoreView />;
       case "help":
@@ -376,8 +377,6 @@ function SettingsPageContent() {
         return <StorageSection />;
       case "meetings":
         return <MeetingsSection />;
-      case "memories":
-        return <MemoriesSection />;
       case "connections":
         return <ConnectionsSection />;
       case "team":
@@ -398,6 +397,7 @@ function SettingsPageContent() {
     { id: "home", label: "Home", icon: <Home className="h-4 w-4" /> },
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-4 w-4" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-4 w-4" /> },
+    { id: "memories", label: "Memories", icon: <Sparkles className="h-4 w-4" /> },
   ].filter((s) => !isSectionHidden(s.id));
 
   // Settings modal sidebar items (filtered by enterprise policy)
@@ -413,7 +413,6 @@ function SettingsPageContent() {
     { id: "storage", label: "Storage", icon: <HardDrive className="h-4 w-4" />, group: "data" },
     { id: "meetings", label: "Meetings", icon: <Phone className="h-4 w-4" />, group: "data" },
     { id: "speakers", label: "Speakers", icon: <Mic className="h-4 w-4" />, group: "data" },
-    { id: "memories", label: "Memories", icon: <Sparkles className="h-4 w-4" />, group: "data" },
     { id: "connections", label: "Connections", icon: <Plug className="h-4 w-4" />, group: "data" },
     { id: "team", label: "Team", icon: <Users className="h-4 w-4" />, group: "account" },
     { id: "account", label: "Account", icon: <User className="h-4 w-4" />, group: "account" },
@@ -467,6 +466,7 @@ function SettingsPageContent() {
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
                 {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
                 <div className="flex items-center gap-1.5">
+                  <NotificationBell />
                   <button
                     onClick={toggleMeeting}
                     disabled={meetingLoading}
@@ -789,6 +789,7 @@ function SettingsPageContent() {
                           {appGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);
@@ -823,6 +824,7 @@ function SettingsPageContent() {
                           {dataGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);
@@ -857,6 +859,7 @@ function SettingsPageContent() {
                           {accountGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);

@@ -125,25 +125,9 @@ jobs:
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
             echo "⚠️ Forcing GitHub-hosted runners (manual override)"
           else
-            # macOS aarch64: MacBook only (Apple Intelligence requires local Xcode 26 SDK)
-            MACBOOK=$(check_runner "macos-26")
-
-            if [ "$MACBOOK" = "available" ]; then
-              echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-              echo "✅ MacBook (macos-26) is available"
-            elif [ "$MACBOOK" = "busy" ]; then
-              RESULT=$(wait_for_runner "macos-26" 300)
-              if [ "$RESULT" = "available" ]; then
-                echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-                echo "✅ MacBook (macos-26) became available"
-              else
-                echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-                echo "⚠️ MacBook still busy after 5 min — queuing anyway (will wait for runner)"
-              fi
-            else
-              echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-              echo "⚠️ MacBook offline — job will wait until it comes online"
-            fi
+            # macOS aarch64: GitHub-hosted macos-26 runner
+            echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
+            echo "✅ Using GitHub-hosted macos-26 runner"
 
             # Always use GH-hosted Windows — self-hosted is unreliable for builds
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
@@ -180,8 +164,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Self-hosted macOS 26 runner (MacBook Pro) for Apple Silicon + Apple Intelligence
-          # Falls back to macos-latest (GH-hosted) if runner is offline
+          # GitHub-hosted macOS 26 runner for Apple Silicon + Apple Intelligence
           - platform: ${{ needs.check_commit.outputs.macos_arm_runner || 'macos-latest' }}
             args: "--target aarch64-apple-darwin --features metal,parakeet-mlx"
             target: aarch64-apple-darwin
@@ -210,7 +193,7 @@ jobs:
             tauri-args: "--target x86_64-unknown-linux-gnu --features official-build"
             os_type: "linux"
 
-    runs-on: ${{ matrix.platform == 'macos-26' && fromJSON('["self-hosted", "macos-26"]') || matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
+    runs-on: ${{ matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
     timeout-minutes: 120
     steps:
       - name: Detect Xcode version and set Apple Intelligence feature
@@ -805,10 +788,13 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C link-arg=/LTCG' || '' }}
-          # Cap MSVC codegen at AVX2 — prevents LTCG from auto-vectorizing C deps
-          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners. Lunar Lake and other
-          # consumer CPUs lack AVX-512, causing STATUS_ILLEGAL_INSTRUCTION (0xc000001d).
+          # LTCG removed: MSVC has known bugs where LTCG ignores /arch:AVX2 and
+          # emits AVX-512 instructions on Xeon CI runners, causing STATUS_ILLEGAL_INSTRUCTION
+          # (0xc000001d) on consumer CPUs without AVX-512 (Arrow Lake, Panther Lake, Lunar Lake).
+          # See: https://developercommunity.visualstudio.com/content/problem/848627
+          RUSTFLAGS: ""
+          # Cap MSVC codegen at AVX2 — prevents auto-vectorizing C deps
+          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners.
           # Only set for x86_64 — clang on ARM64 doesn't understand /arch:AVX2.
           CFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
           CXXFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}

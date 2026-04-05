@@ -53,6 +53,8 @@ pub async fn oauth_connect(
         map.insert(state.clone(), tx);
     }
 
+    let redirect_uri = config.redirect_uri_override.unwrap_or(OAUTH_REDIRECT_URI);
+
     let mut auth_url = reqwest::Url::parse(config.auth_url)
         .map_err(|e| format!("bad auth_url: {}", e))?;
     {
@@ -60,7 +62,7 @@ pub async fn oauth_connect(
         pairs
             .append_pair("client_id", config.client_id)
             .append_pair("response_type", "code")
-            .append_pair("redirect_uri", OAUTH_REDIRECT_URI)
+            .append_pair("redirect_uri", redirect_uri)
             .append_pair("state", &state);
         for (k, v) in config.extra_auth_params {
             pairs.append_pair(k, v);
@@ -97,7 +99,7 @@ pub async fn oauth_connect(
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let token_data = oauth::exchange_code(&client, &integration_id, &code, OAUTH_REDIRECT_URI)
+    let token_data = oauth::exchange_code(&client, &integration_id, &code, redirect_uri)
         .await
         .map_err(|e| {
             error!("token exchange failed for {}: {}", integration_id, e);

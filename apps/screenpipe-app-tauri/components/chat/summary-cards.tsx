@@ -11,7 +11,6 @@ import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { FALLBACK_TEMPLATES, type CustomTemplate } from "@/lib/summary-templates";
 import { type Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
-import { HomeStatsBadge } from "@/components/home-stats-badge";
 
 interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
@@ -97,7 +96,6 @@ export function SummaryCards({
         One-click summaries from your screen activity
       </p>
 
-      <HomeStatsBadge />
 
       {/* Featured template cards */}
       <div className="grid grid-cols-3 gap-1.5 w-full max-w-lg mb-2">

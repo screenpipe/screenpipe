@@ -3422,7 +3422,9 @@ fn render_prompt_with_port(
         r#"Time range: {start_time} to {end_time}
 Date: {date}
 Timezone: {timezone} (UTC{tz_offset})
-"#
+Pipe name: {}
+"#,
+        config.name
     );
 
     prompt.push_str(&header);

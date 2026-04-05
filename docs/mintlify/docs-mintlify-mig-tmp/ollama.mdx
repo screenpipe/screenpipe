@@ -49,6 +49,21 @@ ollama pull <model-name>
 - at least one model pulled
 - screenpipe running
 
+## custom OpenAI-compatible endpoints
+
+if you're running a custom LLM server (Qwen, vLLM, Text Generation WebUI, etc.), screenpipe auto-detects the endpoint format:
+
+1. first tries OpenAI-compatible format: `GET {endpoint}/v1/models`
+2. falls back to Ollama format: `GET {endpoint}/api/tags`
+
+**if your endpoint uses neither format**, you may need to:
+
+- check what path your server uses for model listing (`/models`, `/v1/list`, etc.)
+- if unsure, test with curl first: `curl {your-endpoint}/path-to-models`
+- join our [Discord](https://discord.gg/screenpipe) — we can help troubleshoot custom setups
+
+example: a Qwen server on `http://localhost:5000` with OpenAI-compatible API should work automatically. if screenpipe can't find models, verify the server responds to: `curl http://localhost:5000/v1/models`
+
 ## troubleshooting
 
 **"ollama not detected"**

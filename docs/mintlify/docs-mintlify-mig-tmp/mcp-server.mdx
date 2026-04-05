@@ -53,6 +53,16 @@ add this as a stdio MCP server in your editor's MCP settings. see also:
 - [continue setup](/continue)
 - [cline setup](/cline)
 
+## HTTP transport (optional)
+
+if you need remote MCP access or prefer HTTP over stdio, the `screenpipe-mcp` package also provides an HTTP server:
+
+```bash
+npx -y screenpipe-mcp-http --port 3031
+```
+
+this is useful for tools like [Msty](https://msty.studio) that support HTTP MCP transport. both `screenpipe-mcp` (stdio) and `screenpipe-mcp-http` (HTTP) come from the same npm package `screenpipe-mcp`.
+
 ## available tools
 
 ### search-content (all platforms)

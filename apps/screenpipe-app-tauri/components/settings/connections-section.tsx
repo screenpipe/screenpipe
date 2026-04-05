@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
-import { useSettings } from "@/lib/hooks/use-settings";
+import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { Command } from "@tauri-apps/plugin-shell";
@@ -25,6 +25,7 @@ import { join, homeDir, tempDir } from "@tauri-apps/api/path";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { CalendarCard } from "./calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
+import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
 import { BrowserUrlCard } from "./browser-url-card";
@@ -195,6 +196,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     ),
     "apple-intelligence": <img src="/images/apple-intelligence.png" alt="Apple Intelligence" className="w-5 h-5 rounded" />,
     "apple-calendar": <img src="/images/apple.svg" alt="Apple" className="w-5 h-5 dark:invert" />,
+    "windows-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     openclaw: <img src="/images/openclaw.png" alt="OpenClaw" className="w-5 h-5" />,
@@ -230,6 +232,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     zapier: <img src="/images/zapier.png" alt="Zapier" className="w-5 h-5 rounded" />,
     github: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
     jira: <img src="/images/jira.png" alt="Jira" className="w-5 h-5 rounded" />,
+    granola: <img src="/images/granola.png" alt="Granola" className="w-5 h-5 rounded" />,
     hubspot: <img src="/images/hubspot.png" alt="HubSpot" className="w-5 h-5 rounded" />,
     airtable: <img src="/images/airtable.png" alt="Airtable" className="w-5 h-5 rounded" />,
     limitless: <img src="/images/limitless.svg" alt="Limitless" className="w-5 h-5" />,
@@ -283,6 +286,25 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     brex: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#F46A35">
         <path d="M18.69 2.319a3.868 3.868 0 0 0-3.108 1.547l-.759 1.007a1.658 1.658 0 0 1-1.313.656H0V21.68h5.296a3.87 3.87 0 0 0 3.108-1.547l.759-1.006a1.656 1.656 0 0 1 1.313-.657H24V2.319h-5.31Zm1.108 11.949h-5.66a3.87 3.87 0 0 0-3.108 1.547l-.759 1.007a1.658 1.658 0 0 1-1.313.656H4.202V9.731h5.661a3.868 3.868 0 0 0 3.107-1.547l.759-1.006a1.658 1.658 0 0 1 1.313-.657h4.771l-.015 7.747Z"/>
+      </svg>
+    ),
+    calendly: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#006BFF" aria-hidden>
+        <path d="M19.655 14.262c.281 0 .557.023.828.064 0 .005-.005.01-.005.014-.105.267-.234.534-.381.786l-1.219 2.106c-1.112 1.936-3.177 3.127-5.411 3.127h-2.432c-2.23 0-4.294-1.191-5.412-3.127l-1.218-2.106a6.251 6.251 0 0 1 0-6.252l1.218-2.106C6.736 4.832 8.8 3.641 11.035 3.641h2.432c2.23 0 4.294 1.191 5.411 3.127l1.219 2.106c.147.252.271.519.381.786 0 .004.005.009.005.014-.267.041-.543.064-.828.064-1.816 0-2.501-.607-3.291-1.306-.764-.676-1.711-1.517-3.44-1.517h-1.029c-1.251 0-2.387.455-3.2 1.278-.796.805-1.233 1.904-1.233 3.099v1.411c0 1.196.437 2.295 1.233 3.099.813.823 1.949 1.278 3.2 1.278h1.034c1.729 0 2.676-.841 3.439-1.517.791-.703 1.471-1.306 3.287-1.301Zm.005-3.237c.399 0 .794-.036 1.179-.11-.002-.004-.002-.01-.002-.014-.073-.414-.193-.823-.349-1.218.731-.12 1.407-.396 1.986-.819 0-.004-.005-.013-.005-.018-.331-1.085-.832-2.101-1.489-3.03-.649-.915-1.435-1.719-2.331-2.395-1.867-1.398-4.088-2.138-6.428-2.138-1.448 0-2.855.28-4.175.841-1.273.543-2.423 1.315-3.407 2.299S2.878 6.552 2.341 7.83c-.557 1.324-.842 2.726-.842 4.175 0 1.448.281 2.855.842 4.174.542 1.274 1.314 2.423 2.298 3.407s2.129 1.761 3.407 2.299c1.324.556 2.727.841 4.175.841 2.34 0 4.561-.74 6.428-2.137a10.815 10.815 0 0 0 2.331-2.396c.652-.929 1.158-1.949 1.489-3.03 0-.004.005-.014.005-.018-.579-.423-1.255-.699-1.986-.819.161-.395.276-.804.349-1.218.005-.009.005-.014.005-.023.869.166 1.692.506 2.404 1.035.685.505.552 1.075.446 1.416C22.184 20.437 17.619 24 12.221 24c-6.625 0-12-5.375-12-12s5.37-12 12-12c5.398 0 9.963 3.563 11.471 8.464.106.341.239.915-.446 1.421-.717.529-1.535.873-2.404 1.034.128.716.128 1.45 0 2.166-.387-.074-.782-.11-1.182-.11-4.184 0-3.968 2.823-6.736 2.823h-1.029c-1.899 0-3.15-1.357-3.15-3.095v-1.411c0-1.738 1.251-3.094 3.15-3.094h1.034c2.768 0 2.552 2.823 6.731 2.827Z"/>
+      </svg>
+    ),
+    gmail: (
+      <svg viewBox="0 0 999.517 749.831" className="w-5 h-5" aria-hidden>
+        <path fill="#4285F4" d="M68.149 749.831h159.014V363.654L0 193.282v488.4C0 719.391 30.553 749.831 68.149 749.831"/>
+        <path fill="#34A853" d="M772.354 749.831h159.014c37.709 0 68.149-30.553 68.149-68.149v-488.4L772.354 363.654"/>
+        <path fill="#FBBC04" d="M772.354 68.342v295.312l227.163-170.372V102.417c0-84.277-96.203-132.322-163.557-81.779"/>
+        <path fill="#EA4335" d="M227.163 363.654V68.342l272.595 204.447 272.595-204.447v295.312L499.758 568.1"/>
+        <path fill="#C5221F" d="M0 102.417v90.865l227.163 170.372V68.342L163.557 20.638C96.09-29.906 0 18.139 0 102.417"/>
+      </svg>
+    ),
+    calcom: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5 text-foreground" fill="currentColor" aria-hidden>
+        <path d="M2.408 14.488C1.035 14.488 0 13.4 0 12.058c0-1.346.982-2.443 2.408-2.443.758 0 1.282.233 1.691.765l-.66.55a1.343 1.343 0 0 0-1.03-.442c-.93 0-1.44.711-1.44 1.57 0 .86.559 1.557 1.44 1.557.413 0 .765-.147 1.043-.443l.651.573c-.391.51-.929.743-1.695.743zM6.948 10.913h.89v3.49h-.89v-.51c-.185.362-.493.604-1.083.604-.943 0-1.695-.82-1.695-1.826 0-1.007.752-1.825 1.695-1.825.585 0 .898.241 1.083.604zm.026 1.758c0-.546-.374-.998-.964-.998-.568 0-.938.457-.938.998 0 .528.37.998.938.998.586 0 .964-.456.964-.998zM8.467 9.503h.89v4.895h-.89zM9.752 13.937a.53.53 0 0 1 .542-.528c.313 0 .533.242.533.528a.527.527 0 0 1-.533.537.534.534 0 0 1-.542-.537zM14.23 13.839c-.33.403-.832.658-1.426.658a1.806 1.806 0 0 1-1.84-1.826c0-1.007.778-1.825 1.84-1.825.572 0 1.07.241 1.4.622l-.687.577c-.172-.215-.396-.376-.713-.376-.568 0-.938.456-.938.998 0 .541.37.997.938.997.343 0 .58-.179.757-.42zM14.305 12.671c0-1.007.78-1.825 1.84-1.825 1.061 0 1.84.818 1.84 1.825 0 1.007-.779 1.826-1.84 1.826-1.06-.005-1.84-.82-1.84-1.826zm2.778 0c0-.546-.37-.998-.938-.998-.568-.004-.937.452-.937.998 0 .542.37.998.937.998.568 0 .938-.456.938-.998zM24 12.269v2.13h-.89v-1.911c0-.604-.281-.864-.704-.864-.396 0-.678.197-.678.864v1.91h-.89v-1.91c0-.604-.285-.864-.704-.864-.396 0-.744.197-.744.864v1.91h-.89v-3.49h.89v.484c.185-.376.52-.564 1.035-.564.489 0 .898.241 1.123.649.224-.417.554-.65 1.153-.65.731.005 1.299.56 1.299 1.442z"/>
       </svg>
     ),
     stripe: (
@@ -1011,7 +1033,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
             <LogOut className="h-3 w-3" />disconnect
           </Button>
         ) : (
-          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
             {status === "loading"
               ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
               : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
@@ -1387,6 +1409,17 @@ export function ConnectionsSection() {
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserExtConnected, setBrowserExtConnected] = useState(false);
+  const [calendarUserDisconnected, setCalendarUserDisconnected] = useState(false);
+
+  const refreshCalendarTile = useCallback(() => {
+    getStore()
+      .then((store) => store.get<boolean>("calendarUserDisconnected"))
+      .then((val) => setCalendarUserDisconnected(val ?? false))
+      .catch(() => {});
+  }, []);
+
+  // Re-read on panel open/close and on explicit connect/disconnect
+  useEffect(() => { refreshCalendarTile(); }, [selected, refreshCalendarTile]);
 
   const refreshStatus = useCallback(() => {
     getInstalledMcpVersion().then(v => {
@@ -1448,8 +1481,9 @@ export function ConnectionsSection() {
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
       { id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false },
-      { id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: false },
+      { id: "apple-calendar", name: os === "windows" ? "Windows Calendar" : "Apple Calendar", icon: os === "windows" ? "windows-calendar" : "apple-calendar", connected: false },
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
+      { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "openclaw", name: "OpenClaw", icon: "openclaw", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false },
@@ -1472,8 +1506,11 @@ export function ConnectionsSection() {
       const api = integrations.find(i => i.id === h.id);
       if (api) h.connected = api.connected;
     }
+    // If user explicitly disconnected calendar, suppress the dot regardless of OS state
+    const calTile = hardcoded.find(h => h.id === "apple-calendar");
+    if (calTile && calendarUserDisconnected) calTile.connected = false;
     return [...hardcoded, ...apiTiles];
-  }, [os, claudeInstalled, cursorInstalled, chatgptConnected, browserExtConnected, integrations]);
+  }, [os, claudeInstalled, cursorInstalled, chatgptConnected, browserExtConnected, integrations, calendarUserDisconnected]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return allTiles;
@@ -1494,8 +1531,9 @@ export function ConnectionsSection() {
       case "browser-url": return <BrowserUrlCard />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
-      case "apple-calendar": return <CalendarCard />;
+      case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
       case "google-calendar": return <GoogleCalendarCard />;
+      case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
       case "openclaw": return <OpenClawCard />;
       case "whatsapp": return <WhatsAppPanel />;
@@ -1564,7 +1602,7 @@ export function ConnectionsSection() {
 
       {/* Expanded panel */}
       {selected && selectedTile && (() => {
-        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "ics-calendar", "openclaw"];
+        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "gmail", "ics-calendar", "openclaw"];
         if (standaloneIds.includes(selected)) {
           // These components render their own Card
           return <div ref={panelRef}>{renderPanel()}</div>;

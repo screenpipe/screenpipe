@@ -465,7 +465,6 @@ export default function NotificationPanelPage() {
               components={{
                 a: ({ href, children }) => (
                   <a
-                    href={href}
                     onClick={async (e) => {
                       e.preventDefault();
                       if (!href) return;
@@ -481,8 +480,7 @@ export default function NotificationPanelPage() {
                         const { open } = await import("@tauri-apps/plugin-shell");
                         await open(url);
                       } catch {
-                        // fallback: try window.open
-                        window.open(href, "_blank");
+                        console.error("failed to open url externally:", href);
                       }
                     }}
                     style={{ color: "rgba(0, 0, 0, 0.7)", textDecoration: "underline", cursor: "pointer" }}

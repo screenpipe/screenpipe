@@ -327,8 +327,10 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: "none"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: "-C link-arg=/LTCG"
-          # Cap MSVC codegen at AVX2 — prevent AVX-512 on Lunar Lake, Arrow Lake etc.
+          # LTCG removed: MSVC LTCG ignores /arch:AVX2 and can emit AVX-512 on Xeon CI runners
+          # causing STATUS_ILLEGAL_INSTRUCTION on consumer CPUs (Arrow Lake, Panther Lake, Lunar Lake)
+          RUSTFLAGS: ""
+          # Cap MSVC codegen at AVX2 — prevent AVX-512 on consumer CPUs
           CFLAGS: "/arch:AVX2"
           CXXFLAGS: "/arch:AVX2"
           # Also cap CMake-built deps (whisper.cpp/GGML) — CFLAGS doesn't reach cmake crate

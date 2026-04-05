@@ -184,11 +184,12 @@ before execution, screenpipe prepends a context header to the prompt:
 Time range: 2026-02-12T13:00:00Z to 2026-02-12T14:00:00Z
 Date: 2026-02-12
 Timezone: PST (UTC-08:00)
+Pipe name: my-pipe
 Output directory: ./output/
 Screenpipe API: http://localhost:3030
 ```
 
-the AI agent uses these values to query the right time range and format output correctly. no template variables needed — just write plain instructions.
+the AI agent uses these values to query the right time range, identify which pipe is running, and format output correctly. no template variables needed — just write plain instructions.
 
 ### schedule formats
 
@@ -364,6 +365,35 @@ pipe.md (prompt + config)
 - **one pipe runs at a time** (global semaphore prevents overlap)
 - **lookback = schedule interval** (capped at 8h to prevent context overflow)
 - **logs saved** to `~/.screenpipe/pipes/{name}/logs/` as JSON
+
+## troubleshooting
+
+### pipe scheduled but doesn't run
+
+**problem**: windows task scheduler or cron shows the task running, but the pipe produces no output.
+
+**solution**: the pipe agent needs to know which pipe it's executing. the context header includes `Pipe name: <name>` so the agent can identify itself. make sure:
+
+1. the pipe folder name matches the expected pipe name (e.g., `~/.screenpipe/pipes/my-pipe/`)
+2. the pipe is listed in `screenpipe pipe list`
+3. check logs: `screenpipe pipe logs my-pipe`
+
+### pipe runs but produces empty output
+
+**problem**: pipe executes successfully but generates no files or notifications.
+
+**solution**: ensure your pipe prompt includes concrete instructions to:
+- query screenpipe API (e.g., `curl http://localhost:3030/search?...`)
+- write output files (e.g., to `./output/<date>.md`)
+- or send notifications (e.g., `POST http://localhost:11435/notify`)
+
+test locally first: `screenpipe pipe run my-pipe` to see logs before relying on scheduled execution.
+
+### windows task scheduler permission denied
+
+**problem**: windows task scheduler fails with permission errors when running pipes.
+
+**solution**: ensure screenpipe engine is running before the task executes. pipes require the local API at `http://localhost:3030`. schedule the pipe *after* the app starts, or use the desktop UI instead.
 
 ## security & permissions
 

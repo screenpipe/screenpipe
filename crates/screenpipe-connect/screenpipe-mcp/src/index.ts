@@ -28,11 +28,15 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
+// Read version from package.json (single source of truth)
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PKG_VERSION: string = require("../package.json").version;
+
 // Initialize server
 const server = new Server(
   {
     name: "screenpipe",
-    version: "0.9.0",
+    version: PKG_VERSION,
   },
   {
     capabilities: {

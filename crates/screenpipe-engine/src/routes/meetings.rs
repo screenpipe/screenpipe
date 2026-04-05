@@ -274,7 +274,7 @@ pub(crate) async fn stop_meeting_handler(
 
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
-    state.db.end_meeting(id, &now).await.map_err(|e| {
+    state.db.end_meeting_with_typed_text(id, &now, true).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             JsonResponse(json!({"error": e.to_string()})),

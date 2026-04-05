@@ -40,6 +40,7 @@ interface AudioSample {
   transcript: string;
   start_time: number;
   end_time: number;
+  timestamp?: number;
 }
 
 interface Speaker {
@@ -69,6 +70,7 @@ function parseSamples(metadata: string): AudioSample[] {
 }
 
 function formatTimeAgo(timestamp: number): string {
+  if (!timestamp) return "";
   const now = Date.now() / 1000;
   const diff = now - timestamp;
   if (diff < 60) return "just now";
@@ -81,7 +83,7 @@ function formatTimeAgo(timestamp: number): string {
 function getLatestSampleTime(speaker: Speaker): number {
   const samples = parseSamples(speaker.metadata);
   if (samples.length === 0) return 0;
-  return Math.max(...samples.map((s) => s.end_time));
+  return Math.max(...samples.map((s) => s.timestamp || 0));
 }
 
 function AudioClip({
@@ -594,9 +596,9 @@ function SpeakerDetail({
             <span className="flex-1 truncate text-muted-foreground">
               &ldquo;{s.transcript}&rdquo;
             </span>
-            {s.end_time > 0 && (
+            {s.timestamp && s.timestamp > 0 && (
               <span className="text-[10px] text-muted-foreground shrink-0">
-                {formatTimeAgo(s.end_time)}
+                {formatTimeAgo(s.timestamp)}
               </span>
             )}
           </div>

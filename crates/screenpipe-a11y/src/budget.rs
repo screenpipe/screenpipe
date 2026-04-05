@@ -20,7 +20,7 @@ pub enum WalkTier {
     Moderate,
     /// 150–250ms avg — significantly reduced
     Heavy,
-    /// > 250ms avg or repeated truncations — minimal walking
+    /// > 250ms avg or repeated truncations — minimal walking (60s interval)
     Critical,
 }
 
@@ -165,7 +165,7 @@ impl AppWalkBudget {
                 Duration::from_millis(150),
             ),
             WalkTier::Critical => (
-                Duration::from_secs(15),
+                Duration::from_secs(60),
                 500usize,
                 Duration::from_millis(100),
             ),

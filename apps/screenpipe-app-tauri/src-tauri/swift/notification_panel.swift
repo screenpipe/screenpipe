@@ -320,7 +320,8 @@ struct MarkdownText: View {
     let raw: String
 
     init(_ text: String) {
-        self.raw = text
+        // Replace literal \n sequences with actual newlines
+        self.raw = text.replacingOccurrences(of: "\\n", with: "\n")
     }
 
     var body: some View {
@@ -657,8 +658,8 @@ class NotificationPanelController: NSObject {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
                 let panelHeight = panel.frame.height
-                let x = visible.origin.x + visible.size.width - Self.panelWidth
-                let y = visible.origin.y + visible.size.height - panelHeight
+                let x = visible.origin.x + visible.size.width - Self.panelWidth - 16
+                let y = visible.origin.y + visible.size.height - panelHeight - 16
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 break
             }
@@ -760,8 +761,15 @@ public func notifFreeString(_ ptr: UnsafeMutablePointer<CChar>?) {
 @_cdecl("notif_show")
 public func notifShow(_ jsonPtr: UnsafePointer<CChar>) -> Int32 {
     let json = String(cString: jsonPtr)
-    guard let data = json.data(using: .utf8),
-          let payload = try? JSONDecoder().decode(NotificationPayload.self, from: data) else {
+    guard let data = json.data(using: .utf8) else {
+        NSLog("[screenpipe-notif] failed to convert json to utf8 data")
+        return -1
+    }
+    let payload: NotificationPayload
+    do {
+        payload = try JSONDecoder().decode(NotificationPayload.self, from: data)
+    } catch {
+        NSLog("[screenpipe-notif] json decode failed: \(error) — json: \(json.prefix(500))")
         return -1
     }
     if #available(macOS 13.0, *) {

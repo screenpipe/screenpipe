@@ -12,6 +12,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://api.notion.com/v1/oauth/authorize",
     client_id: "334d872b-594c-81f9-9dce-00371097ac7d",
     extra_auth_params: &[("owner", "user")],
+    redirect_uri_override: None,
 };
 
 static DEF: IntegrationDef = IntegrationDef {

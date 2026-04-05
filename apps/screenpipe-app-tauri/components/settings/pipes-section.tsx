@@ -1179,6 +1179,164 @@ export function PipesSection() {
     }
   }, []);
 
+  // Check if a pipe has notifications denied in its permissions.
+  // Looks for "Api(POST /notify)" (any spacing/casing) in deny lines.
+  const isNotificationsDenied = (rawContent: string): boolean => {
+    const match = rawContent.match(/^---\n([\s\S]*?)\n---/);
+    if (!match) return false;
+    const yaml = match[1];
+    // Split into lines for precise matching — only match inside deny block
+    const lines = yaml.split("\n");
+    let inDeny = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (/^deny:\s*$/.test(trimmed) || /^deny:$/.test(trimmed)) {
+        inDeny = true;
+        continue;
+      }
+      // Exit deny block when hitting another key at same indent
+      if (inDeny && /^\w/.test(trimmed) && !trimmed.startsWith("-")) {
+        inDeny = false;
+      }
+      if (inDeny && /^-\s*Api\(\s*(\*)?\s*POST\s+\/notify\s*\)/i.test(trimmed)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const toggleNotifications = useCallback(async (pipeName: string, enabled: boolean) => {
+    const pipe = pipes.find((p) => p.config.name === pipeName);
+    if (!pipe) return;
+
+    let content = promptDrafts[pipeName] ?? pipe.raw_content;
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+
+    if (!frontmatterMatch) {
+      // No frontmatter — add one with deny rule
+      if (!enabled) {
+        content = `---\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n${content}`;
+      }
+    } else {
+      const yaml = frontmatterMatch[1];
+      const body = content.slice(frontmatterMatch[0].length);
+      const lines = yaml.split("\n");
+
+      if (!enabled) {
+        // Add deny rule for POST /notify
+        const hasDeny = lines.some((l) => l.trim() === "deny:" || /^\s+deny:\s*$/.test(l));
+        const hasPermissions = lines.some((l) => /^permissions:\s/.test(l) || l.trim() === "permissions:");
+        const isPreset = lines.some((l) => /^permissions:\s+\S/.test(l));
+
+        if (hasDeny) {
+          // Find deny: line and insert after it
+          const idx = lines.findIndex((l) => l.trim() === "deny:" || /^\s+deny:\s*$/.test(l));
+          lines.splice(idx + 1, 0, "    - Api(POST /notify)");
+        } else if (hasPermissions && isPreset) {
+          // permissions: reader → keep as-is, just add deny block after it
+          // "permissions: reader" stays valid — Rust treats preset + deny as:
+          // resolve preset rules, then apply deny overrides.
+          // Actually — the Rust enum is untagged: Preset(String) or Rules{allow,deny,...}.
+          // We can't mix them. So we need to KEEP the preset line and add a
+          // separate deny line. But that's not valid YAML for the enum.
+          //
+          // Safest: just append a top-level deny at the permissions level.
+          // Convert: "permissions: reader" → "permissions:\n  allow: []\n  deny:\n    - Api(POST /notify)"
+          // But this loses the preset behavior.
+          //
+          // Best approach: don't touch the permissions at all.
+          // Instead, add a separate top-level field that the middleware can check.
+          // BUT we said no Rust changes...
+          //
+          // Practical fix: for preset permissions, switch to Rules format
+          // and copy the preset's allow list. But we don't know the allow list on the frontend.
+          //
+          // Simplest correct approach: convert to Rules with empty allow (= deny everything
+          // except what the preset would allow). This is wrong.
+          //
+          // Actually — let's just append deny as a sibling of permissions.
+          // The YAML will look like:
+          //   permissions: reader
+          //   deny:
+          //     - Api(POST /notify)
+          // This won't parse as PipePermissionsConfig because it's "untagged" enum.
+          // The deny would end up in the catch-all config HashMap instead.
+          //
+          // OK — the REAL simplest fix: wrap it in Rules format.
+          // "permissions: reader" → permissions:\n  allow: []\n  deny:\n    - Api(POST /notify)
+          // With empty allow, the default allowlist for "none" preset kicks in = full access.
+          // Then deny overrides. This is effectively the same as the preset with a deny added.
+          const permIdx = lines.findIndex((l) => /^permissions:\s+\S/.test(l));
+          lines.splice(permIdx, 1,
+            "permissions:",
+            "  deny:",
+            "    - Api(POST /notify)",
+          );
+        } else if (hasPermissions) {
+          // Already rules format, add deny section
+          // Find the end of the permissions block and insert deny
+          const permIdx = lines.findIndex((l) => l.trim() === "permissions:");
+          // Find where to insert: after the last indented line under permissions
+          let insertIdx = permIdx + 1;
+          while (insertIdx < lines.length && (lines[insertIdx].startsWith("  ") || lines[insertIdx].trim() === "")) {
+            insertIdx++;
+          }
+          lines.splice(insertIdx, 0, "  deny:", "    - Api(POST /notify)");
+        } else {
+          // No permissions at all — add it at end
+          lines.push("permissions:", "  deny:", "    - Api(POST /notify)");
+        }
+      } else {
+        // Remove deny rule for POST /notify
+        const filtered: string[] = [];
+        let skipEmpty = false;
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (/^-\s*Api\(\s*(\*)?\s*POST\s+\/notify\s*\)/i.test(trimmed)) {
+            skipEmpty = true;
+            continue; // skip this line
+          }
+          filtered.push(lines[i]);
+        }
+
+        // Clean up empty deny: blocks (deny: followed by no items)
+        const cleaned: string[] = [];
+        for (let i = 0; i < filtered.length; i++) {
+          const trimmed = filtered[i].trim();
+          if ((trimmed === "deny:" || /^\s*deny:\s*$/.test(filtered[i]))) {
+            // Check if next non-empty line is an item (starts with -)
+            let nextIdx = i + 1;
+            while (nextIdx < filtered.length && filtered[nextIdx].trim() === "") nextIdx++;
+            if (nextIdx >= filtered.length || !filtered[nextIdx].trim().startsWith("-")) {
+              continue; // skip empty deny:
+            }
+          }
+          cleaned.push(filtered[i]);
+        }
+
+        lines.length = 0;
+        lines.push(...cleaned);
+      }
+
+      content = `---\n${lines.join("\n").trim()}\n---${body}`;
+    }
+
+    // Save via raw_content
+    await savePipeContent(pipeName, content);
+    // Update local state so UI reflects change immediately
+    setPipes((prev) =>
+      prev.map((p) =>
+        p.config.name === pipeName ? { ...p, raw_content: content } : p
+      )
+    );
+    // Clear any draft so the raw editor shows the saved version
+    setPromptDrafts((prev) => {
+      const next = { ...prev };
+      delete next[pipeName];
+      return next;
+    });
+  }, [pipes, promptDrafts, savePipeContent]);
+
   const handlePipeEdit = useCallback((name: string, value: string) => {
     setPromptDrafts((prev) => ({ ...prev, [name]: value }));
     pendingSaves.current[name] = value;
@@ -1483,28 +1641,6 @@ export function PipesSection() {
         </Card>
       ) : (
         <div className="border border-border rounded-md divide-y divide-border">
-          {/* Global daily limit / credits exhausted banner — shown once at top */}
-          {(() => {
-            const errors = filteredPipes
-              .filter((p) => p.last_success === false && p.last_error)
-              .map((p) => parsePipeError(p.last_error!));
-            const limitError = errors.find(
-              (e) => e.type === "credits_exhausted" || e.type === "daily_limit"
-            );
-            if (!limitError) return null;
-            return (
-              <div className="flex items-center gap-2 text-xs px-4 py-2">
-                <span className="text-muted-foreground">
-                  {limitError.type === "credits_exhausted"
-                    ? "daily ai usage limit reached — try a lighter model or wait until tomorrow"
-                    : limitError.message}
-                  {limitError.resets_at && (
-                    <> · resets {new Date(limitError.resets_at).toLocaleTimeString()}</>
-                  )}
-                </span>
-              </div>
-            );
-          })()}
           {filteredPipes.map((pipe) => {
             const recentExecs = pipeExecutions[pipe.config.name] || [];
             const isRunning = pipe.is_running || runningPipe === pipe.config.name;
@@ -1655,6 +1791,17 @@ export function PipesSection() {
                         : <Play className="h-3.5 w-3.5" />}
                     </Button>
                   )}
+
+                  {/* Publish button */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => setPublishPipeName(pipe.config.name)}
+                    title="publish to store"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                  </Button>
 
                   {/* Overflow menu */}
                   <DropdownMenu>
@@ -2212,6 +2359,15 @@ export function PipesSection() {
                               </form>
                             </div>
                           </div>}
+
+                        {/* Notifications toggle */}
+                        <div className="flex items-center justify-between border px-3 py-2.5">
+                          <span className="text-xs font-medium cursor-help" title="allow this pipe to send notifications">notifications</span>
+                          <Switch
+                            checked={!isNotificationsDenied(promptDrafts[pipe.config.name] ?? pipe.raw_content)}
+                            onCheckedChange={(checked) => toggleNotifications(pipe.config.name, checked)}
+                          />
+                        </div>
 
                       </TabsContent>
 

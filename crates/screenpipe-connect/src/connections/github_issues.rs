@@ -14,6 +14,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://github.com/login/oauth/authorize",
     client_id: GITHUB_CLIENT_ID,
     extra_auth_params: &[("scope", "repo")],
+    redirect_uri_override: None,
 };
 
 static DEF: IntegrationDef = IntegrationDef {

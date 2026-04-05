@@ -158,6 +158,8 @@ export type Settings = SettingsStore & {
 	offlineMode?: boolean;
 	/** Pause all screen capture when a DRM streaming app (Netflix, Disney+, etc.) is focused */
 	pauseOnDrmContent?: boolean;
+	/** Auto-append typed text to meeting notes when a meeting ends */
+	appendTypedTextToMeetingNotes?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
 	localRetentionEnabled?: boolean;
 	/** Days to keep data locally before auto-deleting (default: 30) */
@@ -335,6 +337,7 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
+			appendTypedTextToMeetingNotes: true,
 			localRetentionEnabled: true,
 			localRetentionDays: 14,
 		};

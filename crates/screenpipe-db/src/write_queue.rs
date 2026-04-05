@@ -423,25 +423,69 @@ async fn execute_batch(
         }
     };
 
-    // Acquire connection
-    let mut conn = match tokio::time::timeout(Duration::from_secs(5), write_pool.acquire()).await {
-        Ok(Ok(conn)) => conn,
-        Ok(Err(e)) => {
+    // Acquire connection and BEGIN IMMEDIATE with retry logic
+    let max_retries = 3;
+    let mut last_error = None;
+    let mut conn_opt = None;
+
+    for attempt in 1..=max_retries {
+        let mut conn = match tokio::time::timeout(Duration::from_secs(5), write_pool.acquire()).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                send_error_to_all(batch, e);
+                return;
+            }
+            Err(_) => {
+                send_error_to_all(batch, sqlx::Error::PoolTimedOut);
+                return;
+            }
+        };
+
+        match sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
+            Ok(_) => {
+                conn_opt = Some(conn);
+                break;
+            }
+            Err(e) if is_nested_transaction_error(&e) => {
+                warn!("write_queue: BEGIN IMMEDIATE hit stuck transaction (attempt {}/{}), rolling back", attempt, max_retries);
+                match sqlx::query("ROLLBACK").execute(&mut *conn).await {
+                    Ok(_) => {
+                        debug!("write_queue: stuck transaction rolled back, connection recovered");
+                        drop(conn);
+                    }
+                    Err(rb_err) => {
+                        warn!("write_queue: ROLLBACK failed ({}), detaching connection as last resort", rb_err);
+                        let _raw = conn.detach();
+                    }
+                }
+                last_error = Some(e);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            Err(e) if attempt < max_retries && is_busy_error(&e) => {
+                warn!("write_queue: BEGIN IMMEDIATE busy (attempt {}/{}), retrying...", attempt, max_retries);
+                drop(conn);
+                last_error = Some(e);
+                tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
+                continue;
+            }
+            Err(e) => {
+                warn!("write_queue: BEGIN IMMEDIATE failed: {}", e);
+                send_error_to_all(batch, e);
+                return;
+            }
+        }
+    }
+
+    let mut conn = match conn_opt {
+        Some(c) => c,
+        None => {
+            let e = last_error.unwrap_or_else(|| sqlx::Error::PoolTimedOut);
+            warn!("write_queue: BEGIN IMMEDIATE exhausted retries: {}", e);
             send_error_to_all(batch, e);
             return;
         }
-        Err(_) => {
-            send_error_to_all(batch, sqlx::Error::PoolTimedOut);
-            return;
-        }
     };
-
-    // BEGIN IMMEDIATE
-    if let Err(e) = sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
-        warn!("write_queue: BEGIN IMMEDIATE failed: {}", e);
-        send_error_to_all(batch, e);
-        return;
-    }
 
     // Execute each write, collecting results
     let mut results: Vec<Result<WriteResult, sqlx::Error>> = Vec::with_capacity(batch.len());
@@ -471,20 +515,30 @@ async fn execute_batch(
 
     // COMMIT or ROLLBACK
     if any_fatal {
-        let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        if let Err(e) = sqlx::query("ROLLBACK").execute(&mut *conn).await {
+            warn!("write_queue: ROLLBACK failed: {}, detaching connection", e);
+            let _raw = conn.detach();
+        }
         // All results become errors on rollback
         for result in results.iter_mut() {
             if result.is_ok() {
                 *result = Err(sqlx::Error::WorkerCrashed);
             }
         }
-    } else if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
-        warn!("write_queue: COMMIT failed: {}", e);
-        // All results become the commit error
-        for pw in batch.drain(..) {
-            let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
+    } else {
+        if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
+            warn!("write_queue: COMMIT failed: {}", e);
+            let msg = e.to_string().to_lowercase();
+            if !msg.contains("no transaction is active") {
+                warn!("write_queue: detaching connection due to commit failure");
+                let _raw = conn.detach();
+            }
+            // All results become the commit error
+            for pw in batch.drain(..) {
+                let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
+            }
+            return;
         }
-        return;
     }
 
     // Send results to callers
@@ -1244,6 +1298,26 @@ fn is_connection_error(e: &sqlx::Error) -> bool {
         e,
         sqlx::Error::Io(_) | sqlx::Error::PoolClosed | sqlx::Error::PoolTimedOut
     )
+}
+
+fn is_nested_transaction_error(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::Database(db_err) => db_err
+            .message()
+            .to_lowercase()
+            .contains("cannot start a transaction within a transaction"),
+        _ => false,
+    }
+}
+
+fn is_busy_error(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            let msg = db_err.message().to_lowercase();
+            msg.contains("database is locked") || msg.contains("database table is locked")
+        }
+        _ => false,
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@
 
 use super::ConnectionCommand;
 use screenpipe_connect::connections::ConnectionManager;
+use screenpipe_connect::oauth;
 use serde_json::{json, Map, Value};
 
 /// Handle connection subcommands (standalone — does NOT require a running server).
@@ -120,31 +121,43 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 return Ok(());
             }
 
-            match cm.get_credentials(id)? {
-                Some(creds) => {
-                    if *use_json {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(
-                                &json!({ "id": id, "credentials": creds })
-                            )?
-                        );
-                    } else {
-                        println!("{}", id);
-                        for (key, value) in &creds {
-                            if let Some(s) = value.as_str() {
-                                println!("  {}: {}", key, s);
-                            }
+            // Check credential store first, then fall back to OAuth token
+            let has_creds = cm.get_credentials(id)?;
+            let has_oauth = oauth::read_oauth_token(id);
+
+            if let Some(creds) = has_creds {
+                if *use_json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &json!({ "id": id, "credentials": creds })
+                        )?
+                    );
+                } else {
+                    println!("{}", id);
+                    for (key, value) in &creds {
+                        if let Some(s) = value.as_str() {
+                            println!("  {}: {}", key, s);
                         }
                     }
                 }
-                None => {
-                    if *use_json {
-                        println!("{}", json!({ "id": id, "credentials": null }));
-                    } else {
-                        println!("{} is not connected", id);
-                        println!("\nhint: screenpipe connection set {} key=value ...", id);
-                    }
+            } else if has_oauth.is_some() {
+                if *use_json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &json!({ "id": id, "connected": true, "auth": "oauth" })
+                        )?
+                    );
+                } else {
+                    println!("{}: connected (via OAuth)", id);
+                }
+            } else {
+                if *use_json {
+                    println!("{}", json!({ "id": id, "credentials": null }));
+                } else {
+                    println!("{} is not connected", id);
+                    println!("\nhint: screenpipe connection set {} key=value ...", id);
                 }
             }
         }
@@ -161,20 +174,26 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             println!("saved credentials for {}", id);
         }
 
-        ConnectionCommand::Test { id } => match cm.get_credentials(id)? {
-            Some(creds) => match cm.test(id, &creds).await {
+        ConnectionCommand::Test { id } => {
+            // For OAuth integrations, test with empty creds — the test()
+            // implementation reads the token from the OAuth file itself.
+            let creds = cm.get_credentials(id)?.unwrap_or_default();
+            let has_oauth = oauth::read_oauth_token(id).is_some();
+
+            if creds.is_empty() && !has_oauth {
+                eprintln!("{} has no saved credentials", id);
+                eprintln!("\nhint: screenpipe connection set {} key=value ...", id);
+                std::process::exit(1);
+            }
+
+            match cm.test(id, &creds).await {
                 Ok(msg) => println!("ok: {}", msg),
                 Err(e) => {
                     eprintln!("error: {}", e);
                     std::process::exit(1);
                 }
-            },
-            None => {
-                eprintln!("{} has no saved credentials", id);
-                eprintln!("\nhint: screenpipe connection set {} key=value ...", id);
-                std::process::exit(1);
             }
-        },
+        }
 
         ConnectionCommand::Remove { id } => {
             cm.disconnect(id)?;

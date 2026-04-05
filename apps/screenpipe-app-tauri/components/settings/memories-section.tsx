@@ -18,8 +18,11 @@ import {
   Search,
   ArrowUpDown,
   Tag,
+  Plus,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { MemoizedReactMarkdown } from "@/components/markdown";
+import remarkGfm from "remark-gfm";
 
 interface MemoryRecord {
   id: number;
@@ -98,7 +101,15 @@ export function MemoriesSection() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [editTags, setEditTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [addingNew, setAddingNew] = useState(false);
+  const [newContent, setNewContent] = useState("");
+  const [newTags, setNewTags] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState("");
+  const [savingNew, setSavingNew] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
+  const newContentRef = useRef<HTMLTextAreaElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -262,26 +273,41 @@ export function MemoriesSection() {
   const startEditing = (memory: MemoryRecord) => {
     setEditingId(memory.id);
     setEditContent(memory.content);
+    setEditTags([...memory.tags]);
+    setTagInput("");
     setTimeout(() => editRef.current?.focus(), 0);
   };
 
   const saveEdit = async (id: number) => {
     const trimmed = editContent.trim();
     const memory = memories.find((m) => m.id === id);
-    if (!trimmed || trimmed === memory?.content) {
+    if (!trimmed) {
+      setEditingId(null);
+      return;
+    }
+    const contentChanged = trimmed !== memory?.content;
+    const tagsChanged = JSON.stringify(editTags) !== JSON.stringify(memory?.tags);
+    if (!contentChanged && !tagsChanged) {
       setEditingId(null);
       return;
     }
     setSavingId(id);
     try {
+      const body: Record<string, unknown> = {};
+      if (contentChanged) body.content = trimmed;
+      if (tagsChanged) body.tags = editTags;
       const res = await fetch(`http://localhost:3030/memories/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: trimmed }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setMemories((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, content: trimmed } : m)),
+        prev.map((m) =>
+          m.id === id
+            ? { ...m, content: trimmed, tags: editTags }
+            : m,
+        ),
       );
       toast({ title: "memory updated" });
     } catch (err) {
@@ -296,22 +322,169 @@ export function MemoriesSection() {
     }
   };
 
+  const addTagToEdit = (tag: string) => {
+    const t = tag.trim().toLowerCase();
+    if (t && !editTags.includes(t)) {
+      setEditTags((prev) => [...prev, t]);
+    }
+    setTagInput("");
+  };
+
+  const removeTagFromEdit = (tag: string) => {
+    setEditTags((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const addTagToNew = (tag: string) => {
+    const t = tag.trim().toLowerCase();
+    if (t && !newTags.includes(t)) {
+      setNewTags((prev) => [...prev, t]);
+    }
+    setNewTagInput("");
+  };
+
+  const removeTagFromNew = (tag: string) => {
+    setNewTags((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const createMemory = async () => {
+    const trimmed = newContent.trim();
+    if (!trimmed) return;
+    setSavingNew(true);
+    try {
+      const res = await fetch("http://localhost:3030/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: trimmed,
+          source: "user",
+          tags: newTags,
+          importance: 5,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: "memory created" });
+      setNewContent("");
+      setNewTags([]);
+      setNewTagInput("");
+      setAddingNew(false);
+      fetchPage(0, false);
+    } catch (err) {
+      toast({
+        title: "failed to create memory",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingNew(false);
+    }
+  };
+
   return (
     <div className="space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
         facts and preferences the AI has learned from your activity
       </p>
 
-      {/* search bar */}
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-        <Input
-          placeholder="search memories..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-8 h-8 text-sm"
-        />
+      {/* search bar + add button */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="search memories..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-8 h-8 text-sm"
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs gap-1"
+          onClick={() => {
+            setAddingNew(true);
+            setTimeout(() => newContentRef.current?.focus(), 0);
+          }}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          add
+        </Button>
       </div>
+
+      {/* add new memory form */}
+      {addingNew && (
+        <div className="border border-border rounded-md p-3 space-y-2 bg-muted/20">
+          <textarea
+            ref={newContentRef}
+            value={newContent}
+            onChange={(e) => setNewContent(e.target.value)}
+            placeholder="what should the AI remember?"
+            className="text-sm w-full bg-transparent border border-border rounded px-2 py-1.5 resize-y focus:outline-none focus:border-foreground/40 min-h-[60px]"
+            rows={2}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                createMemory();
+              }
+              if (e.key === "Escape") setAddingNew(false);
+            }}
+          />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {newTags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border border-border bg-muted"
+              >
+                <Tag className="h-2.5 w-2.5" />
+                {tag}
+                <button
+                  onClick={() => removeTagFromNew(tag)}
+                  className="hover:text-destructive"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))}
+            <Input
+              value={newTagInput}
+              onChange={(e) => setNewTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === ",") {
+                  e.preventDefault();
+                  addTagToNew(newTagInput);
+                }
+                if (e.key === "Backspace" && !newTagInput && newTags.length > 0) {
+                  removeTagFromNew(newTags[newTags.length - 1]);
+                }
+              }}
+              placeholder="add tag..."
+              className="h-6 text-[10px] w-20 px-1.5 border-dashed"
+            />
+          </div>
+          <div className="flex items-center gap-2 justify-end">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={() => {
+                setAddingNew(false);
+                setNewContent("");
+                setNewTags([]);
+                setNewTagInput("");
+              }}
+            >
+              cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={createMemory}
+              disabled={!newContent.trim() || savingNew}
+            >
+              {savingNew ? <Loader2 className="h-3 w-3 animate-spin" /> : "save"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -398,17 +571,29 @@ export function MemoriesSection() {
       {loading ? (
         <MemoriesSkeleton />
       ) : memories.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-8 space-y-2">
+        <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
             {debouncedQuery || activeTag
               ? "no memories match your search"
               : "no memories yet"}
           </p>
           {!debouncedQuery && !activeTag && (
-            <p className="text-xs">
-              memories are created when the AI learns something about you during
-              chat conversations. try asking the AI to remember something.
-            </p>
+            <>
+              <p className="text-xs">
+                memories are automatically created by pipes that learn from your
+                screen & audio activity.
+              </p>
+              <p className="text-xs mt-3">
+                install pipes from the{" "}
+                <a
+                  href="?section=pipes"
+                  className="underline text-foreground hover:text-foreground/80 transition-colors"
+                >
+                  pipe store
+                </a>{" "}
+                to start building memories.
+              </p>
+            </>
           )}
         </div>
       ) : (
@@ -450,14 +635,53 @@ export function MemoriesSection() {
                       rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
                     />
                   ) : (
-                    <p className="text-sm text-foreground">
-                      {memory.content}
+                    <div className="text-sm text-foreground">
+                      <MemoizedReactMarkdown
+                        className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p({ children }) {
+                            return <p className="mb-1 last:mb-0">{children}</p>;
+                          },
+                          a({ href, children }) {
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:underline"
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                          code({ className, children, ...props }) {
+                            const isInline = !className;
+                            if (isInline) {
+                              return (
+                                <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </pre>
+                            );
+                          },
+                        }}
+                      >
+                        {memory.content}
+                      </MemoizedReactMarkdown>
                       {savingId === memory.id && (
                         <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
                       )}
-                    </p>
+                    </div>
                   )}
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
                     </span>
@@ -467,16 +691,58 @@ export function MemoriesSection() {
                     >
                       {memory.source}
                     </Badge>
-                    {memory.tags.length > 0 &&
-                      memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="secondary"
-                          className="text-[10px] px-1 py-0 font-normal"
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
+                    {editingId === memory.id ? (
+                      <>
+                        {editTags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] rounded-full border border-border bg-muted"
+                          >
+                            <Tag className="h-2 w-2" />
+                            {tag}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeTagFromEdit(tag);
+                              }}
+                              className="hover:text-destructive"
+                            >
+                              <X className="h-2.5 w-2.5" />
+                            </button>
+                          </span>
+                        ))}
+                        <Input
+                          value={tagInput}
+                          onChange={(e) => setTagInput(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === "Enter" || e.key === ",") {
+                              e.preventDefault();
+                              addTagToEdit(tagInput);
+                            }
+                            if (e.key === "Backspace" && !tagInput && editTags.length > 0) {
+                              removeTagFromEdit(editTags[editTags.length - 1]);
+                            }
+                          }}
+                          placeholder="+ tag"
+                          className="h-5 text-[10px] w-16 px-1 border-dashed inline-flex"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        {memory.tags.length > 0 &&
+                          memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
+                            <Badge
+                              key={tag}
+                              variant="secondary"
+                              className="text-[10px] px-1 py-0 font-normal"
+                            >
+                              {tag}
+                            </Badge>
+                          ))}
+                      </>
+                    )}
                     {memory.frame_id && (
                       <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5">
                         <ExternalLink className="h-2.5 w-2.5" />

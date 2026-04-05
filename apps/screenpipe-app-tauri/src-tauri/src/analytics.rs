@@ -244,13 +244,23 @@ impl AnalyticsManager {
                 let health_status = match self.check_recording_health().await {
                     Ok(status) => status,
                     Err(e) => {
-                        error!("failed to check recording health: {}", e);
+                        // Connection errors are expected when the backend hasn't started yet;
+                        // downgrade to warn so Sentry doesn't treat startup races as errors.
+                        let e_str = e.to_string();
+                        if e_str.contains("error sending request")
+                            || e_str.contains("Connection refused")
+                            || e_str.contains("os error")
+                        {
+                            warn!("backend not yet available for health check: {}", e_str);
+                        } else {
+                            error!("failed to check recording health: {}", e_str);
+                        }
                         json!({
                             "is_healthy": false,
                             "frame_status": "error",
                             "audio_status": "error",
                             "ui_status": "error",
-                            "error": e.to_string()
+                            "error": e_str
                         })
                     }
                 };
@@ -339,7 +349,12 @@ impl AnalyticsManager {
         &self,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         let health_url = format!("{}/health", self.local_api_base_url);
-        let response = self.client.get(&health_url).send().await?;
+        let response = self
+            .client
+            .get(&health_url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             return Ok(json!({

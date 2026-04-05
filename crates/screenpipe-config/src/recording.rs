@@ -134,9 +134,15 @@ pub struct RecordingSettings {
     #[serde(rename = "ignoreIncognitoWindows")]
     pub ignore_incognito_windows: bool,
 
-    /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
-    #[serde(rename = "pauseOnDrmContent", default = "default_true")]
+    /// Experimental: pause screen capture when a DRM streaming app or site is focused.
+    /// Off by default; engine-only pause (no full app shutdown).
+    #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
+
+    /// Automatically append text typed during a meeting to the meeting's note
+    /// when the meeting ends. Groups typed text by app/window context.
+    #[serde(rename = "appendTypedTextToMeetingNotes", default = "default_true")]
+    pub append_typed_text_to_meeting_notes: bool,
 
     /// Languages for transcription (ISO 639-1 codes).
     pub languages: Vec<String>,
@@ -292,7 +298,8 @@ impl Default for RecordingSettings {
             included_windows: vec![],
             ignored_urls: vec![],
             ignore_incognito_windows: true,
-            pause_on_drm_content: true,
+            pause_on_drm_content: false,
+            append_typed_text_to_meeting_notes: true,
             languages: vec![],
             use_pii_removal: false,
             user_id: String::new(),

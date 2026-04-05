@@ -1106,7 +1106,7 @@ const AISection = ({
 
           <AIProviderCard
             type="anthropic"
-            title="Claude.ai"
+            title="Claude API"
             description="Use your Anthropic API key"
             imageSrc="/images/claude-ai.svg"
             selected={(settingsPreset?.provider as string) === "anthropic"}

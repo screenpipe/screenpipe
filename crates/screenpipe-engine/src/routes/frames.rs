@@ -176,7 +176,19 @@ pub async fn get_frame_data(
 
                         // No fallback found either
                         let err_str = e.to_string();
-                        if err_str.contains("VIDEO_CORRUPTED")
+                        if err_str.contains("FFPROBE_NOT_FOUND") {
+                            error!("ffprobe not found — frame extraction will fail for all compacted frames: {}", err_str);
+                            Err((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                JsonResponse(json!({
+                                    "error": "ffprobe not found - install ffprobe alongside ffmpeg to extract frames from compacted videos",
+                                    "error_type": "ffprobe_not_found",
+                                    "frame_id": frame_id,
+                                    "file_path": file_path,
+                                    "details": err_str
+                                })),
+                            ))
+                        } else if err_str.contains("VIDEO_CORRUPTED")
                             || err_str.contains("VIDEO_NOT_FOUND")
                         {
                             Err((

@@ -34,29 +34,10 @@ pub struct ServerState {
     pub app_handle: tauri::AppHandle,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct NotificationPayload {
-    title: String,
-    body: String,
-    /// unique id (auto-generated if omitted)
-    id: Option<String>,
-    /// notification type/category
-    #[serde(rename = "type")]
-    notification_type: Option<String>,
-    /// auto-dismiss after N ms (default 20000)
-    #[serde(rename = "autoDismissMs")]
-    auto_dismiss_ms: Option<u64>,
-    /// timeout in ms (alias for autoDismissMs)
-    timeout: Option<u64>,
-    /// action buttons shown in the notification panel
-    #[serde(default)]
-    actions: Vec<serde_json::Value>,
-}
-
 #[derive(Serialize)]
-struct ApiResponse {
-    success: bool,
-    message: String,
+pub struct ApiResponse {
+    pub success: bool,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -247,12 +228,25 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
 
     let cors = CorsLayer::new()
         .allow_origin("*".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers(Any)
         .allow_credentials(false);
 
     let app = Router::new()
-        .route("/notify", axum::routing::post(send_notification))
+        .route(
+            "/notify",
+            axum::routing::post(crate::notifications::routes::send_notification),
+        )
+        .route(
+            "/notifications",
+            axum::routing::get(crate::notifications::routes::list)
+                .post(crate::notifications::routes::mark_read)
+                .delete(crate::notifications::routes::clear),
+        )
+        .route(
+            "/notifications/:id",
+            axum::routing::delete(crate::notifications::routes::dismiss),
+        )
         .route("/inbox", axum::routing::post(send_inbox_message))
         .route("/log", axum::routing::post(log_message))
         .route("/auth", axum::routing::post(handle_auth))
@@ -299,48 +293,6 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
         addr,
         last_err.map(|e| e.to_string()).unwrap_or_default()
     );
-}
-
-async fn send_notification(
-    State(state): State<ServerState>,
-    Json(payload): Json<NotificationPayload>,
-) -> Result<Json<ApiResponse>, (StatusCode, String)> {
-    info!("Received notification request: {:?}", payload);
-
-    // Build the panel payload matching what the frontend expects
-    let panel_id = payload
-        .id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let dismiss_ms = payload.auto_dismiss_ms.or(payload.timeout).unwrap_or(20000);
-
-    let panel_payload = serde_json::json!({
-        "id": panel_id,
-        "type": payload.notification_type.unwrap_or_else(|| "pipe".to_string()),
-        "title": payload.title,
-        "body": payload.body,
-        "actions": payload.actions,
-        "autoDismissMs": dismiss_ms,
-    });
-
-    let panel_json = panel_payload.to_string();
-
-    // Use the show_notification_panel command directly
-    match crate::commands::show_notification_panel(state.app_handle.clone(), panel_json).await {
-        Ok(()) => {
-            info!("Notification panel shown");
-            Ok(Json(ApiResponse {
-                success: true,
-                message: "Notification sent successfully".to_string(),
-            }))
-        }
-        Err(e) => {
-            error!("Failed to show notification panel: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to show notification: {}", e),
-            ))
-        }
-    }
 }
 
 async fn send_inbox_message(

@@ -69,6 +69,10 @@ pub struct OAuthConfig {
     /// Extra query params appended to the authorization URL verbatim.
     /// e.g. `&[("owner", "user")]` for Notion.
     pub extra_auth_params: &'static [(&'static str, &'static str)],
+    /// Override redirect URI for providers that require HTTPS.
+    /// When set, this is used instead of the default localhost callback.
+    /// The website relays the callback to the local server.
+    pub redirect_uri_override: Option<&'static str>,
 }
 
 // ---------------------------------------------------------------------------

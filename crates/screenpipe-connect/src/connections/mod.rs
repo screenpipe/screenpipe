@@ -10,11 +10,15 @@
 pub mod airtable;
 pub mod asana;
 pub mod brex;
+pub mod calcom;
+pub mod calendly;
 pub mod clickup;
 pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod github_issues;
+pub mod gmail;
+pub mod granola;
 pub mod hubspot;
 pub mod intercom;
 pub mod jira;
@@ -123,6 +127,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zapier::Zapier),
         Box::new(github_issues::GithubIssues),
         Box::new(jira::Jira),
+        Box::new(granola::Granola),
         Box::new(hubspot::HubSpot),
         Box::new(limitless::Limitless),
         Box::new(airtable::Airtable),
@@ -144,6 +149,9 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(intercom::Intercom),
         Box::new(monday::Monday),
         Box::new(asana::Asana),
+        Box::new(calcom::CalCom),
+        Box::new(calendly::Calendly),
+        Box::new(gmail::Gmail),
     ]
 }
 

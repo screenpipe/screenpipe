@@ -103,6 +103,7 @@ mod health;
 mod log_files;
 mod native_notification;
 mod native_shortcut_reminder;
+mod notifications;
 mod safe_icon;
 mod shortcuts;
 mod vault;

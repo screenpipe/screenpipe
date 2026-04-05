@@ -39,6 +39,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Sync manifest.json version from package.json
+        working-directory: crates/screenpipe-connect/screenpipe-mcp
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          jq --arg v "$VER" '.version = $v' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+          echo "synced manifest.json version to $VER"
+
       - name: Install mcpb CLI
         run: npm install -g @anthropic-ai/mcpb
 

@@ -9,8 +9,9 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use screenpipe_connect::connections::ConnectionManager;
-use screenpipe_connect::oauth::PENDING_OAUTH;
+use screenpipe_connect::oauth::{self as oauth_store, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -379,6 +380,220 @@ fn is_native_calendar_available() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Gmail-specific routes
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct GmailMessagesQuery {
+    pub q: Option<String>,
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<u32>,
+    #[serde(rename = "pageToken")]
+    pub page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct GmailSendRequest {
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    pub from: Option<String>,
+}
+
+/// GET /connections/gmail/messages — list or search Gmail messages.
+async fn gmail_list_messages(
+    Query(params): Query<GmailMessagesQuery>,
+) -> (StatusCode, Json<Value>) {
+    let client = reqwest::Client::new();
+    match gmail_list_messages_inner(&client, params).await {
+        Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
+        Err(e) => gmail_err(e),
+    }
+}
+
+async fn gmail_list_messages_inner(
+    client: &reqwest::Client,
+    params: GmailMessagesQuery,
+) -> anyhow::Result<Value> {
+    let token = gmail_token(client).await?;
+    let max_results = params.max_results.unwrap_or(20).min(500);
+    let mut url =
+        reqwest::Url::parse("https://gmail.googleapis.com/gmail/v1/users/me/messages").unwrap();
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("maxResults", &max_results.to_string());
+        if let Some(q) = &params.q {
+            pairs.append_pair("q", q);
+        }
+        if let Some(pt) = &params.page_token {
+            pairs.append_pair("pageToken", pt);
+        }
+    }
+    let data: Value = client
+        .get(url)
+        .bearer_auth(&token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(data)
+}
+
+/// GET /connections/gmail/messages/:id — read a full Gmail message.
+async fn gmail_get_message(Path(id): Path<String>) -> (StatusCode, Json<Value>) {
+    let client = reqwest::Client::new();
+    match gmail_get_message_inner(&client, &id).await {
+        Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
+        Err(e) => gmail_err(e),
+    }
+}
+
+async fn gmail_get_message_inner(client: &reqwest::Client, id: &str) -> anyhow::Result<Value> {
+    let token = gmail_token(client).await?;
+    let url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=full",
+        id
+    );
+    let msg: Value = client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(parse_gmail_message(&msg))
+}
+
+/// POST /connections/gmail/send — send an email via Gmail.
+async fn gmail_send(Json(body): Json<GmailSendRequest>) -> (StatusCode, Json<Value>) {
+    let client = reqwest::Client::new();
+    match gmail_send_inner(&client, body).await {
+        Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
+        Err(e) => gmail_err(e),
+    }
+}
+
+async fn gmail_send_inner(
+    client: &reqwest::Client,
+    body: GmailSendRequest,
+) -> anyhow::Result<Value> {
+    let token = gmail_token(client).await?;
+    let from = body.from.unwrap_or_default();
+    let raw = build_rfc2822_message(&from, &body.to, &body.subject, &body.body);
+    let encoded = URL_SAFE_NO_PAD.encode(raw.as_bytes());
+    let data: Value = client
+        .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+        .bearer_auth(&token)
+        .json(&json!({ "raw": encoded }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(data)
+}
+
+/// Retrieve a valid Gmail OAuth token or return an error.
+async fn gmail_token(client: &reqwest::Client) -> anyhow::Result<String> {
+    oauth_store::get_valid_token(client, "gmail")
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Gmail not connected — use 'Connect with Gmail' in Settings > Connections"))
+}
+
+/// Convert an anyhow error into the standard `(StatusCode, Json)` handler return.
+fn gmail_err(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": e.to_string() })),
+    )
+}
+
+/// Build a minimal RFC 2822 email message string.
+fn build_rfc2822_message(from: &str, to: &str, subject: &str, body: &str) -> String {
+    let mut msg = String::new();
+    if !from.is_empty() {
+        msg.push_str(&format!("From: {}\r\n", from));
+    }
+    msg.push_str(&format!("To: {}\r\n", to));
+    msg.push_str(&format!("Subject: {}\r\n", subject));
+    msg.push_str("MIME-Version: 1.0\r\n");
+    msg.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    msg.push_str("\r\n");
+    msg.push_str(body);
+    msg
+}
+
+/// Extract useful fields from a raw Gmail API message object.
+fn parse_gmail_message(msg: &Value) -> Value {
+    let id = msg["id"].as_str().unwrap_or("").to_string();
+    let thread_id = msg["threadId"].as_str().unwrap_or("").to_string();
+    let snippet = msg["snippet"].as_str().unwrap_or("").to_string();
+
+    let headers = msg["payload"]["headers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let get_header = |name: &str| -> String {
+        headers
+            .iter()
+            .find(|h| h["name"].as_str().map(|n| n.eq_ignore_ascii_case(name)).unwrap_or(false))
+            .and_then(|h| h["value"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let from = get_header("From");
+    let to = get_header("To");
+    let subject = get_header("Subject");
+    let date = get_header("Date");
+
+    // Extract plain text body — try payload.body.data first, then parts
+    let body = extract_text_body(&msg["payload"]);
+
+    json!({
+        "id": id,
+        "threadId": thread_id,
+        "from": from,
+        "to": to,
+        "subject": subject,
+        "date": date,
+        "snippet": snippet,
+        "body": body,
+    })
+}
+
+/// Recursively extract plain-text body from a Gmail payload part.
+fn extract_text_body(payload: &Value) -> String {
+    // Try direct body.data first (single-part messages)
+    if let Some(text) = decode_base64url(payload["body"]["data"].as_str()) {
+        return text;
+    }
+    // Walk parts (multipart/mixed, multipart/alternative, etc.)
+    let parts = payload["parts"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    for part in parts {
+        let mime = part["mimeType"].as_str().unwrap_or("");
+        if mime == "text/plain" {
+            if let Some(text) = decode_base64url(part["body"]["data"].as_str()) {
+                return text;
+            }
+        }
+        let nested = extract_text_body(part);
+        if !nested.is_empty() {
+            return nested;
+        }
+    }
+    String::new()
+}
+
+fn decode_base64url(data: Option<&str>) -> Option<String> {
+    let text = String::from_utf8(URL_SAFE_NO_PAD.decode(data?).ok()?).ok()?;
+    if text.is_empty() { None } else { Some(text) }
+}
+
+// ---------------------------------------------------------------------------
 // OAuth callback route
 // ---------------------------------------------------------------------------
 
@@ -454,6 +669,10 @@ where
         // Calendar routes (must be before /:id to avoid conflict)
         .route("/calendar/events", get(calendar_events))
         .route("/calendar/status", get(calendar_status))
+        // Gmail-specific routes (must be before /:id to avoid conflict)
+        .route("/gmail/messages", get(gmail_list_messages))
+        .route("/gmail/messages/:id", get(gmail_get_message))
+        .route("/gmail/send", post(gmail_send))
         // WhatsApp-specific routes (must be before /:id to avoid conflict)
         .route("/whatsapp/pair", post(whatsapp_pair))
         .route("/whatsapp/status", get(whatsapp_status))
