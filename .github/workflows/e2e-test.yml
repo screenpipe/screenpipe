@@ -200,6 +200,12 @@ jobs:
           pulseaudio pulseaudio-utils libpipewire-0.3-dev
           libgbm-dev libwayland-dev libegl-dev libopenblas-dev mold
 
+    - name: Fix OpenBLAS linking
+      run: |
+        sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+
     - name: Set up Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
@@ -248,7 +254,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
-        OPENBLAS_PATH: /usr
+        OPENBLAS_PATH: /usr/lib/x86_64-linux-gnu/openblas
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
