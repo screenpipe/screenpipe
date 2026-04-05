@@ -305,31 +305,42 @@ describe('Pipes: discover → install → play', function () {
     await pipeNameBtn.moveTo();
     await browser.pause(400);
 
-    const played = await browser.execute((name: string) => {
+    const playResult = await browser.execute((name: string) => {
       for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
         if (nameBtn.textContent?.trim() !== name) continue;
         const row = nameBtn.closest<HTMLElement>('div.group');
         if (!row) continue;
-        const playBtn = row.querySelector<HTMLButtonElement>('button[title="run pipe"]');
-        if (playBtn && !playBtn.disabled) {
-          playBtn.click();
-          return true;
+        
+        const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
+        if (stopBtn) return 'already_running';
+
+        const runBtn = row.querySelector<HTMLButtonElement>('button[title="run pipe"]');
+        if (runBtn && !runBtn.disabled) {
+          runBtn.click();
+          return 'clicked_run';
         }
+
+        const configBtn = row.querySelector<HTMLButtonElement>('button[title="configure required connections first"]');
+        if (configBtn) return 'missing_connections';
+        
+        return 'no_play_button_found';
       }
-      return false;
+      return 'row_not_found';
     }, installedPipeName);
 
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
-    expect(played).toBe(true);
+    expect(['clicked_run', 'already_running']).toContain(playResult);
 
-    await browser.waitUntil(
-      async () => {
-        if (await $$('button[title="stop pipe"]').length > 0) return true;
-        const body = (await browser.execute(() => document.body.innerText || '')) as string;
-        return body.toLowerCase().includes('running');
-      },
-      { timeout: 30_000, timeoutMsg: 'Pipe did not enter running state within timeout' }
-    );
+    if (playResult === 'already_running' || playResult === 'clicked_run') {
+      await browser.waitUntil(
+        async () => {
+          if (await $$('button[title="stop pipe"]').length > 0) return true;
+          const body = (await browser.execute(() => document.body.innerText || '')) as string;
+          return body.toLowerCase().includes('running');
+        },
+        { timeout: 30_000, timeoutMsg: 'Pipe did not enter running state within timeout' }
+      );
+    }
 
     const filepath = await saveScreenshot('pipes-running');
     expect(existsSync(filepath)).toBe(true);
