@@ -996,10 +996,7 @@ impl ShowRewindWindow {
                         .max_inner_size(logical_size.width, logical_size.height)
                         .position(position.x as f64, position.y as f64)
                         .on_page_load(move |win, payload| {
-                            if matches!(
-                                payload.event(),
-                                tauri::webview::PageLoadEvent::Finished
-                            ) {
+                            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
                                 // Setup Win32 overlay AFTER webview loads so the
                                 // window becomes visible only when JS is ready
                                 // to handle keyboard events.
@@ -1007,7 +1004,9 @@ impl ShowRewindWindow {
                                     tracing::error!("Failed to setup Windows overlay: {}", e);
                                 }
                                 // Activate so keyboard focus goes to the webview
-                                if let Err(e) = crate::windows_overlay::bring_to_front_and_activate(&win) {
+                                if let Err(e) =
+                                    crate::windows_overlay::bring_to_front_and_activate(&win)
+                                {
                                     tracing::error!("Failed to activate overlay: {}", e);
                                 }
                                 let _ = app_clone.emit("window-focused", true);
