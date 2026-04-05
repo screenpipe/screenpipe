@@ -12,8 +12,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::sync::RwLock;
 
-static HIDDEN_SECTIONS: Lazy<RwLock<HashSet<String>>> =
-    Lazy::new(|| RwLock::new(HashSet::new()));
+static HIDDEN_SECTIONS: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new(HashSet::new()));
 
 /// Called by the frontend after fetching the enterprise policy.
 #[tauri::command]
@@ -21,10 +20,7 @@ static HIDDEN_SECTIONS: Lazy<RwLock<HashSet<String>>> =
 pub fn set_enterprise_policy(hidden_sections: Vec<String>) {
     if let Ok(mut guard) = HIDDEN_SECTIONS.write() {
         *guard = hidden_sections.into_iter().collect();
-        tracing::info!(
-            "enterprise: policy updated, hidden sections: {:?}",
-            *guard
-        );
+        tracing::info!("enterprise: policy updated, hidden sections: {:?}", *guard);
     }
 }
 
