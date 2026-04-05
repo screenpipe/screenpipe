@@ -249,6 +249,8 @@ jobs:
       uses: tauri-apps/tauri-action@v0.5.17
       env:
         OPENBLAS_PATH: /usr
+        OPENBLAS_STATIC: 0
+        PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
