@@ -12,7 +12,9 @@
 use tauri::WebviewWindow;
 use tracing::{error, info};
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, SetForegroundWindow, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
     HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
@@ -115,8 +117,10 @@ pub fn setup_overlay(window: &WebviewWindow, click_through: bool) -> Result<(), 
             let rc = mi.rcMonitor;
             info!(
                 "Repositioning overlay to monitor rect: ({}, {}) {}x{}",
-                rc.left, rc.top,
-                rc.right - rc.left, rc.bottom - rc.top
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top
             );
             SetWindowPos(
                 hwnd,
@@ -219,14 +223,21 @@ pub fn is_click_through_enabled(window: &WebviewWindow) -> bool {
 /// Repositions the overlay to exactly cover the monitor at the given physical point.
 /// Used when re-showing the overlay so it appears on the monitor where the cursor is,
 /// matching macOS behavior where the panel moves to the active screen.
-pub fn reposition_to_cursor_monitor(window: &WebviewWindow, cursor_x: i32, cursor_y: i32) -> Result<(), String> {
+pub fn reposition_to_cursor_monitor(
+    window: &WebviewWindow,
+    cursor_x: i32,
+    cursor_y: i32,
+) -> Result<(), String> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::MonitorFromPoint;
 
     let hwnd = get_hwnd(window).ok_or("Failed to get HWND")?;
 
     unsafe {
-        let point = POINT { x: cursor_x, y: cursor_y };
+        let point = POINT {
+            x: cursor_x,
+            y: cursor_y,
+        };
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -242,8 +253,10 @@ pub fn reposition_to_cursor_monitor(window: &WebviewWindow, cursor_x: i32, curso
         let rc = mi.rcMonitor;
         info!(
             "Repositioning overlay to cursor monitor: ({}, {}) {}x{}",
-            rc.left, rc.top,
-            rc.right - rc.left, rc.bottom - rc.top
+            rc.left,
+            rc.top,
+            rc.right - rc.left,
+            rc.bottom - rc.top
         );
 
         let result = SetWindowPos(
