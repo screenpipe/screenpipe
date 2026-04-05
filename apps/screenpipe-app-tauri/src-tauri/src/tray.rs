@@ -464,10 +464,10 @@ fn create_dynamic_menu(
         );
     }
     menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("quit", "Quit screenpipe")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?,
-        );
+        &MenuItemBuilder::with_id("quit", "Quit screenpipe")
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?,
+    );
 
     menu_builder.build().map_err(Into::into)
 }
