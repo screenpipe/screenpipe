@@ -36,12 +36,12 @@ pub fn finalize_webview_window(window: tauri::WebviewWindow) -> tauri::WebviewWi
 pub use util::screen_aware_size;
 
 #[cfg(target_os = "macos")]
+pub use content_process::setup_content_process_handler;
+#[cfg(target_os = "macos")]
 #[allow(unused_imports)]
 pub use first_responder::make_nswindow_webview_first_responder;
 #[cfg(target_os = "macos")]
 pub use first_responder::make_webview_first_responder;
-#[cfg(target_os = "macos")]
-pub use content_process::setup_content_process_handler;
 #[cfg(target_os = "macos")]
 pub use focus::clear_frontmost_app;
 #[cfg(target_os = "macos")]
