@@ -19,6 +19,7 @@ static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 /// Callback invoked from Swift when user clicks a notification action.
 /// Handles "manage" directly in Rust (opens home window to notifications settings).
 /// Other actions are forwarded as Tauri events to JS.
+#[allow(dead_code)]
 extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char) {
     if json_ptr.is_null() {
         return;
@@ -57,6 +58,7 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
 }
 
 /// Callback invoked from Swift when user clicks a shortcut reminder action.
+#[allow(dead_code)]
 extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c_char) {
     if action_ptr.is_null() {
         return;
@@ -122,7 +124,10 @@ pub fn get_enterprise_license_key() -> Option<String> {
     // Fallback: ~/.screenpipe/enterprise.json (manually entered by employee)
     let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
     if user_path.exists() {
-        info!("enterprise: checking user config at {}", user_path.display());
+        info!(
+            "enterprise: checking user config at {}",
+            user_path.display()
+        );
         return read_enterprise_key_from_path(&user_path);
     }
 
@@ -150,7 +155,10 @@ fn read_enterprise_key_from_exe_dir() -> Option<String> {
     };
 
     if !config_path.exists() {
-        info!("enterprise: no enterprise.json at {}", config_path.display());
+        info!(
+            "enterprise: no enterprise.json at {}",
+            config_path.display()
+        );
         return None;
     }
 
@@ -180,7 +188,10 @@ fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_string());
 
     match &key {
-        Some(k) => info!("enterprise: license key loaded ({}...)", &k[..k.len().min(8)]),
+        Some(k) => info!(
+            "enterprise: license key loaded ({}...)",
+            &k[..k.len().min(8)]
+        ),
         None => warn!("enterprise: enterprise.json missing 'license_key' field"),
     }
 
