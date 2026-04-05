@@ -40,9 +40,7 @@ impl Integration for ClickUp {
             .error_for_status()?
             .json()
             .await?;
-        let name = resp["user"]["username"]
-            .as_str()
-            .unwrap_or("unknown");
+        let name = resp["user"]["username"].as_str().unwrap_or("unknown");
         Ok(format!("connected as {}", name))
     }
 }
