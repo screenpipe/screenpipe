@@ -547,7 +547,7 @@ pub fn request_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationStatus {
     pub name: String,
-    pub status: String,  // "granted" | "denied" | "not_asked"
+    pub status: String, // "granted" | "denied" | "not_asked"
     pub running: bool,
 }
 
@@ -603,9 +603,7 @@ pub fn request_single_browser_automation(browser_name: String) -> String {
     {
         use std::process::Command;
 
-        let browser = CHROMIUM_BROWSERS
-            .iter()
-            .find(|b| b.name == browser_name);
+        let browser = CHROMIUM_BROWSERS.iter().find(|b| b.name == browser_name);
 
         let Some(browser) = browser else {
             return "not_asked".to_string();
