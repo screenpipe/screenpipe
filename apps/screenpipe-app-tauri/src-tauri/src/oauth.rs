@@ -55,8 +55,8 @@ pub async fn oauth_connect(
 
     let redirect_uri = config.redirect_uri_override.unwrap_or(OAUTH_REDIRECT_URI);
 
-    let mut auth_url = reqwest::Url::parse(config.auth_url)
-        .map_err(|e| format!("bad auth_url: {}", e))?;
+    let mut auth_url =
+        reqwest::Url::parse(config.auth_url).map_err(|e| format!("bad auth_url: {}", e))?;
     {
         let mut pairs = auth_url.query_pairs_mut();
         pairs
