@@ -2214,7 +2214,10 @@ impl PipeManager {
 
         // Persist to local overrides so reload_pipes() doesn't revert this
         if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
-            warn!("failed to save local enabled override for '{}': {}", name, e);
+            warn!(
+                "failed to save local enabled override for '{}': {}",
+                name, e
+            );
         }
 
         // Update in-memory
