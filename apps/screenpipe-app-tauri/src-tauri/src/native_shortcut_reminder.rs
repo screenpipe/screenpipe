@@ -48,6 +48,7 @@ mod ffi {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 mod ffi {
     pub fn is_available() -> bool {
         false
