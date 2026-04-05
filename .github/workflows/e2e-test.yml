@@ -200,6 +200,19 @@ jobs:
           pulseaudio pulseaudio-utils libpipewire-0.3-dev
           libgbm-dev libwayland-dev libegl-dev libopenblas-dev mold
 
+    - name: Normalize OpenBLAS paths for antirez-asr-sys
+      run: |
+        sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+        if [ ! -e /usr/include/cblas.h ]; then
+          CBLAS_HEADER="$(dpkg -L libopenblas-dev | grep -m1 '/cblas\.h$' || true)"
+          if [ -n "$CBLAS_HEADER" ]; then
+            sudo ln -sf "$CBLAS_HEADER" /usr/include/cblas.h
+          fi
+        fi
+        echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+
     - name: Set up Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
@@ -248,7 +261,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
-        OPENBLAS_PATH: /usr
+        OPENBLAS_PATH: ${{ env.OPENBLAS_PATH }}
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
