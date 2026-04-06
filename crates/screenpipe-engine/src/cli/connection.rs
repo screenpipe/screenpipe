@@ -129,9 +129,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 if *use_json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(
-                            &json!({ "id": id, "credentials": creds })
-                        )?
+                        serde_json::to_string_pretty(&json!({ "id": id, "credentials": creds }))?
                     );
                 } else {
                     println!("{}", id);
