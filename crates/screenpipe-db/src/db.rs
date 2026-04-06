@@ -6642,12 +6642,11 @@ LIMIT ? OFFSET ?
     /// Returns deduplicated text grouped by app+window, or None if nothing was typed.
     pub async fn get_meeting_typed_text(&self, id: i64) -> Result<Option<String>, SqlxError> {
         // Get meeting time range
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT meeting_start, meeting_end FROM meetings WHERE id = ?1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT meeting_start, meeting_end FROM meetings WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let (start, end) = match row {
             Some((s, Some(e))) => (s, e),
@@ -7144,7 +7143,10 @@ LIMIT ? OFFSET ?
             Some("asc") => "ASC",
             _ => "DESC",
         };
-        sql.push_str(&format!(" ORDER BY {} {} LIMIT ?7 OFFSET ?8", order_col, order_direction));
+        sql.push_str(&format!(
+            " ORDER BY {} {} LIMIT ?7 OFFSET ?8",
+            order_col, order_direction
+        ));
 
         let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);
 
