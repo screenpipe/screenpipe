@@ -765,11 +765,11 @@ pub async fn extract_frame_from_video(
                 // as VIDEO_CORRUPTED — surface the real cause so it can be fixed.
                 if err_str.contains("no such file") || err_str.contains("os error 2") {
                     return Err(anyhow::anyhow!(
-                        "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. \
+                    "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. \
                          Ensure ffprobe is installed alongside ffmpeg. Error: {}",
-                        file_path,
-                        e
-                    ));
+                    file_path,
+                    e
+                ));
                 }
                 error!("failed to get video metadata, using defaults: {}", e);
                 (1.0, f64::MAX) // Use MAX duration to disable validation on error
