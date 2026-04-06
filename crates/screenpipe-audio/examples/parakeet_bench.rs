@@ -76,7 +76,10 @@ fn main() {
         let max_ms = times.iter().map(|d| d.as_millis()).max().unwrap();
         let rtf = avg_ms / (dur as f64 * 1000.0); // real-time factor
 
-        println!("  Output: \"{}\"", &result.text[..result.text.len().min(80)]);
+        println!(
+            "  Output: \"{}\"",
+            &result.text[..result.text.len().min(80)]
+        );
         println!(
             "  Avg: {:.0}ms | Min: {}ms | Max: {}ms | RTF: {:.3}x",
             avg_ms, min_ms, max_ms, rtf
