@@ -14,11 +14,13 @@ use tracing::{debug, error, info, warn};
 use std::sync::OnceLock;
 
 /// Global app handle stored so the native notification action callback can emit events.
+#[allow(unused)]
 static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 /// Callback invoked from Swift when user clicks a notification action.
 /// Handles "manage" directly in Rust (opens home window to notifications settings).
 /// Other actions are forwarded as Tauri events to JS.
+#[allow(unused)]
 extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char) {
     if json_ptr.is_null() {
         return;
@@ -57,6 +59,7 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
 }
 
 /// Callback invoked from Swift when user clicks a shortcut reminder action.
+#[allow(unused)]
 extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c_char) {
     if action_ptr.is_null() {
         return;
