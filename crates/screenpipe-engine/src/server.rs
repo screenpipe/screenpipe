@@ -164,7 +164,6 @@ pub struct AppState {
     pub browser_bridge: Arc<crate::routes::browser::BrowserBridge>,
 }
 
-
 pub struct SCServer {
     db: Arc<DatabaseManager>,
     addr: SocketAddr,
