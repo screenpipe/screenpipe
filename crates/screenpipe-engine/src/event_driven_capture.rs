@@ -378,6 +378,7 @@ pub async fn event_driven_capture_loop(
                 state.config.min_capture_interval_ms = profile.min_capture_interval_ms;
                 state.config.idle_capture_interval_ms = profile.idle_capture_interval_ms;
                 state.config.jpeg_quality = profile.jpeg_quality;
+                snapshot_writer.set_quality(profile.jpeg_quality);
                 visual_check_interval = Duration::from_millis(profile.visual_check_interval_ms);
                 visual_change_threshold = profile.visual_change_threshold;
                 visual_check_enabled = profile.visual_check_interval_ms > 0;

@@ -10,28 +10,44 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use image::DynamicImage;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use tracing::{debug, error};
 
 /// Writes JPEG snapshots to disk for event-driven capture.
 pub struct SnapshotWriter {
     base_dir: PathBuf,
-    quality: u8,
+    quality: AtomicU8,
+    /// Maximum width for stored snapshots (0 = no limit).
+    max_width: AtomicU32,
 }
 
 impl SnapshotWriter {
     /// Create a new SnapshotWriter.
     ///
     /// - `base_dir`: root data directory (e.g., `~/.screenpipe/data`)
-    /// - `quality`: JPEG quality 1-100 (default 80)
-    pub fn new(base_dir: impl Into<PathBuf>, quality: u8) -> Self {
+    /// - `quality`: JPEG quality 1-100
+    /// - `max_width`: max snapshot width in pixels (0 = no limit)
+    pub fn new(base_dir: impl Into<PathBuf>, quality: u8, max_width: u32) -> Self {
         Self {
             base_dir: base_dir.into(),
-            quality: quality.clamp(1, 100),
+            quality: AtomicU8::new(quality.clamp(1, 100)),
+            max_width: AtomicU32::new(max_width),
         }
+    }
+
+    /// Update JPEG quality at runtime (called by power manager).
+    pub fn set_quality(&self, quality: u8) {
+        self.quality.store(quality.clamp(1, 100), Ordering::Relaxed);
+    }
+
+    /// Update maximum snapshot width at runtime (0 = no limit).
+    pub fn set_max_width(&self, width: u32) {
+        self.max_width.store(width, Ordering::Relaxed);
     }
 
     /// Write a screenshot as JPEG. Returns the absolute path to the written file.
@@ -52,19 +68,34 @@ impl SnapshotWriter {
         let filename = format!("{}_m{}.jpg", timestamp_ms, monitor_id);
         let path = date_dir.join(&filename);
 
+        let quality = self.quality.load(Ordering::Relaxed);
+        let max_w = self.max_width.load(Ordering::Relaxed);
+
+        // Downscale if image exceeds max_width (preserving aspect ratio).
+        // Use a reference to avoid cloning the full image buffer when no resize is needed.
+        let resized;
+        let img: &DynamicImage = if max_w > 0 && image.width() > max_w {
+            resized = image.resize(max_w, u32::MAX, FilterType::Triangle);
+            &resized
+        } else {
+            image
+        };
+
         let file = fs::File::create(&path)?;
         let mut writer = BufWriter::new(file);
-        let mut encoder = JpegEncoder::new_with_quality(&mut writer, self.quality);
-        encoder.encode_image(image)?;
+        let mut encoder = JpegEncoder::new_with_quality(&mut writer, quality);
+        encoder.encode_image(img)?;
         writer.flush()?;
         writer.get_ref().sync_all()?;
 
         debug!(
-            "snapshot written: {} ({}x{}, q={})",
+            "snapshot written: {} ({}x{} -> {}x{}, q={})",
             path.display(),
             image.width(),
             image.height(),
-            self.quality
+            img.width(),
+            img.height(),
+            quality
         );
 
         Ok(path)
@@ -126,7 +157,7 @@ mod tests {
     #[test]
     fn test_write_creates_jpeg() {
         let tmp = TempDir::new().unwrap();
-        let writer = SnapshotWriter::new(tmp.path(), 80);
+        let writer = SnapshotWriter::new(tmp.path(), 80, 0);
         let img = test_image(1920, 1080);
         let now = Utc::now();
 
@@ -145,7 +176,7 @@ mod tests {
     #[test]
     fn test_write_creates_date_directory() {
         let tmp = TempDir::new().unwrap();
-        let writer = SnapshotWriter::new(tmp.path(), 80);
+        let writer = SnapshotWriter::new(tmp.path(), 80, 0);
         let img = test_image(100, 100);
         let now = Utc::now();
 
@@ -158,7 +189,7 @@ mod tests {
     #[test]
     fn test_write_includes_monitor_id() {
         let tmp = TempDir::new().unwrap();
-        let writer = SnapshotWriter::new(tmp.path(), 80);
+        let writer = SnapshotWriter::new(tmp.path(), 80, 0);
         let img = test_image(100, 100);
         let now = Utc::now();
 
@@ -169,10 +200,10 @@ mod tests {
 
     #[test]
     fn test_quality_clamped() {
-        let writer = SnapshotWriter::new("/tmp", 150);
-        assert_eq!(writer.quality, 100);
+        let writer = SnapshotWriter::new("/tmp", 150, 0);
+        assert_eq!(writer.quality.load(Ordering::Relaxed), 100);
 
-        let writer = SnapshotWriter::new("/tmp", 0);
-        assert_eq!(writer.quality, 1);
+        let writer = SnapshotWriter::new("/tmp", 0, 0);
+        assert_eq!(writer.quality.load(Ordering::Relaxed), 1);
     }
 }

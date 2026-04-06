@@ -39,6 +39,8 @@ pub struct VisionManagerConfig {
     pub pause_on_drm_content: bool,
     /// Languages for OCR recognition.
     pub languages: Vec<screenpipe_core::Language>,
+    /// Maximum width for stored snapshots (0 = no limit, store at native res).
+    pub max_snapshot_width: u32,
 }
 
 /// Status of the VisionManager
@@ -242,10 +244,17 @@ impl VisionManager {
         let output_path = self.config.output_path.clone();
         let device_name = format!("monitor_{}", monitor_id);
 
-        // Create snapshot writer for this monitor's data directory
+        // Create snapshot writer for this monitor's data directory.
+        // Use current power profile's JPEG quality instead of hardcoded 80.
+        let initial_jpeg_quality = self
+            .power_profile_rx
+            .as_ref()
+            .map(|rx| rx.borrow().jpeg_quality)
+            .unwrap_or(80);
         let snapshot_writer = Arc::new(SnapshotWriter::new(
             format!("{}/data", output_path),
-            80, // JPEG quality
+            initial_jpeg_quality,
+            self.config.max_snapshot_width,
         ));
 
         // Create activity feed for this monitor
