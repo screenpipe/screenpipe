@@ -58,10 +58,7 @@ impl Integration for Confluence {
             .error_for_status()?
             .json()
             .await?;
-        let count = resp["results"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let count = resp["results"].as_array().map(|a| a.len()).unwrap_or(0);
         Ok(format!("connected — {} spaces found", count))
     }
 }
