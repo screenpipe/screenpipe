@@ -1032,7 +1032,9 @@ impl PipeManager {
             store,
             api_port,
             last_reload: Arc::new(Mutex::new(
-                Instant::now().checked_sub(std::time::Duration::from_secs(10)).unwrap_or(Instant::now()),
+                Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(10))
+                    .unwrap_or(Instant::now()),
             )),
             token_registry: None,
             extra_context: None,
@@ -2308,7 +2310,10 @@ impl PipeManager {
 
         // Persist to local overrides so reload_pipes() doesn't revert this
         if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
-            warn!("failed to save local enabled override for '{}': {}", name, e);
+            warn!(
+                "failed to save local enabled override for '{}': {}",
+                name, e
+            );
         }
 
         // Update in-memory
@@ -2997,9 +3002,7 @@ impl PipeManager {
                         }
 
                         // Shared PID — set synchronously by the executor right after spawn
-                        let shared_pid = std::sync::Arc::new(
-                            std::sync::atomic::AtomicU32::new(0),
-                        );
+                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
                         let shared_pid_for_kill = shared_pid.clone();
                         let pipes_dir_for_pidfile = pipes_dir_for_log.clone();
                         let pipe_name_for_pidfile = pipe_name.clone();
@@ -3171,7 +3174,8 @@ impl PipeManager {
                             }
                             Err(_elapsed) => {
                                 warn!("pipe '{}' timed out after {}s", pipe_name, pipe_timeout);
-                                let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                                let real_pid =
+                                    shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
                                 if real_pid != 0 {
                                     let _ = crate::agents::pi::kill_process_group(real_pid);
                                 }
