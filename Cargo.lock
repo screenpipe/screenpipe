@@ -6814,7 +6814,6 @@ version = "0.3.263"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
