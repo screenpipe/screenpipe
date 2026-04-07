@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
@@ -989,6 +989,8 @@ function ChatGptPanel() {
 // ---------------------------------------------------------------------------
 
 function OAuthPanel({ integrationId, integrationName }: { integrationId: string; integrationName: string }) {
+  const { settings } = useSettings();
+  const isPro = !!settings.user?.cloud_subscribed;
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
   const [displayName, setDisplayName] = useState<string | null>(null);
 
@@ -1032,6 +1034,29 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             <LogOut className="h-3 w-3" />disconnect
           </Button>
+        ) : !isPro ? (
+          <div className="flex flex-col gap-1.5">
+            <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap opacity-60">
+              <Lock className="h-3 w-3" />pro required
+            </Button>
+            <button
+              onClick={async () => {
+                try {
+                  const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ plan: "monthly", origin: "desktop-oauth-gate" }),
+                  });
+                  const data = await response.json();
+                  if (data.url) { await openUrl(data.url); return; }
+                } catch {}
+                await openUrl("https://screenpi.pe");
+              }}
+              className="text-[10px] text-muted-foreground hover:text-foreground underline"
+            >
+              upgrade to pro to connect
+            </button>
+          </div>
         ) : (
           <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
             {status === "loading"

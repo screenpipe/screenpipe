@@ -962,9 +962,14 @@ export function SyncSettings() {
 
         if (hasSubscription) {
           if (settings.user && !settings.user.cloud_subscribed) {
-            await updateSettings({
+            const engineUpdate: Record<string, any> = {
               user: { ...settings.user, cloud_subscribed: true },
-            });
+            };
+            // Auto-switch to cloud transcription for new subscribers
+            if (settings.audioTranscriptionEngine !== "screenpipe-cloud") {
+              engineUpdate.audioTranscriptionEngine = "screenpipe-cloud";
+            }
+            await updateSettings(engineUpdate);
           }
           return await initSyncBackend();
         } else {

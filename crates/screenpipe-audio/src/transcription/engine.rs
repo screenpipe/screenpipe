@@ -19,6 +19,51 @@ use std::sync::Mutex as StdMutex;
 use tracing::{error, info, warn};
 use whisper_rs::{WhisperContext, WhisperState};
 
+/// MLX Metal memory management — cap the GPU buffer cache to prevent unbounded growth.
+/// MLX's caching allocator keeps freed GPU buffers for reuse; without a limit the
+/// cache grows to 10+ GB over hours of transcription on a 0.6B model.
+#[cfg(feature = "parakeet-mlx")]
+mod mlx_memory {
+    #[allow(dead_code)]
+    extern "C" {
+        pub fn mlx_set_cache_limit(res: *mut usize, limit: usize) -> std::ffi::c_int;
+        pub fn mlx_get_active_memory(res: *mut usize) -> std::ffi::c_int;
+        pub fn mlx_get_cache_memory(res: *mut usize) -> std::ffi::c_int;
+        pub fn mlx_get_peak_memory(res: *mut usize) -> std::ffi::c_int;
+        pub fn mlx_clear_cache() -> std::ffi::c_int;
+    }
+
+    /// Set MLX buffer cache limit. Returns the previous limit.
+    pub fn set_cache_limit(limit_bytes: usize) -> usize {
+        let mut prev: usize = 0;
+        unsafe { mlx_set_cache_limit(&mut prev, limit_bytes) };
+        prev
+    }
+
+    /// Clear all cached (unused) MLX Metal buffers.
+    #[allow(dead_code)]
+    pub fn clear_cache() {
+        unsafe { mlx_clear_cache() };
+    }
+
+    /// Log current MLX memory stats.
+    pub fn log_memory_stats(label: &str) {
+        let (mut active, mut cache, mut peak) = (0usize, 0usize, 0usize);
+        unsafe {
+            mlx_get_active_memory(&mut active);
+            mlx_get_cache_memory(&mut cache);
+            mlx_get_peak_memory(&mut peak);
+        }
+        tracing::info!(
+            "mlx memory [{}]: active={:.1}MB, cache={:.1}MB, peak={:.1}MB",
+            label,
+            active as f64 / 1048576.0,
+            cache as f64 / 1048576.0,
+            peak as f64 / 1048576.0,
+        );
+    }
+}
+
 /// Unified transcription engine that owns the runtime state for whatever backend is configured.
 /// Only the selected model is loaded — no dummy Whisper downloads for non-Whisper engines.
 #[derive(Clone)]
@@ -146,7 +191,17 @@ impl TranscriptionEngine {
                     .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?;
                     match load_result {
                         Ok(model) => {
-                            info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
+                            // Cap MLX buffer cache to 2 GB — prevents the caching allocator
+                            // from accumulating 10+ GB of GPU memory over time.
+                            // Model weights (~1.2 GB) are active memory, not cache.
+                            const MLX_CACHE_LIMIT: usize = 2 * 1024 * 1024 * 1024;
+                            let prev = mlx_memory::set_cache_limit(MLX_CACHE_LIMIT);
+                            info!(
+                                "parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully, \
+                                 mlx cache limit set to 2GB (was {}MB)",
+                                prev / 1048576
+                            );
+                            mlx_memory::log_memory_stats("after model load");
                             Ok(Self::ParakeetMlx {
                                 model: Arc::new(StdMutex::new(model)),
                                 vocabulary,
@@ -207,7 +262,14 @@ impl TranscriptionEngine {
                     .map_err(|e| anyhow!("parakeet-mlx model loading task panicked: {}", e))?;
                     match load_result {
                         Ok(model) => {
-                            info!("parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully");
+                            const MLX_CACHE_LIMIT: usize = 2 * 1024 * 1024 * 1024;
+                            let prev = mlx_memory::set_cache_limit(MLX_CACHE_LIMIT);
+                            info!(
+                                "parakeet-tdt-0.6b-v3-mlx (GPU) model loaded successfully, \
+                                 mlx cache limit set to 2GB (was {}MB)",
+                                prev / 1048576
+                            );
+                            mlx_memory::log_memory_stats("after model load");
                             Ok(Self::ParakeetMlx {
                                 model: Arc::new(StdMutex::new(model)),
                                 vocabulary,
@@ -543,6 +605,9 @@ impl TranscriptionSession {
                 let result = engine
                     .transcribe_with_sample_rate(audio, sample_rate, opts)
                     .map_err(|e| anyhow!("{}", e))?;
+                // Free cached Metal buffers after each transcription to prevent
+                // unbounded GPU memory growth from variable-length audio tensors
+                mlx_memory::clear_cache();
                 Ok(result.text)
             }
 

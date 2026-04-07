@@ -6,18 +6,80 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader } from "lucide-react";
+import { Loader, Brain, Clock, Users } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 
-const PIPE_SLUG = "follow-up-reminders";
+const PATHS = [
+  {
+    id: "memory",
+    icon: Brain,
+    title: "I forget everything",
+    subtitle: "Daily summaries · search history · never miss a follow-up",
+    pipes: ["obsidian-daily-summary", "todo-list-assistant"],
+    notification: {
+      title: "🧠 Memory enabled",
+      body: "Screenpipe will now:\n\n- Summarize your day automatically\n- Remind you about things you forgot\n\nFirst summary tonight.",
+    },
+  },
+  {
+    id: "time",
+    icon: Clock,
+    title: "I waste too much time",
+    subtitle: "Automatic time tracking · meeting notes · smart reminders",
+    pipes: ["toggl-time-tracker", "todo-list-assistant"],
+    notification: {
+      title: "⏱ Time tracking enabled",
+      body: "Screenpipe will now:\n\n- Track time across every app automatically\n- Remind you about follow-ups\n\nFirst report in a few hours.",
+    },
+  },
+  {
+    id: "people",
+    icon: Users,
+    title: "I lose track of people",
+    subtitle: "Remember every conversation · auto-CRM · relationship insights",
+    pipes: ["personal-crm", "todo-list-assistant"],
+    notification: {
+      title: "👥 People tracking enabled",
+      body: "Screenpipe will now:\n\n- Remember everyone you meet\n- Track what you discussed\n- Remind you to follow up\n\nFirst update in a few hours.",
+    },
+  },
+] as const;
 
-type Phase = "prompt" | "enabling" | "done";
+type PathId = (typeof PATHS)[number]["id"];
+type Phase = "choose" | "enabling" | "done";
+
+async function installAndEnable(slug: string): Promise<void> {
+  const enableRes = await fetch(
+    `http://localhost:3030/pipes/${slug}/enable`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    }
+  );
+
+  if (!enableRes.ok) {
+    const installRes = await fetch("http://localhost:3030/pipes/store/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    });
+    if (!installRes.ok) throw new Error(`failed to install ${slug}`);
+
+    await fetch(`http://localhost:3030/pipes/${slug}/enable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+  }
+}
 
 export default function PickPipe() {
-  const [phase, setPhase] = useState<Phase>("prompt");
+  const [phase, setPhase] = useState<Phase>("choose");
+  const [selected, setSelected] = useState<PathId | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [showSkip, setShowSkip] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,86 +87,61 @@ export default function PickPipe() {
   const isCompletingRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
 
-  // Count-up timer
   useEffect(() => {
     const interval = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Show skip after 5s
   useEffect(() => {
     const timer = setTimeout(() => setShowSkip(true), 5000);
     return () => clearTimeout(timer);
   }, []);
 
-  const handleSoundsGood = useCallback(async () => {
-    setPhase("enabling");
-    setError(null);
+  const handleSelect = useCallback(
+    async (pathId: PathId) => {
+      setSelected(pathId);
+      setPhase("enabling");
+      setError(null);
 
-    try {
-      // Enable the day-recap pipe
-      const enableRes = await fetch(
-        `http://localhost:3030/pipes/${PIPE_SLUG}/enable`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: true }),
-        }
-      );
+      const path = PATHS.find((p) => p.id === pathId)!;
 
-      if (!enableRes.ok) {
-        // Pipe might not be installed yet — try store install
-        const installRes = await fetch(
-          "http://localhost:3030/pipes/store/install",
-          {
+      try {
+        await Promise.all(path.pipes.map((slug) => installAndEnable(slug)));
+
+        posthog.capture("onboarding_path_selected", {
+          path: pathId,
+          pipes: path.pipes,
+          time_spent_ms: Date.now() - mountTimeRef.current,
+        });
+
+        try {
+          await completeOnboarding();
+        } catch {}
+        try {
+          scheduleFirstRunNotification();
+        } catch {}
+
+        try {
+          await fetch("http://localhost:3030/notify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slug: PIPE_SLUG }),
-          }
-        );
-        if (!installRes.ok) throw new Error("failed to install pipe");
+            body: JSON.stringify(path.notification),
+          });
+        } catch {}
 
-        await fetch(`http://localhost:3030/pipes/${PIPE_SLUG}/enable`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: true }),
-        });
+        await commands.showWindow({ Home: { page: null } });
+        try {
+          window.close();
+        } catch {}
+      } catch (err) {
+        console.error("failed to enable pipes:", err);
+        setError("Couldn't enable — try again or skip");
+        setPhase("choose");
+        setSelected(null);
       }
-
-      posthog.capture("onboarding_pipe_enabled", {
-        pipe_id: PIPE_SLUG,
-        time_spent_ms: Date.now() - mountTimeRef.current,
-      });
-
-      // Complete onboarding first
-      try { await completeOnboarding(); } catch {}
-      try { scheduleFirstRunNotification(); } catch {}
-
-      // Send a deterministic welcome notification showing what reminders look like
-      try {
-        await fetch("http://localhost:3030/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: "🔔 reminders enabled",
-            body: "screenpipe will remind you to:\n\n" +
-              "- reply to emails you opened but didn't respond to\n" +
-              "- follow up on meetings where you said \"I'll send that over\"\n" +
-              "- revisit tabs you bookmarked but never read\n\n" +
-              "first reminder in about 1 hour.",
-          }),
-        });
-      } catch {}
-
-      // Show Main window and close onboarding
-      await commands.showWindow("Main");
-      try { window.close(); } catch {}
-    } catch (err) {
-      console.error("failed to enable pipe:", err);
-      setError("couldn't enable — try again or skip");
-      setPhase("prompt");
-    }
-  }, [completeOnboarding]);
+    },
+    [completeOnboarding]
+  );
 
   const handleSkip = useCallback(async () => {
     if (isCompletingRef.current) return;
@@ -114,24 +151,19 @@ export default function PickPipe() {
     posthog.capture("onboarding_completed");
 
     try {
+      // still enable todo-list-assistant as default
+      await installAndEnable("todo-list-assistant").catch(() => {});
       await completeOnboarding();
-    } catch (e) {
-      console.error("failed to complete onboarding:", e);
-    }
+    } catch {}
     try {
       scheduleFirstRunNotification();
-    } catch (e) {
-      console.error("failed to schedule notification:", e);
-    }
+    } catch {}
     try {
-      await commands.showWindow("Main");
+      await commands.showWindow({ Home: { page: null } });
       window.close();
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }, [completeOnboarding]);
 
-  // Recording indicator (shared)
   const RecordingDot = () => (
     <motion.div
       className="flex items-center space-x-2"
@@ -149,12 +181,10 @@ export default function PickPipe() {
     </motion.div>
   );
 
-  // ── Enabling phase ──
   if (phase === "enabling") {
     return (
       <div className="flex flex-col items-center justify-center space-y-8 py-4">
         <RecordingDot />
-
         <motion.div
           className="flex flex-col items-center space-y-4"
           initial={{ opacity: 0 }}
@@ -162,56 +192,57 @@ export default function PickPipe() {
         >
           <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
           <p className="font-mono text-sm text-muted-foreground">
-            enabling reminders...
+            Setting things up...
           </p>
         </motion.div>
       </div>
     );
   }
 
-  // ── Prompt phase (Variant C — opinionated, no choice) ──
   return (
     <div className="flex flex-col items-center justify-center space-y-6 py-4">
       <RecordingDot />
 
       <motion.div
-        className="flex flex-col items-center space-y-6 w-full max-w-sm"
+        className="flex flex-col items-center space-y-5 w-full max-w-sm"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.5 }}
       >
-        {/* Icon */}
-        <motion.span
-          className="text-4xl"
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ delay: 0.3, type: "spring", stiffness: 300, damping: 20 }}
-        >
-          🔔
-        </motion.span>
+        <h2 className="font-mono text-lg font-bold text-center">
+          What brings you here?
+        </h2>
 
-        {/* Pitch */}
-        <div className="text-center space-y-3">
-          <h2 className="font-sans text-lg font-bold lowercase leading-snug">
-            screenpipe will remind you about things you forgot to follow up on.
-          </h2>
-          <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
-            <span>unreplied emails</span>
-            <span>meeting follow-ups</span>
-            <span>forgotten tabs</span>
-            <span>promised actions</span>
-          </div>
+        <div className="flex flex-col gap-3 w-full">
+          {PATHS.map((path, i) => {
+            const Icon = path.icon;
+            return (
+              <motion.button
+                key={path.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 + i * 0.1, duration: 0.4 }}
+                onClick={() => handleSelect(path.id)}
+                className="w-full text-left border border-foreground/10 p-4 hover:border-foreground/40 transition-all duration-150 group"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 border border-foreground/20 flex items-center justify-center shrink-0 group-hover:border-foreground/40 transition-colors">
+                    <Icon className="w-4 h-4 text-foreground/60 group-hover:text-foreground transition-colors" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-mono text-sm font-semibold">
+                      {path.title}
+                    </p>
+                    <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
+                      {path.subtitle}
+                    </p>
+                  </div>
+                </div>
+              </motion.button>
+            );
+          })}
         </div>
 
-        {/* CTA */}
-        <button
-          onClick={handleSoundsGood}
-          className="w-full border border-foreground bg-foreground text-background py-3 font-mono text-sm uppercase tracking-widest hover:bg-background hover:text-foreground transition-colors duration-150"
-        >
-          enable reminders
-        </button>
-
-        {/* Error */}
         <AnimatePresence>
           {error && (
             <motion.p
@@ -225,7 +256,6 @@ export default function PickPipe() {
           )}
         </AnimatePresence>
 
-        {/* Skip */}
         <AnimatePresence>
           {showSkip && (
             <motion.button
@@ -235,14 +265,13 @@ export default function PickPipe() {
               onClick={handleSkip}
               className="font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
             >
-              skip for now →
+              Just let me explore →
             </motion.button>
           )}
         </AnimatePresence>
 
-        {/* Pipe store hint */}
         <p className="font-mono text-[9px] text-muted-foreground/30 text-center">
-          you can add more automations from the pipe store anytime.
+          You can add more from the pipe store anytime.
         </p>
       </motion.div>
     </div>

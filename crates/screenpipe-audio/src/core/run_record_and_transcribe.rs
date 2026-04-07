@@ -105,8 +105,13 @@ pub async fn run_record_and_transcribe(
         warn!("final flush failed for {}: {}", device_name, e);
     }
 
-    info!("stopped recording for {}", device_name);
-    Ok(())
+    if audio_stream.is_disconnected.load(Ordering::Relaxed) {
+        info!("stopped recording for {} (disconnected)", device_name);
+        Err(anyhow::anyhow!("device {} disconnected", device_name))
+    } else {
+        info!("stopped recording for {}", device_name);
+        Ok(())
+    }
 }
 
 /// Receive one audio chunk from the broadcast channel, handling timeouts and device type logic.

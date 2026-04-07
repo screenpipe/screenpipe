@@ -127,10 +127,11 @@ export function AccountSection() {
                 if (isActive) {
                   updateSettings({
                     user: { ...settings.user!, cloud_subscribed: true },
+                    audioTranscriptionEngine: "screenpipe-cloud",
                   });
                   toast({
                     title: "subscription activated",
-                    description: "welcome to screenpipe pro!",
+                    description: "welcome to screenpipe pro! cloud transcription enabled.",
                   });
                   return; // stop polling
                 }

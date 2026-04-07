@@ -390,6 +390,12 @@ pub struct GmailMessagesQuery {
     pub max_results: Option<u32>,
     #[serde(rename = "pageToken")]
     pub page_token: Option<String>,
+    pub instance: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct GmailInstanceQuery {
+    pub instance: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -398,6 +404,7 @@ pub struct GmailSendRequest {
     pub subject: String,
     pub body: String,
     pub from: Option<String>,
+    pub instance: Option<String>,
 }
 
 /// GET /connections/gmail/messages — list or search Gmail messages.
@@ -405,7 +412,8 @@ async fn gmail_list_messages(
     Query(params): Query<GmailMessagesQuery>,
 ) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
-    match gmail_list_messages_inner(&client, params).await {
+    let instance = params.instance.clone();
+    match gmail_list_messages_inner(&client, params, instance.as_deref()).await {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
@@ -414,8 +422,9 @@ async fn gmail_list_messages(
 async fn gmail_list_messages_inner(
     client: &reqwest::Client,
     params: GmailMessagesQuery,
+    instance: Option<&str>,
 ) -> anyhow::Result<Value> {
-    let token = gmail_token(client).await?;
+    let token = gmail_token(client, instance).await?;
     let max_results = params.max_results.unwrap_or(20).min(500);
     let mut url =
         reqwest::Url::parse("https://gmail.googleapis.com/gmail/v1/users/me/messages").unwrap();
@@ -441,16 +450,19 @@ async fn gmail_list_messages_inner(
 }
 
 /// GET /connections/gmail/messages/:id — read a full Gmail message.
-async fn gmail_get_message(Path(id): Path<String>) -> (StatusCode, Json<Value>) {
+async fn gmail_get_message(
+    Path(id): Path<String>,
+    Query(q): Query<GmailInstanceQuery>,
+) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
-    match gmail_get_message_inner(&client, &id).await {
+    match gmail_get_message_inner(&client, &id, q.instance.as_deref()).await {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
 }
 
-async fn gmail_get_message_inner(client: &reqwest::Client, id: &str) -> anyhow::Result<Value> {
-    let token = gmail_token(client).await?;
+async fn gmail_get_message_inner(client: &reqwest::Client, id: &str, instance: Option<&str>) -> anyhow::Result<Value> {
+    let token = gmail_token(client, instance).await?;
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=full",
         id
@@ -469,7 +481,8 @@ async fn gmail_get_message_inner(client: &reqwest::Client, id: &str) -> anyhow::
 /// POST /connections/gmail/send — send an email via Gmail.
 async fn gmail_send(Json(body): Json<GmailSendRequest>) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
-    match gmail_send_inner(&client, body).await {
+    let instance = body.instance.clone();
+    match gmail_send_inner(&client, body, instance.as_deref()).await {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
@@ -478,8 +491,9 @@ async fn gmail_send(Json(body): Json<GmailSendRequest>) -> (StatusCode, Json<Val
 async fn gmail_send_inner(
     client: &reqwest::Client,
     body: GmailSendRequest,
+    instance: Option<&str>,
 ) -> anyhow::Result<Value> {
-    let token = gmail_token(client).await?;
+    let token = gmail_token(client, instance).await?;
     let from = body.from.unwrap_or_default();
     let raw = build_rfc2822_message(&from, &body.to, &body.subject, &body.body);
     let encoded = URL_SAFE_NO_PAD.encode(raw.as_bytes());
@@ -496,10 +510,28 @@ async fn gmail_send_inner(
 }
 
 /// Retrieve a valid Gmail OAuth token or return an error.
-async fn gmail_token(client: &reqwest::Client) -> anyhow::Result<String> {
-    oauth_store::get_valid_token(client, "gmail")
+async fn gmail_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow::Result<String> {
+    oauth_store::get_valid_token_instance(client, "gmail", instance)
         .await
         .ok_or_else(|| anyhow::anyhow!("Gmail not connected — use 'Connect with Gmail' in Settings > Connections"))
+}
+
+/// GET /connections/gmail/instances — list all connected Gmail accounts.
+async fn gmail_list_instances() -> (StatusCode, Json<Value>) {
+    let instances = oauth_store::list_oauth_instances("gmail");
+    let mut accounts = Vec::new();
+    for inst in instances {
+        let path = oauth_store::oauth_token_path_instance("gmail", inst.as_deref());
+        let email = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| v["email"].as_str().map(String::from));
+        accounts.push(json!({
+            "instance": inst,
+            "email": email,
+        }));
+    }
+    (StatusCode::OK, Json(json!({ "data": accounts })))
 }
 
 /// Convert an anyhow error into the standard `(StatusCode, Json)` handler return.
@@ -670,6 +702,7 @@ where
         .route("/calendar/events", get(calendar_events))
         .route("/calendar/status", get(calendar_status))
         // Gmail-specific routes (must be before /:id to avoid conflict)
+        .route("/gmail/instances", get(gmail_list_instances))
         .route("/gmail/messages", get(gmail_list_messages))
         .route("/gmail/messages/:id", get(gmail_get_message))
         .route("/gmail/send", post(gmail_send))

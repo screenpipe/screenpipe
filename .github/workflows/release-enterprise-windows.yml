@@ -169,6 +169,11 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
           RUSTFLAGS: "-C link-arg=/LTCG"
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF"
         with:
           args: "--target x86_64-pc-windows-msvc"

@@ -31,11 +31,22 @@ export function ThemeProvider({
   storageKey = "screenpipe-ui-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ColorTheme | undefined>(undefined);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [theme, setThemeState] = useState<ColorTheme | undefined>(() => {
+    // Read theme synchronously on first render to avoid flash
+    if (typeof window === "undefined") return undefined;
+    try {
+      const stored = localStorage?.getItem(storageKey) as ColorTheme;
+      return stored || "system";
+    } catch {
+      return "system";
+    }
+  });
+  const [isLoaded, setIsLoaded] = useState(() => typeof window !== "undefined");
   const { updateSettings } = useSettings();
 
   useEffect(() => {
+    // Fallback for SSR or edge cases where initializer didn't run
+    if (theme && isLoaded) return;
     try {
       const storedTheme = localStorage?.getItem(storageKey) as ColorTheme;
       if (storedTheme) {
@@ -47,7 +58,7 @@ export function ThemeProvider({
       setThemeState("system");
     }
     setIsLoaded(true);
-  }, [storageKey]);
+  }, [storageKey, theme, isLoaded]);
 
   useEffect(() => {
     if (!theme || !isLoaded) return;

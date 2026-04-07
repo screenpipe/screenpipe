@@ -875,7 +875,7 @@ pub async fn extract_frame_from_video(
 async fn cleanup_old_frames(frames_dir: &PathBuf) -> Result<()> {
     use std::time::{Duration, SystemTime};
 
-    let one_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+    let one_hour_ago = SystemTime::now().checked_sub(Duration::from_secs(3600)).unwrap_or(SystemTime::UNIX_EPOCH);
     let mut read_dir = tokio::fs::read_dir(frames_dir).await?;
 
     while let Some(entry) = read_dir.next_entry().await? {

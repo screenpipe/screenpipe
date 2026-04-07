@@ -437,9 +437,9 @@ impl Default for SettingsStore {
             "Parted".to_string(),
         ]);
 
-        // Default free AI preset - works without login
+        // Default AI preset - works without login
         let default_free_preset = AIPreset {
-            id: "screenpipe-free".to_string(),
+            id: "screenpipe-cloud".to_string(),
             prompt: r#"IMPORTANT: At the start of every conversation, read the files in .pi/skills/ directory (e.g. .pi/skills/screenpipe-api/SKILL.md and .pi/skills/screenpipe-cli/SKILL.md) before responding.
 Rules:
 - Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images

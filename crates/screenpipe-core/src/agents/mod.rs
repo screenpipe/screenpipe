@@ -13,6 +13,13 @@ pub mod pi;
 
 use anyhow::Result;
 use std::path::Path;
+use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
+
+/// Shared PID that is set synchronously right after `cmd.spawn()`.
+/// The scheduler reads this to kill the process on timeout — no async
+/// channel race.
+pub type SharedPid = Arc<AtomicU32>;
 
 /// Output produced by an agent run.
 #[derive(Debug, Clone)]
@@ -40,8 +47,8 @@ pub trait AgentExecutor: Send + Sync {
     /// Execute `prompt` using `model` with the given `working_dir` as cwd.
     /// `provider` overrides the default provider (e.g. `"anthropic"`, `"openai"`).
     /// If `None`, uses screenpipe cloud as default.
-    /// `pid_tx` receives the OS PID immediately after the subprocess spawns,
-    /// enabling the caller to track/kill the process before `run()` returns.
+    /// `shared_pid` is set synchronously right after the subprocess spawns,
+    /// enabling the caller to kill the process on timeout with no race.
     /// `continue_session` — when `true`, the agent resumes its last session for
     /// this working directory (Pi: `--continue`); when `false`, starts fresh
     /// (Pi: `--no-session`).
@@ -53,7 +60,7 @@ pub trait AgentExecutor: Send + Sync {
         provider: Option<&str>,
         provider_url: Option<&str>,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput>;
 
@@ -70,7 +77,7 @@ pub trait AgentExecutor: Send + Sync {
         provider: Option<&str>,
         provider_url: Option<&str>,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         _pipe_system_prompt: Option<&str>,
@@ -83,7 +90,7 @@ pub trait AgentExecutor: Send + Sync {
                 provider,
                 provider_url,
                 provider_api_key,
-                pid_tx,
+                shared_pid,
                 continue_session,
             )
             .await?;

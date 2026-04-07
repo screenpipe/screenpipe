@@ -3,35 +3,47 @@
 import { useState, useEffect } from "react";
 import { commands } from "@/lib/utils/tauri";
 
-/** True when running the enterprise build (updates managed by IT). */
-export function useIsEnterpriseBuild(): boolean {
-  const [isEnterprise, setIsEnterprise] = useState(false);
+// Module-level cache: one IPC call shared across all components.
+let cachedResult: boolean | null = null;
+let pendingPromise: Promise<boolean> | null = null;
 
-  useEffect(() => {
-    let cancelled = false;
+async function resolveEnterpriseBuild(): Promise<boolean> {
+  if (cachedResult !== null) return cachedResult;
+  if (pendingPromise) return pendingPromise;
 
-    async function check() {
-      // retry a few times — Tauri IPC may not be ready immediately
-      for (let i = 0; i < 5; i++) {
-        try {
-          const result = await commands.isEnterpriseBuildCmd();
-          if (!cancelled) {
-            console.log(`[enterprise] isEnterpriseBuild = ${result} (attempt ${i + 1})`);
-            setIsEnterprise(result);
-          }
-          return;
-        } catch (e) {
-          console.warn(`[enterprise] isEnterpriseBuildCmd failed (attempt ${i + 1}):`, e);
-          if (i < 4) await new Promise((r) => setTimeout(r, 500));
+  pendingPromise = (async () => {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const result = await commands.isEnterpriseBuildCmd();
+        cachedResult = result;
+        if (i === 0) {
+          console.log(`[enterprise] isEnterpriseBuild = ${result}`);
         }
-      }
-      if (!cancelled) {
-        console.error("[enterprise] isEnterpriseBuildCmd failed after 5 attempts");
-        setIsEnterprise(false);
+        return result;
+      } catch {
+        if (i < 2) await new Promise((r) => setTimeout(r, 500));
       }
     }
+    cachedResult = false;
+    return false;
+  })();
 
-    check();
+  return pendingPromise;
+}
+
+/** True when running the enterprise build (updates managed by IT). */
+export function useIsEnterpriseBuild(): boolean {
+  const [isEnterprise, setIsEnterprise] = useState(cachedResult ?? false);
+
+  useEffect(() => {
+    if (cachedResult !== null) {
+      setIsEnterprise(cachedResult);
+      return;
+    }
+    let cancelled = false;
+    resolveEnterpriseBuild().then((result) => {
+      if (!cancelled) setIsEnterprise(result);
+    });
     return () => { cancelled = true; };
   }, []);
 

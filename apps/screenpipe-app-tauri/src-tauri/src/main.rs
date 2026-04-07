@@ -637,6 +637,7 @@ async fn main() {
                 oauth::oauth_connect,
                 oauth::oauth_status,
                 oauth::oauth_disconnect,
+                oauth::oauth_list_instances,
                 // Pipe suggestions scheduler commands
                 pipe_suggestions_scheduler::pipe_suggestions_get_settings,
                 pipe_suggestions_scheduler::pipe_suggestions_update_settings,
@@ -901,6 +902,7 @@ async fn main() {
             oauth::oauth_connect,
             oauth::oauth_status,
             oauth::oauth_disconnect,
+            oauth::oauth_list_instances,
             // Pipe suggestions scheduler commands
             pipe_suggestions_scheduler::pipe_suggestions_get_settings,
             pipe_suggestions_scheduler::pipe_suggestions_update_settings,

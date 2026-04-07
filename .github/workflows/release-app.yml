@@ -686,6 +686,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF
           NO_STRIP: true
         run: |
@@ -793,16 +798,20 @@ jobs:
           # (0xc000001d) on consumer CPUs without AVX-512 (Arrow Lake, Panther Lake, Lunar Lake).
           # See: https://developercommunity.visualstudio.com/content/problem/848627
           RUSTFLAGS: ""
-          # Cap MSVC codegen at AVX2 — prevents auto-vectorizing C deps
-          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners.
-          # Only set for x86_64 — clang on ARM64 doesn't understand /arch:AVX2.
           CFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
           CXXFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
-          # Fix whisper.cpp crash on newer CPUs (Lunar Lake, Arrow Lake, etc.) that lack AVX-512
-          # GGML_NATIVE=ON compiles with -march=native, causing illegal instruction on CPUs without AVX-512
-          # CMAKE_C_FLAGS/CMAKE_CXX_FLAGS=/arch:AVX2 caps CMake-built deps (whisper.cpp/GGML) at AVX2.
-          # CFLAGS/CXXFLAGS only affects cc-crate builds (sqlite-vec), NOT cmake-crate builds.
-          # Without this, MSVC auto-vectorizes GGML code to AVX-512 on Xeon CI runners.
+          # Fix whisper.cpp/GGML AVX-512 crash on Lunar Lake, Arrow Lake, etc.
+          # whisper-rs build.rs passes env vars starting with GGML_ as cmake defines.
+          # CMAKE_ARGS as a single string gets passed as -DCMAKE_ARGS="..." which cmake ignores.
+          # Individual GGML_* env vars are the ONLY way to control the whisper-rs cmake build.
+          # Without GGML_NATIVE=OFF, FindSIMD.cmake detects AVX-512 on CI Xeon runners
+          # and overrides GGML_AVX512 to ON, producing 512-bit ZMM instructions that crash
+          # on CPUs without full AVX-512 support (STATUS_ILLEGAL_INSTRUCTION 0xc000001d).
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2' || '-DGGML_NATIVE=OFF' }}
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}

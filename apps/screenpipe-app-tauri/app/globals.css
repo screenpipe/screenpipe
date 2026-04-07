@@ -357,11 +357,18 @@
   /* Vibrant sidebar theme — Minimal macOS backdrop */
   .vibrant-sidebar {
     /* CRITICAL FIX for macOS WKWebView backdrop-filter flicker */
-    background-color: rgba(0, 0, 0, 0.15) !important;
+    background-color: rgba(0, 0, 0, 0.08) !important;
     border-color: transparent;
   }
   .dark .vibrant-sidebar {
-    background-color: rgba(0, 0, 0, 0.15) !important;
+    background-color: rgba(255, 255, 255, 0.06) !important;
+  }
+
+  /* System dark mode fallback — covers the gap before JS applies .dark class */
+  @media (prefers-color-scheme: dark) {
+    html:not(.light) .vibrant-sidebar {
+      background-color: rgba(255, 255, 255, 0.06) !important;
+    }
   }
   .vibrant-sidebar-border {
     border-color: transparent;

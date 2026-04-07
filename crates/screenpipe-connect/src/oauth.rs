@@ -80,8 +80,15 @@ pub struct OAuthConfig {
 // ---------------------------------------------------------------------------
 
 pub fn oauth_token_path(integration_id: &str) -> PathBuf {
-    screenpipe_core::paths::default_screenpipe_data_dir()
-        .join(format!("{}-oauth.json", integration_id))
+    oauth_token_path_instance(integration_id, None)
+}
+
+pub fn oauth_token_path_instance(integration_id: &str, instance: Option<&str>) -> PathBuf {
+    let name = match instance {
+        Some(inst) => format!("{}:{}-oauth.json", integration_id, inst),
+        None => format!("{}-oauth.json", integration_id),
+    };
+    screenpipe_core::paths::default_screenpipe_data_dir().join(name)
 }
 
 fn unix_now() -> u64 {
@@ -94,10 +101,13 @@ fn unix_now() -> u64 {
 /// Read the stored access token, returning `None` if the file is missing
 /// or the token has expired (with a 60-second safety buffer).
 pub fn read_oauth_token(integration_id: &str) -> Option<String> {
-    let content = std::fs::read_to_string(oauth_token_path(integration_id)).ok()?;
+    read_oauth_token_instance(integration_id, None)
+}
+
+pub fn read_oauth_token_instance(integration_id: &str, instance: Option<&str>) -> Option<String> {
+    let content = std::fs::read_to_string(oauth_token_path_instance(integration_id, instance)).ok()?;
     let v: Value = serde_json::from_str(&content).ok()?;
 
-    // If provider stores an expiry, treat the token as absent when expired
     if let Some(expires_at) = v["expires_at"].as_u64() {
         if unix_now() >= expires_at.saturating_sub(60) {
             return None;
@@ -110,7 +120,11 @@ pub fn read_oauth_token(integration_id: &str) -> Option<String> {
 /// Write the raw provider token response to disk, augmenting it with a
 /// computed `expires_at` unix timestamp if `expires_in` is present.
 pub fn write_oauth_token(integration_id: &str, data: &Value) -> Result<()> {
-    let path = oauth_token_path(integration_id);
+    write_oauth_token_instance(integration_id, None, data)
+}
+
+pub fn write_oauth_token_instance(integration_id: &str, instance: Option<&str>, data: &Value) -> Result<()> {
+    let path = oauth_token_path_instance(integration_id, instance);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -123,11 +137,43 @@ pub fn write_oauth_token(integration_id: &str, data: &Value) -> Result<()> {
 }
 
 pub fn delete_oauth_token(integration_id: &str) -> Result<()> {
-    let path = oauth_token_path(integration_id);
+    delete_oauth_token_instance(integration_id, None)
+}
+
+pub fn delete_oauth_token_instance(integration_id: &str, instance: Option<&str>) -> Result<()> {
+    let path = oauth_token_path_instance(integration_id, instance);
     if path.exists() {
         std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+/// List all OAuth instances for a given integration by scanning token files.
+/// Returns a vec of instance names (None = default/unnamed instance).
+pub fn list_oauth_instances(integration_id: &str) -> Vec<Option<String>> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let prefix = format!("{}", integration_id);
+    let suffix = "-oauth.json";
+    let mut instances = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(suffix) {
+                continue;
+            }
+            let stem = &name[..name.len() - suffix.len()];
+            if stem == prefix {
+                // Default instance: gmail-oauth.json
+                instances.push(None);
+            } else if let Some(inst) = stem.strip_prefix(&format!("{}:", prefix)) {
+                // Named instance: gmail:work-oauth.json
+                instances.push(Some(inst.to_string()));
+            }
+        }
+    }
+
+    instances
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +183,11 @@ pub fn delete_oauth_token(integration_id: &str) -> Result<()> {
 /// Attempt a token refresh via the backend proxy.
 /// Writes the new token to disk on success, returns the new `access_token`.
 pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Result<String> {
-    let content = std::fs::read_to_string(oauth_token_path(integration_id))?;
+    refresh_token_instance(client, integration_id, None).await
+}
+
+pub async fn refresh_token_instance(client: &reqwest::Client, integration_id: &str, instance: Option<&str>) -> Result<String> {
+    let content = std::fs::read_to_string(oauth_token_path_instance(integration_id, instance))?;
     let stored: Value = serde_json::from_str(&content)?;
     let refresh_tok = stored["refresh_token"]
         .as_str()
@@ -156,7 +206,7 @@ pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Re
         .json()
         .await?;
 
-    write_oauth_token(integration_id, &resp)?;
+    write_oauth_token_instance(integration_id, instance, &resp)?;
 
     resp["access_token"]
         .as_str()
@@ -167,11 +217,14 @@ pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Re
 /// Read a valid token, refreshing automatically if expired.
 /// Returns `None` only if disconnected with no way to recover.
 pub async fn get_valid_token(client: &reqwest::Client, integration_id: &str) -> Option<String> {
-    if let Some(token) = read_oauth_token(integration_id) {
+    get_valid_token_instance(client, integration_id, None).await
+}
+
+pub async fn get_valid_token_instance(client: &reqwest::Client, integration_id: &str, instance: Option<&str>) -> Option<String> {
+    if let Some(token) = read_oauth_token_instance(integration_id, instance) {
         return Some(token);
     }
-    // Token missing or expired — try refresh
-    refresh_token(client, integration_id).await.ok()
+    refresh_token_instance(client, integration_id, instance).await.ok()
 }
 
 // ---------------------------------------------------------------------------

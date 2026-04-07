@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -21,6 +20,7 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface MeetingRecord {
   id: number;
@@ -327,6 +327,31 @@ export function MeetingsSection() {
     }
   };
 
+  const summarizeMeeting = (meeting: MeetingRecord) => {
+    const start = new Date(meeting.meeting_start);
+    const end = meeting.meeting_end ? new Date(meeting.meeting_end) : null;
+    const duration = end
+      ? `${Math.round((end.getTime() - start.getTime()) / 60000)} minutes`
+      : "ongoing";
+
+    const parts: string[] = [
+      `app: ${meeting.meeting_app}`,
+      `time: ${start.toISOString()}${end ? ` to ${end.toISOString()}` : ""} (${duration})`,
+    ];
+    if (meeting.title) parts.push(`title: ${meeting.title}`);
+    if (meeting.attendees) parts.push(`attendees: ${meeting.attendees}`);
+    if (meeting.note) parts.push(`notes: ${meeting.note}`);
+
+    const prompt = `search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. then suggest which of my connected integrations would be useful to share this with and draft a message for each.\n\nmeeting:\n${parts.join("\n")}`;
+
+    showChatWithPrefill({
+      context: "",
+      prompt,
+      autoSend: true,
+      source: "meeting-summarize",
+    });
+  };
+
   const cancelEdit = () => {
     setEditingId(null);
   };
@@ -626,12 +651,6 @@ export function MeetingsSection() {
                             {meeting.meeting_app}
                           </span>
                         )}
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] px-1 py-0 font-normal"
-                        >
-                          {meeting.detection_source}
-                        </Badge>
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5">
                         {formatTime(meeting.meeting_start)}
@@ -697,6 +716,15 @@ export function MeetingsSection() {
                     </>
                   ) : (
                     <>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => summarizeMeeting(meeting)}
+                        title="summarize with AI"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
                       <Button
                         size="icon"
                         variant="ghost"

@@ -266,6 +266,65 @@ pub fn start_sleep_monitor() {
         }
     });
 
+    // Thread 4: Display reconfiguration watcher.
+    // Detects monitor plug/unplug, mirror mode changes, resolution changes, etc.
+    // Uses CGDisplayRegisterReconfigurationCallback — fires BEFORE and AFTER
+    // each reconfiguration. We only act on the "completion" callback (kCGDisplayBeginConfigurationFlag unset).
+    std::thread::spawn(|| {
+        use std::ffi::c_void;
+
+        type CGDirectDisplayID = u32;
+        type CGDisplayChangeSummaryFlags = u32;
+
+        // kCGDisplayBeginConfigurationFlag = (1 << 0)
+        const K_CG_DISPLAY_BEGIN_CONFIGURATION_FLAG: CGDisplayChangeSummaryFlags = 1;
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGDisplayRegisterReconfigurationCallback(
+                callback: unsafe extern "C" fn(
+                    display: CGDirectDisplayID,
+                    flags: CGDisplayChangeSummaryFlags,
+                    user_info: *mut c_void,
+                ),
+                user_info: *mut c_void,
+            ) -> i32; // CGError
+
+            fn CFRunLoopRun();
+        }
+
+        unsafe extern "C" fn on_display_reconfigured(
+            _display: CGDirectDisplayID,
+            flags: CGDisplayChangeSummaryFlags,
+            _user_info: *mut c_void,
+        ) {
+            // Only act on completion (not the "begin" phase)
+            if flags & K_CG_DISPLAY_BEGIN_CONFIGURATION_FLAG != 0 {
+                return;
+            }
+            // Display topology changed — invalidate cached SCStream handles
+            #[cfg(target_os = "macos")]
+            screenpipe_screen::stream_invalidation::request();
+        }
+
+        unsafe {
+            let err = CGDisplayRegisterReconfigurationCallback(
+                on_display_reconfigured,
+                std::ptr::null_mut(),
+            );
+            if err != 0 {
+                // CGError != kCGErrorSuccess — log and continue without this watcher
+                eprintln!("CGDisplayRegisterReconfigurationCallback failed: {}", err);
+                return;
+            }
+        }
+
+        info!("Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)");
+
+        // The callback is delivered on the run loop of this thread
+        unsafe { CFRunLoopRun(); }
+    });
+
     // Thread 3: NSWorkspace notification observers for system sleep/wake.
     // These are still useful for the RECENTLY_WOKE flag and telemetry.
     std::thread::spawn(move || {

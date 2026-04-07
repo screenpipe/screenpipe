@@ -65,7 +65,7 @@ impl AppCost {
         Self {
             durations: Vec::with_capacity(WINDOW_SIZE),
             truncation_count: 0,
-            last_walk: Instant::now() - Duration::from_secs(600), // allow first walk immediately
+            last_walk: Instant::now().checked_sub(Duration::from_secs(600)).unwrap_or(Instant::now()), // allow first walk immediately
             tier: WalkTier::Light,
         }
     }

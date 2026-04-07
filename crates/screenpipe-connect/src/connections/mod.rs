@@ -17,6 +17,7 @@ pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod github_issues;
+pub mod glean;
 pub mod gmail;
 pub mod granola;
 pub mod hubspot;
@@ -151,6 +152,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(asana::Asana),
         Box::new(calcom::CalCom),
         Box::new(calendly::Calendly),
+        Box::new(glean::Glean),
         Box::new(gmail::Gmail),
     ]
 }
@@ -211,7 +213,7 @@ impl ConnectionManager {
                 let def = i.def();
                 let is_oauth = i.oauth_config().is_some();
                 let connected = if is_oauth {
-                    oauth::read_oauth_token(def.id).is_some()
+                    !oauth::list_oauth_instances(def.id).is_empty()
                 } else {
                     store
                         .get(def.id)

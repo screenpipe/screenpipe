@@ -509,7 +509,7 @@ impl PiExecutor {
         working_dir: &Path,
         resolved_provider: &str,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<super::SharedPid>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
     ) -> Result<AgentOutput> {
@@ -587,10 +587,9 @@ impl PiExecutor {
         let child = cmd.spawn()?;
         let pid = child.id();
 
-        if let Some(tx) = pid_tx {
-            if let Some(p) = pid {
-                let _ = tx.send(p);
-            }
+        // Set PID synchronously — no async race
+        if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
+            sp.store(p, std::sync::atomic::Ordering::SeqCst);
         }
 
         let output = child.wait_with_output().await?;
@@ -619,7 +618,7 @@ impl PiExecutor {
         working_dir: &Path,
         resolved_provider: &str,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
@@ -699,10 +698,9 @@ impl PiExecutor {
         let mut child = cmd.spawn()?;
         let pid = child.id();
 
-        if let Some(tx) = pid_tx {
-            if let Some(p) = pid {
-                let _ = tx.send(p);
-            }
+        // Set PID synchronously — no async race
+        if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
+            sp.store(p, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Take stdout for streaming reads; stderr will be read after exit
@@ -805,7 +803,7 @@ impl AgentExecutor for PiExecutor {
         provider: Option<&str>,
         provider_url: Option<&str>,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
         Self::ensure_pi_config(
@@ -847,7 +845,7 @@ impl AgentExecutor for PiExecutor {
                 working_dir,
                 &resolved_provider,
                 provider_api_key,
-                pid_tx,
+                shared_pid.clone(),
                 continue_session,
                 None, // no pipe system prompt for trait-based calls
             )
@@ -896,7 +894,7 @@ impl AgentExecutor for PiExecutor {
         provider: Option<&str>,
         provider_url: Option<&str>,
         provider_api_key: Option<&str>,
-        pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+        shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
@@ -936,7 +934,7 @@ impl AgentExecutor for PiExecutor {
                 working_dir,
                 &resolved_provider,
                 provider_api_key,
-                pid_tx,
+                shared_pid.clone(),
                 line_tx.clone(),
                 continue_session,
                 pipe_system_prompt,

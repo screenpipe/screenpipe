@@ -93,7 +93,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (onboardingData.isCompleted) {
       commands
-        .showWindow("Main")
+        .showWindow({ Home: { page: null } })
         .then(() => window.close())
         .catch(() => {});
     }

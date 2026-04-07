@@ -86,4 +86,5 @@ core-graphics = { version = "0.24.0", features = ["highsierra"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { version = "0.16.1" }
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
 

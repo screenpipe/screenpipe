@@ -474,7 +474,7 @@ function SettingsPageContent() {
                     title={manualMeeting ? "stop meeting" : "start meeting"}
                   >
                     {manualMeeting && (
-                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
                     )}
                     <Phone className="h-3.5 w-3.5" />
                   </button>
@@ -558,12 +558,12 @@ function SettingsPageContent() {
                       <div className={cn(
                         "transition-colors flex-shrink-0",
                         isActive
-                          ? isTranslucent ? "" : "text-primary"
-                          : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
+                          ? isTranslucent ? "vibrant-sidebar-fg" : "text-primary"
+                          : isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         {section.icon}
                       </div>
-                      {!sidebarCollapsed && <span className={cn("text-sm truncate", isActive && isTranslucent ? "font-semibold" : "font-medium")}>{section.label}</span>}
+                      {!sidebarCollapsed && <span className={cn("text-sm truncate", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {

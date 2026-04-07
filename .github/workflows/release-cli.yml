@@ -330,10 +330,15 @@ jobs:
           # LTCG removed: MSVC LTCG ignores /arch:AVX2 and can emit AVX-512 on Xeon CI runners
           # causing STATUS_ILLEGAL_INSTRUCTION on consumer CPUs (Arrow Lake, Panther Lake, Lunar Lake)
           RUSTFLAGS: ""
-          # Cap MSVC codegen at AVX2 — prevent AVX-512 on consumer CPUs
           CFLAGS: "/arch:AVX2"
           CXXFLAGS: "/arch:AVX2"
-          # Also cap CMake-built deps (whisper.cpp/GGML) — CFLAGS doesn't reach cmake crate
+          # whisper-rs build.rs passes GGML_* env vars as cmake defines.
+          # CMAKE_ARGS string was ignored — these individual vars actually work.
+          GGML_NATIVE: "OFF"
+          GGML_AVX512: "OFF"
+          GGML_AVX512_VBMI: "OFF"
+          GGML_AVX512_VNNI: "OFF"
+          GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
           ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
