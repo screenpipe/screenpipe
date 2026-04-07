@@ -780,7 +780,10 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                 let is_expired = now >= expires_at.saturating_sub(60);
 
                 if is_expired {
-                    let refresh_token_owned = token_data.get("refresh_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let refresh_token_owned = token_data
+                        .get("refresh_token")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     if let Some(ref refresh_token) = refresh_token_owned {
                         tracing::info!("ChatGPT OAuth token expired, refreshing...");
                         if let Ok(client) = reqwest::blocking::Client::builder()
@@ -801,17 +804,28 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                             match refresh_res {
                                 Ok(resp) if resp.status().is_success() => {
                                     if let Ok(v) = resp.json::<serde_json::Value>() {
-                                        if let Some(new_token) = v.get("access_token").and_then(|t| t.as_str()) {
-                                            let new_refresh = v.get("refresh_token")
+                                        if let Some(new_token) =
+                                            v.get("access_token").and_then(|t| t.as_str())
+                                        {
+                                            let new_refresh = v
+                                                .get("refresh_token")
                                                 .and_then(|t| t.as_str())
                                                 .unwrap_or(refresh_token.as_str());
-                                            let new_expires_in = v.get("expires_in").and_then(|t| t.as_u64()).unwrap_or(3600);
+                                            let new_expires_in = v
+                                                .get("expires_in")
+                                                .and_then(|t| t.as_u64())
+                                                .unwrap_or(3600);
 
-                                            token_data["access_token"] = serde_json::Value::String(new_token.to_string());
-                                            token_data["refresh_token"] = serde_json::Value::String(new_refresh.to_string());
-                                            token_data["expires_at"] = serde_json::json!(now + new_expires_in);
+                                            token_data["access_token"] =
+                                                serde_json::Value::String(new_token.to_string());
+                                            token_data["refresh_token"] =
+                                                serde_json::Value::String(new_refresh.to_string());
+                                            token_data["expires_at"] =
+                                                serde_json::json!(now + new_expires_in);
 
-                                            if let Ok(updated) = serde_json::to_string_pretty(&token_data) {
+                                            if let Ok(updated) =
+                                                serde_json::to_string_pretty(&token_data)
+                                            {
                                                 let _ = std::fs::write(&path, updated);
                                             }
                                             tracing::info!("ChatGPT token refreshed successfully");
@@ -819,7 +833,10 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                                     }
                                 }
                                 Ok(resp) => {
-                                    tracing::error!("ChatGPT token refresh failed ({})", resp.status());
+                                    tracing::error!(
+                                        "ChatGPT token refresh failed ({})",
+                                        resp.status()
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::error!("ChatGPT token refresh request failed: {}", e);
@@ -1091,7 +1108,9 @@ impl PipeManager {
             store,
             api_port,
             last_reload: Arc::new(Mutex::new(
-                Instant::now().checked_sub(std::time::Duration::from_secs(10)).unwrap_or(Instant::now()),
+                Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(10))
+                    .unwrap_or(Instant::now()),
             )),
             token_registry: None,
             extra_context: None,
@@ -2430,7 +2449,10 @@ impl PipeManager {
 
         // Persist to local overrides so reload_pipes() doesn't revert this
         if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
-            warn!("failed to save local enabled override for '{}': {}", name, e);
+            warn!(
+                "failed to save local enabled override for '{}': {}",
+                name, e
+            );
         }
 
         // Update in-memory
@@ -3131,9 +3153,7 @@ impl PipeManager {
                         }
 
                         // Shared PID — set synchronously by the executor right after spawn
-                        let shared_pid = std::sync::Arc::new(
-                            std::sync::atomic::AtomicU32::new(0),
-                        );
+                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
                         let shared_pid_for_kill = shared_pid.clone();
                         let pipes_dir_for_pidfile = pipes_dir_for_log.clone();
                         let pipe_name_for_pidfile = pipe_name.clone();
@@ -3305,7 +3325,8 @@ impl PipeManager {
                             }
                             Err(_elapsed) => {
                                 warn!("pipe '{}' timed out after {}s", pipe_name, pipe_timeout);
-                                let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                                let real_pid =
+                                    shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
                                 if real_pid != 0 {
                                     let _ = crate::agents::pi::kill_process_group(real_pid);
                                 }
@@ -3790,13 +3811,29 @@ fn parse_time_str(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
     if let Some(h) = s.strip_suffix("am") {
         let n: u32 = h.trim().parse().ok()?;
-        if n == 12 { Some(0) } else if n <= 12 { Some(n) } else { None }
+        if n == 12 {
+            Some(0)
+        } else if n <= 12 {
+            Some(n)
+        } else {
+            None
+        }
     } else if let Some(h) = s.strip_suffix("pm") {
         let n: u32 = h.trim().parse().ok()?;
-        if n == 12 { Some(12) } else if n <= 12 { Some(n + 12) } else { None }
+        if n == 12 {
+            Some(12)
+        } else if n <= 12 {
+            Some(n + 12)
+        } else {
+            None
+        }
     } else {
         let n: u32 = s.parse().ok()?;
-        if n < 24 { Some(n) } else { None }
+        if n < 24 {
+            Some(n)
+        } else {
+            None
+        }
     }
 }
 
@@ -4339,15 +4376,24 @@ mod tests {
     fn test_parse_schedule_human_daily() {
         match parse_schedule("every day at 9am") {
             Some(ParsedSchedule::Cron(_)) => {}
-            other => panic!("expected cron for 'every day at 9am', got {:?}", other.is_some()),
+            other => panic!(
+                "expected cron for 'every day at 9am', got {:?}",
+                other.is_some()
+            ),
         }
         match parse_schedule("every day at 12pm") {
             Some(ParsedSchedule::Cron(_)) => {}
-            other => panic!("expected cron for 'every day at 12pm', got {:?}", other.is_some()),
+            other => panic!(
+                "expected cron for 'every day at 12pm', got {:?}",
+                other.is_some()
+            ),
         }
         match parse_schedule("every day at 6pm") {
             Some(ParsedSchedule::Cron(_)) => {}
-            other => panic!("expected cron for 'every day at 6pm', got {:?}", other.is_some()),
+            other => panic!(
+                "expected cron for 'every day at 6pm', got {:?}",
+                other.is_some()
+            ),
         }
     }
 
@@ -4355,7 +4401,10 @@ mod tests {
     fn test_parse_schedule_human_weekday() {
         match parse_schedule("every monday at 9am") {
             Some(ParsedSchedule::Cron(_)) => {}
-            other => panic!("expected cron for 'every monday at 9am', got {:?}", other.is_some()),
+            other => panic!(
+                "expected cron for 'every monday at 9am', got {:?}",
+                other.is_some()
+            ),
         }
     }
 
