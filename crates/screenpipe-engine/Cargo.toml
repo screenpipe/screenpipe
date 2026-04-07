@@ -104,6 +104,9 @@ uuid = { version = "1.5.0", features = ["v4"] }
 # the upstream eval transport.
 url = "2"
 
+# Whisper (for Rewind audio import)
+whisper-rs = { git = "https://github.com/screenpipe/whisper-rs.git", rev = "97e4070", features = ["tracing_backend"] }
+
 # Cloud sync utilities
 hostname = "0.4"
 md5 = "0.7"

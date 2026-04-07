@@ -36,6 +36,7 @@ import { HermesCard } from "./hermes-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
+import { RewindImportCard } from "./rewind-import-card";
 import posthog from "posthog-js";
 
 // ---------------------------------------------------------------------------
@@ -347,6 +348,13 @@ export function IntegrationIcon({ icon }: { icon: string }) {
       </svg>
     ),
     "voice-memos": <img src="/images/voice-memos.svg" alt="Voice Memos" className="w-5 h-5 rounded" />,
+    "rewind-import": (
+      <div className="w-5 h-5 rounded bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+          <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+        </svg>
+      </div>
+    ),
     microsoft365: (
       <svg viewBox="0 0 24 24" className="w-5 h-5">
         <path fill="#F25022" d="M1 1h10v10H1z"/>
@@ -1990,6 +1998,7 @@ export function ConnectionsSection() {
       ...(os === "macos" ? [
         { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: browserUrlConnected },
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
+        { id: "rewind-import", name: "Rewind AI Import", icon: "rewind-import", connected: false },
       ] : []),
       ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
       { id: "apple-calendar", name: os === "windows" ? "Windows Calendar" : "Apple Calendar", icon: os === "windows" ? "windows-calendar" : "apple-calendar", connected: false },
@@ -2059,6 +2068,7 @@ export function ConnectionsSection() {
       case "user-browser": return <UserBrowserCard />;
       case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
+      case "rewind-import": return <RewindImportCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
       case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
       case "google-calendar": return <GoogleCalendarCard

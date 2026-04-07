@@ -121,6 +121,7 @@ mod native_shortcut_reminder;
 mod notifications;
 mod safe_icon;
 mod shortcuts;
+mod rewind_import;
 mod vault;
 mod viewer;
 use base64::Engine;
@@ -993,6 +994,7 @@ async fn main() {
         .manage(suggestions_state)
         .manage(pipe_suggestions_state)
         .manage(sync_scheduler)
+        .manage(rewind_import::RewindImportState::default())
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
             commands::get_local_api_config,
@@ -1176,6 +1178,11 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            // Rewind AI import commands
+            rewind_import::rewind_scan,
+            rewind_import::rewind_start_import,
+            rewind_import::rewind_get_progress,
+            rewind_import::rewind_cancel_import,
         ])
         .setup(move |app| {
             //deep link register_all

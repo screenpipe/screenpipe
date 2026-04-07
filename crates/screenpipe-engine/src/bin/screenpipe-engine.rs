@@ -372,6 +372,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::backup::handle_backup_command(subcommand, data_dir).await?;
             return Ok(());
         }
+        Command::Import { ref subcommand } => {
+            screenpipe_engine::cli::import::handle_import_command(subcommand).await?;
+            return Ok(());
+        }
         Command::Doctor => {
             eprintln!("screenpipe doctor");
             eprintln!("=================");

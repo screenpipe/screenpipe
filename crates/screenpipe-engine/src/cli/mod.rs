@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup;
 pub mod connection;
 pub mod db;
+pub mod import;
 pub mod install;
 pub mod login;
 pub mod mcp;
@@ -264,6 +265,12 @@ pub enum Command {
         /// Data directory. Default to $HOME/.screenpipe
         #[arg(long, value_hint = ValueHint::DirPath)]
         data_dir: Option<String>,
+    },
+
+    /// Import data from external sources (e.g. Rewind AI)
+    Import {
+        #[command(subcommand)]
+        subcommand: ImportCommand,
     },
 }
 
@@ -1387,6 +1394,38 @@ pub struct RemoteSyncArgs {
     /// SSH port
     #[arg(long, default_value_t = 22)]
     pub port: u16,
+}
+
+// =============================================================================
+// Import subcommands
+// =============================================================================
+
+#[derive(Subcommand)]
+pub enum ImportCommand {
+    /// Import screen recordings and audio from Rewind AI
+    Rewind {
+        /// Scan for available Rewind data without importing
+        #[arg(long, default_value_t = false)]
+        scan: bool,
+        /// Start the import
+        #[arg(long, default_value_t = false)]
+        start: bool,
+        /// Discard previous checkpoint and start fresh
+        #[arg(long, default_value_t = false)]
+        fresh: bool,
+        /// Data directory (default: ~/.screenpipe)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        data_dir: Option<String>,
+        /// Only import data from this date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+        /// Only import data up to this date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+        /// Skip audio snippet import (video/OCR only)
+        #[arg(long, default_value_t = false)]
+        skip_audio: bool,
+    },
 }
 
 // =============================================================================
