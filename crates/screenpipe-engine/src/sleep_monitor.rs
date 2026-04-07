@@ -319,10 +319,14 @@ pub fn start_sleep_monitor() {
             }
         }
 
-        info!("Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)");
+        info!(
+            "Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)"
+        );
 
         // The callback is delivered on the run loop of this thread
-        unsafe { CFRunLoopRun(); }
+        unsafe {
+            CFRunLoopRun();
+        }
     });
 
     // Thread 3: NSWorkspace notification observers for system sleep/wake.
