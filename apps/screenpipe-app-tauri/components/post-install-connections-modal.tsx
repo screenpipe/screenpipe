@@ -132,7 +132,7 @@ export function PostInstallConnectionsModal({
     }));
 
     try {
-      const res = await commands.oauthConnect(integrationId);
+      const res = await commands.oauthConnect(integrationId, null);
       if (res.status === "ok" && res.data.connected) {
         handleSaved(connId);
       } else {
