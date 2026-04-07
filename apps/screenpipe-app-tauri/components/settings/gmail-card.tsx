@@ -36,7 +36,7 @@ export function GmailCard() {
         );
       } else {
         // Fallback to single status check for backwards compat
-        const status = await commands.oauthStatus("gmail");
+        const status = await commands.oauthStatus("gmail", null);
         if (status.status === "ok" && status.data.connected) {
           setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
         } else {
@@ -55,7 +55,7 @@ export function GmailCard() {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("gmail");
+      const res = await commands.oauthConnect("gmail", null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
