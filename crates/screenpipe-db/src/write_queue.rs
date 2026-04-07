@@ -429,17 +429,18 @@ async fn execute_batch(
     let mut conn_opt = None;
 
     for attempt in 1..=max_retries {
-        let mut conn = match tokio::time::timeout(Duration::from_secs(5), write_pool.acquire()).await {
-            Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => {
-                send_error_to_all(batch, e);
-                return;
-            }
-            Err(_) => {
-                send_error_to_all(batch, sqlx::Error::PoolTimedOut);
-                return;
-            }
-        };
+        let mut conn =
+            match tokio::time::timeout(Duration::from_secs(5), write_pool.acquire()).await {
+                Ok(Ok(conn)) => conn,
+                Ok(Err(e)) => {
+                    send_error_to_all(batch, e);
+                    return;
+                }
+                Err(_) => {
+                    send_error_to_all(batch, sqlx::Error::PoolTimedOut);
+                    return;
+                }
+            };
 
         match sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await {
             Ok(_) => {
@@ -463,7 +464,10 @@ async fn execute_batch(
                 continue;
             }
             Err(e) if attempt < max_retries && is_busy_error(&e) => {
-                warn!("write_queue: BEGIN IMMEDIATE busy (attempt {}/{}), retrying...", attempt, max_retries);
+                warn!(
+                    "write_queue: BEGIN IMMEDIATE busy (attempt {}/{}), retrying...",
+                    attempt, max_retries
+                );
                 drop(conn);
                 last_error = Some(e);
                 tokio::time::sleep(Duration::from_millis(50 * attempt as u64)).await;
