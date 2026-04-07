@@ -1414,7 +1414,11 @@ mod tests {
             config: crate::config::UiCaptureConfig::default(),
             last_mouse_pos: (0, 0),
             text_buf: text.to_string(),
-            last_text_time: if text.is_empty() { None } else { Some(std::time::Instant::now()) },
+            last_text_time: if text.is_empty() {
+                None
+            } else {
+                Some(std::time::Instant::now())
+            },
             current_app: Arc::new(parking_lot::Mutex::new(Some("test".into()))),
             current_window: Arc::new(parking_lot::Mutex::new(Some("test window".into()))),
             activity_feed: None,
