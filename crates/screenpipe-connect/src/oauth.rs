@@ -105,7 +105,8 @@ pub fn read_oauth_token(integration_id: &str) -> Option<String> {
 }
 
 pub fn read_oauth_token_instance(integration_id: &str, instance: Option<&str>) -> Option<String> {
-    let content = std::fs::read_to_string(oauth_token_path_instance(integration_id, instance)).ok()?;
+    let content =
+        std::fs::read_to_string(oauth_token_path_instance(integration_id, instance)).ok()?;
     let v: Value = serde_json::from_str(&content).ok()?;
 
     if let Some(expires_at) = v["expires_at"].as_u64() {
@@ -123,7 +124,11 @@ pub fn write_oauth_token(integration_id: &str, data: &Value) -> Result<()> {
     write_oauth_token_instance(integration_id, None, data)
 }
 
-pub fn write_oauth_token_instance(integration_id: &str, instance: Option<&str>, data: &Value) -> Result<()> {
+pub fn write_oauth_token_instance(
+    integration_id: &str,
+    instance: Option<&str>,
+    data: &Value,
+) -> Result<()> {
     let path = oauth_token_path_instance(integration_id, instance);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -186,7 +191,11 @@ pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Re
     refresh_token_instance(client, integration_id, None).await
 }
 
-pub async fn refresh_token_instance(client: &reqwest::Client, integration_id: &str, instance: Option<&str>) -> Result<String> {
+pub async fn refresh_token_instance(
+    client: &reqwest::Client,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> Result<String> {
     let content = std::fs::read_to_string(oauth_token_path_instance(integration_id, instance))?;
     let stored: Value = serde_json::from_str(&content)?;
     let refresh_tok = stored["refresh_token"]
@@ -220,11 +229,17 @@ pub async fn get_valid_token(client: &reqwest::Client, integration_id: &str) -> 
     get_valid_token_instance(client, integration_id, None).await
 }
 
-pub async fn get_valid_token_instance(client: &reqwest::Client, integration_id: &str, instance: Option<&str>) -> Option<String> {
+pub async fn get_valid_token_instance(
+    client: &reqwest::Client,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> Option<String> {
     if let Some(token) = read_oauth_token_instance(integration_id, instance) {
         return Some(token);
     }
-    refresh_token_instance(client, integration_id, instance).await.ok()
+    refresh_token_instance(client, integration_id, instance)
+        .await
+        .ok()
 }
 
 // ---------------------------------------------------------------------------
