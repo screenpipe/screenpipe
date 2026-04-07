@@ -461,7 +461,11 @@ async fn gmail_get_message(
     }
 }
 
-async fn gmail_get_message_inner(client: &reqwest::Client, id: &str, instance: Option<&str>) -> anyhow::Result<Value> {
+async fn gmail_get_message_inner(
+    client: &reqwest::Client,
+    id: &str,
+    instance: Option<&str>,
+) -> anyhow::Result<Value> {
     let token = gmail_token(client, instance).await?;
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=full",
@@ -513,7 +517,11 @@ async fn gmail_send_inner(
 async fn gmail_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow::Result<String> {
     oauth_store::get_valid_token_instance(client, "gmail", instance)
         .await
-        .ok_or_else(|| anyhow::anyhow!("Gmail not connected — use 'Connect with Gmail' in Settings > Connections"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
+            )
+        })
 }
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
@@ -571,7 +579,12 @@ fn parse_gmail_message(msg: &Value) -> Value {
     let get_header = |name: &str| -> String {
         headers
             .iter()
-            .find(|h| h["name"].as_str().map(|n| n.eq_ignore_ascii_case(name)).unwrap_or(false))
+            .find(|h| {
+                h["name"]
+                    .as_str()
+                    .map(|n| n.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+            })
             .and_then(|h| h["value"].as_str())
             .unwrap_or("")
             .to_string()
@@ -604,7 +617,10 @@ fn extract_text_body(payload: &Value) -> String {
         return text;
     }
     // Walk parts (multipart/mixed, multipart/alternative, etc.)
-    let parts = payload["parts"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let parts = payload["parts"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     for part in parts {
         let mime = part["mimeType"].as_str().unwrap_or("");
         if mime == "text/plain" {
@@ -622,7 +638,11 @@ fn extract_text_body(payload: &Value) -> String {
 
 fn decode_base64url(data: Option<&str>) -> Option<String> {
     let text = String::from_utf8(URL_SAFE_NO_PAD.decode(data?).ok()?).ok()?;
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 // ---------------------------------------------------------------------------
