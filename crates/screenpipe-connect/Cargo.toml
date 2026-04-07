@@ -22,7 +22,6 @@ russh-sftp = "2.1"
 dirs = "6"
 chrono = "0.4"
 async-trait = "0.1"
-base64 = "0.22"
 once_cell = "1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mdns-sd = "0.13"
