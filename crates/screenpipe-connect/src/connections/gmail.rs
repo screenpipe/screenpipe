@@ -67,9 +67,7 @@ impl Integration for Gmail {
             .json()
             .await?;
 
-        let email = resp["emailAddress"]
-            .as_str()
-            .unwrap_or("unknown");
+        let email = resp["emailAddress"].as_str().unwrap_or("unknown");
         Ok(format!("connected as {}", email))
     }
 }
