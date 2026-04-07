@@ -514,6 +514,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced frame via the write queue. Returns the frame ID (0 if skipped due to conflict).
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_frame(
         &self,
         sync_id: &str,
@@ -570,6 +571,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced transcription via the write queue. Returns the audio_chunk_id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_transcription(
         &self,
         sync_id: &str,
@@ -600,6 +602,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced accessibility record via the write queue.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_accessibility(
         &self,
         sync_id: &str,
@@ -1102,6 +1105,7 @@ impl DatabaseManager {
     /// Replace all transcription rows for an audio chunk with a single new transcription.
     /// Used by the re-transcribe endpoint. Deletes existing rows first to avoid
     /// UNIQUE constraint violations on (audio_chunk_id, transcription).
+    #[allow(clippy::too_many_arguments)]
     pub async fn replace_audio_transcription(
         &self,
         audio_chunk_id: i64,
@@ -6642,12 +6646,11 @@ LIMIT ? OFFSET ?
     /// Returns deduplicated text grouped by app+window, or None if nothing was typed.
     pub async fn get_meeting_typed_text(&self, id: i64) -> Result<Option<String>, SqlxError> {
         // Get meeting time range
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT meeting_start, meeting_end FROM meetings WHERE id = ?1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT meeting_start, meeting_end FROM meetings WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let (start, end) = match row {
             Some((s, Some(e))) => (s, e),
@@ -6832,6 +6835,7 @@ LIMIT ? OFFSET ?
         Ok(rows)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_meeting(
         &self,
         id: i64,
@@ -7085,6 +7089,7 @@ LIMIT ? OFFSET ?
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_memories(
         &self,
         query: Option<&str>,
@@ -7144,7 +7149,10 @@ LIMIT ? OFFSET ?
             Some("asc") => "ASC",
             _ => "DESC",
         };
-        sql.push_str(&format!(" ORDER BY {} {} LIMIT ?7 OFFSET ?8", order_col, order_direction));
+        sql.push_str(&format!(
+            " ORDER BY {} {} LIMIT ?7 OFFSET ?8",
+            order_col, order_direction
+        ));
 
         let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);
 
