@@ -218,6 +218,7 @@ describe('Pipes: discover → install → play', function () {
           const list: any[] = Array.isArray(json) ? json : (json.data || json.pipes || []);
           const pipe = list.find((p: any) => {
             const perms = p.permissions as any;
+            if (p.config && p.config.connections && p.config.connections.length > 0) return false;
             if (!perms) return true;
             if (perms.allow_connections === true) return false;
             if (perms.preset === 'admin' || perms.preset === 'writer') return false;
@@ -305,19 +306,31 @@ describe('Pipes: discover → install → play', function () {
     await pipeNameBtn.moveTo();
     await browser.pause(400);
 
-    const played = await browser.execute((name: string) => {
+    const playState = await browser.execute((name: string) => {
+      let debugHtml = "";
       for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
         if (nameBtn.textContent?.trim() !== name) continue;
         const row = nameBtn.closest<HTMLElement>('div.group');
         if (!row) continue;
+        debugHtml = row.innerHTML;
+        
+        // Sometimes the pipe auto-starts if it has a schedule or trigger
+        const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop pipe"]');
+        if (stopBtn) return { played: true, debugHtml };
+
         const playBtn = row.querySelector<HTMLButtonElement>('button[title="run pipe"]');
         if (playBtn && !playBtn.disabled) {
           playBtn.click();
-          return true;
+          return { played: true, debugHtml };
         }
       }
-      return false;
+      return { played: false, debugHtml };
     }, installedPipeName);
+    
+    if (!playState.played) {
+      console.log("DEBUG ROW HTML:", playState.debugHtml);
+    }
+    const played = playState.played;
 
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
