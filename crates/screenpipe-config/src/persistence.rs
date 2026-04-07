@@ -62,13 +62,15 @@ mod tests {
 
     #[test]
     fn save_and_load_round_trip() {
-        let mut settings = RecordingSettings::default();
-        settings.port = 4040;
-        settings.power_mode = Some("battery_saver".to_string());
-        settings.vocabulary = vec![crate::VocabEntry {
-            word: "screenpipe".to_string(),
-            replace_with: None,
-        }];
+        let settings = RecordingSettings {
+            port: 4040,
+            power_mode: Some("battery_saver".to_string()),
+            vocabulary: vec![crate::VocabEntry {
+                word: "screenpipe".to_string(),
+                replace_with: None,
+            }],
+            ..Default::default()
+        };
 
         let file = NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
