@@ -2068,11 +2068,7 @@ pub async fn run_meeting_detection_loop(
         // Drain pending calendar events (non-blocking).
         // Each publish replaces the full list, so we keep only the latest.
         while let Some(event) = cal_sub.next().now_or_never().flatten() {
-            calendar_events = event
-                .data
-                .into_iter()
-                .filter(|e| !e.is_all_day)
-                .collect();
+            calendar_events = event.data.into_iter().filter(|e| !e.is_all_day).collect();
         }
 
         // Skip if manual meeting is active
@@ -2214,9 +2210,7 @@ pub async fn run_meeting_detection_loop(
                     // Calendar enrichment: find overlapping calendar event
                     let (cal_title, cal_attendees) =
                         find_overlapping_calendar_event(&calendar_events);
-                    let attendees_str = cal_attendees
-                        .as_ref()
-                        .map(|a| a.join(", "));
+                    let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
 
                     // Try to merge with recently-ended meeting
                     let meeting_id = match db.find_recent_meeting_for_app(&app, 120).await {
