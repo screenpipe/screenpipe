@@ -765,11 +765,11 @@ pub async fn extract_frame_from_video(
                 // as VIDEO_CORRUPTED — surface the real cause so it can be fixed.
                 if err_str.contains("no such file") || err_str.contains("os error 2") {
                     return Err(anyhow::anyhow!(
-                        "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. \
+                    "FFPROBE_NOT_FOUND: cannot extract frame from {} - ffprobe binary not found. \
                          Ensure ffprobe is installed alongside ffmpeg. Error: {}",
-                        file_path,
-                        e
-                    ));
+                    file_path,
+                    e
+                ));
                 }
                 error!("failed to get video metadata, using defaults: {}", e);
                 (1.0, f64::MAX) // Use MAX duration to disable validation on error
@@ -875,7 +875,9 @@ pub async fn extract_frame_from_video(
 async fn cleanup_old_frames(frames_dir: &PathBuf) -> Result<()> {
     use std::time::{Duration, SystemTime};
 
-    let one_hour_ago = SystemTime::now().checked_sub(Duration::from_secs(3600)).unwrap_or(SystemTime::UNIX_EPOCH);
+    let one_hour_ago = SystemTime::now()
+        .checked_sub(Duration::from_secs(3600))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut read_dir = tokio::fs::read_dir(frames_dir).await?;
 
     while let Some(entry) = read_dir.next_entry().await? {
