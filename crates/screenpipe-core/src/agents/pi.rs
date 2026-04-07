@@ -151,6 +151,7 @@ impl PiExecutor {
         use crate::pipes::permissions::PipePermissions;
         let perms = PipePermissions::from_config(config);
 
+        #[allow(clippy::type_complexity)]
         let all_skills: &[(&str, &str, Box<dyn Fn(&PipePermissions) -> bool>)] = &[
             (
                 "screenpipe-api",
@@ -1755,6 +1756,7 @@ mod tests {
     /// The fix replaces strict UTF-8 `BufReader::lines()` with raw byte-level
     /// reading + `String::from_utf8_lossy`.
     #[test]
+    #[allow(invalid_from_utf8)]
     fn test_lossy_utf8_handles_invalid_bytes() {
         // Simulate raw bytes from a pipe: "Hi" + 0xFF 0xFE (invalid UTF-8) + newline + "OK" + newline
         let raw_bytes: &[u8] = b"Hi\xff\xfe\nOK\n";
