@@ -50,10 +50,7 @@ impl Integration for Salesforce {
             .error_for_status()?
             .json()
             .await?;
-        let count = resp["sobjects"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let count = resp["sobjects"].as_array().map(|a| a.len()).unwrap_or(0);
         Ok(format!("connected — {} objects available", count))
     }
 }
