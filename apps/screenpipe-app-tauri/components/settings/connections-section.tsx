@@ -1008,7 +1008,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       }
     } catch { /* fallback below */ }
     try {
-      const res = await commands.oauthStatus(integrationId);
+      const res = await commands.oauthStatus(integrationId, null);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
         setDisplayName(res.data.display_name ?? null);
@@ -1021,7 +1021,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
   const handleConnect = async () => {
     setStatus("loading");
     try {
-      const res = await commands.oauthConnect(integrationId);
+      const res = await commands.oauthConnect(integrationId, null);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
         await fetchStatus();
@@ -1034,7 +1034,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
   };
 
   const handleDisconnect = async () => {
-    await commands.oauthDisconnect(integrationId);
+    await commands.oauthDisconnect(integrationId, null);
     setStatus("idle");
     setDisplayName(null);
   };
