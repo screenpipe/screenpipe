@@ -38,6 +38,37 @@ interface NotificationPayload {
   pipe_name?: string;
 }
 
+async function openNotificationLink(href: string) {
+  const raw = href.trim();
+  if (!raw) return;
+
+  let localPath: string | null = null;
+  if (raw.startsWith("~/")) {
+    const home = await import("@tauri-apps/api/path").then((m) => m.homeDir());
+    localPath = home + raw.slice(1);
+  } else if (raw.startsWith("/") && !raw.startsWith("//")) {
+    localPath = raw;
+  } else if (/^[A-Za-z]:[\\/]/.test(raw)) {
+    localPath = raw;
+  }
+
+  const { open } = await import("@tauri-apps/plugin-shell");
+  if (localPath && localPath.toLowerCase().endsWith(".md")) {
+    try {
+      await invoke("open_note_path", { path: localPath });
+      return;
+    } catch {
+      // Fallback to default file opener.
+    }
+  }
+  if (localPath) {
+    await invoke("open_note_path", { path: localPath });
+    return;
+  }
+
+  await open(raw);
+}
+
 export default function NotificationPanelPage() {
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
   const [visible, setVisible] = useState(false);
@@ -469,16 +500,7 @@ export default function NotificationPanelPage() {
                       e.preventDefault();
                       if (!href) return;
                       try {
-                        // file paths: expand ~ and open natively
-                        let url = href;
-                        if (url.startsWith("~/")) {
-                          const home = await import("@tauri-apps/api/path").then(m => m.homeDir());
-                          url = "file://" + home + url.slice(2);
-                        } else if (url.startsWith("/") && !url.startsWith("//")) {
-                          url = "file://" + url;
-                        }
-                        const { open } = await import("@tauri-apps/plugin-shell");
-                        await open(url);
+                        await openNotificationLink(href);
                       } catch {
                         console.error("failed to open url externally:", href);
                       }

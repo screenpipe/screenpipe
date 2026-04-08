@@ -3768,6 +3768,11 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
             86400,
         )));
     }
+    if s.eq_ignore_ascii_case("weekly") || s.eq_ignore_ascii_case("every week") {
+        return Some(ParsedSchedule::Interval(std::time::Duration::from_secs(
+            7 * 86400,
+        )));
+    }
     // Try human-readable interval first
     if let Some(d) = parse_duration_str(s) {
         return Some(ParsedSchedule::Interval(d));
@@ -3814,6 +3819,7 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     // "monday", "tuesday", etc. → specific weekday
     let cron_str = match prefix {
         "day" => format!("0 0 {} * * * *", utc_hour),
+        "daily" => format!("0 0 {} * * * *", utc_hour),
         "monday" | "mon" => format!("0 0 {} * * 1 *", utc_hour),
         "tuesday" | "tue" => format!("0 0 {} * * 2 *", utc_hour),
         "wednesday" | "wed" => format!("0 0 {} * * 3 *", utc_hour),
@@ -3839,6 +3845,12 @@ fn local_hour_to_utc(local_hour: u32) -> u32 {
 /// Parse "9am", "12pm", "6pm", "14", "9" into a 24-hour number.
 fn parse_time_str(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
+    if let Some((hour, minute)) = parse_hour_minute(&s) {
+        if minute != 0 {
+            return None;
+        }
+        return Some(hour);
+    }
     if let Some(h) = s.strip_suffix("am") {
         let n: u32 = h.trim().parse().ok()?;
         if n == 12 {
@@ -3865,6 +3877,68 @@ fn parse_time_str(s: &str) -> Option<u32> {
             None
         }
     }
+}
+
+fn parse_hour_minute(s: &str) -> Option<(u32, u32)> {
+    let normalized = s
+        .replace(" a.m.", "am")
+        .replace(" p.m.", "pm")
+        .replace(" a.m", "am")
+        .replace(" p.m", "pm")
+        .replace(" am", "am")
+        .replace(" pm", "pm")
+        .replace(' ', "");
+
+    let (clock, ampm) = if let Some(c) = normalized.strip_suffix("am") {
+        (c, Some("am"))
+    } else if let Some(c) = normalized.strip_suffix("pm") {
+        (c, Some("pm"))
+    } else {
+        (normalized.as_str(), None)
+    };
+
+    let (hour, minute) = if let Some((h, m)) = clock.split_once(':') {
+        let hour: u32 = h.parse().ok()?;
+        let minute: u32 = m.parse().ok()?;
+        (hour, minute)
+    } else {
+        let hour: u32 = clock.parse().ok()?;
+        (hour, 0)
+    };
+
+    if minute >= 60 {
+        return None;
+    }
+
+    let hour24 = match ampm {
+        Some("am") => {
+            if hour == 12 {
+                0
+            } else if hour <= 12 {
+                hour
+            } else {
+                return None;
+            }
+        }
+        Some("pm") => {
+            if hour == 12 {
+                12
+            } else if hour <= 12 {
+                hour + 12
+            } else {
+                return None;
+            }
+        }
+        _ => {
+            if hour < 24 {
+                hour
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some((hour24, minute))
 }
 
 /// Check if a pipe should run now given its schedule and last run time.
@@ -4425,6 +4499,13 @@ mod tests {
                 other.is_some()
             ),
         }
+        match parse_schedule("daily at 9am") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'daily at 9am', got {:?}",
+                other.is_some()
+            ),
+        }
     }
 
     #[test]
@@ -4453,6 +4534,26 @@ mod tests {
         assert_eq!(parse_time_str("6pm"), Some(18));
         assert_eq!(parse_time_str("1pm"), Some(13));
         assert_eq!(parse_time_str("14"), Some(14));
+        assert_eq!(parse_time_str("9:00am"), Some(9));
+        assert_eq!(parse_time_str("9:00 am"), Some(9));
+        assert_eq!(parse_time_str("09:00"), Some(9));
+        assert_eq!(parse_time_str("9:30am"), None);
+    }
+
+    #[test]
+    fn test_parse_schedule_weekly_aliases() {
+        match parse_schedule("weekly") {
+            Some(ParsedSchedule::Interval(d)) => {
+                assert_eq!(d, std::time::Duration::from_secs(7 * 86400));
+            }
+            _ => panic!("expected weekly interval"),
+        }
+        match parse_schedule("every week") {
+            Some(ParsedSchedule::Interval(d)) => {
+                assert_eq!(d, std::time::Duration::from_secs(7 * 86400));
+            }
+            _ => panic!("expected every week interval"),
+        }
     }
 
     #[test]

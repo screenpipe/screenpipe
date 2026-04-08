@@ -856,6 +856,7 @@ async fn main() {
             commands::copy_frame_to_clipboard,
             commands::copy_deeplink_to_clipboard,
             commands::copy_text_to_clipboard,
+            commands::open_note_path,
             // Overlay commands (Windows)
             commands::enable_overlay_click_through,
             commands::disable_overlay_click_through,

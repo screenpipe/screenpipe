@@ -1105,11 +1105,23 @@ export function PipesSection() {
       )
     );
     try {
-      await fetch(`${apiBase}/pipes/${name}/enable`, {
+      const res = await fetch(`${apiBase}/pipes/${name}/enable`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
+      let data: { success?: boolean; error?: string } | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        // Older servers may return empty body; treat non-2xx as failure below.
+      }
+      if (!res.ok || data?.error || data?.success === false) {
+        throw new Error(
+          data?.error ||
+          `failed to ${enabled ? "enable" : "disable"} pipe "${name}"`
+        );
+      }
     } catch {
       // Revert on failure
       setPipes((prev) =>
@@ -1119,6 +1131,11 @@ export function PipesSection() {
             : p
         )
       );
+      toast({
+        title: "pipe toggle failed",
+        description: `could not ${enabled ? "enable" : "disable"} "${name}"`,
+        variant: "destructive",
+      });
     }
   };
 
