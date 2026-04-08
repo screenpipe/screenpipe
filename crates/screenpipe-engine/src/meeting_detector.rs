@@ -114,7 +114,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         // Microsoft Teams Desktop
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
-                macos_app_names: &["microsoft teams", "teams"],
+                macos_app_names: &["microsoft teams", "teams", "msteams"],
                 windows_process_names: &["ms-teams.exe", "teams.exe"],
                 browser_url_patterns: &["teams.microsoft.com", "teams.live.com", "Microsoft Teams"],
                 browser_title_patterns: &[],
@@ -2510,6 +2510,8 @@ mod tests {
                 .contains(&"microsoft teams")
         });
         assert!(teams.is_some(), "Teams profile not found");
+        let teams_profile = teams.unwrap();
+        assert!(teams_profile.app_identifiers.macos_app_names.contains(&"msteams"), "MSTeams not added to macos_app_names");
     }
 
     #[test]

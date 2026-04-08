@@ -36,7 +36,7 @@ export function GmailCard() {
         );
       } else {
         // Fallback to single status check for backwards compat
-        const status = await commands.oauthStatus("gmail");
+        const status = await commands.oauthStatus("gmail", null);
         if (status.status === "ok" && status.data.connected) {
           setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
         } else {

@@ -500,6 +500,12 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         state.max_depth_reached = depth;
     }
 
+    // Yield every 100 elements to let macOS process pending HID/input events.
+    // Without this, tight AX IPC loops can starve USB mouse/keyboard event delivery.
+    if state.node_count % 100 == 0 {
+        std::thread::yield_now();
+    }
+
     // Set a per-element timeout to prevent IPC hangs
     let _ = elem.set_messaging_timeout_secs(state.element_timeout_secs);
 

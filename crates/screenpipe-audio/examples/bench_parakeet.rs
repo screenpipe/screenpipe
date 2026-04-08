@@ -13,6 +13,7 @@ use screenpipe_core::Language;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg(target_os = "windows")]
 fn get_rss_mb() -> f64 {
     #[repr(C)]
     #[allow(non_snake_case)]
@@ -41,6 +42,11 @@ fn get_rss_mb() -> f64 {
             0.0
         }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_rss_mb() -> f64 {
+    0.0
 }
 
 #[tokio::main]

@@ -170,7 +170,7 @@ jobs:
             target: aarch64-apple-darwin
             tauri-args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,official-build"
             os_type: "macos"
-          - platform: "macos-latest"
+          - platform: "macos-26"
             args: "--target x86_64-apple-darwin --features metal"
             target: x86_64-apple-darwin
             tauri-args: "--target x86_64-apple-darwin --features metal,official-build"
@@ -833,7 +833,10 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # https://tauri.app/v1/guides/distribution/sign-macos
-          CI: true
+          # CI=false so tauri's DMG bundler renders the background image correctly
+          # (CI=true causes hdiutil to skip the background/icon layout stage)
+          # See: https://github.com/tauri-apps/tauri-action/issues/740
+          CI: false
           # Fix std::filesystem availability - requires macOS 10.15+
           # whisper.cpp ggml uses std::filesystem::path which needs 10.15
           # All these vars needed to ensure cmake picks up the deployment target

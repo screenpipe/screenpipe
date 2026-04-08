@@ -200,6 +200,25 @@ jobs:
           pulseaudio pulseaudio-utils libpipewire-0.3-dev
           libgbm-dev libwayland-dev libegl-dev libopenblas-dev mold
 
+    - name: Normalize OpenBLAS paths for antirez-asr-sys
+      run: |
+        sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
+        sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/include
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+        CBLAS_HEADER="$(find /usr/include /usr/lib -name cblas.h 2>/dev/null | head -n1 || true)"
+        if [ -z "$CBLAS_HEADER" ]; then
+          CBLAS_HEADER="$(dpkg -L libopenblas-dev | grep -m1 '/cblas\.h$' || true)"
+        fi
+        if [ -n "$CBLAS_HEADER" ]; then
+          CBLAS_DIR="$(dirname "$CBLAS_HEADER")"
+          sudo ln -sf "$CBLAS_HEADER" /usr/include/cblas.h
+          sudo ln -sf "$CBLAS_HEADER" /usr/lib/x86_64-linux-gnu/openblas/include/cblas.h
+          echo "C_INCLUDE_PATH=$CBLAS_DIR:/usr/include:/usr/lib/x86_64-linux-gnu/openblas/include:${C_INCLUDE_PATH:-}" >> "$GITHUB_ENV"
+          echo "CFLAGS=-I$CBLAS_DIR -I/usr/include -I/usr/lib/x86_64-linux-gnu/openblas/include ${CFLAGS:-}" >> "$GITHUB_ENV"
+        fi
+        echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+
     - name: Set up Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
@@ -248,7 +267,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
-        OPENBLAS_PATH: /usr
+        OPENBLAS_PATH: ${{ env.OPENBLAS_PATH }}
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

@@ -547,7 +547,7 @@ mod tests {
     #[tokio::test]
     async fn test_paired_capture_without_accessibility() {
         let tmp = TempDir::new().unwrap();
-        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80);
+        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .unwrap();
@@ -584,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn test_paired_capture_with_accessibility_text() {
         let tmp = TempDir::new().unwrap();
-        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80);
+        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .unwrap();
@@ -644,7 +644,7 @@ mod tests {
     #[tokio::test]
     async fn test_paired_capture_empty_accessibility_text() {
         let tmp = TempDir::new().unwrap();
-        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80);
+        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
             .await
             .unwrap();
