@@ -19,6 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, SetForegroundWindow, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
     HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
     WS_CAPTION, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_THICKFRAME,
+    SetWindowDisplayAffinity, WINDOW_DISPLAY_AFFINITY, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
 };
 
 /// Extended window styles for overlay behavior
@@ -330,6 +331,26 @@ pub fn bring_to_front_and_activate(window: &WebviewWindow) -> Result<(), String>
     }
 
     info!("Overlay brought to front and activated");
+    Ok(())
+}
+
+/// Controls whether the window is excluded from screen capture tools like OBS.
+///
+/// When `capturable` is false, `WDA_EXCLUDEFROMCAPTURE` hides the window from
+/// all screen recording APIs (requires Windows 10 version 2004+).
+/// When true, `WDA_NONE` restores normal capture visibility.
+pub fn set_display_affinity(window: &WebviewWindow, capturable: bool) -> Result<(), String> {
+    let hwnd = get_hwnd(window).ok_or("Failed to get HWND")?;
+    let affinity: WINDOW_DISPLAY_AFFINITY = if capturable { WDA_NONE } else { WDA_EXCLUDEFROMCAPTURE };
+    unsafe {
+        SetWindowDisplayAffinity(hwnd, affinity)
+            .map_err(|e| format!("SetWindowDisplayAffinity failed: {}", e))?;
+    }
+    info!(
+        "Window display affinity set: capturable={} (affinity=0x{:X})",
+        capturable,
+        affinity.0
+    );
     Ok(())
 }
 
