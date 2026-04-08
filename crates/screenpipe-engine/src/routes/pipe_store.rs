@@ -367,6 +367,129 @@ pub async fn pipe_store_check_updates(State(pm): State<SharedPipeManager>) -> Js
     Json(json!({ "data": updates }))
 }
 
+/// POST /pipes/store/auto-update
+///
+/// Automatically update all store-installed pipes that have not been locally modified.
+/// Returns which pipes were auto-updated, which were skipped (modified), and any errors.
+///
+/// Uses a static flag to prevent concurrent auto-update requests from duplicating work.
+pub async fn pipe_store_auto_update(State(pm): State<SharedPipeManager>) -> Json<Value> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static AUTO_UPDATING: AtomicBool = AtomicBool::new(false);
+
+    // Prevent concurrent auto-update requests
+    if AUTO_UPDATING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Json(json!({
+            "auto_updated": [],
+            "skipped_modified": [],
+            "errors": [{"error": "auto-update already in progress"}],
+        }));
+    }
+
+    let result = pipe_store_auto_update_inner(&pm).await;
+    AUTO_UPDATING.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn pipe_store_auto_update_inner(pm: &SharedPipeManager) -> Json<Value> {
+    let mgr = pm.lock().await;
+    let pipes = mgr.list_pipes().await;
+    drop(mgr);
+
+    let base = api_base_url();
+    let client = &*REGISTRY_CLIENT;
+
+    let mut auto_updated: Vec<Value> = Vec::new();
+    let mut skipped_modified: Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
+
+    for pipe in &pipes {
+        let slug = match &pipe.source_slug {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+        let installed_version = pipe.installed_version.unwrap_or(0);
+        let is_modified = pipe.locally_modified.unwrap_or(false);
+
+        // Fetch latest version from registry
+        let detail_url = format!("{}/api/pipes/store/{}", base, slug);
+        let detail = match client.get(&detail_url).send().await {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(json!({ "slug": slug, "error": format!("parse error: {}", e) }));
+                    continue;
+                }
+            },
+            Err(e) => {
+                errors.push(json!({ "slug": slug, "error": format!("network error: {}", e) }));
+                continue;
+            }
+        };
+
+        let latest_version = detail
+            .get("version")
+            .or_else(|| detail.get("data").and_then(|d| d.get("version")))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        if latest_version <= installed_version {
+            continue;
+        }
+
+        if is_modified {
+            skipped_modified.push(json!({
+                "slug": slug,
+                "pipe_name": pipe.config.name,
+                "installed_version": installed_version,
+                "latest_version": latest_version,
+            }));
+            continue;
+        }
+
+        // Get source_md for the update
+        let source_md = match detail
+            .get("source_md")
+            .or_else(|| detail.get("data").and_then(|d| d.get("source_md")))
+            .and_then(|v| v.as_str())
+        {
+            Some(md) => md.to_string(),
+            None => {
+                errors.push(json!({ "slug": slug, "error": "missing source_md" }));
+                continue;
+            }
+        };
+
+        let mgr = pm.lock().await;
+        match mgr
+            .update_pipe_from_store(&slug, &source_md, &slug, latest_version)
+            .await
+        {
+            Ok(()) => {
+                auto_updated.push(json!({
+                    "slug": slug,
+                    "pipe_name": pipe.config.name,
+                    "from_version": installed_version,
+                    "to_version": latest_version,
+                }));
+            }
+            Err(e) => {
+                errors.push(json!({ "slug": slug, "error": e.to_string() }));
+            }
+        }
+        drop(mgr);
+    }
+
+    Json(json!({
+        "auto_updated": auto_updated,
+        "skipped_modified": skipped_modified,
+        "errors": errors,
+    }))
+}
+
 /// POST /pipes/store/:slug/review
 ///
 /// Submit a review for a pipe. Requires auth (Bearer token).

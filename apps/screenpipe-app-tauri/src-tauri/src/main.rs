@@ -6,7 +6,6 @@
 #![allow(deprecated)] // cocoa/objc crate deprecations — will migrate to objc2 later
 #![allow(unused_imports)]
 
-
 use analytics::AnalyticsManager;
 use commands::show_main_window;
 use serde_json::json;
@@ -42,7 +41,6 @@ mod icons;
 use crate::analytics::start_analytics;
 mod calendar;
 mod chatgpt_oauth;
-mod oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
@@ -53,6 +51,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod oauth;
 mod permissions;
 mod pi;
 mod pi_command_queue;
@@ -656,6 +655,7 @@ async fn main() {
                 // Suggestions
                 suggestions::get_cached_suggestions,
                 suggestions::force_regenerate_suggestions,
+                suggestions::set_enhanced_ai_suggestions,
                 // Config commands
                 config::validate_data_dir,
                 // Hardware detection
@@ -935,6 +935,7 @@ async fn main() {
             // Suggestions
             suggestions::get_cached_suggestions,
                 suggestions::force_regenerate_suggestions,
+                suggestions::set_enhanced_ai_suggestions,
             // Config commands
             config::validate_data_dir,
             // Hardware detection
@@ -1592,9 +1593,25 @@ async fn main() {
 
             // Auto-start suggestions scheduler (always on)
             let suggestions_state = app_handle.state::<suggestions::SuggestionsState>();
+            // Initialize enhanced AI config from saved settings
+            {
+                if let Ok(Some(store)) = crate::store::SettingsStore::get(&app_handle) {
+                    if store.enhanced_ai {
+                        let token = store.user.token.clone().unwrap_or_default();
+                        if !token.is_empty() {
+                            let mut guard = suggestions_state.enhanced_ai.blocking_lock();
+                            *guard = Some(suggestions::EnhancedAIConfig {
+                                enabled: true,
+                                token,
+                            });
+                        }
+                    }
+                }
+            }
             let suggestions_state_clone = suggestions::SuggestionsState {
                 cache: suggestions_state.cache.clone(),
                 scheduler_handle: suggestions_state.scheduler_handle.clone(),
+                enhanced_ai: suggestions_state.enhanced_ai.clone(),
             };
             tauri::async_runtime::spawn(async move {
                 suggestions::auto_start_scheduler(&suggestions_state_clone).await;

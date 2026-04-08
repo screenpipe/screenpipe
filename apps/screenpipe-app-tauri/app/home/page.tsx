@@ -63,6 +63,7 @@ import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
+import { computeMeetingActive, type MeetingRow } from "@/lib/utils/meeting-state";
 import { toast } from "@/components/ui/use-toast";
 import {
   Tooltip,
@@ -222,31 +223,27 @@ function SettingsPageContent() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  // Manual meeting toggle state — synced with server
-  const [manualMeeting, setManualMeeting] = useState(false);
+  // Active meeting state — lights up the phone icon for ANY active meeting
+  // (manual OR auto-detected: Teams, Zoom, etc.). manualActive is true only
+  // when the user can stop it via the icon click.
+  const [meetingState, setMeetingState] = useState<{ active: boolean; manualActive: boolean }>(
+    { active: false, manualActive: false },
+  );
   const [meetingLoading, setMeetingLoading] = useState(false);
 
-  // Poll server for active manual meeting on mount + interval
-  // manualMeetingStartedAt: timestamp when user clicked start, used to ignore
-  // the first poll after start (server may not have synced yet)
+  // Timestamp when user clicked start, used for a 10s grace period so a
+  // stale poll can't clear local state before the server persists the row.
   const manualMeetingStartedAt = useRef<number>(0);
   useEffect(() => {
     let cancelled = false;
     const check = () => {
       fetch("http://localhost:3030/meetings?limit=5")
         .then((r) => r.ok ? r.json() : [])
-        .then((meetings: { meeting_end: string | null; detection_source: string }[]) => {
+        .then((meetings: MeetingRow[]) => {
           if (cancelled) return;
-          const hasActiveManual = meetings.some(
-            (m) => m.meeting_end === null && m.detection_source === "manual"
+          setMeetingState(
+            computeMeetingActive(meetings, manualMeetingStartedAt.current),
           );
-          // Grace period: ignore poll clearing the meeting within 10s of user clicking start
-          // (prevents race where poll returns stale data before server processes the start)
-          const inGracePeriod = Date.now() - manualMeetingStartedAt.current < 10_000;
-          if (inGracePeriod && !hasActiveManual) {
-            return; // don't clear — trust the local click
-          }
-          setManualMeeting(hasActiveManual);
         })
         .catch(() => {});
     };
@@ -258,11 +255,17 @@ function SettingsPageContent() {
   const toggleMeeting = useCallback(async () => {
     setMeetingLoading(true);
     try {
-      if (manualMeeting) {
+      if (meetingState.manualActive) {
+        // Stop the manual meeting we previously started
         await fetch("http://localhost:3030/meetings/stop", { method: "POST" });
         manualMeetingStartedAt.current = 0;
-        setManualMeeting(false);
+        setMeetingState({ active: false, manualActive: false });
+      } else if (meetingState.active) {
+        // Auto-detected meeting in progress — icon is a passive indicator,
+        // user can't stop someone else's Teams/Zoom call from here
+        return;
       } else {
+        // No meeting active — start a manual one
         const res = await fetch("http://localhost:3030/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -270,7 +273,7 @@ function SettingsPageContent() {
         });
         if (res.ok) {
           manualMeetingStartedAt.current = Date.now();
-          setManualMeeting(true);
+          setMeetingState({ active: true, manualActive: true });
         }
       }
     } catch (e) {
@@ -278,7 +281,7 @@ function SettingsPageContent() {
     } finally {
       setMeetingLoading(false);
     }
-  }, [manualMeeting]);
+  }, [meetingState]);
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useEffect(() => {
@@ -291,7 +294,7 @@ function SettingsPageContent() {
 
   // Settings modal state
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [modalSection, setModalSection] = useState<SettingsModalSection>("general");
+  const [modalSection, setModalSection] = useState<SettingsModalSection>("display");
 
   // Open modal when URL points to a modal section
   useEffect(() => {
@@ -469,11 +472,17 @@ function SettingsPageContent() {
                   <NotificationBell />
                   <button
                     onClick={toggleMeeting}
-                    disabled={meetingLoading}
+                    disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
                     className={cn("relative flex items-center justify-center h-5 w-5 transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                    title={manualMeeting ? "stop meeting" : "start meeting"}
+                    title={
+                      meetingState.manualActive
+                        ? "stop meeting"
+                        : meetingState.active
+                          ? "meeting detected"
+                          : "start meeting"
+                    }
                   >
-                    {manualMeeting && (
+                    {meetingState.active && (
                       <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
                     )}
                     <Phone className="h-3.5 w-3.5" />

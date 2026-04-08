@@ -26,11 +26,22 @@ export function GmailCard() {
 
   const fetchAccounts = useCallback(async () => {
     try {
-      const res = await commands.oauthStatus("gmail");
-      if (res.status === "ok" && res.data.connected) {
-        setAccounts([{ instance: null, displayName: (res.data as any).display_name ?? null }]);
+      const res = await commands.oauthListInstances("gmail");
+      if (res.status === "ok" && res.data.length > 0) {
+        setAccounts(
+          res.data.map((i) => ({
+            instance: i.instance,
+            displayName: i.display_name,
+          }))
+        );
       } else {
-        setAccounts([]);
+        // Fallback to single status check for backwards compat
+        const status = await commands.oauthStatus("gmail");
+        if (status.status === "ok" && status.data.connected) {
+          setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
+        } else {
+          setAccounts([]);
+        }
       }
     } catch {
       setAccounts([]);
@@ -59,7 +70,7 @@ export function GmailCard() {
     const key = instance ?? "__default__";
     setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("gmail");
+      await commands.oauthDisconnect("gmail", instance);
       posthog.capture("gmail_disconnected", { instance });
       await fetchAccounts();
     } catch (e) {
@@ -142,18 +153,7 @@ export function GmailCard() {
                   <Lock className="h-3 w-3" />pro required
                 </Button>
                 <button
-                  onClick={async () => {
-                    try {
-                      const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ plan: "monthly", origin: "desktop-gmail-gate" }),
-                      });
-                      const data = await response.json();
-                      if (data.url) { await openUrl(data.url); return; }
-                    } catch {}
-                    await openUrl("https://screenpi.pe");
-                  }}
+                  onClick={() => openUrl("https://screenpi.pe/onboarding")}
                   className="text-[10px] text-muted-foreground hover:text-foreground underline"
                 >
                   upgrade to pro to connect

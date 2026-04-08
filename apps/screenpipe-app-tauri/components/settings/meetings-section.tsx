@@ -349,6 +349,7 @@ export function MeetingsSection() {
       prompt,
       autoSend: true,
       source: "meeting-summarize",
+      useHomeChat: true,
     });
   };
 

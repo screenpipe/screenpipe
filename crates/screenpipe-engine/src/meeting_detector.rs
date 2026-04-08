@@ -24,7 +24,10 @@
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
 use chrono::{DateTime, Utc};
+use futures::{FutureExt, StreamExt};
 use screenpipe_db::DatabaseManager;
+use screenpipe_events::subscribe_to_event;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -2028,6 +2031,11 @@ pub async fn run_meeting_detection_loop(
         Err(e) => warn!("meeting v2: failed to close orphaned meetings: {}", e),
     }
 
+    // Calendar enrichment: subscribe to calendar events from the event bus.
+    // If the calendar isn't connected, this stream simply never yields — safe no-op.
+    let mut cal_sub = subscribe_to_event::<Vec<CalendarEventSignal>>("calendar_events");
+    let mut calendar_events: Vec<CalendarEventSignal> = Vec::new();
+
     info!(
         "meeting v2: detection loop started (base_interval={:?}, profiles={})",
         base_interval,
@@ -2055,6 +2063,12 @@ pub async fn run_meeting_detection_loop(
                 sync_meeting_flag(false, &in_meeting_flag, &detector);
                 return;
             }
+        }
+
+        // Drain pending calendar events (non-blocking).
+        // Each publish replaces the full list, so we keep only the latest.
+        while let Some(event) = cal_sub.next().now_or_never().flatten() {
+            calendar_events = event.data.into_iter().filter(|e| !e.is_all_day).collect();
         }
 
         // Skip if manual meeting is active
@@ -2193,6 +2207,11 @@ pub async fn run_meeting_detection_loop(
         if let Some(action) = action {
             match action {
                 StateAction::StartMeeting { app } => {
+                    // Calendar enrichment: find overlapping calendar event
+                    let (cal_title, cal_attendees) =
+                        find_overlapping_calendar_event(&calendar_events);
+                    let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
+
                     // Try to merge with recently-ended meeting
                     let meeting_id = match db.find_recent_meeting_for_app(&app, 120).await {
                         Ok(Some(recent)) => match db.reopen_meeting(recent.id).await {
@@ -2201,17 +2220,59 @@ pub async fn run_meeting_detection_loop(
                                     "meeting v2: reopened recent meeting (id={}, app={})",
                                     recent.id, app
                                 );
+                                // Enrich reopened meeting with calendar data if it has none
+                                if cal_title.is_some()
+                                    && recent.title.as_ref().is_none_or(|t| t.is_empty())
+                                {
+                                    if let Err(e) = db
+                                        .update_meeting(
+                                            recent.id,
+                                            None,
+                                            None,
+                                            cal_title.as_deref(),
+                                            attendees_str.as_deref(),
+                                            None,
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        warn!(
+                                            "meeting v2: failed to enrich reopened meeting {}: {}",
+                                            recent.id, e
+                                        );
+                                    }
+                                }
                                 recent.id
                             }
                             Err(e) => {
                                 warn!("meeting v2: failed to reopen meeting {}: {}", recent.id, e);
-                                insert_new_meeting(&db, &app).await
+                                insert_new_meeting(
+                                    &db,
+                                    &app,
+                                    cal_title.as_deref(),
+                                    attendees_str.as_deref(),
+                                )
+                                .await
                             }
                         },
-                        Ok(None) => insert_new_meeting(&db, &app).await,
+                        Ok(None) => {
+                            insert_new_meeting(
+                                &db,
+                                &app,
+                                cal_title.as_deref(),
+                                attendees_str.as_deref(),
+                            )
+                            .await
+                        }
                         Err(e) => {
                             warn!("meeting v2: failed to find recent meeting: {}", e);
-                            insert_new_meeting(&db, &app).await
+                            insert_new_meeting(
+                                &db,
+                                &app,
+                                cal_title.as_deref(),
+                                attendees_str.as_deref(),
+                            )
+                            .await
                         }
                     };
 
@@ -2230,10 +2291,6 @@ pub async fn run_meeting_detection_loop(
                             last_seen,
                         };
                     }
-
-                    // Calendar enrichment removed — the old MeetingDetector
-                    // no longer holds calendar state. Can be re-added when
-                    // calendar events are stored in the DB.
                 }
                 StateAction::EndMeeting { meeting_id } => {
                     if meeting_id >= 0 {
@@ -2352,11 +2409,61 @@ fn sync_meeting_flag(
     }
 }
 
-/// Insert a new meeting into the database. Returns the meeting ID, or -1 on failure.
-async fn insert_new_meeting(db: &DatabaseManager, app: &str) -> i64 {
-    match db.insert_meeting(app, "ui_scan", None, None).await {
+/// Calendar event signal received from the event bus (published by calendar.rs in src-tauri).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalendarEventSignal {
+    pub title: String,
+    pub start: String,
+    pub end: String,
+    #[serde(default)]
+    pub attendees: Vec<String>,
+    #[serde(default)]
+    pub is_all_day: bool,
+}
+
+/// Check if any non-all-day calendar event overlaps with the current time.
+/// Returns (title, attendees) of the first matching event, or (None, None).
+fn find_overlapping_calendar_event(
+    events: &[CalendarEventSignal],
+) -> (Option<String>, Option<Vec<String>>) {
+    let now = Utc::now();
+    for cal_event in events {
+        if let (Ok(start), Ok(end)) = (
+            DateTime::parse_from_rfc3339(&cal_event.start),
+            DateTime::parse_from_rfc3339(&cal_event.end),
+        ) {
+            let start_utc = start.with_timezone(&Utc);
+            let end_utc = end.with_timezone(&Utc);
+            if start_utc <= now && end_utc >= now {
+                return (
+                    Some(cal_event.title.clone()),
+                    if cal_event.attendees.is_empty() {
+                        None
+                    } else {
+                        Some(cal_event.attendees.clone())
+                    },
+                );
+            }
+        }
+    }
+    (None, None)
+}
+
+/// Insert a new meeting into the database with optional calendar enrichment.
+/// Returns the meeting ID, or -1 on failure.
+async fn insert_new_meeting(
+    db: &DatabaseManager,
+    app: &str,
+    title: Option<&str>,
+    attendees: Option<&str>,
+) -> i64 {
+    match db.insert_meeting(app, "ui_scan", title, attendees).await {
         Ok(id) => {
-            info!("meeting v2: meeting started (id={}, app={})", id, app);
+            info!(
+                "meeting v2: meeting started (id={}, app={}, title={:?})",
+                id, app, title
+            );
             id
         }
         Err(e) => {

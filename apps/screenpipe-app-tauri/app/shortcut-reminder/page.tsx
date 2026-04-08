@@ -73,6 +73,7 @@ export default function ShortcutReminderPage() {
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
   const overlayData = useOverlayData();
   const meeting = useMeetingState();
+  const [overlayScale, setOverlayScale] = useState(1);
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
 
@@ -91,6 +92,10 @@ export default function ShortcutReminderPage() {
       }
       if (settings?.searchShortcut) {
         setSearchShortcut(formatShortcut(settings.searchShortcut, isMacRef.current));
+      }
+      if (settings?.shortcutOverlaySize) {
+        const s = settings.shortcutOverlaySize;
+        setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
       }
     } catch (e) {
       console.error("Failed to read shortcuts from store file:", e);
@@ -181,7 +186,11 @@ export default function ShortcutReminderPage() {
       <div
         onMouseDown={handleMouseDown}
         className="select-none"
-        style={{ cursor: "grab" }}
+        style={{
+          cursor: "grab",
+          transform: overlayScale !== 1 ? `scale(${overlayScale})` : undefined,
+          transformOrigin: "center center",
+        }}
       >
         <div
           className="border border-white/20"

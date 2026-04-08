@@ -507,8 +507,7 @@ pub async fn start_embedded_server(
                 let local_port = config.port;
                 tokio::spawn(async move {
                     screenpipe_engine::workflow_classifier::start_workflow_classifier(
-                        screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL
-                            .to_string(),
+                        screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL.to_string(),
                         token_for_classifier,
                         local_port,
                         std::time::Duration::from_secs(30),

@@ -26,6 +26,7 @@ export interface TeamInfo {
   name: string;
   created_at: string;
   member_count: number;
+  auto_join_domain?: string | null;
 }
 
 export interface TeamMember {

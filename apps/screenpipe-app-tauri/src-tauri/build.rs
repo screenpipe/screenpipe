@@ -388,7 +388,10 @@ fn main() {
             }
         } else {
             let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
-            println!("cargo:warning=mlx-metallib: already present ({} MB)", size / 1_000_000);
+            println!(
+                "cargo:warning=mlx-metallib: already present ({} MB)",
+                size / 1_000_000
+            );
         }
     }
 

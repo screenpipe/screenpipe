@@ -117,6 +117,12 @@ pub struct RecordingSettings {
     #[serde(rename = "videoQuality")]
     pub video_quality: String,
 
+    /// Maximum width for stored snapshots. Images wider than this are downscaled
+    /// (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
+    /// native resolution). Default: 1920.
+    #[serde(rename = "maxSnapshotWidth", default = "default_max_snapshot_width")]
+    pub max_snapshot_width: u32,
+
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
     #[serde(rename = "ignoredWindows")]
@@ -294,6 +300,7 @@ impl Default for RecordingSettings {
             monitor_ids: vec![],
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
+            max_snapshot_width: default_max_snapshot_width(),
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],
@@ -328,6 +335,10 @@ impl Default for RecordingSettings {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_snapshot_width() -> u32 {
+    1920
 }
 
 #[cfg(test)]

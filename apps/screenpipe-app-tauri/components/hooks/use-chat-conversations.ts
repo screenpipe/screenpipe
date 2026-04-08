@@ -232,6 +232,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, messages]);
 
+  // ---- renameConversation ----
+  const renameConversation = async (convId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const { loadConversationFile } = await import("@/lib/chat-storage");
+    const conv = await loadConversationFile(convId);
+    if (!conv) return;
+    await saveConversationFile({ ...conv, title: trimmed, updatedAt: Date.now() });
+    await refreshFileConversations();
+  };
+
   // ---- deleteConversation ----
   const deleteConversation = async (convId: string) => {
     await deleteConversationFile(convId);
@@ -317,6 +328,81 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     }
   };
 
+  // ---- branchConversation ----
+  // Creates a new conversation forked from the current one up to (and including)
+  // the given message ID, then switches to it. Pi gets history re-injected on
+  // the next message (piSessionSyncedRef = false).
+  const branchConversation = async (upToMessageId: string) => {
+    const msgIndex = messages.findIndex((m) => m.id === upToMessageId);
+    if (msgIndex === -1) return;
+
+    const branchedMessages = messages.slice(0, msgIndex + 1);
+    if (branchedMessages.length === 0) return;
+
+    const newId = crypto.randomUUID();
+    const firstUserMsg = branchedMessages.find((m) => m.role === "user");
+    const title = (firstUserMsg?.content.slice(0, 47) || "Branched Chat") + "…";
+
+    const conversation: ChatConversation = {
+      id: newId,
+      title,
+      messages: branchedMessages.slice(-100).map((m) => {
+        let content = m.content;
+        if (!content && m.contentBlocks?.length) {
+          content = m.contentBlocks
+            .filter((b: any) => b.type === "text")
+            .map((b: any) => b.text)
+            .join("\n") || "(tool result)";
+        }
+        const blocks = m.contentBlocks?.map((b: any) => {
+          if (b.type === "tool") {
+            const { isRunning, ...rest } = b.toolCall;
+            return { type: "tool", toolCall: { ...rest, isRunning: false, result: rest.result?.slice(0, 4000) } };
+          }
+          if (b.type === "thinking") return { ...b, isThinking: false };
+          return b;
+        });
+        return {
+          id: m.id,
+          role: m.role,
+          content,
+          timestamp: m.timestamp,
+          ...(blocks?.length ? { contentBlocks: blocks } : {}),
+          ...(m.images?.length ? { images: m.images } : {}),
+          ...(m.model ? { model: m.model } : {}),
+          ...(m.provider ? { provider: m.provider } : {}),
+        };
+      }),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await saveConversationFile(conversation);
+    await refreshFileConversations();
+
+    // Switch to the branched conversation
+    piSessionIdRef.current = newId;
+    piSessionSyncedRef.current = false;
+    setMessages(branchedMessages);
+    setConversationId(newId);
+    setShowHistory(false);
+
+    try {
+      const { getStore } = await import("@/lib/hooks/use-settings");
+      const store = await getStore();
+      const freshSettings = await store.get<any>("settings");
+      if (freshSettings?.chatHistory) {
+        await store.set("settings", {
+          ...freshSettings,
+          chatHistory: { ...freshSettings.chatHistory, activeConversationId: newId },
+        });
+        await store.save();
+      }
+    } catch (e) {
+      console.warn("[chat] failed to update activeConversationId for branch:", e);
+    }
+  };
+
   // ---- startNewConversation ----
   // Assigns a fresh session ID so the next message starts a brand-new Pi
   // process. The old session stays alive (backend evicts LRU when > 4).
@@ -396,6 +482,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     saveConversation,
     loadConversation,
     deleteConversation,
+    renameConversation,
     startNewConversation,
+    branchConversation,
   };
 }

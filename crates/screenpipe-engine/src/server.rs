@@ -164,7 +164,6 @@ pub struct AppState {
     pub browser_bridge: Arc<crate::routes::browser::BrowserBridge>,
 }
 
-
 pub struct SCServer {
     db: Arc<DatabaseManager>,
     addr: SocketAddr,
@@ -674,6 +673,10 @@ impl SCServer {
                 .route(
                     "/store/check-updates",
                     axum::routing::get(crate::routes::pipe_store::pipe_store_check_updates),
+                )
+                .route(
+                    "/store/auto-update",
+                    axum::routing::post(crate::routes::pipe_store::pipe_store_auto_update),
                 )
                 .route(
                     "/store/:slug",

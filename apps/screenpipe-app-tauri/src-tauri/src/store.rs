@@ -2,57 +2,93 @@ use super::get_base_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::error;
 
-/// Cached store instance — built once, reused for the lifetime of the process.
-/// Avoids TOCTOU race in StoreBuilder::build() when called multiple times during
-/// startup (settings init, onboarding init, tray setup all call get_store).
-static STORE_CACHE: OnceLock<Arc<tauri_plugin_store::Store<tauri::Wry>>> = OnceLock::new();
+/// Cached store instance — reusable across the process lifetime.
+/// Uses Mutex instead of OnceLock so the cache can be invalidated when the
+/// Tauri resource table drops the underlying store (e.g. after an in-place
+/// update restart on Windows where resource IDs become stale).
+static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> =
+    Mutex::new(None);
+
+/// Build (or rebuild) the store, retrying on TOCTOU races and stale resource IDs.
+fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
+    let base_dir = get_base_dir(app, None)?;
+    let store_path = base_dir.join("store.bin");
+
+    let mut last_err = None;
+    for attempt in 0..3u32 {
+        match StoreBuilder::new(app, store_path.clone()).build() {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("os error 17") || msg.contains("File exists") {
+                    tracing::warn!(
+                        "store build race (attempt {}): {}, retrying",
+                        attempt + 1,
+                        msg
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        100 * (attempt as u64 + 1),
+                    ));
+                    last_err = Some(e);
+                    continue;
+                }
+                // After cleanup_before_exit or in-place update on Windows, the
+                // resources_table is cleared but StoreState.stores still holds the
+                // old resource ID. Force a fresh store via create_new to evict it.
+                if msg.contains("resource id") && msg.contains("invalid") {
+                    tracing::warn!(
+                        "store resource stale (attempt {}): {}, rebuilding fresh",
+                        attempt + 1,
+                        msg
+                    );
+                    match StoreBuilder::new(app, store_path.clone())
+                        .create_new()
+                        .build()
+                    {
+                        Ok(s) => return Ok(s),
+                        Err(e2) => {
+                            tracing::warn!("fresh store build also failed: {}", e2);
+                            last_err = Some(e);
+                            continue;
+                        }
+                    }
+                }
+                return Err(anyhow::anyhow!(e));
+            }
+        }
+    }
+    Err(anyhow::anyhow!(last_err.unwrap()))
+}
 
 pub fn get_store(
     app: &AppHandle,
     _profile_name: Option<String>, // Keep parameter for API compatibility but ignore it
 ) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
-    if let Some(cached) = STORE_CACHE.get() {
+    let mut guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(ref cached) = *guard {
         return Ok(cached.clone());
     }
 
-    let base_dir = get_base_dir(app, None)?;
-    let store_path = base_dir.join("store.bin");
+    let store = build_store(app)?;
+    *guard = Some(store.clone());
+    Ok(store)
+}
 
-    // Retry with backoff to handle TOCTOU race (EEXIST / os error 17)
-    // when multiple instances or threads race to create store.bin.
-    let mut last_err = None;
-    let store = 'retry: {
-        for attempt in 0..3u32 {
-            match StoreBuilder::new(app, store_path.clone()).build() {
-                Ok(s) => break 'retry s,
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("os error 17") || msg.contains("File exists") {
-                        tracing::warn!(
-                            "store build race (attempt {}): {}, retrying",
-                            attempt + 1,
-                            msg
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            100 * (attempt as u64 + 1),
-                        ));
-                        last_err = Some(e);
-                        continue;
-                    }
-                    return Err(anyhow::anyhow!(e));
-                }
-            }
+/// Invalidate the cached store so the next `get_store` call rebuilds it.
+/// Called when a "resource id … is invalid" error is detected.
+pub fn invalidate_store_cache() {
+    if let Ok(mut guard) = STORE_CACHE.lock() {
+        if guard.is_some() {
+            tracing::warn!("store cache invalidated — will rebuild on next access");
+            *guard = None;
         }
-        return Err(anyhow::anyhow!(last_err.unwrap()));
-    };
-
-    // If another thread raced us, use their instance
-    Ok(STORE_CACHE.get_or_init(|| store).clone())
+    }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -188,6 +224,9 @@ pub struct SettingsStore {
     pub disable_ocr: bool,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
+    /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
+    #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
+    pub shortcut_overlay_size: String,
     /// Unique device ID for AI usage tracking (generated on first launch)
     #[serde(rename = "deviceId", default = "generate_device_id")]
     pub device_id: String,
@@ -195,6 +234,13 @@ pub struct SettingsStore {
     /// When disabled, users must click "update now" in the tray menu.
     #[serde(rename = "autoUpdate", default = "default_true")]
     pub auto_update: bool,
+    /// Auto-update store-installed pipes that haven't been locally modified.
+    #[serde(rename = "autoUpdatePipes", default = "default_true")]
+    pub auto_update_pipes: bool,
+    /// Use screenpipe cloud for AI-powered features like suggestions.
+    /// Better quality but sends activity context to the cloud (zero data retention).
+    #[serde(rename = "enhancedAI", default)]
+    pub enhanced_ai: bool,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
@@ -234,6 +280,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_overlay_size() -> String {
+    "small".to_string()
 }
 
 fn default_ui_theme() -> String {
@@ -515,8 +565,11 @@ Rules:
             lock_vault_shortcut: "Super+Shift+L".to_string(),
             disable_ocr: false,
             show_shortcut_overlay: true,
+            shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
+            auto_update_pipes: true,
+            enhanced_ai: false,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
             #[cfg(not(target_os = "macos"))]
@@ -625,12 +678,16 @@ impl SettingsStore {
     /// comes from the User auth object, user_name has a fallback chain).
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
-        // Override user_id from auth user object (not the flat userId field)
+        // Override user_id with the Clerk JWT token from the auth user object.
+        // This token is used as the Bearer credential for screenpipe cloud
+        // (transcription proxy, Pi agent, etc.), not as a database ID.
+        // Fallback to user.id if token is unavailable.
         settings.user_id = self
             .user
-            .id
+            .token
             .as_ref()
-            .filter(|id| !id.is_empty())
+            .filter(|t| !t.is_empty())
+            .or(self.user.id.as_ref().filter(|id| !id.is_empty()))
             .cloned()
             .unwrap_or_default();
         // Fallback chain: userName setting → cloud name → cloud email
@@ -712,10 +769,7 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     let (mut store, mut should_save) = match SettingsStore::get(app) {
         Ok(Some(store)) => {
             is_new_store = false;
-            (
-                store,
-                should_persist_restart_notification_migration,
-            )
+            (store, should_persist_restart_notification_migration)
         }
         Ok(None) => {
             is_new_store = true;
@@ -742,13 +796,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     // (e.g. tier boundaries changed in an update).
     {
         let detected = screenpipe_config::detect_tier();
-        let stored_tier = store.recording.device_tier.as_deref()
+        let stored_tier = store
+            .recording
+            .device_tier
+            .as_deref()
             .and_then(screenpipe_config::DeviceTier::from_str_loose);
         if stored_tier != Some(detected) {
-            tracing::info!(
-                "hardware tier changed: {:?} -> {:?}",
-                stored_tier, detected
-            );
+            tracing::info!("hardware tier changed: {:?} -> {:?}", stored_tier, detected);
             if is_new_store || store.recording.device_tier.is_none() {
                 screenpipe_config::apply_tier_defaults(&mut store.recording, detected);
             }
@@ -758,7 +812,10 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
 
         // Unconditional safety guard: prevent parakeet/parakeet-mlx on platforms
         // where it will crash (Low tier = OOM, macOS < 26 = MLX segfault).
-        if screenpipe_config::is_engine_unsafe(&store.recording.audio_transcription_engine, detected) {
+        if screenpipe_config::is_engine_unsafe(
+            &store.recording.audio_transcription_engine,
+            detected,
+        ) {
             let safe = screenpipe_config::best_engine_for_platform(detected);
             tracing::warn!(
                 "engine {} is unsafe on this platform (tier={:?}, macOS={:?}) — switching to {}",

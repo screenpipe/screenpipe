@@ -780,7 +780,10 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                 let is_expired = now >= expires_at.saturating_sub(60);
 
                 if is_expired {
-                    let refresh_token_owned = token_data.get("refresh_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let refresh_token_owned = token_data
+                        .get("refresh_token")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     if let Some(ref refresh_token) = refresh_token_owned {
                         tracing::info!("ChatGPT OAuth token expired, refreshing...");
                         if let Ok(client) = reqwest::blocking::Client::builder()
@@ -801,17 +804,28 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                             match refresh_res {
                                 Ok(resp) if resp.status().is_success() => {
                                     if let Ok(v) = resp.json::<serde_json::Value>() {
-                                        if let Some(new_token) = v.get("access_token").and_then(|t| t.as_str()) {
-                                            let new_refresh = v.get("refresh_token")
+                                        if let Some(new_token) =
+                                            v.get("access_token").and_then(|t| t.as_str())
+                                        {
+                                            let new_refresh = v
+                                                .get("refresh_token")
                                                 .and_then(|t| t.as_str())
                                                 .unwrap_or(refresh_token.as_str());
-                                            let new_expires_in = v.get("expires_in").and_then(|t| t.as_u64()).unwrap_or(3600);
+                                            let new_expires_in = v
+                                                .get("expires_in")
+                                                .and_then(|t| t.as_u64())
+                                                .unwrap_or(3600);
 
-                                            token_data["access_token"] = serde_json::Value::String(new_token.to_string());
-                                            token_data["refresh_token"] = serde_json::Value::String(new_refresh.to_string());
-                                            token_data["expires_at"] = serde_json::json!(now + new_expires_in);
+                                            token_data["access_token"] =
+                                                serde_json::Value::String(new_token.to_string());
+                                            token_data["refresh_token"] =
+                                                serde_json::Value::String(new_refresh.to_string());
+                                            token_data["expires_at"] =
+                                                serde_json::json!(now + new_expires_in);
 
-                                            if let Ok(updated) = serde_json::to_string_pretty(&token_data) {
+                                            if let Ok(updated) =
+                                                serde_json::to_string_pretty(&token_data)
+                                            {
                                                 let _ = std::fs::write(&path, updated);
                                             }
                                             tracing::info!("ChatGPT token refreshed successfully");
@@ -819,7 +833,10 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                                     }
                                 }
                                 Ok(resp) => {
-                                    tracing::error!("ChatGPT token refresh failed ({})", resp.status());
+                                    tracing::error!(
+                                        "ChatGPT token refresh failed ({})",
+                                        resp.status()
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::error!("ChatGPT token refresh request failed: {}", e);
@@ -1091,7 +1108,9 @@ impl PipeManager {
             store,
             api_port,
             last_reload: Arc::new(Mutex::new(
-                Instant::now().checked_sub(std::time::Duration::from_secs(10)).unwrap_or(Instant::now()),
+                Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(10))
+                    .unwrap_or(Instant::now()),
             )),
             token_registry: None,
             extra_context: None,
@@ -1337,8 +1356,13 @@ impl PipeManager {
                     let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
                         let pipe_path = self.pipes_dir.join(name).join("pipe.md");
                         if let Ok(content) = std::fs::read_to_string(&pipe_path) {
-                            let actual_hash = simple_hash(&content);
-                            actual_hash != *expected_hash
+                            // Hash only the body (prompt) so config changes (schedule,
+                            // preset, etc.) don't trigger locally_modified.
+                            if let Ok((_, file_body)) = parse_frontmatter(&content) {
+                                simple_hash(&file_body) != *expected_hash
+                            } else {
+                                simple_hash(&content) != *expected_hash
+                            }
                         } else {
                             false
                         }
@@ -1398,8 +1422,13 @@ impl PipeManager {
                 let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
                     let pipe_path = self.pipes_dir.join(name).join("pipe.md");
                     if let Ok(content) = std::fs::read_to_string(&pipe_path) {
-                        let actual_hash = simple_hash(&content);
-                        actual_hash != *expected_hash
+                        // Hash only the body (prompt) so config changes don't
+                        // trigger locally_modified.
+                        if let Ok((_, file_body)) = parse_frontmatter(&content) {
+                            simple_hash(&file_body) != *expected_hash
+                        } else {
+                            simple_hash(&content) != *expected_hash
+                        }
                     } else {
                         false
                     }
@@ -2416,11 +2445,14 @@ impl PipeManager {
         let (mut config, body) = parse_frontmatter(&content)?;
         config.enabled = enabled;
         let new_content = serialize_pipe(&config, &body)?;
-        std::fs::write(&pipe_md, &new_content)?;
+        atomic_write(&pipe_md, &new_content)?;
 
         // Persist to local overrides so reload_pipes() doesn't revert this
         if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
-            warn!("failed to save local enabled override for '{}': {}", name, e);
+            warn!(
+                "failed to save local enabled override for '{}': {}",
+                name, e
+            );
         }
 
         // Update in-memory
@@ -2455,7 +2487,7 @@ impl PipeManager {
             // Validate it parses correctly
             let (mut config, body) = parse_frontmatter(raw)?;
             config.name = name.to_string(); // preserve directory name
-            std::fs::write(&pipe_md, raw)?;
+            atomic_write(&pipe_md, raw)?;
 
             // Update in-memory
             let mut pipes = self.pipes.lock().await;
@@ -2523,6 +2555,19 @@ impl PipeManager {
                             .collect();
                     }
                 }
+                "timeout" => {
+                    config.timeout = v.as_u64();
+                }
+                "trigger" => {
+                    if v.is_null() {
+                        config.trigger = None;
+                    } else {
+                        match serde_json::from_value::<TriggerConfig>(v.clone()) {
+                            Ok(t) => config.trigger = Some(t),
+                            Err(e) => warn!("invalid trigger config for '{}': {}", name, e),
+                        }
+                    }
+                }
                 _ => {
                     config.config.insert(k.clone(), v.clone());
                 }
@@ -2530,7 +2575,7 @@ impl PipeManager {
         }
 
         let new_content = serialize_pipe(&config, &new_body)?;
-        std::fs::write(&pipe_md, &new_content)?;
+        atomic_write(&pipe_md, &new_content)?;
 
         // Update in-memory
         let mut pipes = self.pipes.lock().await;
@@ -2625,7 +2670,7 @@ impl PipeManager {
                 ));
             }
             let content = response.text().await?;
-            std::fs::write(dest_dir.join("pipe.md"), &content)?;
+            atomic_write(&dest_dir.join("pipe.md"), &content)?;
             self.load_pipes().await?;
             let _ = remove_tombstone(&self.pipes_dir, &name);
             info!("installed pipe '{}' from URL", name);
@@ -2652,9 +2697,8 @@ impl PipeManager {
         config.source_slug = Some(slug.to_string());
         config.installed_version = Some(version);
 
-        // Hash the source_md content
-        let source_hash = simple_hash(source_md);
-        config.source_hash = Some(source_hash);
+        // Hash only the body (prompt) so config changes don't trigger locally_modified
+        config.source_hash = Some(simple_hash(&body));
 
         // Derive name from slug
         let name = slug.to_string();
@@ -2663,7 +2707,7 @@ impl PipeManager {
 
         // Re-serialize with tracking fields included
         let content = serialize_pipe(&config, &body)?;
-        std::fs::write(dest_dir.join("pipe.md"), &content)?;
+        atomic_write(&dest_dir.join("pipe.md"), &content)?;
 
         self.load_pipes().await?;
         let _ = remove_tombstone(&self.pipes_dir, &name);
@@ -2686,21 +2730,31 @@ impl PipeManager {
 
         let (mut config, body) = parse_frontmatter(source_md)?;
 
-        // Preserve user's enabled state and schedule from current config
+        // Preserve user's enabled state, schedule, preset, and connections from current config
         let current_path = dest_dir.join("pipe.md");
         if let Ok(current_content) = std::fs::read_to_string(&current_path) {
+            // Backup existing pipe.md before overwriting
+            let backup_path = dest_dir.join("pipe.md.bak");
+            if let Err(e) = std::fs::copy(&current_path, &backup_path) {
+                warn!("failed to backup pipe.md for '{}': {}", name, e);
+            }
+
             if let Ok((current_config, _)) = parse_frontmatter(&current_content) {
                 config.enabled = current_config.enabled;
                 config.preset = current_config.preset.clone();
+                config.schedule = current_config.schedule.clone();
+                config.connections = current_config.connections.clone();
             }
         }
 
         config.source_slug = Some(slug.to_string());
         config.installed_version = Some(version);
-        config.source_hash = Some(simple_hash(source_md));
+        // Hash only the prompt body so config changes (schedule, preset, etc.)
+        // don't trigger locally_modified — only actual prompt edits do.
+        config.source_hash = Some(simple_hash(&body));
 
         let content = serialize_pipe(&config, &body)?;
-        std::fs::write(current_path, &content)?;
+        atomic_write(&current_path, &content)?;
 
         self.load_pipes().await?;
         info!("updated pipe '{}' to store v{}", name, version);
@@ -3112,9 +3166,7 @@ impl PipeManager {
                         }
 
                         // Shared PID — set synchronously by the executor right after spawn
-                        let shared_pid = std::sync::Arc::new(
-                            std::sync::atomic::AtomicU32::new(0),
-                        );
+                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
                         let shared_pid_for_kill = shared_pid.clone();
                         let pipes_dir_for_pidfile = pipes_dir_for_log.clone();
                         let pipe_name_for_pidfile = pipe_name.clone();
@@ -3286,7 +3338,8 @@ impl PipeManager {
                             }
                             Err(_elapsed) => {
                                 warn!("pipe '{}' timed out after {}s", pipe_name, pipe_timeout);
-                                let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                                let real_pid =
+                                    shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
                                 if real_pid != 0 {
                                     let _ = crate::agents::pi::kill_process_group(real_pid);
                                 }
@@ -3491,7 +3544,7 @@ impl PipeManager {
                     }
                 }
                 std::fs::create_dir_all(&dir)?;
-                std::fs::write(&pipe_md, content)?;
+                atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
             }
         }
@@ -3561,6 +3614,22 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     Ok((config, body))
 }
 
+/// Atomic file write: write to a temp file in the same directory, then rename.
+/// On Unix, rename is atomic. On Windows, this avoids the partial-write window
+/// where a concurrent reader (e.g. the scheduler) sees a truncated file.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("cannot determine parent dir of {:?}", path))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.flush()?;
+    // persist atomically (rename on Unix, MoveFileEx on Windows)
+    tmp.persist(path)?;
+    Ok(())
+}
+
 /// Serialize a PipeConfig + body back to pipe.md format.
 /// Name is excluded from frontmatter (derived from directory name).
 pub fn serialize_pipe(config: &PipeConfig, body: &str) -> Result<String> {
@@ -3583,6 +3652,7 @@ pub fn serialize_pipe(config: &PipeConfig, body: &str) -> Result<String> {
         "connections",
         "permissions",
         "timeout",
+        "trigger",
         "source_slug",
         "installed_version",
         "source_hash",
@@ -3702,6 +3772,11 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
     if let Some(d) = parse_duration_str(s) {
         return Some(ParsedSchedule::Interval(d));
     }
+    // Try "every day at Xam/pm" and "every <weekday> at Xam/pm"
+    // These are generated by the UI schedule dropdown.
+    if let Some(cron) = parse_human_schedule(s) {
+        return Some(ParsedSchedule::Cron(Box::new(cron)));
+    }
     // Try cron expression (5 or 6 field)
     // cron crate requires 7 fields (sec min hour dom month dow year),
     // so we pad short expressions.
@@ -3714,6 +3789,82 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
         return Some(ParsedSchedule::Cron(Box::new(cron)));
     }
     None
+}
+
+/// Parse human-readable schedules like "every day at 9am", "every monday at 6pm".
+/// Times are interpreted as local time and converted to UTC for the cron expression,
+/// since the cron library evaluates against UTC.
+fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
+    let s = s.to_lowercase();
+    let s = s.strip_prefix("every").unwrap_or(&s).trim();
+
+    // Extract "at Xam/pm" from the end
+    let (prefix, local_hour) = if let Some(at_pos) = s.find(" at ") {
+        let time_str = s[at_pos + 4..].trim();
+        let h = parse_time_str(time_str)?;
+        (s[..at_pos].trim(), h)
+    } else {
+        return None;
+    };
+
+    // Convert local hour to UTC using current system timezone offset
+    let utc_hour = local_hour_to_utc(local_hour);
+
+    // "day" → every day at that hour
+    // "monday", "tuesday", etc. → specific weekday
+    let cron_str = match prefix {
+        "day" => format!("0 0 {} * * * *", utc_hour),
+        "monday" | "mon" => format!("0 0 {} * * 1 *", utc_hour),
+        "tuesday" | "tue" => format!("0 0 {} * * 2 *", utc_hour),
+        "wednesday" | "wed" => format!("0 0 {} * * 3 *", utc_hour),
+        "thursday" | "thu" => format!("0 0 {} * * 4 *", utc_hour),
+        "friday" | "fri" => format!("0 0 {} * * 5 *", utc_hour),
+        "saturday" | "sat" => format!("0 0 {} * * 6 *", utc_hour),
+        "sunday" | "sun" => format!("0 0 {} * * 0 *", utc_hour),
+        _ => return None,
+    };
+
+    CronSchedule::from_str(&cron_str).ok()
+}
+
+/// Convert a local hour (0-23) to UTC hour using the system's current timezone offset.
+fn local_hour_to_utc(local_hour: u32) -> u32 {
+    let now = chrono::Local::now();
+    let offset_secs = now.offset().local_minus_utc(); // positive = east of UTC
+    let offset_hours = offset_secs / 3600;
+    // local_hour - offset = utc_hour, wrapped to 0-23
+    ((local_hour as i32 - offset_hours).rem_euclid(24)) as u32
+}
+
+/// Parse "9am", "12pm", "6pm", "14", "9" into a 24-hour number.
+fn parse_time_str(s: &str) -> Option<u32> {
+    let s = s.trim().to_lowercase();
+    if let Some(h) = s.strip_suffix("am") {
+        let n: u32 = h.trim().parse().ok()?;
+        if n == 12 {
+            Some(0)
+        } else if n <= 12 {
+            Some(n)
+        } else {
+            None
+        }
+    } else if let Some(h) = s.strip_suffix("pm") {
+        let n: u32 = h.trim().parse().ok()?;
+        if n == 12 {
+            Some(12)
+        } else if n <= 12 {
+            Some(n + 12)
+        } else {
+            None
+        }
+    } else {
+        let n: u32 = s.parse().ok()?;
+        if n < 24 {
+            Some(n)
+        } else {
+            None
+        }
+    }
 }
 
 /// Check if a pipe should run now given its schedule and last run time.
@@ -4252,6 +4403,68 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_schedule_human_daily() {
+        match parse_schedule("every day at 9am") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'every day at 9am', got {:?}",
+                other.is_some()
+            ),
+        }
+        match parse_schedule("every day at 12pm") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'every day at 12pm', got {:?}",
+                other.is_some()
+            ),
+        }
+        match parse_schedule("every day at 6pm") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'every day at 6pm', got {:?}",
+                other.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn test_parse_schedule_human_weekday() {
+        match parse_schedule("every monday at 9am") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'every monday at 9am', got {:?}",
+                other.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn test_should_run_human_daily() {
+        // "every day at 9am" should fire if last run was yesterday
+        let yesterday = Utc::now() - chrono::Duration::hours(25);
+        assert!(should_run("every day at 9am", yesterday));
+    }
+
+    #[test]
+    fn test_parse_time_str() {
+        assert_eq!(parse_time_str("9am"), Some(9));
+        assert_eq!(parse_time_str("12pm"), Some(12));
+        assert_eq!(parse_time_str("12am"), Some(0));
+        assert_eq!(parse_time_str("6pm"), Some(18));
+        assert_eq!(parse_time_str("1pm"), Some(13));
+        assert_eq!(parse_time_str("14"), Some(14));
+    }
+
+    #[test]
+    fn test_local_hour_to_utc() {
+        // Just verify it returns valid hours and doesn't panic
+        for h in 0..24 {
+            let utc = local_hour_to_utc(h);
+            assert!(utc < 24, "local_hour_to_utc({}) returned {}", h, utc);
+        }
+    }
+
+    #[test]
     fn test_parse_schedule_garbage() {
         assert!(parse_schedule("not a schedule").is_none());
     }
@@ -4558,5 +4771,207 @@ mod tests {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         assert!(!history, "history should default to false");
+    }
+
+    // -- frontmatter round-trip tests (trigger/duplicate detection) -----------
+
+    #[test]
+    fn test_roundtrip_minimal_config() {
+        let content = "---\nschedule: every 30m\nenabled: true\n---\n\nDo stuff";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.schedule, "every 30m");
+        assert!(config.enabled);
+        assert_eq!(body, "Do stuff");
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let (config2, body2) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.schedule, "every 30m");
+        assert!(config2.enabled);
+        assert_eq!(body2, "Do stuff");
+    }
+
+    #[test]
+    fn test_roundtrip_with_trigger() {
+        let content = "---\nschedule: manual\nenabled: true\ntrigger:\n  events:\n    - crm_update\n    - meeting_end\n  custom:\n    - when I open slack\n---\n\nHandle events";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.schedule, "manual");
+        let trigger = config.trigger.as_ref().unwrap();
+        assert_eq!(trigger.events, vec!["crm_update", "meeting_end"]);
+        assert_eq!(trigger.custom, vec!["when I open slack"]);
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Must not contain duplicate trigger keys
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "serialized YAML has duplicate 'trigger:' keys:\n{}", serialized);
+
+        // Round-trip must parse back identically
+        let (config2, body2) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(body2, "Handle events");
+        let trigger2 = config2.trigger.as_ref().unwrap();
+        assert_eq!(trigger2.events, vec!["crm_update", "meeting_end"]);
+        assert_eq!(trigger2.custom, vec!["when I open slack"]);
+    }
+
+    #[test]
+    fn test_roundtrip_trigger_none() {
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nNo trigger";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert!(config.trigger.is_none());
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        assert!(!serialized.contains("trigger:"), "trigger: should not appear when None:\n{}", serialized);
+
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert!(config2.trigger.is_none());
+    }
+
+    #[test]
+    fn test_no_duplicate_keys_all_fields() {
+        let content = "---\nschedule: every 2h\nenabled: true\nmodel: claude-haiku-4-5\nprovider: openai\npreset: my-preset\nconnections:\n  - slack\n  - gmail\ntimeout: 600\ntrigger:\n  events:\n    - test_event\nsource_slug: my-pipe\ninstalled_version: 5\nsource_hash: abc123\n---\n\nFull config";
+        let (config, body) = parse_frontmatter(content).unwrap();
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Check no known field appears more than once
+        for field in &["schedule:", "enabled:", "model:", "provider:", "preset:", "connections:", "timeout:", "trigger:", "source_slug:", "installed_version:", "source_hash:"] {
+            let count = serialized.matches(field).count();
+            assert!(count <= 1, "field '{}' appears {} times in serialized YAML:\n{}", field, count, serialized);
+        }
+
+        // Must round-trip
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.schedule, "every 2h");
+        assert!(config2.trigger.is_some());
+        assert_eq!(config2.trigger.unwrap().events, vec!["test_event"]);
+    }
+
+    #[test]
+    fn test_trigger_in_extras_gets_cleaned() {
+        // Simulate the bug: trigger lands in both the struct field AND the extras HashMap
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Set trigger on the struct
+        config.trigger = Some(TriggerConfig {
+            events: vec!["my_event".to_string()],
+            custom: vec![],
+        });
+
+        // Also sneak it into the extras HashMap (simulating the bug)
+        config.config.insert(
+            "trigger".to_string(),
+            serde_json::json!({"events": ["my_event"], "custom": []}),
+        );
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // serialize_pipe should have cleaned the duplicate from extras
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "duplicate trigger: not cleaned from extras:\n{}", serialized);
+
+        // Must still parse correctly
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        let t = config2.trigger.unwrap();
+        assert_eq!(t.events, vec!["my_event"]);
+    }
+
+    #[test]
+    fn test_all_known_fields_cleaned_from_extras() {
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Insert every known field into extras HashMap (worst case scenario)
+        config.config.insert("schedule".to_string(), serde_json::json!("every 2h"));
+        config.config.insert("enabled".to_string(), serde_json::json!(false));
+        config.config.insert("model".to_string(), serde_json::json!("gpt-4"));
+        config.config.insert("provider".to_string(), serde_json::json!("openai"));
+        config.config.insert("trigger".to_string(), serde_json::json!({"events": ["x"]}));
+        config.config.insert("connections".to_string(), serde_json::json!(["slack"]));
+        config.config.insert("timeout".to_string(), serde_json::json!(300));
+        config.config.insert("source_slug".to_string(), serde_json::json!("test"));
+        config.config.insert("installed_version".to_string(), serde_json::json!(1));
+        config.config.insert("source_hash".to_string(), serde_json::json!("abc"));
+        config.config.insert("preset".to_string(), serde_json::json!("my-preset"));
+        config.config.insert("name".to_string(), serde_json::json!("test-pipe"));
+        config.config.insert("config".to_string(), serde_json::json!({"old": true}));
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Every known field should appear at most once
+        for field in &["schedule:", "enabled:", "model:", "trigger:", "connections:", "timeout:", "source_slug:", "installed_version:", "source_hash:"] {
+            let count = serialized.matches(field).count();
+            assert!(count <= 1, "field '{}' appears {} times after cleanup:\n{}", field, count, serialized);
+        }
+
+        // "config:" and "name:" should not appear at all (they're stripped)
+        assert!(!serialized.contains("\nconfig:"), "legacy 'config:' not cleaned:\n{}", serialized);
+        assert!(!serialized.contains("\nname:"), "'name:' should be stripped:\n{}", serialized);
+
+        // Must still parse without error
+        parse_frontmatter(&serialized).expect("round-trip parse failed after extras cleanup");
+    }
+
+    #[test]
+    fn test_update_config_trigger_does_not_leak_to_extras() {
+        // Simulate what update_config does when receiving a trigger update
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Simulate the update_config match arm for "trigger"
+        let trigger_json = serde_json::json!({"events": ["new_event"], "custom": ["when I open chrome"]});
+        match serde_json::from_value::<TriggerConfig>(trigger_json.clone()) {
+            Ok(t) => config.trigger = Some(t),
+            Err(_) => panic!("trigger deserialization should succeed"),
+        }
+
+        // Verify trigger is NOT in extras
+        assert!(!config.config.contains_key("trigger"), "trigger leaked into extras HashMap");
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "trigger duplicated:\n{}", serialized);
+
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        let t = config2.trigger.unwrap();
+        assert_eq!(t.events, vec!["new_event"]);
+        assert_eq!(t.custom, vec!["when I open chrome"]);
+    }
+
+    #[test]
+    fn test_multiple_trigger_updates_no_accumulation() {
+        let content = "---\nschedule: manual\nenabled: true\ntrigger:\n  events:\n    - old_event\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Update trigger 3 times in a row
+        for i in 0..3 {
+            let trigger_json = serde_json::json!({"events": [format!("event_{}", i)]});
+            config.trigger = Some(serde_json::from_value::<TriggerConfig>(trigger_json).unwrap());
+
+            let serialized = serialize_pipe(&config, &body).unwrap();
+            let trigger_count = serialized.matches("trigger:").count();
+            assert_eq!(trigger_count, 1, "trigger duplicated on iteration {}:\n{}", i, serialized);
+
+            // Re-parse for next iteration (simulates read-modify-write cycle)
+            let (new_config, _) = parse_frontmatter(&serialized).unwrap();
+            config = new_config;
+        }
+
+        // Final state should have event_2
+        let t = config.trigger.unwrap();
+        assert_eq!(t.events, vec!["event_2"]);
+    }
+
+    #[test]
+    fn test_unknown_extra_fields_preserved() {
+        // Extra fields that are NOT known should survive round-trip
+        let content = "---\nschedule: every 1h\nenabled: true\nmy_custom_field: hello\nanother: 42\n---\n\nTest";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
+        assert_eq!(config2.config.get("another").and_then(|v| v.as_i64()), Some(42));
     }
 }

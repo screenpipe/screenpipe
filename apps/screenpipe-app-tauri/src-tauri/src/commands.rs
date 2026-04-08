@@ -122,7 +122,10 @@ pub fn get_enterprise_license_key() -> Option<String> {
     // Fallback: ~/.screenpipe/enterprise.json (manually entered by employee)
     let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
     if user_path.exists() {
-        info!("enterprise: checking user config at {}", user_path.display());
+        info!(
+            "enterprise: checking user config at {}",
+            user_path.display()
+        );
         return read_enterprise_key_from_path(&user_path);
     }
 
@@ -150,7 +153,10 @@ fn read_enterprise_key_from_exe_dir() -> Option<String> {
     };
 
     if !config_path.exists() {
-        info!("enterprise: no enterprise.json at {}", config_path.display());
+        info!(
+            "enterprise: no enterprise.json at {}",
+            config_path.display()
+        );
         return None;
     }
 
@@ -180,7 +186,10 @@ fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_string());
 
     match &key {
-        Some(k) => info!("enterprise: license key loaded ({}...)", &k[..k.len().min(8)]),
+        Some(k) => info!(
+            "enterprise: license key loaded ({}...)",
+            &k[..k.len().min(8)]
+        ),
         None => warn!("enterprise: enterprise.json missing 'license_key' field"),
     }
 
@@ -1031,9 +1040,19 @@ pub async fn show_shortcut_reminder(
     }
 
     // Window dimensions: 2-row grid (3 shortcuts + activity viz)
-    // 3 columns: timeline, chat, search. Auto-sized columns shrink to content.
-    let window_width = 160.0;
-    let window_height = 40.0;
+    // Scale based on overlay size setting
+    let scale = match crate::store::SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .shortcut_overlay_size
+        .as_str()
+    {
+        "large" => 2.0_f64,
+        "medium" => 1.5,
+        _ => 1.0,
+    };
+    let window_width = 160.0 * scale;
+    let window_height = 40.0 * scale;
 
     // Position at top center of the screen where the cursor is
     let (x, y) = {

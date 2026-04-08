@@ -5,12 +5,16 @@ description: Manage screenpipe pipes (scheduled AI automations) and connections 
 
 # Screenpipe CLI
 
-Use `bunx screenpipe@latest` to run CLI commands (or `npx screenpipe@latest`). No separate install needed.
+Use `bun x screenpipe@latest` to run CLI commands. No separate install needed.
+
+**IMPORTANT**: Always run `bun x` commands from a clean temp directory to avoid node_modules conflicts:
+```bash
+cd "$(mktemp -d)" && bun x screenpipe@latest <command>
+```
 
 ## Shell
 
-- **macOS/Linux** → `bash`
-- **Windows** → `powershell`
+- **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)
 
 ---
 
@@ -21,14 +25,14 @@ Pipes are markdown-based AI automations that run on schedule. Each pipe lives at
 ### Commands
 
 ```bash
-bunx screenpipe@latest pipe list                    # List all pipes (compact table)
-bunx screenpipe@latest pipe enable <name>           # Enable a pipe
-bunx screenpipe@latest pipe disable <name>          # Disable a pipe
-bunx screenpipe@latest pipe run <name>              # Run once immediately (for testing)
-bunx screenpipe@latest pipe logs <name>             # View execution logs
-bunx screenpipe@latest pipe install <url-or-path>   # Install from GitHub or local path
-bunx screenpipe@latest pipe delete <name>           # Delete a pipe
-bunx screenpipe@latest pipe models list             # View AI model presets
+bun x screenpipe@latest pipe list                    # List all pipes (compact table)
+bun x screenpipe@latest pipe enable <name>           # Enable a pipe
+bun x screenpipe@latest pipe disable <name>          # Disable a pipe
+bun x screenpipe@latest pipe run <name>              # Run once immediately (for testing)
+bun x screenpipe@latest pipe logs <name>             # View execution logs
+bun x screenpipe@latest pipe install <url-or-path>   # Install from GitHub or local path
+bun x screenpipe@latest pipe delete <name>           # Delete a pipe
+bun x screenpipe@latest pipe models list             # View AI model presets
 ```
 
 ### Creating a Pipe
@@ -59,9 +63,9 @@ Screenpipe prepends a context header with time range, timezone, OS, and API URL 
 
 After creating:
 ```bash
-bunx screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
-bunx screenpipe@latest pipe enable my-pipe
-bunx screenpipe@latest pipe run my-pipe   # test immediately
+bun x screenpipe@latest pipe install ~/.screenpipe/pipes/my-pipe
+bun x screenpipe@latest pipe enable my-pipe
+bun x screenpipe@latest pipe run my-pipe   # test immediately
 ```
 
 ### Editing Config
@@ -90,29 +94,29 @@ Manage integrations (Telegram, Slack, Discord, Email, Todoist, Teams) from the C
 ### Commands
 
 ```bash
-bunx screenpipe@latest connection list              # List all connections + status
-bunx screenpipe@latest connection list --json       # JSON output
-bunx screenpipe@latest connection get <id>          # Show saved credentials
-bunx screenpipe@latest connection get <id> --json   # JSON output
-bunx screenpipe@latest connection set <id> key=val  # Save credentials
-bunx screenpipe@latest connection test <id>         # Test a connection
-bunx screenpipe@latest connection remove <id>       # Remove credentials
+bun x screenpipe@latest connection list              # List all connections + status
+bun x screenpipe@latest connection list --json       # JSON output
+bun x screenpipe@latest connection get <id>          # Show saved credentials
+bun x screenpipe@latest connection get <id> --json   # JSON output
+bun x screenpipe@latest connection set <id> key=val  # Save credentials
+bun x screenpipe@latest connection test <id>         # Test a connection
+bun x screenpipe@latest connection remove <id>       # Remove credentials
 ```
 
 ### Examples
 
 ```bash
 # Set up Telegram
-bunx screenpipe@latest connection set telegram bot_token=123456:ABC-DEF chat_id=5776185278
+bun x screenpipe@latest connection set telegram bot_token=123456:ABC-DEF chat_id=5776185278
 
 # Set up Slack webhook
-bunx screenpipe@latest connection set slack webhook_url=https://hooks.slack.com/services/...
+bun x screenpipe@latest connection set slack webhook_url=https://hooks.slack.com/services/...
 
 # Verify it works
-bunx screenpipe@latest connection test telegram
+bun x screenpipe@latest connection test telegram
 
 # Check what's connected
-bunx screenpipe@latest connection list
+bun x screenpipe@latest connection list
 ```
 
 Connection IDs: `telegram`, `slack`, `discord`, `email`, `todoist`, `teams`, `google-calendar`, `apple-intelligence`, `openclaw`

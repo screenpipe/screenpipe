@@ -439,14 +439,9 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                     }
                     // Ensure @anthropic-ai/sdk is a direct dependency (Windows bun fix)
                     if !contents.contains("@anthropic-ai/sdk") {
-                        let deps = obj
-                            .entry("dependencies")
-                            .or_insert_with(|| json!({}));
+                        let deps = obj.entry("dependencies").or_insert_with(|| json!({}));
                         if let Some(deps_obj) = deps.as_object_mut() {
-                            deps_obj.insert(
-                                "@anthropic-ai/sdk".to_string(),
-                                json!("^0.73.0"),
-                            );
+                            deps_obj.insert("@anthropic-ai/sdk".to_string(), json!("^0.73.0"));
                         }
                         changed = true;
                     }
@@ -800,13 +795,19 @@ fn ensure_pi_config(
     } else {
         json!({"providers": {}})
     };
-    if !models_config.get("providers").and_then(|p| p.as_object()).is_some() {
+    if !models_config
+        .get("providers")
+        .and_then(|p| p.as_object())
+        .is_some()
+    {
         models_config = json!({"providers": {}});
     }
 
     // Merge new providers into existing ones (add/update, don't remove others)
     if let (Some(existing), Some(new)) = (
-        models_config.get_mut("providers").and_then(|p| p.as_object_mut()),
+        models_config
+            .get_mut("providers")
+            .and_then(|p| p.as_object_mut()),
         new_providers.get("providers").and_then(|p| p.as_object()),
     ) {
         for (k, v) in new {
@@ -1140,14 +1141,13 @@ pub async fn pi_start_inner(
             #[cfg(windows)]
             let new_path = {
                 let mut path = new_path;
-                let bash_result = tokio::task::spawn_blocking(
-                    screenpipe_core::agents::pi::ensure_bash_available,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    warn!("bash setup task panicked (non-fatal): {:?}", e);
-                    None
-                });
+                let bash_result =
+                    tokio::task::spawn_blocking(screenpipe_core::agents::pi::ensure_bash_available)
+                        .await
+                        .unwrap_or_else(|e| {
+                            warn!("bash setup task panicked (non-fatal): {:?}", e);
+                            None
+                        });
                 match bash_result {
                     Some(bash_dir) => {
                         // Also add the usr/bin dir which has common unix utils (grep, cat, etc.)
@@ -1845,8 +1845,8 @@ pub fn ensure_pi_installed_background() {
                 .flatten()
                 .unwrap_or_default();
             let needs_lru_fix = !pkg_contents.is_empty() && !pkg_contents.contains("overrides");
-            let needs_anthropic_sdk = !pkg_contents.is_empty()
-                && !pkg_contents.contains("@anthropic-ai/sdk");
+            let needs_anthropic_sdk =
+                !pkg_contents.is_empty() && !pkg_contents.contains("@anthropic-ai/sdk");
             let needs_upgrade = !is_local_pi_version_current(&install_dir);
 
             if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {

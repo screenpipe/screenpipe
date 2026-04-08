@@ -162,10 +162,11 @@ struct ScreenMatrixView: View {
 // MARK: - Main shortcut reminder view
 // Concept #4: Audio-reactive pill that expands on hover
 
-private let kCollapsedW: CGFloat = 62
-private let kCollapsedH: CGFloat = 22
-private let kExpandedW: CGFloat = 200
-private let kExpandedH: CGFloat = 26
+// Base sizes — multiplied by gOverlayScale at panel creation
+private let kBaseCollapsedW: CGFloat = 62
+private let kBaseCollapsedH: CGFloat = 22
+private let kBaseExpandedW: CGFloat = 200
+private let kBaseExpandedH: CGFloat = 26
 private let kAnimDur: Double = 0.2
 
 @available(macOS 13.0, *)
@@ -174,17 +175,19 @@ struct ShortcutReminderView: View {
     let chatShortcut: String
     let searchShortcut: String
     let metrics: OverlayMetrics
+    let scale: CGFloat
     let onAction: (String) -> Void
     @Binding var isExpanded: Bool
+
+    // Scaled helpers
+    private func s(_ v: CGFloat) -> CGFloat { v * scale }
 
     var body: some View {
         ZStack {
             if isExpanded {
-                // Expanded: full shortcut bar
                 expandedView
                     .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
             } else {
-                // Collapsed: tiny audio-reactive pill
                 collapsedView
                     .transition(.opacity.combined(with: .scale(scale: 1.2, anchor: .trailing)))
             }
@@ -196,36 +199,32 @@ struct ShortcutReminderView: View {
         }
     }
 
-    // MARK: - Collapsed pill (live audio + screen viz)
+    // MARK: - Collapsed pill
     private var collapsedView: some View {
-        HStack(spacing: 3) {
-            // App icon tiny
+        HStack(spacing: s(3)) {
             if let appIcon = NSApp.applicationIconImage {
                 Image(nsImage: appIcon)
                     .resizable()
-                    .frame(width: 12, height: 12)
+                    .frame(width: s(12), height: s(12))
             }
-            // Mini audio bars
             AudioEqualizerView(active: metrics.audioActive, speechRatio: metrics.speechRatio)
-                .frame(width: 18, height: 12)
-            // Mini screen capture viz
+                .frame(width: s(18), height: s(12))
             ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
-                .frame(width: 18, height: 12)
+                .frame(width: s(18), height: s(12))
                 .clipShape(RoundedRectangle(cornerRadius: 1))
-            // Meeting indicator
             ZStack {
                 Image(systemName: "phone.fill")
-                    .font(.system(size: 6))
+                    .font(.system(size: s(6)))
                     .foregroundColor(metrics.meetingActive ? .white : .white.opacity(0.2))
                 if metrics.meetingActive {
                     Circle().fill(.white)
-                        .frame(width: 4, height: 4)
-                        .offset(x: 5, y: -5)
+                        .frame(width: s(4), height: s(4))
+                        .offset(x: s(5), y: s(-5))
                 }
             }
         }
-        .padding(.horizontal, 5)
-        .frame(height: kCollapsedH)
+        .padding(.horizontal, s(5))
+        .frame(height: kBaseCollapsedH * scale)
         .background(Capsule().fill(Color.black.opacity(0.75)))
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
     }
@@ -233,45 +232,41 @@ struct ShortcutReminderView: View {
     // MARK: - Expanded bar
     private var expandedView: some View {
         HStack(spacing: 0) {
-            // Shortcut buttons
-            ShortcutCellButton(icon: "rectangle", label: overlayShortcut, colW: nil, edge: .leading) {
+            ShortcutCellButton(icon: "rectangle", label: overlayShortcut, colW: nil, edge: .leading, scale: scale) {
                 onAction("open_timeline")
             }
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
-            ShortcutCellButton(icon: "bubble.left", label: chatShortcut, colW: nil, edge: nil) {
+            ShortcutCellButton(icon: "bubble.left", label: chatShortcut, colW: nil, edge: nil, scale: scale) {
                 onAction("open_chat")
             }
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
-            ShortcutCellButton(icon: "magnifyingglass", label: searchShortcut, colW: nil, edge: nil) {
+            ShortcutCellButton(icon: "magnifyingglass", label: searchShortcut, colW: nil, edge: nil, scale: scale) {
                 onAction("open_search")
             }
 
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
 
-            // Audio viz
             AudioEqualizerView(active: metrics.audioActive, speechRatio: metrics.speechRatio)
-                .frame(width: 24, height: 12)
-                .padding(.horizontal, 3)
+                .frame(width: s(24), height: s(12))
+                .padding(.horizontal, s(3))
 
-            // Screen viz
             ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
-                .frame(width: 24, height: 12)
-                .padding(.trailing, 2)
+                .frame(width: s(24), height: s(12))
+                .padding(.trailing, s(2))
 
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
 
-            // Meeting + close
-            HoverIconButton(icon: "phone.fill", isActive: metrics.meetingActive, edge: nil) {
+            HoverIconButton(icon: "phone.fill", isActive: metrics.meetingActive, edge: nil, scale: scale) {
                 onAction("toggle_meeting")
             }
-            HoverIconButton(icon: "xmark", isActive: false, edge: .trailing) {
+            HoverIconButton(icon: "xmark", isActive: false, edge: .trailing, scale: scale) {
                 onAction("close")
             }
         }
-        .frame(height: kExpandedH)
+        .frame(height: kBaseExpandedH * scale)
         .background(Capsule().fill(Color.black.opacity(0.8)))
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
-        .clipShape(Capsule()) // clip hover highlights to capsule shape
+        .clipShape(Capsule())
     }
 }
 
@@ -282,7 +277,8 @@ struct ShortcutCellButton: View {
     let icon: String
     let label: String
     let colW: CGFloat?
-    let edge: HorizontalEdge?  // .leading = left cap, .trailing = right cap, nil = middle
+    let edge: HorizontalEdge?
+    let scale: CGFloat
     let action: () -> Void
     @State private var hovered = false
 
@@ -290,15 +286,15 @@ struct ShortcutCellButton: View {
         Button(action: action) {
             HStack(spacing: 1) {
                 Image(systemName: icon)
-                    .font(.system(size: 5))
+                    .font(.system(size: 5 * scale))
                     .foregroundColor(.white.opacity(0.5))
                 Text(label)
-                    .font(Brand.swiftUIMonoFont(size: 7, weight: .medium))
+                    .font(Brand.swiftUIMonoFont(size: 7 * scale, weight: .medium))
                     .foregroundColor(.white.opacity(0.8))
                     .lineLimit(1)
                     .fixedSize()
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 6 * scale)
             .frame(width: colW).frame(maxHeight: .infinity)
             .background(hovered ? Color.white.opacity(0.12) : Color.clear)
             .contentShape(Rectangle())
@@ -313,6 +309,7 @@ struct HoverIconButton: View {
     let icon: String
     let isActive: Bool
     let edge: HorizontalEdge?
+    let scale: CGFloat
     let action: () -> Void
     @State private var hovered = false
 
@@ -320,20 +317,38 @@ struct HoverIconButton: View {
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: icon)
-                    .font(.system(size: 5, weight: icon == "xmark" ? .medium : .regular))
+                    .font(.system(size: 5 * scale, weight: icon == "xmark" ? .medium : .regular))
                     .foregroundColor(isActive ? .white : (hovered ? .white : .white.opacity(0.4)))
                 if isActive {
                     Circle().fill(.white)
-                        .frame(width: 3, height: 3)
+                        .frame(width: 3 * scale, height: 3 * scale)
                         .offset(x: 1, y: -1)
                 }
             }
-            .frame(width: 16).frame(maxHeight: .infinity)
+            .frame(width: 16 * scale).frame(maxHeight: .infinity)
             .background(hovered ? Color.white.opacity(0.12) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { h in hovered = h }
+    }
+}
+
+// MARK: - Overlay scale (read from ~/.screenpipe/store.bin)
+
+private var gOverlayScale: CGFloat = 1.0
+
+private func loadOverlayScale() {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let storePath = home.appendingPathComponent(".screenpipe/store.bin").path
+    guard let data = FileManager.default.contents(atPath: storePath),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let settings = json["settings"] as? [String: Any],
+          let size = settings["shortcutOverlaySize"] as? String else { return }
+    switch size {
+    case "large": gOverlayScale = 2.0
+    case "medium": gOverlayScale = 1.5
+    default: gOverlayScale = 1.0
     }
 }
 
@@ -363,7 +378,13 @@ class ShortcutReminderController: NSObject {
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
             }
-            if panel == nil {
+            let prevScale = gOverlayScale
+            loadOverlayScale()
+            if panel == nil || prevScale != gOverlayScale {
+                panel?.orderOut(nil)
+                panel = nil
+                hostingView = nil
+                trackingView = nil
                 createPanel()
             }
             updateContent()
@@ -489,8 +510,10 @@ class ShortcutReminderController: NSObject {
     private func createPanel() {
         // Start with expanded size — the content will be smaller but the panel
         // needs room so the hover area catches mouse events during animation
+        let w = kBaseExpandedW * gOverlayScale
+        let h = kBaseExpandedH * gOverlayScale
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Int(kExpandedW), height: Int(kExpandedH)),
+            contentRect: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -507,7 +530,7 @@ class ShortcutReminderController: NSObject {
         p.isReleasedWhenClosed = false
         p.sharingType = .readOnly
 
-        let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(kExpandedW), height: Int(kExpandedH)))
+        let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)))
         tracking.autoresizingMask = [.width, .height]
         p.contentView = tracking
         self.trackingView = tracking
@@ -521,8 +544,10 @@ class ShortcutReminderController: NSObject {
         for screen in NSScreen.screens {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
-                let x = screen.frame.origin.x + (screen.frame.size.width - kExpandedW) / 2
-                let y = visible.origin.y + visible.size.height - kExpandedH - 4
+                let w = kBaseExpandedW * gOverlayScale
+                let h = kBaseExpandedH * gOverlayScale
+                let x = screen.frame.origin.x + (screen.frame.size.width - w) / 2
+                let y = visible.origin.y + visible.size.height - h - 4
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 break
             }
@@ -537,6 +562,7 @@ class ShortcutReminderController: NSObject {
             chatShortcut: chatShortcut,
             searchShortcut: searchShortcut,
             metrics: metrics,
+            scale: gOverlayScale,
             onAction: { [weak self] action in
                 self?.sendAction(action)
             },

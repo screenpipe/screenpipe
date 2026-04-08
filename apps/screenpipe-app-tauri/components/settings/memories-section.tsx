@@ -586,7 +586,7 @@ export function MemoriesSection() {
               <p className="text-xs mt-3">
                 install pipes from the{" "}
                 <a
-                  href="?section=pipes"
+                  href="?section=pipes&tab=discover"
                   className="underline text-foreground hover:text-foreground/80 transition-colors"
                 >
                   pipe store

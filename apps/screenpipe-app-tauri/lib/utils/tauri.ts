@@ -812,10 +812,11 @@ async chatgptOauthModels() : Promise<Result<string[], string>> {
 /**
  * Start the OAuth flow for any integration that has `oauth_config()` set.
  * `integration_id` must match the integration's `def().id`.
+ * `instance` is an optional name for multi-account support (e.g. email address).
  */
-async oauthConnect(integrationId: string) : Promise<Result<OAuthStatus, string>> {
+async oauthConnect(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId, instance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -824,20 +825,31 @@ async oauthConnect(integrationId: string) : Promise<Result<OAuthStatus, string>>
 /**
  * Check whether a valid (non-expired) OAuth token exists for the given integration.
  */
-async oauthStatus(integrationId: string) : Promise<Result<OAuthStatus, string>> {
+async oauthStatus(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_status", { integrationId }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_status", { integrationId, instance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * Remove the stored OAuth token for the given integration.
+ * Remove the stored OAuth token for the given integration instance.
  */
-async oauthDisconnect(integrationId: string) : Promise<Result<boolean, string>> {
+async oauthDisconnect(integrationId: string, instance: string | null) : Promise<Result<boolean, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_disconnect", { integrationId }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_disconnect", { integrationId, instance }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List all connected OAuth instances for a given integration.
+ */
+async oauthListInstances(integrationId: string) : Promise<Result<OAuthInstanceInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("oauth_list_instances", { integrationId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1046,6 +1058,7 @@ export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
+export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
@@ -1187,6 +1200,12 @@ useAllMonitors: boolean;
  */
 videoQuality: string; 
 /**
+ * Maximum width for stored snapshots. Images wider than this are downscaled
+ * (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
+ * native resolution). Default: 1920.
+ */
+maxSnapshotWidth?: number; 
+/**
  * Window titles to exclude from capture.
  */
 ignoredWindows: string[]; 
@@ -1203,9 +1222,15 @@ ignoredUrls?: string[];
  */
 ignoreIncognitoWindows: boolean; 
 /**
- * Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
+ * Experimental: pause screen capture when a DRM streaming app or site is focused.
+ * Off by default; engine-only pause (no full app shutdown).
  */
 pauseOnDrmContent?: boolean; 
+/**
+ * Automatically append text typed during a meeting to the meeting's note
+ * when the meeting ends. Groups typed text by app/window context.
+ */
+appendTypedTextToMeetingNotes?: boolean; 
 /**
  * Languages for transcription (ISO 639-1 codes).
  */
@@ -1313,6 +1338,10 @@ scheduleRules?: ScheduleRule[] }) &
  */
 disableOcr?: boolean; showShortcutOverlay?: boolean; 
 /**
+ * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
+ */
+shortcutOverlaySize?: string; 
+/**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
 deviceId?: string; 
@@ -1321,6 +1350,12 @@ deviceId?: string;
  * When disabled, users must click "update now" in the tray menu.
  */
 autoUpdate?: boolean; 
+/**
+ * Auto-update store-installed pipes that haven't been locally modified.
+ */
+autoUpdatePipes?: boolean;
+/** Use screenpipe cloud for AI features like suggestions (zero data retention). */
+enhancedAI?: boolean;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

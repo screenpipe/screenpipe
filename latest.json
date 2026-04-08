@@ -1,0 +1,26 @@
+{
+  "version": "2.3.18",
+  "pub_date": "2026-04-04T23:44:40.413Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://screenpi.pe/api/app-update/download/stable/2.3.18/aarch64-apple-darwin/screenpipe.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWHJLa2MwMiswSXZONjQrMjlEbnJxRU1MT0hMWUd5Z2EzTWMweC9MaXNQd0dZYVRJeXprdDMwd0t5VVlOQzNHUmtUSHJFOWZxUGM1NzR6TlZMN3JpT0hTelRoLzBTc1FnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzQ0Mzk0CWZpbGU6c2NyZWVucGlwZS5hcHAudGFyLmd6CkxyYWZ6NmEweEQ4eGlUV25FOEZRT2JXU0N5cVE5djhYc1hTZlZFSGNCTmx4dk5NQmQxT3IvVU5wMkVxL0VTWWNLTVdTc3I4Tlpyc09ybHRpRkprNkNRPT0K"
+    },
+    "darwin-x86_64": {
+      "url": "https://screenpi.pe/api/app-update/download/stable/2.3.18/x86_64-apple-darwin/screenpipe.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWHJLa2MwMiswSXI1VjJUYjhFQ2hnRUU4aU1md1dJV0hGWllFR0dudGRpY0N4cVVrMjNsQThwZkNOVUFDYjgvNjM4SWNVbFV4WEEyY0lUN09sV3lreEg0c0NNMmRVU3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzQzMDcwCWZpbGU6c2NyZWVucGlwZS5hcHAudGFyLmd6CjhwNmpuVmt0Y1N2ZXJvM2J4Yk1XVXU0Q2VsYTFiNzF0ZUI2OEFnZjdabnk0UlRTN3FhZ2NhWExWTFk4Ni9wUlRjdExFV0QxWWlUMTNlODhXL3BIYUNBPT0K"
+    },
+    "windows-x86_64": {
+      "url": "https://screenpi.pe/api/app-update/download/stable/2.3.18/x86_64-pc-windows-msvc/screenpipe_2.3.18_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWHJLa2MwMiswSXNsYnRCRjd2Q3pVdGplWGJ0SWJ6YVJKYnN3bStCVGppRDBJazhnN05SN1VjcE5URkhubG1KUUJoS2JHMnI1eGhYU2dPYkRlMWhLYmEvMHhab0FYS2drPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzQ0NjI2CWZpbGU6c2NyZWVucGlwZV8yLjMuMThfeDY0LXNldHVwLmV4ZQpBdkdsVmlyUmJEbkdmRHhkZEFxbEJuMXE3TUlTbEd2NnYraTNkVTBvanA1MTlieFpIa05jeFhyajQyeVBUMENLbUtLZEZONngzME9ZSE5MMDJ5ZkhEUT09Cg=="
+    },
+    "windows-aarch64": {
+      "url": "https://screenpi.pe/api/app-update/download/stable/2.3.18/aarch64-pc-windows-msvc/screenpipe_2.3.18_arm64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWHJLa2MwMiswSXJPa0lDSk5pUEY1Tzc5dDVoSkZQdDErVVVBMVFzSk10MVRCeFVoVGo5TGZqU2kwQVZ0ZGoyVTBYUjZSTDAzbHNMaWdiTUJQTnpmblNkcG45ZVZHdXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzQ0NjAwCWZpbGU6c2NyZWVucGlwZV8yLjMuMThfYXJtNjQtc2V0dXAuZXhlClhNUEE1ajlRb0RjeXE3RVNJeVBzSytFeURIMzdBcnl3dU1LcFRxb3NVYkhVekZaaXM0MlhDc0NuZHh0cGRlNlJCeC9NSlZsMURRVW4vcG5kek1VT0R3PT0K"
+    },
+    "linux-x86_64": {
+      "url": "https://screenpi.pe/api/app-update/download/stable/2.3.18/x86_64-unknown-linux-gnu/screenpipe_2.3.18_amd64.AppImage",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRWHJLa2MwMiswSWhMZFVrcFB5ZzJlYVRIVzd0a3pQeE5vRFpFYzRlRy9VK3dUeGNJSUc5ZEVpeS9VaS96cHVKandYZ3c1T2c1TUE1QzcyemdTbXVHbEVSejJEbHNhQXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzQzNzcyCWZpbGU6c2NyZWVucGlwZV8yLjMuMThfYW1kNjQuQXBwSW1hZ2UKNkxSNDBzRjJDRUdVMWZwRDNJRXhYSlZDMVpJa1BRN1lkWDVuMkdSOUhSSEVLaEFteVNYaE00R1pkUVNzMXR4T3pPRm4yenJzYzR6eUtraHFGeGVTQWc9PQo="
+    }
+  }
+}

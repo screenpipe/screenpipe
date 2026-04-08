@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://app.cal.com/auth/oauth2/authorize",
     client_id: "e9e319206428a99bfcb2207e51f827c96c1ed24821458a8633356e80632575dd",
-    extra_auth_params: &[],
+    extra_auth_params: &[("scope", "READ_BOOKING READ_PROFILE")],
     redirect_uri_override: None,
 };
 

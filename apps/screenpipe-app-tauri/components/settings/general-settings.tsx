@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare, Trash2 } from "lucide-react";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, Undo2, MessageSquare, Trash2, Sparkles } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
@@ -162,6 +162,59 @@ export default function GeneralSettings() {
             </CardContent>
           </Card>
         )}
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Auto-update pipes</h3>
+                  <p className="text-xs text-muted-foreground">Update store pipes you haven&apos;t modified</p>
+                </div>
+              </div>
+              <Switch
+                id="auto-update-pipes-toggle"
+                checked={settings?.autoUpdatePipes ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ autoUpdatePipes: checked })
+                }
+                className="ml-4"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Sparkles className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Enhanced AI</h3>
+                  <p className="text-xs text-muted-foreground">
+                    use screenpipe cloud for smarter suggestions
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                    sends recent activity to screenpipe cloud for processing. we don&apos;t store your data (zero retention).
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="enhanced-ai-toggle"
+                checked={settings?.enhancedAI ?? false}
+                onCheckedChange={async (checked) => {
+                  handleSettingsChange({ enhancedAI: checked });
+                  const token = settings?.user?.token || "";
+                  try {
+                    await commands.setEnhancedAiSuggestions(checked, token);
+                  } catch {}
+                }}
+                className="ml-4"
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         {!isEnterprise && (
           <Card className="border-border bg-card">

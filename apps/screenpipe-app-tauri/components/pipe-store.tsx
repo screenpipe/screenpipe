@@ -319,7 +319,14 @@ function ConnectionsStrip() {
 }
 
 export function PipeStoreView() {
-  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
+  // Read initial tab from URL param (e.g. ?section=pipes&tab=discover)
+  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("tab") === "discover") return "discover";
+    }
+    return "my-pipes";
+  });
 
   const tabs = [
     { key: "my-pipes" as const, label: "My Pipes" },

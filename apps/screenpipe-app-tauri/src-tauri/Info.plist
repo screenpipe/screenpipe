@@ -16,6 +16,11 @@
     <string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>NSSupportsAutomaticTermination</key>
     <true/>
     <key>NSSupportsSuddenTermination</key>

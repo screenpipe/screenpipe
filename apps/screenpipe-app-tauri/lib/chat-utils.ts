@@ -19,10 +19,15 @@ export interface ChatPrefillData {
   frameId?: number;
   autoSend?: boolean;
   source?: string;
+  /** Open the Home window chat instead of the Chat overlay. */
+  useHomeChat?: boolean;
 }
 
 /**
- * Show the Chat window and reliably deliver a chat-prefill event.
+ * Show a chat window and reliably deliver a chat-prefill event.
+ *
+ * By default opens the Chat overlay. Pass `useHomeChat: true` to open the
+ * Home window's embedded chat instead (e.g. for meeting summaries).
  *
  * The chat webview may be freshly created (destroyed on close), so we use a
  * handshake: the chat component emits "chat-ready" on mount and responds to
@@ -30,10 +35,15 @@ export interface ChatPrefillData {
  * with a 5-second timeout fallback.
  */
 export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> {
-  await commands.showWindow("Chat");
+  const targetWindow = data.useHomeChat ? "home" : "chat";
+
+  if (data.useHomeChat) {
+    await commands.showWindow({ Home: { page: null } });
+  } else {
+    await commands.showWindow("Chat");
+  }
+
   // Wait for the chat component to signal readiness.
-  // Use `listen` (not `once`) so we don't miss events that fire before the
-  // listener is registered — we unlisten manually after the first event.
   await new Promise<void>((resolve) => {
     let resolved = false;
     const done = () => {
@@ -49,7 +59,7 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
     // Small delay to ensure the listen call above has registered first.
     setTimeout(() => emit("chat-ping", {}), 50);
   });
-  await emit("chat-prefill", { ...data, targetWindow: "chat" });
+  await emit("chat-prefill", { ...data, targetWindow });
 }
 
 // ============================================================================

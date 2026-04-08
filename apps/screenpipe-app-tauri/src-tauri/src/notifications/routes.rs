@@ -35,10 +35,7 @@ pub async fn send_notification(
     // Persist to disk before attempting to show — survives crashes/restarts
     store::push(NotificationHistoryEntry {
         id: panel_id.clone(),
-        notification_type: panel_payload["type"]
-            .as_str()
-            .unwrap_or("pipe")
-            .to_string(),
+        notification_type: panel_payload["type"].as_str().unwrap_or("pipe").to_string(),
         title: payload.title.clone(),
         body: payload.body.clone(),
         pipe_name: None,

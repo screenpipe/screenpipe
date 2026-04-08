@@ -229,6 +229,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     n8n: <img src="/images/n8n.png" alt="n8n" className="w-5 h-5 rounded" />,
     make: <img src="/images/make.png" alt="Make" className="w-5 h-5 rounded" />,
+    glean: <img src="/images/glean.svg" alt="Glean" className="w-5 h-5 rounded" />,
     zapier: <img src="/images/zapier.png" alt="Zapier" className="w-5 h-5 rounded" />,
     github: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
     jira: <img src="/images/jira.png" alt="Jira" className="w-5 h-5 rounded" />,
@@ -896,6 +897,9 @@ function WhatsAppPanel() {
       <p className="text-xs text-muted-foreground">
         Connect your personal WhatsApp by scanning a QR code, just like WhatsApp Web. Requires <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer" className="underline">Node.js</a> installed.
       </p>
+      <p className="text-xs text-destructive">
+        ⚠️ WhatsApp may ban accounts using unofficial integrations. Use at your own risk.
+      </p>
       {status === "idle" && (
         <Button onClick={handlePair} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
           pair with QR code
@@ -994,14 +998,26 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
   const [displayName, setDisplayName] = useState<string | null>(null);
 
-  useEffect(() => {
-    commands.oauthStatus(integrationId).then(res => {
+  const fetchStatus = useCallback(async () => {
+    try {
+      // Try list instances first for richer info
+      const listRes = await commands.oauthListInstances(integrationId);
+      if (listRes.status === "ok" && listRes.data.length > 0) {
+        setStatus("connected");
+        setDisplayName(listRes.data.map(i => i.display_name || i.instance).filter(Boolean).join(", ") || null);
+        return;
+      }
+    } catch { /* fallback below */ }
+    try {
+      const res = await commands.oauthStatus(integrationId);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
         setDisplayName(res.data.display_name ?? null);
       }
-    });
+    } catch { /* ignore */ }
   }, [integrationId]);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const handleConnect = async () => {
     setStatus("loading");
@@ -1009,7 +1025,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       const res = await commands.oauthConnect(integrationId);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
-        setDisplayName(res.data.display_name ?? null);
+        await fetchStatus();
       } else {
         setStatus("idle");
       }
@@ -1032,7 +1048,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       <div className="flex flex-wrap gap-2">
         {status === "connected" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />disconnect{displayName ? ` (${displayName})` : ""}
           </Button>
         ) : !isPro ? (
           <div className="flex flex-col gap-1.5">
@@ -1040,18 +1056,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
               <Lock className="h-3 w-3" />pro required
             </Button>
             <button
-              onClick={async () => {
-                try {
-                  const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ plan: "monthly", origin: "desktop-oauth-gate" }),
-                  });
-                  const data = await response.json();
-                  if (data.url) { await openUrl(data.url); return; }
-                } catch {}
-                await openUrl("https://screenpi.pe");
-              }}
+              onClick={() => openUrl("https://screenpi.pe/onboarding")}
               className="text-[10px] text-muted-foreground hover:text-foreground underline"
             >
               upgrade to pro to connect

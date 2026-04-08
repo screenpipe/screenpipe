@@ -106,6 +106,9 @@ pub struct RecordingConfig {
 
     /// Per-day schedule rules (only used when schedule_enabled is true).
     pub schedule_rules: Vec<screenpipe_config::ScheduleRule>,
+
+    /// Maximum width for stored snapshots (0 = no limit). Default: 1920.
+    pub max_snapshot_width: u32,
 }
 
 impl RecordingConfig {
@@ -192,6 +195,7 @@ impl RecordingConfig {
                 .unwrap_or_default(),
             schedule_enabled: settings.schedule_enabled,
             schedule_rules: settings.schedule_rules.clone(),
+            max_snapshot_width: settings.max_snapshot_width,
         }
     }
 
@@ -250,6 +254,7 @@ impl RecordingConfig {
             ignore_incognito_windows: self.ignore_incognito_windows,
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
+            max_snapshot_width: self.max_snapshot_width,
         }
     }
 }

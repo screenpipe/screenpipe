@@ -51,7 +51,22 @@ const PATHS = [
 type PathId = (typeof PATHS)[number]["id"];
 type Phase = "choose" | "enabling" | "done";
 
+async function waitForServer(maxWaitMs = 10000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await fetch("http://localhost:3030/health");
+      if (res.ok) return;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("server not ready");
+}
+
 async function installAndEnable(slug: string): Promise<void> {
+  // Wait for server to be ready before attempting install
+  await waitForServer();
+
   const enableRes = await fetch(
     `http://localhost:3030/pipes/${slug}/enable`,
     {
@@ -151,8 +166,13 @@ export default function PickPipe() {
     posthog.capture("onboarding_completed");
 
     try {
-      // still enable todo-list-assistant as default
-      await installAndEnable("todo-list-assistant").catch(() => {});
+      // best-effort install of default pipe — don't block onboarding completion
+      await installAndEnable("todo-list-assistant").catch((e) => {
+        console.warn("failed to install default pipe:", e);
+      });
+    } catch {}
+
+    try {
       await completeOnboarding();
     } catch {}
     try {
@@ -162,6 +182,8 @@ export default function PickPipe() {
       await commands.showWindow({ Home: { page: null } });
       window.close();
     } catch {}
+
+    isCompletingRef.current = false;
   }, [completeOnboarding]);
 
   const RecordingDot = () => (

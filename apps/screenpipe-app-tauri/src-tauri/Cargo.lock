@@ -459,7 +459,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -1717,7 +1717,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.0"
-source = "git+https://github.com/yury/cidre.git#4b0f590028051f1b98c325405f119cb6f3e95580"
+source = "git+https://github.com/yury/cidre.git#ee0a48a2f8be4b4433e34db06bee46c3346a91a8"
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
@@ -1901,7 +1901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2861,7 +2861,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6685,7 +6685,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8537,7 +8537,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9310,7 +9310,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9642,7 +9642,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.3.28"
+version = "2.3.34"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9744,7 +9744,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -9799,7 +9799,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -9811,7 +9811,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9840,7 +9840,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9873,6 +9873,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -9885,7 +9886,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9910,7 +9911,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9973,7 +9974,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9989,7 +9990,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -10025,7 +10026,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.263"
+version = "0.3.267"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -11258,7 +11259,6 @@ dependencies = [
  "cfg-if 1.0.4",
  "libc",
  "psm",
- "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 

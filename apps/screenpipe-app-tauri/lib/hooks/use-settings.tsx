@@ -671,6 +671,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 						github_username: settings.user?.github_username,
 						website: settings.user?.website,
 						contact: settings.user?.contact,
+						cloud_subscribed: !!settings.user?.cloud_subscribed,
 						app_version: appVersion,
 					});
 				})
@@ -682,11 +683,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 						github_username: settings.user?.github_username,
 						website: settings.user?.website,
 						contact: settings.user?.contact,
+						cloud_subscribed: !!settings.user?.cloud_subscribed,
 					});
 				});
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id]);
+	}, [settings.analyticsId, settings.user?.id, settings.user?.cloud_subscribed]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {

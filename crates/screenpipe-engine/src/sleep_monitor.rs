@@ -7,16 +7,17 @@
 //! macOS: polls `CGSessionCopyCurrentDictionary` every 2s to detect screen lock
 //! (catches Cmd+Ctrl+Q, menu lock, hot corner, auto-lock, display sleep).
 //! Also listens for NSWorkspace sleep/wake notifications for the `RECENTLY_WOKE` flag.
-//! Windows: polls `OpenInputDesktop` every 5s.
+//! Windows: polls `OpenInputDesktop` every 5s and detects wake via clock-gap.
+//! Linux: detects wake via clock-gap polling.
 //! Exposes an `screen_is_locked()` flag so capture loops can skip work while
 //! the screen is locked / screensaver is active.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use tracing::debug;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use tracing::info;
 #[cfg(target_os = "macos")]
 use tracing::{debug, error, info, warn};
@@ -28,6 +29,8 @@ use serde_json::json;
 
 /// Tracks whether the system is currently in a "post-wake" state
 static RECENTLY_WOKE: AtomicBool = AtomicBool::new(false);
+/// Monotonic sequence used to avoid stale wake-clear timers winning races.
+static RECENTLY_WOKE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Tracks whether the screen is currently locked / screensaver active.
 /// When true, capture loops should skip capture to avoid wasting resources
@@ -47,6 +50,37 @@ pub fn screen_is_locked() -> bool {
 /// Set the screen locked state (called from capture loop when lock-screen app detected).
 pub fn set_screen_locked(locked: bool) {
     SCREEN_IS_LOCKED.store(locked, Ordering::SeqCst);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn mark_recently_woke(platform: &'static str) {
+    RECENTLY_WOKE.store(true, Ordering::SeqCst);
+    let seq = RECENTLY_WOKE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    tracing::info!("Detected system wake on {}", platform);
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        if RECENTLY_WOKE_SEQ.load(Ordering::SeqCst) == seq {
+            RECENTLY_WOKE.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn is_wake_gap(elapsed: std::time::Duration, poll_interval: std::time::Duration) -> bool {
+    // If wall-clock time jumped far beyond our poll interval, the machine likely slept.
+    elapsed > poll_interval + std::time::Duration::from_secs(15)
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn detected_wake_from_poll_gap(
+    last_tick: &mut std::time::SystemTime,
+    poll_interval: std::time::Duration,
+) -> bool {
+    let now = std::time::SystemTime::now();
+    let elapsed = now.duration_since(*last_tick).unwrap_or_default();
+    *last_tick = now;
+    is_wake_gap(elapsed, poll_interval)
 }
 
 /// Check whether the screen is currently locked by querying the macOS
@@ -319,10 +353,14 @@ pub fn start_sleep_monitor() {
             }
         }
 
-        info!("Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)");
+        info!(
+            "Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)"
+        );
 
         // The callback is delivered on the run loop of this thread
-        unsafe { CFRunLoopRun(); }
+        unsafe {
+            CFRunLoopRun();
+        }
     });
 
     // Thread 3: NSWorkspace notification observers for system sleep/wake.
@@ -387,7 +425,7 @@ fn on_will_sleep() {
 #[cfg(target_os = "macos")]
 fn on_did_wake(handle: &tokio::runtime::Handle) {
     // Mark that we recently woke
-    RECENTLY_WOKE.store(true, Ordering::SeqCst);
+    mark_recently_woke("macos");
 
     // Immediately re-check screen lock state via CGSession.
     // The CFNotificationCenter unlock notification can be lost during sleep/wake,
@@ -438,10 +476,6 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
                 audio_healthy, vision_healthy
             );
         }
-
-        // Clear the recently woke flag after 30 seconds
-        tokio::time::sleep(Duration::from_secs(25)).await;
-        RECENTLY_WOKE.store(false, Ordering::SeqCst);
     });
 }
 
@@ -493,11 +527,17 @@ pub fn start_sleep_monitor() {
     use windows::Win32::System::StationsAndDesktops::{
         CloseDesktop, OpenInputDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS,
     };
+    let poll_interval = std::time::Duration::from_secs(5);
 
     info!("Starting Windows screen-lock monitor (OpenInputDesktop polling)");
 
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
+        let mut last_tick = std::time::SystemTime::now();
         loop {
+            if detected_wake_from_poll_gap(&mut last_tick, poll_interval) {
+                mark_recently_woke("windows");
+            }
+
             // SAFETY: Win32 call — if the return is invalid the desktop is
             // not accessible (screen locked / screensaver / UAC).
             let locked = unsafe {
@@ -520,15 +560,34 @@ pub fn start_sleep_monitor() {
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::thread::sleep(poll_interval);
         }
     });
 }
 
-/// No-op on platforms other than macOS and Windows
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// Start the wake monitor on Linux.
+///
+/// Uses wall-clock gap detection to infer suspend/resume without extra runtime deps.
+#[cfg(target_os = "linux")]
 pub fn start_sleep_monitor() {
-    debug!("Sleep monitor is only available on macOS and Windows");
+    let poll_interval = std::time::Duration::from_secs(5);
+    info!("Starting Linux wake monitor (clock-gap polling)");
+
+    std::thread::spawn(move || {
+        let mut last_tick = std::time::SystemTime::now();
+        loop {
+            if detected_wake_from_poll_gap(&mut last_tick, poll_interval) {
+                mark_recently_woke("linux");
+            }
+            std::thread::sleep(poll_interval);
+        }
+    });
+}
+
+/// No-op on platforms other than macOS, Windows, and Linux
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub fn start_sleep_monitor() {
+    debug!("Sleep monitor is only available on macOS, Windows, and Linux");
 }
 
 #[cfg(test)]
@@ -551,5 +610,15 @@ mod tests {
         assert!(screen_is_locked());
         SCREEN_IS_LOCKED.store(false, Ordering::SeqCst);
         assert!(!screen_is_locked());
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn test_is_wake_gap_detection() {
+        use std::time::Duration;
+        let poll = Duration::from_secs(5);
+        assert!(!is_wake_gap(Duration::from_secs(6), poll));
+        assert!(!is_wake_gap(Duration::from_secs(20), poll));
+        assert!(is_wake_gap(Duration::from_secs(21), poll));
     }
 }

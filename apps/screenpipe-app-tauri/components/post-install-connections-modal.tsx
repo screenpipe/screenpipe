@@ -132,7 +132,7 @@ export function PostInstallConnectionsModal({
     }));
 
     try {
-      const res = await commands.oauthConnect(integrationId);
+      const res = await commands.oauthConnect(integrationId, null);
       if (res.status === "ok" && res.data.connected) {
         handleSaved(connId);
       } else {
@@ -244,18 +244,7 @@ export function PostInstallConnectionsModal({
                             <Lock className="h-3 w-3" />pro required
                           </Button>
                           <button
-                            onClick={async () => {
-                              try {
-                                const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ plan: "monthly", origin: "desktop-pipe-install-gate" }),
-                                });
-                                const data = await response.json();
-                                if (data.url) { await openUrl(data.url); return; }
-                              } catch {}
-                              await openUrl("https://screenpi.pe");
-                            }}
+                            onClick={() => openUrl("https://screenpi.pe/onboarding")}
                             className="text-[10px] text-muted-foreground hover:text-foreground underline"
                           >
                             upgrade to pro to connect

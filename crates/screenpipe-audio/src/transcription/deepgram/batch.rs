@@ -135,12 +135,12 @@ fn create_query_params(languages: Vec<Language>, vocabulary: &[VocabularyEntry])
         .concat();
     }
 
-    // Add vocabulary as Deepgram keywords (up to 100 per their API limit)
+    // Add vocabulary as Deepgram keyterms (Nova-3 uses `keyterm` instead of `keywords`)
     for entry in vocabulary.iter().take(100) {
         let keyword = entry.replacement.as_deref().unwrap_or(&entry.word);
         // Simple percent-encode spaces for the query string
         let encoded = keyword.replace(' ', "%20");
-        query_params.push_str(&format!("&keywords={}:2", encoded));
+        query_params.push_str(&format!("&keyterm={}:2", encoded));
     }
 
     query_params

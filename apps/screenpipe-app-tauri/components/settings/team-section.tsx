@@ -53,6 +53,7 @@ export function TeamSection() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [togglingAutoJoin, setTogglingAutoJoin] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState("");
   const [pendingJoin, setPendingJoin] = useState<{
     teamId: string;
@@ -642,6 +643,82 @@ export function TeamSection() {
                 </>
               ) : (
                 "send invite"
+              )}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Auto-join by domain (admin only) */}
+      {isAdmin && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-medium flex items-center gap-1.5">
+                <Globe className="h-4 w-4" />
+                auto-join by email domain
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                {team.team?.auto_join_domain
+                  ? `anyone signing up with @${team.team.auto_join_domain} auto-joins this team`
+                  : "new users with your company email domain will auto-join this team"}
+              </p>
+            </div>
+            <Button
+              variant={team.team?.auto_join_domain ? "destructive" : "outline"}
+              size="sm"
+              className="text-xs whitespace-nowrap"
+              disabled={togglingAutoJoin}
+              onClick={async () => {
+                setTogglingAutoJoin(true);
+                try {
+                  const userEmail = settings.user?.email || "";
+                  const userDomain = userEmail.split("@")[1]?.toLowerCase();
+                  const isEnabled = !!team.team?.auto_join_domain;
+                  const newDomain = isEnabled ? null : userDomain;
+
+                  if (!isEnabled && !userDomain) {
+                    toast({ title: "could not detect your email domain", variant: "destructive" });
+                    return;
+                  }
+
+                  const token = settings.user?.token;
+                  const res = await fetch("https://screenpi.pe/api/team", {
+                    method: "PATCH",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: JSON.stringify({ auto_join_domain: newDomain }),
+                  });
+
+                  const data = await res.json();
+                  if (!res.ok) {
+                    toast({ title: data.error || "failed to update", variant: "destructive" });
+                    return;
+                  }
+
+                  if (data.retro_added > 0) {
+                    toast({ title: `auto-join enabled — ${data.retro_added} existing user(s) added to team` });
+                  } else {
+                    toast({ title: isEnabled ? "auto-join disabled" : "auto-join enabled" });
+                  }
+
+                  // Refresh team data
+                  team.fetchTeam();
+                } catch (e: any) {
+                  toast({ title: "failed to update", description: e.message, variant: "destructive" });
+                } finally {
+                  setTogglingAutoJoin(false);
+                }
+              }}
+            >
+              {togglingAutoJoin ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : team.team?.auto_join_domain ? (
+                "disable"
+              ) : (
+                "enable"
               )}
             </Button>
           </div>

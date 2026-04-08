@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
-    menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
     AppHandle, Manager, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -35,6 +35,72 @@ static UPDATE_MENU_ITEM: Lazy<Mutex<Option<MenuItem<Wry>>>> = Lazy::new(|| Mutex
 
 // Track last known state to avoid unnecessary updates
 static LAST_MENU_STATE: Lazy<Mutex<MenuState>> = Lazy::new(|| Mutex::new(MenuState::default()));
+
+/// Optimistic recording status override — set on start/stop click for instant UI feedback.
+/// Tuple of (status, expiry_instant). Cleared when real status matches or after timeout.
+static OPTIMISTIC_STATUS: Lazy<Mutex<Option<(RecordingStatus, std::time::Instant)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn set_optimistic_status(status: RecordingStatus) {
+    let mut opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    *opt = Some((
+        status,
+        std::time::Instant::now() + std::time::Duration::from_secs(15),
+    ));
+}
+
+/// Immediately rebuild the tray menu (called from main thread after optimistic status set).
+fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+    let update_item = UPDATE_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let state = {
+        let mut last = LAST_MENU_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        // Reset to force rebuild
+        let s = last.clone();
+        last.recording_status = None;
+        s
+    };
+    // Build new state with effective (optimistic) status
+    let effective = get_effective_recording_status();
+    let mut new_state = state;
+    new_state.recording_status = Some(effective);
+
+    let menu = create_dynamic_menu(app, &new_state, update_item.as_ref())?;
+    if let Some(tray) = app.tray_by_id("screenpipe_main") {
+        if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
+            *guard = Some(menu.clone());
+        }
+        tray.set_menu(Some(menu))?;
+    }
+    // Update last state so the poller doesn't immediately rebuild again
+    {
+        let mut last = LAST_MENU_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        *last = new_state;
+    }
+    Ok(())
+}
+
+fn get_effective_recording_status() -> RecordingStatus {
+    let opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((status, expiry)) = opt.as_ref() {
+        if std::time::Instant::now() < *expiry {
+            return status.clone();
+        }
+    }
+    drop(opt);
+    // Clear expired optimistic status
+    let real = get_recording_status();
+    let mut opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((ref s, _)) = *opt {
+        // Clear if real status caught up or expired
+        if *s == real {
+            *opt = None;
+        }
+    }
+    real
+}
 
 /// Keep the most recent tray menu alive to prevent a use-after-free crash.
 ///
@@ -324,22 +390,33 @@ fn create_dynamic_menu(
     }
 
     // --- Recording status + devices ---
-    let status_text = match get_recording_status() {
+    let effective_status = get_effective_recording_status();
+    let status_text = match effective_status {
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
         RecordingStatus::Stopped => "○ Stopped",
         RecordingStatus::Error => "○ Error",
     };
-    menu_builder = menu_builder
-        .item(&PredefinedMenuItem::separator(app)?)
-        .item(
-            &MenuItemBuilder::with_id("recording_status", status_text)
+    menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
+
+    if effective_status == RecordingStatus::Recording
+        || effective_status == RecordingStatus::Starting
+    {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("privacy_info", "Your data stays local")
                 .enabled(false)
                 .build(app)?,
         );
+    }
 
-    if get_recording_status() == RecordingStatus::Recording
-        || get_recording_status() == RecordingStatus::Starting
+    menu_builder = menu_builder.item(
+        &MenuItemBuilder::with_id("recording_status", status_text)
+            .enabled(false)
+            .build(app)?,
+    );
+
+    if effective_status == RecordingStatus::Recording
+        || effective_status == RecordingStatus::Starting
     {
         let info = get_recording_info();
         for (i, device) in info.devices.iter().enumerate() {
@@ -359,7 +436,7 @@ fn create_dynamic_menu(
     }
 
     // Show "fix permissions" when recording is in error state
-    if get_recording_status() == RecordingStatus::Error {
+    if effective_status == RecordingStatus::Error {
         let perms = crate::permissions::do_permissions_check(false);
         let has_permission_issue =
             !perms.screen_recording.permitted() || !perms.microphone.permitted();
@@ -433,17 +510,12 @@ fn create_dynamic_menu(
     if !is_tray_item_hidden("tray_recording_controls") {
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
-        let mut start_builder = MenuItemBuilder::with_id("start_recording", "Start recording");
-        if !start_rec_shortcut.is_empty() {
-            start_builder = start_builder.accelerator(&to_accelerator(&start_rec_shortcut));
-        }
-        menu_builder = menu_builder.item(&start_builder.build(app)?);
-
-        let mut stop_builder = MenuItemBuilder::with_id("stop_recording", "Stop recording");
-        if !stop_rec_shortcut.is_empty() {
-            stop_builder = stop_builder.accelerator(&to_accelerator(&stop_rec_shortcut));
-        }
-        menu_builder = menu_builder.item(&stop_builder.build(app)?);
+        let is_recording = effective_status == RecordingStatus::Recording;
+        let label = if is_recording { "Recording" } else { "Record" };
+        let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
+            .checked(is_recording)
+            .build(app)?;
+        menu_builder = menu_builder.item(&toggle);
     }
 
     // TODO: vault lock tray item disabled — CLI-only for now
@@ -464,10 +536,10 @@ fn create_dynamic_menu(
         );
     }
     menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("quit", "Quit screenpipe")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?,
-        );
+        &MenuItemBuilder::with_id("quit", "Quit screenpipe")
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?,
+    );
 
     menu_builder.build().map_err(Into::into)
 }
@@ -550,11 +622,24 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app.emit("tray-show-chat", ());
             });
         }
-        "start_recording" => {
-            let _ = app_handle.emit("shortcut-start-recording", ());
-        }
-        "stop_recording" => {
-            let _ = app_handle.emit("shortcut-stop-recording", ());
+        "start_recording" | "stop_recording" | "toggle_recording" => {
+            let is_recording = get_recording_status() == RecordingStatus::Recording;
+            let (optimistic, event) = if is_recording {
+                (RecordingStatus::Stopped, "shortcut-stop-recording")
+            } else {
+                (RecordingStatus::Starting, "shortcut-start-recording")
+            };
+            set_optimistic_status(optimistic);
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = app.emit(event, ());
+            });
+            let app2 = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Err(e) = force_tray_rebuild(&app2) {
+                    error!("tray rebuild failed: {}", e);
+                }
+            });
         }
         "lock_vault" => {
             let _ = app_handle.emit("vault-lock-requested", ());
@@ -756,9 +841,10 @@ async fn update_menu_if_needed(
         == Some(true);
 
     let recording_info = get_recording_info();
+    let effective_status = get_effective_recording_status();
     let new_state = MenuState {
         shortcuts: get_current_shortcuts(app)?,
-        recording_status: Some(recording_info.status),
+        recording_status: Some(effective_status),
         onboarding_completed,
         has_permission_issue,
         devices: recording_info
@@ -866,7 +952,13 @@ pub fn setup_tray_menu_updater(app: AppHandle, update_item: &tauri::menu::MenuIt
                 break;
             }
             if let Err(e) = update_menu_if_needed(&app, &update_item).await {
-                error!("Failed to update tray menu: {:#}", e);
+                let msg = format!("{:#}", e);
+                error!("Failed to update tray menu: {}", msg);
+                // Tauri resource table can go stale after in-place updates on
+                // Windows — invalidate the cached store so the next tick rebuilds it.
+                if msg.contains("resource id") && msg.contains("invalid") {
+                    crate::store::invalidate_store_cache();
+                }
             }
         }
     });

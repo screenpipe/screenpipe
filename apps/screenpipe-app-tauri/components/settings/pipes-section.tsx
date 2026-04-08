@@ -71,8 +71,15 @@ import { useQueryState } from "nuqs";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { saveConversationFile } from "@/lib/chat-storage";
-import { UpgradeDialog } from "@/components/upgrade-dialog";
 import { PublishDialog } from "@/components/pipe-store";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PostInstallConnectionsModal } from "@/components/post-install-connections-modal";
 import posthog from "posthog-js";
 import { MemoizedReactMarkdown } from "@/components/markdown";
@@ -693,7 +700,6 @@ export function PipesSection() {
   const [loading, setLoading] = useState(true);
   const [runningPipe, setRunningPipe] = useState<string | null>(null);
   const [stoppingPipe, setStoppingPipe] = useState<string | null>(null);
-  const [showUpgrade, setShowUpgrade] = useState(false);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<Record<string, "saving" | "saved" | "error">>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
@@ -722,6 +728,12 @@ export function PipesSection() {
   const [connectionModal, setConnectionModal] = useState<{ pipeName: string; connections: string[] } | null>(null);
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
   const [updatingPipe, setUpdatingPipe] = useState<string | null>(null);
+  const [updateDialog, setUpdateDialog] = useState<{
+    pipeName: string;
+    slug: string;
+    installedVersion: number;
+    latestVersion: number;
+  } | null>(null);
   // Live streaming output for running executions: key = "pipeName:executionId"
   const [liveOutput, setLiveOutput] = useState<Record<string, string[]>>({});
   const liveOutputRef = useRef<Record<string, string[]>>({});
@@ -947,9 +959,37 @@ export function PipesSection() {
   };
 
   const trackedPipesView = useRef(false);
+  const autoUpdateRan = useRef(false);
   useEffect(() => {
     fetchConnections();
     checkForUpdates();
+
+    // Auto-update unmodified pipes
+    if (settings?.autoUpdatePipes !== false && !autoUpdateRan.current) {
+      autoUpdateRan.current = true;
+      (async () => {
+        try {
+          const res = await fetch(`${apiBase}/pipes/store/auto-update`, { method: "POST" });
+          if (res.ok) {
+            const data = await res.json();
+            const updated = data.auto_updated || [];
+            if (updated.length > 0) {
+              for (const u of updated) {
+                toast({
+                  title: `${u.pipe_name} auto-updated`,
+                  description: `v${u.from_version} → v${u.to_version}`,
+                });
+              }
+              // Refresh updates map and pipes list
+              await Promise.all([checkForUpdates(), fetchPipes()]);
+            }
+          }
+        } catch {
+          // silently fail — not critical
+        }
+      })();
+    }
+
     fetchPipes().then(() => {
       if (!trackedPipesView.current) {
         trackedPipesView.current = true;
@@ -1488,10 +1528,12 @@ export function PipesSection() {
               <>
                 <p>no pipes installed</p>
                 <p className="text-sm mt-2">
-                  create a pipe at{" "}
-                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                    ~/.screenpipe/pipes/my-pipe/pipe.md
-                  </code>
+                  <a
+                    href="?section=pipes&tab=discover"
+                    className="underline text-foreground hover:text-foreground/80 transition-colors"
+                  >
+                    browse the store
+                  </a>
                 </p>
               </>
             ) : pipeFilter === "team" ? (
@@ -1558,9 +1600,12 @@ export function PipesSection() {
                       const update = availableUpdates[pipe.config.name];
                       const slug = (pipe.config as any).config?.source_slug as string || pipe.source_slug || pipe.config.name;
                       if (update.locally_modified) {
-                        if (confirm(`you have local changes to this pipe. updating to v${update.latest_version} will overwrite them. continue?`)) {
-                          updatePipe(pipe.config.name, slug);
-                        }
+                        setUpdateDialog({
+                          pipeName: pipe.config.name,
+                          slug,
+                          installedVersion: update.installed_version,
+                          latestVersion: update.latest_version,
+                        });
                       } else {
                         updatePipe(pipe.config.name, slug);
                       }
@@ -2601,13 +2646,6 @@ export function PipesSection() {
         />
       )}
 
-      <UpgradeDialog
-        open={showUpgrade}
-        onOpenChange={setShowUpgrade}
-        reason="daily_limit"
-        source="pipes"
-      />
-
       <PublishDialog
         open={!!publishPipeName}
         onOpenChange={(v) => { if (!v) setPublishPipeName(null); }}
@@ -2618,6 +2656,45 @@ export function PipesSection() {
         }}
         defaultPipe={publishPipeName || undefined}
       />
+
+      <Dialog open={!!updateDialog} onOpenChange={(open) => !open && setUpdateDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>update {updateDialog?.pipeName}?</DialogTitle>
+            <DialogDescription>
+              <span className="inline-flex items-center gap-2 mt-2">
+                <Badge variant="outline">v{updateDialog?.installedVersion}</Badge>
+                <span>→</span>
+                <Badge variant="outline">v{updateDialog?.latestVersion}</Badge>
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
+            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              you have local edits to this pipe. updating will overwrite your prompt changes.
+              a backup will be saved as <code className="text-xs">pipe.md.bak</code>.
+              your schedule, model, and enabled state will be preserved.
+            </p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setUpdateDialog(null)}>
+              skip
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (updateDialog) {
+                  updatePipe(updateDialog.pipeName, updateDialog.slug);
+                  setUpdateDialog(null);
+                }
+              }}
+            >
+              update & discard my edits
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

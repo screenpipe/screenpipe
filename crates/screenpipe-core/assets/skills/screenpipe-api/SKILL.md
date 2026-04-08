@@ -41,6 +41,7 @@ Don't jump to heavy `/search` calls. Escalate:
 
 | Step | Endpoint | When |
 |------|----------|------|
+| 0 | `GET /memories?q=...` | **Always query first/in parallel** — highest signal, lowest cost |
 | 1 | `GET /activity-summary?start_time=...&end_time=...` | Broad questions ("what was I doing?", "which apps?") |
 | 2 | `GET /search?...` | Need specific content |
 | 3 | `GET /elements?...` or `GET /frames/{id}/context` | UI structure, buttons, links |
@@ -340,18 +341,37 @@ When the user says "that was actually Jordan, not Karishma":
 
 ---
 
-## 11. Memories — Persistent Facts & Preferences
+## 11. Memories — High-Signal Persistent Knowledge
 
-Store and retrieve persistent memories (user preferences, decisions, project context).
+**Memories are the highest-signal data source in screenpipe.** They contain curated facts, user preferences, decisions, and project context — distilled from hours of screen/audio data. Always check memories when answering questions or building context.
+
+### When to Query Memories
+
+**Query memories FIRST (before or alongside `/search`)** when:
+- The user asks about preferences, decisions, or past context
+- You need background on a project, person, or workflow
+- You're generating a summary, recommendation, or action plan
+- You're unsure about user preferences or past decisions
+- Any task where historical context would improve the output
+
+**Rule: If you're calling `/search`, also call `/memories` in parallel.** Memories provide the "why" behind the raw screen data. Search gives you what happened; memories tell you what matters.
+
+### API
 
 ```bash
+# Search memories (FTS) — do this often!
+curl "http://localhost:3030/memories?q=preference&limit=20"
+
+# List recent memories (high importance first)
+curl "http://localhost:3030/memories?min_importance=0.5&limit=20"
+
+# Filter by source or tags
+curl "http://localhost:3030/memories?source=user&tags=project&limit=20"
+
 # Create a memory
 curl -X POST http://localhost:3030/memories \
   -H "Content-Type: application/json" \
   -d '{"content": "User prefers dark mode", "source": "user", "tags": ["preference", "ui"], "importance": 0.7}'
-
-# List/search memories
-curl "http://localhost:3030/memories?q=preference&limit=10"
 
 # Update a memory
 curl -X PUT http://localhost:3030/memories/1 \
@@ -364,7 +384,11 @@ curl -X DELETE http://localhost:3030/memories/1
 
 Parameters for `GET /memories`: `q` (FTS search), `source`, `tags`, `min_importance`, `start_time`, `end_time`, `limit`, `offset`.
 
-Memories also appear in `/search?content_type=memory`. Use sparingly — only store genuinely useful long-lived facts, not transient observations.
+Memories also appear in `/search?content_type=memory`.
+
+### Creating Memories
+
+When you learn something important about the user (preferences, decisions, project context), store it as a memory. Use `importance` 0.0-1.0 to rank signal. Only store genuinely useful long-lived facts, not transient observations.
 
 ---
 
