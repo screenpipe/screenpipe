@@ -127,6 +127,38 @@ ask Claude Code to use screenpipe naturally:
 
 ## troubleshooting
 
+**AI agent crashed with "Error: AI agent crashed — restarting automatically..."?**
+
+this happens when Claude Code can't communicate with screenpipe or screenpipe encounters an error. try these steps in order:
+
+1. **check screenpipe is running:**
+   ```bash
+   curl http://localhost:3030/health
+   ```
+   you should see `{"status":"healthy"}`. if this fails, start screenpipe first.
+
+2. **verify MCP is connected:**
+   ```bash
+   claude mcp list
+   ```
+   you should see `screenpipe` in the list with status "ready".
+
+3. **check screenpipe has recorded data:**
+   ```bash
+   curl "http://localhost:3030/search?limit=1"
+   ```
+   if empty, screenpipe hasn't recorded anything yet—let it run for a minute and try again.
+
+4. **restart the MCP connection:**
+   ```bash
+   claude mcp remove screenpipe
+   claude mcp add screenpipe --transport stdio -- npx -y screenpipe-mcp
+   ```
+
+5. **check screenpipe logs:**
+   - macOS/Linux: `~/.screenpipe/screenpipe.log`
+   - Windows: check event viewer or `%APPDATA%\screenpipe\logs`
+
 **MCP not connecting?**
 - verify screenpipe is running: `curl http://localhost:3030/health`
 - check MCP status in Claude Code: `/mcp`
