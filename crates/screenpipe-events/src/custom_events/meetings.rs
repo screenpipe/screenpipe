@@ -11,7 +11,10 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-const MEETING_APPS: &[&str] = &["zoom", "teams", "meet", "webex", "skype", "slack"];
+const MEETING_APPS: &[&str] = &[
+    "zoom", "teams", "meet", "webex", "skype", "slack", "signal", "whatsapp",
+    "telegram", "facetime", "discord",
+];
 const MEETING_KEYWORDS: &[&str] = &[
     "meeting",
     "call",

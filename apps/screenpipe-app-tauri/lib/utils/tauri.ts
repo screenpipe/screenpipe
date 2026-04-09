@@ -967,7 +967,8 @@ async trainVoice(name: string, startTime: string, endTime: string) : Promise<Res
 }
 },
 /**
- * Return cached suggestions or default idle suggestions if cache is empty.
+ * Return cached suggestions. If cache is empty (first load), generate
+ * template suggestions from current activity data so the UI is never generic.
  */
 async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
     try {
@@ -984,6 +985,17 @@ async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
 async forceRegenerateSuggestions() : Promise<Result<CachedSuggestions, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("force_regenerate_suggestions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or disable enhanced AI suggestions (uses screenpipe cloud).
+ */
+async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_enhanced_ai_suggestions", { enabled, token }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1353,9 +1365,12 @@ autoUpdate?: boolean;
 /**
  * Auto-update store-installed pipes that haven't been locally modified.
  */
-autoUpdatePipes?: boolean;
-/** Use screenpipe cloud for AI features like suggestions (zero data retention). */
-enhancedAI?: boolean;
+autoUpdatePipes?: boolean; 
+/**
+ * Use screenpipe cloud for AI-powered features like suggestions.
+ * Better quality but sends activity context to the cloud (zero data retention).
+ */
+enhancedAI?: boolean; 
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).
@@ -1384,7 +1399,15 @@ translucentSidebar?: boolean;
  */
 uiTheme?: string }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
-export type Suggestion = { text: string }
+export type Suggestion = { text: string; 
+/**
+ * Short preview with real data (e.g. "1h20m in VS Code — auth.rs, api.rs")
+ */
+preview?: string | null; 
+/**
+ * Priority: 1 = hero card (most relevant), 2+ = supporting cards
+ */
+priority?: number }
 /**
  * Sync configuration.
  */

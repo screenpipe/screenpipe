@@ -2910,11 +2910,20 @@ impl PipeManager {
                 }
             }
 
-            // Subscribe to workflow events for event-triggered pipes
+            // Subscribe to trigger-relevant events only.
+            // We subscribe to individual topics to avoid processing high-frequency
+            // system events (ui_frame, window_ocr, realtime_transcription).
             use futures::StreamExt;
-            let mut workflow_rx = screenpipe_events::subscribe_to_event::<
-                screenpipe_events::WorkflowEvent,
-            >("workflow_event");
+            let mut meeting_start_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+            let mut meeting_end_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            let mut workflow_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
+            // pipe_completed:* uses subscribe_to_all with prefix filtering below
+            let mut pipe_completed_rx = screenpipe_events::subscribe_to_all_events();
+
+            // Circular chain detection: track recently-triggered pipe→pipe chains.
+            // If A→B→A would fire, suppress the second link.
+            let mut recent_chain: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+            const CHAIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
             loop {
                 // Check for shutdown
@@ -2942,42 +2951,90 @@ impl PipeManager {
                         .collect()
                 };
 
-                // Drain pending workflow events and mark matching pipes for immediate execution.
-                // We reset their last_run to epoch so the existing should_run() check
-                // passes on this tick, reusing the full execution path without duplication.
+                // Drain pending events and mark matching pipes for immediate execution.
+                // Collect events from targeted subscriptions to avoid processing
+                // high-frequency system events (ui_frame, window_ocr, etc.).
                 let mut event_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 {
                     use futures::FutureExt;
-                    while let Some(event) = workflow_rx.next().now_or_never().flatten() {
-                        let event_type = &event.data.event_type;
+
+                    // Collect events from all targeted subscriptions into one vec
+                    let mut pending_events: Vec<(String, serde_json::Value)> = Vec::new();
+                    while let Some(e) = meeting_start_rx.next().now_or_never().flatten() {
+                        pending_events.push((e.name, e.data));
+                    }
+                    while let Some(e) = meeting_end_rx.next().now_or_never().flatten() {
+                        pending_events.push((e.name, e.data));
+                    }
+                    while let Some(e) = workflow_rx.next().now_or_never().flatten() {
+                        // For workflow_event, expose the inner event_type as the match key
+                        let event_type = e.data.get("event_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("workflow_event")
+                            .to_string();
+                        pending_events.push((event_type, e.data));
+                    }
+                    // pipe_completed:* — filter from all-events subscription
+                    while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
+                        if e.name.starts_with("pipe_completed:") {
+                            pending_events.push((e.name, e.data));
+                        }
+                    }
+
+                    // Expire old chain cooldowns
+                    recent_chain.retain(|_, ts| ts.elapsed() < CHAIN_COOLDOWN);
+
+                    for (event_name, _data) in &pending_events {
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
-                                if trigger.events.iter().any(|e| e == event_type) {
-                                    let already_running = {
-                                        let r = running.lock().await;
-                                        r.contains_key(name)
-                                    };
-                                    if already_running {
+                                if !trigger.events.iter().any(|e| e == event_name) {
+                                    continue;
+                                }
+
+                                // Don't let a pipe trigger itself
+                                if *event_name == format!("pipe_completed:{}", name) {
+                                    continue;
+                                }
+
+                                // Circular chain detection: if pipe X was triggered by
+                                // pipe_completed:Y within the cooldown, don't let
+                                // pipe_completed:X trigger Y back.
+                                if event_name.starts_with("pipe_completed:") {
+                                    let source_pipe = &event_name["pipe_completed:".len()..];
+                                    let reverse_key = format!("{}→{}", name, source_pipe);
+                                    if recent_chain.contains_key(&reverse_key) {
                                         debug!(
-                                            "scheduler: event '{}' skipped pipe '{}' (already running)",
-                                            event_type, name
+                                            "scheduler: suppressing circular chain {} → {} → {}",
+                                            source_pipe, name, source_pipe
                                         );
                                         continue;
                                     }
-                                    info!(
-                                        "scheduler: event '{}' ({:.0}%) triggered pipe '{}'",
-                                        event_type,
-                                        event.data.confidence * 100.0,
-                                        name
-                                    );
-                                    // Reset last_run so should_run() passes for "manual" pipes too
-                                    last_run.remove(name);
-                                    event_triggered.insert(name.clone());
+                                    // Record this chain link
+                                    let chain_key = format!("{}→{}", source_pipe, name);
+                                    recent_chain.insert(chain_key, Instant::now());
                                 }
+
+                                let already_running = {
+                                    let r = running.lock().await;
+                                    r.contains_key(name)
+                                };
+                                if already_running {
+                                    debug!(
+                                        "scheduler: event '{}' skipped pipe '{}' (already running)",
+                                        event_name, name
+                                    );
+                                    continue;
+                                }
+                                info!(
+                                    "scheduler: event '{}' triggered pipe '{}'",
+                                    event_name, name
+                                );
+                                last_run.remove(name);
+                                event_triggered.insert(name.clone());
                             }
                         }
                     }
@@ -3413,6 +3470,18 @@ impl PipeManager {
                         }
                         drop(l);
 
+                        // Emit pipe_completed event so other pipes can chain
+                        let event_name = format!("pipe_completed:{}", name_for_cb);
+                        let _ = screenpipe_events::send_event(
+                            &event_name,
+                            screenpipe_events::PipeCompletedEvent {
+                                pipe_name: name_for_cb.clone(),
+                                success,
+                                duration_secs,
+                                timestamp: chrono::Utc::now(),
+                            },
+                        );
+
                         // Fire run-complete callback (analytics, etc.)
                         if let Some(ref cb) = on_complete {
                             cb(
@@ -3768,6 +3837,11 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
             86400,
         )));
     }
+    if s.eq_ignore_ascii_case("weekly") || s.eq_ignore_ascii_case("every week") {
+        return Some(ParsedSchedule::Interval(std::time::Duration::from_secs(
+            7 * 86400,
+        )));
+    }
     // Try human-readable interval first
     if let Some(d) = parse_duration_str(s) {
         return Some(ParsedSchedule::Interval(d));
@@ -3814,6 +3888,7 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     // "monday", "tuesday", etc. → specific weekday
     let cron_str = match prefix {
         "day" => format!("0 0 {} * * * *", utc_hour),
+        "daily" => format!("0 0 {} * * * *", utc_hour),
         "monday" | "mon" => format!("0 0 {} * * 1 *", utc_hour),
         "tuesday" | "tue" => format!("0 0 {} * * 2 *", utc_hour),
         "wednesday" | "wed" => format!("0 0 {} * * 3 *", utc_hour),
@@ -3839,6 +3914,12 @@ fn local_hour_to_utc(local_hour: u32) -> u32 {
 /// Parse "9am", "12pm", "6pm", "14", "9" into a 24-hour number.
 fn parse_time_str(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
+    if let Some((hour, minute)) = parse_hour_minute(&s) {
+        if minute != 0 {
+            return None;
+        }
+        return Some(hour);
+    }
     if let Some(h) = s.strip_suffix("am") {
         let n: u32 = h.trim().parse().ok()?;
         if n == 12 {
@@ -3865,6 +3946,68 @@ fn parse_time_str(s: &str) -> Option<u32> {
             None
         }
     }
+}
+
+fn parse_hour_minute(s: &str) -> Option<(u32, u32)> {
+    let normalized = s
+        .replace(" a.m.", "am")
+        .replace(" p.m.", "pm")
+        .replace(" a.m", "am")
+        .replace(" p.m", "pm")
+        .replace(" am", "am")
+        .replace(" pm", "pm")
+        .replace(' ', "");
+
+    let (clock, ampm) = if let Some(c) = normalized.strip_suffix("am") {
+        (c, Some("am"))
+    } else if let Some(c) = normalized.strip_suffix("pm") {
+        (c, Some("pm"))
+    } else {
+        (normalized.as_str(), None)
+    };
+
+    let (hour, minute) = if let Some((h, m)) = clock.split_once(':') {
+        let hour: u32 = h.parse().ok()?;
+        let minute: u32 = m.parse().ok()?;
+        (hour, minute)
+    } else {
+        let hour: u32 = clock.parse().ok()?;
+        (hour, 0)
+    };
+
+    if minute >= 60 {
+        return None;
+    }
+
+    let hour24 = match ampm {
+        Some("am") => {
+            if hour == 12 {
+                0
+            } else if hour <= 12 {
+                hour
+            } else {
+                return None;
+            }
+        }
+        Some("pm") => {
+            if hour == 12 {
+                12
+            } else if hour <= 12 {
+                hour + 12
+            } else {
+                return None;
+            }
+        }
+        _ => {
+            if hour < 24 {
+                hour
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some((hour24, minute))
 }
 
 /// Check if a pipe should run now given its schedule and last run time.
@@ -4425,6 +4568,13 @@ mod tests {
                 other.is_some()
             ),
         }
+        match parse_schedule("daily at 9am") {
+            Some(ParsedSchedule::Cron(_)) => {}
+            other => panic!(
+                "expected cron for 'daily at 9am', got {:?}",
+                other.is_some()
+            ),
+        }
     }
 
     #[test]
@@ -4453,6 +4603,26 @@ mod tests {
         assert_eq!(parse_time_str("6pm"), Some(18));
         assert_eq!(parse_time_str("1pm"), Some(13));
         assert_eq!(parse_time_str("14"), Some(14));
+        assert_eq!(parse_time_str("9:00am"), Some(9));
+        assert_eq!(parse_time_str("9:00 am"), Some(9));
+        assert_eq!(parse_time_str("09:00"), Some(9));
+        assert_eq!(parse_time_str("9:30am"), None);
+    }
+
+    #[test]
+    fn test_parse_schedule_weekly_aliases() {
+        match parse_schedule("weekly") {
+            Some(ParsedSchedule::Interval(d)) => {
+                assert_eq!(d, std::time::Duration::from_secs(7 * 86400));
+            }
+            _ => panic!("expected weekly interval"),
+        }
+        match parse_schedule("every week") {
+            Some(ParsedSchedule::Interval(d)) => {
+                assert_eq!(d, std::time::Duration::from_secs(7 * 86400));
+            }
+            _ => panic!("expected every week interval"),
+        }
     }
 
     #[test]
@@ -4803,7 +4973,11 @@ mod tests {
 
         // Must not contain duplicate trigger keys
         let trigger_count = serialized.matches("trigger:").count();
-        assert_eq!(trigger_count, 1, "serialized YAML has duplicate 'trigger:' keys:\n{}", serialized);
+        assert_eq!(
+            trigger_count, 1,
+            "serialized YAML has duplicate 'trigger:' keys:\n{}",
+            serialized
+        );
 
         // Round-trip must parse back identically
         let (config2, body2) = parse_frontmatter(&serialized).unwrap();
@@ -4820,7 +4994,11 @@ mod tests {
         assert!(config.trigger.is_none());
 
         let serialized = serialize_pipe(&config, &body).unwrap();
-        assert!(!serialized.contains("trigger:"), "trigger: should not appear when None:\n{}", serialized);
+        assert!(
+            !serialized.contains("trigger:"),
+            "trigger: should not appear when None:\n{}",
+            serialized
+        );
 
         let (config2, _) = parse_frontmatter(&serialized).unwrap();
         assert!(config2.trigger.is_none());
@@ -4834,9 +5012,27 @@ mod tests {
         let serialized = serialize_pipe(&config, &body).unwrap();
 
         // Check no known field appears more than once
-        for field in &["schedule:", "enabled:", "model:", "provider:", "preset:", "connections:", "timeout:", "trigger:", "source_slug:", "installed_version:", "source_hash:"] {
+        for field in &[
+            "schedule:",
+            "enabled:",
+            "model:",
+            "provider:",
+            "preset:",
+            "connections:",
+            "timeout:",
+            "trigger:",
+            "source_slug:",
+            "installed_version:",
+            "source_hash:",
+        ] {
             let count = serialized.matches(field).count();
-            assert!(count <= 1, "field '{}' appears {} times in serialized YAML:\n{}", field, count, serialized);
+            assert!(
+                count <= 1,
+                "field '{}' appears {} times in serialized YAML:\n{}",
+                field,
+                count,
+                serialized
+            );
         }
 
         // Must round-trip
@@ -4868,7 +5064,11 @@ mod tests {
 
         // serialize_pipe should have cleaned the duplicate from extras
         let trigger_count = serialized.matches("trigger:").count();
-        assert_eq!(trigger_count, 1, "duplicate trigger: not cleaned from extras:\n{}", serialized);
+        assert_eq!(
+            trigger_count, 1,
+            "duplicate trigger: not cleaned from extras:\n{}",
+            serialized
+        );
 
         // Must still parse correctly
         let (config2, _) = parse_frontmatter(&serialized).unwrap();
@@ -4882,31 +5082,81 @@ mod tests {
         let (mut config, body) = parse_frontmatter(content).unwrap();
 
         // Insert every known field into extras HashMap (worst case scenario)
-        config.config.insert("schedule".to_string(), serde_json::json!("every 2h"));
-        config.config.insert("enabled".to_string(), serde_json::json!(false));
-        config.config.insert("model".to_string(), serde_json::json!("gpt-4"));
-        config.config.insert("provider".to_string(), serde_json::json!("openai"));
-        config.config.insert("trigger".to_string(), serde_json::json!({"events": ["x"]}));
-        config.config.insert("connections".to_string(), serde_json::json!(["slack"]));
-        config.config.insert("timeout".to_string(), serde_json::json!(300));
-        config.config.insert("source_slug".to_string(), serde_json::json!("test"));
-        config.config.insert("installed_version".to_string(), serde_json::json!(1));
-        config.config.insert("source_hash".to_string(), serde_json::json!("abc"));
-        config.config.insert("preset".to_string(), serde_json::json!("my-preset"));
-        config.config.insert("name".to_string(), serde_json::json!("test-pipe"));
-        config.config.insert("config".to_string(), serde_json::json!({"old": true}));
+        config
+            .config
+            .insert("schedule".to_string(), serde_json::json!("every 2h"));
+        config
+            .config
+            .insert("enabled".to_string(), serde_json::json!(false));
+        config
+            .config
+            .insert("model".to_string(), serde_json::json!("gpt-4"));
+        config
+            .config
+            .insert("provider".to_string(), serde_json::json!("openai"));
+        config
+            .config
+            .insert("trigger".to_string(), serde_json::json!({"events": ["x"]}));
+        config
+            .config
+            .insert("connections".to_string(), serde_json::json!(["slack"]));
+        config
+            .config
+            .insert("timeout".to_string(), serde_json::json!(300));
+        config
+            .config
+            .insert("source_slug".to_string(), serde_json::json!("test"));
+        config
+            .config
+            .insert("installed_version".to_string(), serde_json::json!(1));
+        config
+            .config
+            .insert("source_hash".to_string(), serde_json::json!("abc"));
+        config
+            .config
+            .insert("preset".to_string(), serde_json::json!("my-preset"));
+        config
+            .config
+            .insert("name".to_string(), serde_json::json!("test-pipe"));
+        config
+            .config
+            .insert("config".to_string(), serde_json::json!({"old": true}));
 
         let serialized = serialize_pipe(&config, &body).unwrap();
 
         // Every known field should appear at most once
-        for field in &["schedule:", "enabled:", "model:", "trigger:", "connections:", "timeout:", "source_slug:", "installed_version:", "source_hash:"] {
+        for field in &[
+            "schedule:",
+            "enabled:",
+            "model:",
+            "trigger:",
+            "connections:",
+            "timeout:",
+            "source_slug:",
+            "installed_version:",
+            "source_hash:",
+        ] {
             let count = serialized.matches(field).count();
-            assert!(count <= 1, "field '{}' appears {} times after cleanup:\n{}", field, count, serialized);
+            assert!(
+                count <= 1,
+                "field '{}' appears {} times after cleanup:\n{}",
+                field,
+                count,
+                serialized
+            );
         }
 
         // "config:" and "name:" should not appear at all (they're stripped)
-        assert!(!serialized.contains("\nconfig:"), "legacy 'config:' not cleaned:\n{}", serialized);
-        assert!(!serialized.contains("\nname:"), "'name:' should be stripped:\n{}", serialized);
+        assert!(
+            !serialized.contains("\nconfig:"),
+            "legacy 'config:' not cleaned:\n{}",
+            serialized
+        );
+        assert!(
+            !serialized.contains("\nname:"),
+            "'name:' should be stripped:\n{}",
+            serialized
+        );
 
         // Must still parse without error
         parse_frontmatter(&serialized).expect("round-trip parse failed after extras cleanup");
@@ -4919,14 +5169,18 @@ mod tests {
         let (mut config, body) = parse_frontmatter(content).unwrap();
 
         // Simulate the update_config match arm for "trigger"
-        let trigger_json = serde_json::json!({"events": ["new_event"], "custom": ["when I open chrome"]});
+        let trigger_json =
+            serde_json::json!({"events": ["new_event"], "custom": ["when I open chrome"]});
         match serde_json::from_value::<TriggerConfig>(trigger_json.clone()) {
             Ok(t) => config.trigger = Some(t),
             Err(_) => panic!("trigger deserialization should succeed"),
         }
 
         // Verify trigger is NOT in extras
-        assert!(!config.config.contains_key("trigger"), "trigger leaked into extras HashMap");
+        assert!(
+            !config.config.contains_key("trigger"),
+            "trigger leaked into extras HashMap"
+        );
 
         let serialized = serialize_pipe(&config, &body).unwrap();
         let trigger_count = serialized.matches("trigger:").count();
@@ -4950,7 +5204,11 @@ mod tests {
 
             let serialized = serialize_pipe(&config, &body).unwrap();
             let trigger_count = serialized.matches("trigger:").count();
-            assert_eq!(trigger_count, 1, "trigger duplicated on iteration {}:\n{}", i, serialized);
+            assert_eq!(
+                trigger_count, 1,
+                "trigger duplicated on iteration {}:\n{}",
+                i, serialized
+            );
 
             // Re-parse for next iteration (simulates read-modify-write cycle)
             let (new_config, _) = parse_frontmatter(&serialized).unwrap();
@@ -4967,11 +5225,26 @@ mod tests {
         // Extra fields that are NOT known should survive round-trip
         let content = "---\nschedule: every 1h\nenabled: true\nmy_custom_field: hello\nanother: 42\n---\n\nTest";
         let (config, body) = parse_frontmatter(content).unwrap();
-        assert_eq!(config.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
+        assert_eq!(
+            config
+                .config
+                .get("my_custom_field")
+                .and_then(|v| v.as_str()),
+            Some("hello")
+        );
 
         let serialized = serialize_pipe(&config, &body).unwrap();
         let (config2, _) = parse_frontmatter(&serialized).unwrap();
-        assert_eq!(config2.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
-        assert_eq!(config2.config.get("another").and_then(|v| v.as_i64()), Some(42));
+        assert_eq!(
+            config2
+                .config
+                .get("my_custom_field")
+                .and_then(|v| v.as_str()),
+            Some("hello")
+        );
+        assert_eq!(
+            config2.config.get("another").and_then(|v| v.as_i64()),
+            Some(42)
+        );
     }
 }

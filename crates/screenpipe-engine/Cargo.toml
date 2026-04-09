@@ -50,7 +50,7 @@ moka = { version = "0.12", features = ["future"] }
 sentry = { workspace = true }
 
 # Server
-axum = { version = "0.7.5", features = ["ws"] }
+axum = { version = "0.7.5", features = ["ws", "multipart"] }
 http-body-util = "0.1"
 tokio = { version = "1.15", features = ["full", "tracing"] }
 tokio-stream = "0.1"

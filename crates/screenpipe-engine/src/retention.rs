@@ -5,8 +5,9 @@
 //! Local data retention — auto-deletes old data after a configurable number of
 //! days. Free alternative to cloud archive: no upload, just permanent deletion.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::{Json, State}, http::StatusCode, response::Json as JsonResponse};
 use chrono::{DateTime, Duration, Utc};
+use oasgen::{oasgen, OaSchema};
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,13 +67,13 @@ impl Default for RetentionConfig {
 // Request / Response types
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, OaSchema)]
 pub struct RetentionConfigureRequest {
     pub enabled: Option<bool>,
     pub retention_days: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, OaSchema)]
 pub struct RetentionStatusResponse {
     pub enabled: bool,
     pub retention_days: u32,
@@ -86,17 +87,18 @@ pub struct RetentionStatusResponse {
 // ============================================================================
 
 /// POST /retention/configure — enable/disable local retention, set days.
+#[oasgen]
 pub async fn retention_configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<RetentionConfigureRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     let retention_days = request.retention_days.unwrap_or(14);
 
     // Enforce minimum 1 day
     if retention_days < 1 {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "retention_days must be at least 1"})),
+            JsonResponse(json!({"error": "retention_days must be at least 1"})),
         ));
     }
 
@@ -133,7 +135,7 @@ pub async fn retention_configure(
                 );
             }
 
-            Ok(Json(json!({
+            Ok(JsonResponse(json!({
                 "success": true,
                 "enabled": runtime.config.enabled,
                 "retention_days": runtime.config.retention_days,
@@ -141,7 +143,7 @@ pub async fn retention_configure(
         }
         None => {
             if !wants_enabled {
-                return Ok(Json(json!({
+                return Ok(JsonResponse(json!({
                     "success": true,
                     "enabled": false,
                     "retention_days": retention_days,
@@ -176,7 +178,7 @@ pub async fn retention_configure(
 
             info!("retention: initialized with {}d retention", retention_days);
 
-            Ok(Json(json!({
+            Ok(JsonResponse(json!({
                 "success": true,
                 "enabled": true,
                 "retention_days": retention_days,
@@ -186,20 +188,21 @@ pub async fn retention_configure(
 }
 
 /// GET /retention/status — return current retention state.
+#[oasgen]
 pub async fn retention_status(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<RetentionStatusResponse>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<RetentionStatusResponse>, (StatusCode, JsonResponse<Value>)> {
     let guard = state.retention_state.inner.read().await;
 
     match guard.as_ref() {
-        None => Ok(Json(RetentionStatusResponse {
+        None => Ok(JsonResponse(RetentionStatusResponse {
             enabled: false,
             retention_days: 30,
             last_cleanup: None,
             last_error: None,
             total_deleted: 0,
         })),
-        Some(runtime) => Ok(Json(RetentionStatusResponse {
+        Some(runtime) => Ok(JsonResponse(RetentionStatusResponse {
             enabled: runtime.config.enabled,
             retention_days: runtime.config.retention_days,
             last_cleanup: runtime.last_cleanup.map(|t| t.to_rfc3339()),
@@ -210,28 +213,29 @@ pub async fn retention_status(
 }
 
 /// POST /retention/run — trigger an immediate cleanup run.
+#[oasgen]
 pub async fn retention_run(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     let guard = state.retention_state.inner.read().await;
     let runtime = guard.as_ref().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "retention not configured"})),
+            JsonResponse(json!({"error": "retention not configured"})),
         )
     })?;
 
     if !runtime.config.enabled {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "retention is disabled"})),
+            JsonResponse(json!({"error": "retention is disabled"})),
         ));
     }
 
     runtime.run_now.notify_one();
     info!("retention: manual run triggered");
 
-    Ok(Json(json!({"success": true})))
+    Ok(JsonResponse(json!({"success": true})))
 }
 
 // ============================================================================

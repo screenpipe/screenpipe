@@ -8,6 +8,7 @@ use axum::{
     response::Json as JsonResponse,
 };
 use chrono::{DateTime, Utc};
+use oasgen::{oasgen, OaSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tracing::{info, warn};
 
 use crate::server::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, OaSchema)]
 pub struct DeleteTimeRangeRequest {
     #[serde(deserialize_with = "super::time::deserialize_flexible_datetime")]
     pub start: DateTime<Utc>,
@@ -23,7 +24,7 @@ pub struct DeleteTimeRangeRequest {
     pub end: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, OaSchema)]
 pub struct DeleteTimeRangeResponse {
     pub frames_deleted: u64,
     pub ocr_deleted: u64,
@@ -36,6 +37,7 @@ pub struct DeleteTimeRangeResponse {
     pub audio_files_deleted: u64,
 }
 
+#[oasgen]
 pub(crate) async fn delete_time_range_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DeleteTimeRangeRequest>,
@@ -95,7 +97,7 @@ pub(crate) async fn delete_time_range_handler(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, OaSchema)]
 pub struct DeviceStorageEntry {
     pub machine_id: String,
     pub frames: i64,
@@ -103,6 +105,7 @@ pub struct DeviceStorageEntry {
 }
 
 /// Get record counts per synced device.
+#[oasgen]
 pub(crate) async fn device_storage_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Vec<DeviceStorageEntry>>, (StatusCode, JsonResponse<Value>)> {
@@ -125,12 +128,13 @@ pub(crate) async fn device_storage_handler(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, OaSchema)]
 pub struct DeleteDeviceDataRequest {
     pub machine_id: String,
 }
 
 /// Delete all locally-stored data that was synced from a specific remote device.
+#[oasgen]
 pub(crate) async fn delete_device_data_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DeleteDeviceDataRequest>,

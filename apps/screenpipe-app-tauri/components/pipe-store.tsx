@@ -478,7 +478,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     if (cached) {
       setPipes(cached);
       // If cache is still fresh, skip network request
-      if (apiCache.isFresh(cacheKey)) return;
+      if (apiCache.isFresh(cacheKey)) {
+        setLoading(false);
+        return;
+      }
     } else {
       setLoading(true);
     }
@@ -641,6 +644,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       toast({ title: `"${slug}" unpublished from store` });
       setShowDetail(false);
       setSelectedPipe(null);
+      apiCache.invalidatePrefix("pipes/store");
       fetchPipes();
     } catch (err: any) {
       toast({
@@ -812,6 +816,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         onOpenChange={setPublishOpen}
         token={token}
         onPublished={() => {
+          apiCache.invalidatePrefix("pipes/store");
           fetchPipes();
           toast({ title: "pipe published to store" });
         }}

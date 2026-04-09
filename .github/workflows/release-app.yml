@@ -651,8 +651,8 @@ jobs:
         shell: bash
         run: |
           ARGS="${{ matrix.tauri-args }}"
-          if [[ "${{ steps.detect-xcode.outputs.has_apple_intelligence }}" == "true" ]]; then
-            # Append apple-intelligence to existing --features flag
+          if [[ "${{ steps.detect-xcode.outputs.has_apple_intelligence }}" == "true" && "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            # Apple Intelligence only works on aarch64 — the crate exports nothing on x86_64
             ARGS=$(echo "$ARGS" | sed 's/--features \([^ ]*\)/--features \1,apple-intelligence/')
             echo "🧠 Tauri build will include Apple Intelligence"
           fi

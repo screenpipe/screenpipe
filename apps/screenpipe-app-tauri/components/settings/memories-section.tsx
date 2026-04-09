@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import {
   Trash2,
   Check,
@@ -113,6 +120,51 @@ export function MemoriesSection() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+
+  // batch selection
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
+
+  const toggleSelected = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === memories.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(memories.map((m) => m.id)));
+    }
+  };
+
+  const batchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchDeleting(true);
+    try {
+      await Promise.all(
+        Array.from(selectedIds).map((id) =>
+          fetch(`http://localhost:3030/memories/${id}`, { method: "DELETE" })
+        )
+      );
+      setMemories((prev) => prev.filter((m) => !selectedIds.has(m.id)));
+      setTotal((prev) => prev - selectedIds.size);
+      toast({ title: `deleted ${selectedIds.size} memories` });
+      setSelectedIds(new Set());
+    } catch (err) {
+      toast({
+        title: "failed to delete some memories",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
 
   // search, filter & sort
   const [searchQuery, setSearchQuery] = useState("");
@@ -506,14 +558,15 @@ export function MemoriesSection() {
                 onClick={() =>
                   setActiveTag((prev) => (prev === tag ? null : tag))
                 }
-                className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
+                className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full border transition-colors max-w-[150px] ${
                   activeTag === tag
                     ? "bg-foreground text-background border-foreground"
                     : "border-border text-muted-foreground hover:bg-muted"
                 }`}
+                title={tag.length > 20 ? tag : undefined}
               >
-                <Tag className="h-2.5 w-2.5" />
-                {tag}
+                <Tag className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{tag}</span>
               </button>
             ))}
           </>
@@ -568,6 +621,38 @@ export function MemoriesSection() {
         </div>
       </div>
 
+      {/* batch delete bar */}
+      {memories.length > 0 && (
+        <div className="flex items-center gap-2 text-xs">
+          <Checkbox
+            checked={selectedIds.size === memories.length && memories.length > 0}
+            onCheckedChange={toggleSelectAll}
+            className="h-3.5 w-3.5"
+          />
+          <span className="text-muted-foreground">
+            {selectedIds.size > 0
+              ? `${selectedIds.size} selected`
+              : "select all"}
+          </span>
+          {selectedIds.size > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-6 text-[10px] px-2 gap-1"
+              onClick={batchDelete}
+              disabled={batchDeleting}
+            >
+              {batchDeleting ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}
+              delete {selectedIds.size}
+            </Button>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <MemoriesSkeleton />
       ) : memories.length === 0 ? (
@@ -609,6 +694,11 @@ export function MemoriesSection() {
                 key={memory.id}
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
+                <Checkbox
+                  checked={selectedIds.has(memory.id)}
+                  onCheckedChange={() => toggleSelected(memory.id)}
+                  className="h-3.5 w-3.5 mt-0.5 shrink-0"
+                />
                 <div
                   className="flex-1 min-w-0 cursor-text"
                   onClick={() => {
@@ -733,13 +823,31 @@ export function MemoriesSection() {
                       <>
                         {memory.tags.length > 0 &&
                           memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
-                            <Badge
-                              key={tag}
-                              variant="secondary"
-                              className="text-[10px] px-1 py-0 font-normal"
-                            >
-                              {tag}
-                            </Badge>
+                            tag.length > 30 ? (
+                              <TooltipProvider key={tag}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Badge
+                                      variant="secondary"
+                                      className="text-[10px] px-1 py-0 font-normal max-w-[120px] truncate cursor-default"
+                                    >
+                                      {tag}
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p className="text-xs break-all">{tag}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            ) : (
+                              <Badge
+                                key={tag}
+                                variant="secondary"
+                                className="text-[10px] px-1 py-0 font-normal"
+                              >
+                                {tag}
+                              </Badge>
+                            )
                           ))}
                       </>
                     )}

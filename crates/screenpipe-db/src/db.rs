@@ -6975,7 +6975,7 @@ LIMIT ? OFFSET ?
             .to_string();
         let meeting = sqlx::query_as::<_, MeetingRecord>(
             "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, \
-             detection_source, created_at \
+             note, detection_source, created_at \
              FROM meetings \
              WHERE meeting_app = ?1 \
                AND meeting_end IS NOT NULL \

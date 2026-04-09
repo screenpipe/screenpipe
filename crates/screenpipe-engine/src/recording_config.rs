@@ -221,6 +221,7 @@ impl RecordingConfig {
         audio_devices: Vec<String>,
     ) -> AudioManagerBuilder {
         AudioManagerBuilder::new()
+            .is_disabled(self.disable_audio)
             .audio_chunk_duration(Duration::from_secs(self.audio_chunk_duration))
             .vad_engine(VadEngineEnum::Silero)
             .languages(self.languages.clone())

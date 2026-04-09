@@ -109,17 +109,21 @@ pub struct CentralHandlerRestartResult {
 impl AudioManager {
     pub async fn new(options: AudioManagerOptions, db: Arc<DatabaseManager>) -> Result<Self> {
         let device_manager = DeviceManager::new().await?;
-        let segmentation_manager = Arc::new(SegmentationManager::new().await?);
+        let segmentation_manager = Arc::new(SegmentationManager::new(options.is_disabled).await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
-        let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = match options.vad_engine {
-            VadEngineEnum::Silero => match SileroVad::new().await {
-                Ok(vad) => Arc::new(Mutex::new(Box::new(vad))),
-                Err(e) => {
-                    warn!("silero vad unavailable, falling back to webrtc: {}", e);
-                    Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
-                }
-            },
-            VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
+        let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = if options.is_disabled {
+            Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+        } else {
+            match options.vad_engine {
+                VadEngineEnum::Silero => match SileroVad::new().await {
+                    Ok(vad) => Arc::new(Mutex::new(Box::new(vad))),
+                    Err(e) => {
+                        warn!("silero vad unavailable, falling back to webrtc: {}", e);
+                        Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+                    }
+                },
+                VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
+            }
         };
 
         let channel_config = &options.channel_config;

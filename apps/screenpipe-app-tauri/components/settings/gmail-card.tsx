@@ -55,7 +55,7 @@ export function GmailCard() {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("gmail");
+      const res = await commands.oauthConnect("gmail", null);
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
@@ -70,7 +70,7 @@ export function GmailCard() {
     const key = instance ?? "__default__";
     setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("gmail", instance);
+      await commands.oauthDisconnect("gmail", instance ?? null);
       posthog.capture("gmail_disconnected", { instance });
       await fetchAccounts();
     } catch (e) {

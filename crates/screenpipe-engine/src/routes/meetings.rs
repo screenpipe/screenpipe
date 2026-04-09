@@ -246,6 +246,14 @@ pub(crate) async fn start_meeting_handler(
         *lock = Some(id);
     }
 
+    // Emit event so triggered pipes can react
+    if let Err(e) = screenpipe_events::send_event(
+        "meeting_started",
+        serde_json::json!({ "meeting_id": id, "app": app, "title": body.title }),
+    ) {
+        tracing::warn!("failed to emit meeting_started event: {}", e);
+    }
+
     let meeting = state.db.get_meeting_by_id(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
@@ -288,6 +296,14 @@ pub(crate) async fn stop_meeting_handler(
     {
         let mut lock = state.manual_meeting.write().await;
         *lock = None;
+    }
+
+    // Emit event so triggered pipes can react
+    if let Err(e) = screenpipe_events::send_event(
+        "meeting_ended",
+        serde_json::json!({ "meeting_id": id }),
+    ) {
+        tracing::warn!("failed to emit meeting_ended event: {}", e);
     }
 
     let meeting = state.db.get_meeting_by_id(id).await.map_err(|e| {

@@ -413,8 +413,16 @@ function formatDuration(ms: number): string {
  *  - LLM errors (credits_exhausted, rate limits, etc.) */
 export function cleanPipeStdout(raw: string): string {
   const parts: string[] = [];
+  let textBuf = "";       // accumulates text_delta fragments
   let errorMessage: string | null = null;
   let hasTextDelta = false;
+
+  function flushText() {
+    if (textBuf) {
+      parts.push(textBuf);
+      textBuf = "";
+    }
+  }
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -437,11 +445,14 @@ export function cleanPipeStdout(raw: string): string {
 
           // text_delta — the main assistant text stream
           if (ae.type === "text_delta" && ae.delta) {
-            parts.push(ae.delta);
+            textBuf += ae.delta;
             hasTextDelta = true;
           }
-          // All other sub-types skipped: thinking_start, thinking_delta,
-          // thinking_end, text_start, text_end, toolcall_start/delta/end
+          // tool call — show a brief indicator so the user sees what the agent did
+          if (ae.type === "toolcall_start" && ae.toolName) {
+            flushText();
+            parts.push(`> *running \`${ae.toolName}\`...*`);
+          }
           continue;
         }
 
@@ -449,6 +460,7 @@ export function cleanPipeStdout(raw: string): string {
         // Text content is skipped because text_delta already streamed it
         // (extracting both would double-count).
         if (evtType === "message_start" || evtType === "message_end") {
+          flushText();
           const msg = evt.message;
           if (msg?.role !== "assistant") continue;
           if (msg.stopReason === "error" && msg.errorMessage) {
@@ -516,6 +528,7 @@ export function cleanPipeStdout(raw: string): string {
     parts.push(trimmed);
   }
 
+  flushText();
   const text = parts.join("\n\n").trim();
   if (!text && errorMessage) {
     return `error: ${errorMessage}`;
@@ -723,7 +736,7 @@ export function PipesSection() {
     return "all";
   });
   const [searchQuery, setSearchQuery] = useState("");
-  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "manual">("scheduled");
+  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual">("scheduled");
   const [availableConnections, setAvailableConnections] = useState<AvailableConnection[]>([]);
   const [connectionModal, setConnectionModal] = useState<{ pipeName: string; connections: string[] } | null>(null);
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
@@ -743,12 +756,13 @@ export function PipesSection() {
       .map((c) => c.key)
   );
 
-  const isManualPipe = (p: PipeStatus) =>
-    !p.config.schedule || p.config.schedule === "manual";
+  const isTriggeredPipe = (p: PipeStatus) =>
+    !!(p.config.trigger?.events?.length) ||
+    !!(p.config.trigger?.custom?.length);
   const isScheduledPipe = (p: PipeStatus) =>
-    (!!p.config.schedule && p.config.schedule !== "manual") ||
-    (!!p.config.trigger?.events?.length) ||
-    (!!p.config.trigger?.custom?.length);
+    !!p.config.schedule && p.config.schedule !== "manual" && !isTriggeredPipe(p);
+  const isManualPipe = (p: PipeStatus) =>
+    (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
 
   const filteredPipes = pipes
     .filter((p) => {
@@ -762,8 +776,9 @@ export function PipesSection() {
         if (!p.config.name.toLowerCase().includes(q)) return false;
       }
 
-      // Filter by pipe type (scheduled vs manual)
+      // Filter by pipe type (scheduled / triggered / manual)
       if (pipeTypeFilter === "scheduled" && !isScheduledPipe(p)) return false;
+      if (pipeTypeFilter === "triggered" && !isTriggeredPipe(p)) return false;
       if (pipeTypeFilter === "manual" && !isManualPipe(p)) return false;
 
       return true;
@@ -1105,11 +1120,23 @@ export function PipesSection() {
       )
     );
     try {
-      await fetch(`${apiBase}/pipes/${name}/enable`, {
+      const res = await fetch(`${apiBase}/pipes/${name}/enable`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
+      let data: { success?: boolean; error?: string } | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        // Older servers may return empty body; treat non-2xx as failure below.
+      }
+      if (!res.ok || data?.error || data?.success === false) {
+        throw new Error(
+          data?.error ||
+          `failed to ${enabled ? "enable" : "disable"} pipe "${name}"`
+        );
+      }
     } catch {
       // Revert on failure
       setPipes((prev) =>
@@ -1119,6 +1146,11 @@ export function PipesSection() {
             : p
         )
       );
+      toast({
+        title: "pipe toggle failed",
+        description: `could not ${enabled ? "enable" : "disable"} "${name}"`,
+        variant: "destructive",
+      });
     }
   };
 
@@ -1428,6 +1460,8 @@ export function PipesSection() {
         <p className="text-sm text-muted-foreground">
           {pipeTypeFilter === "scheduled"
             ? "scheduled agents that run on your screen data"
+            : pipeTypeFilter === "triggered"
+            ? "pipes triggered by events like meetings or other pipes"
             : "pipes you trigger manually"}
           {" · "}
           <a
@@ -1442,13 +1476,13 @@ export function PipesSection() {
         </p>
       </div>
 
-      {/* Scheduled / Manual sub-tabs */}
+      {/* Scheduled / Triggered / Manual sub-tabs */}
       <div className="flex items-center gap-4 border-b border-border">
-        {(["scheduled", "manual"] as const).map((tab) => {
+        {(["scheduled", "triggered", "manual"] as const).map((tab) => {
           const count = pipes.filter((p) => {
             if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
             if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-            return tab === "scheduled" ? isScheduledPipe(p) : isManualPipe(p);
+            return tab === "scheduled" ? isScheduledPipe(p) : tab === "triggered" ? isTriggeredPipe(p) : isManualPipe(p);
           }).length;
           return (
             <button
@@ -1513,6 +1547,17 @@ export function PipesSection() {
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
               <p>no pipes match your search</p>
+            ) : pipeTypeFilter === "triggered" ? (
+              <>
+                <p>no triggered pipes installed</p>
+                <p className="text-sm mt-2">
+                  triggered pipes use{" "}
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    trigger.events
+                  </code>
+                  {" "}in their frontmatter (e.g. meeting_started, meeting_ended)
+                </p>
+              </>
             ) : pipeTypeFilter === "manual" ? (
               <>
                 <p>no manual pipes installed</p>
@@ -1634,16 +1679,22 @@ export function PipesSection() {
                   </button>
                 )}
 
-                {/* Schedule */}
+                {/* Schedule + triggers */}
                 <span
-                  className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[140px]"
-                  title={pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
-                    ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
-                    : pipe.config.schedule || "manual"}
+                  className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[180px]"
+                  title={[
+                    pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
+                      ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
+                      : "",
+                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${pipe.config.schedule}` : "",
+                  ].filter(Boolean).join(" | ") || "manual"}
                 >
                   {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0
                     ? `› ${(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)} trigger${((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 1 ? "s" : ""}`
                     : humanizeSchedule(pipe.config.schedule)}
+                  {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0 && pipe.config.schedule && pipe.config.schedule !== "manual" ? (
+                    <span className="text-muted-foreground/50"> + {humanizeSchedule(pipe.config.schedule)}</span>
+                  ) : null}
                 </span>
 
                 {/* Last run time */}
@@ -1849,6 +1900,12 @@ export function PipesSection() {
 
                         {/* Schedule */}
                         <div>
+                      <Label className="text-xs flex items-center gap-1.5 mb-1 cursor-help" title={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 ? "runs on this schedule in addition to triggers" : "how often to run this pipe"}>
+                        schedule
+                        {((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 && pipe.config.schedule && pipe.config.schedule !== "manual" && (
+                          <span className="text-muted-foreground font-normal">+ triggers</span>
+                        )}
+                      </Label>
                       <Select
                         value={pipe.config.schedule || "manual"}
                         onValueChange={(value) => {
@@ -1875,8 +1932,6 @@ export function PipesSection() {
                       >
                         <SelectTrigger
                           className="mt-1 h-8 text-xs"
-                          disabled={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0}
-                          title={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 ? "schedule is overridden by triggers" : undefined}
                         >
                           <SelectValue />
                         </SelectTrigger>
@@ -2219,53 +2274,64 @@ export function PipesSection() {
                           </div>
                         </div>
 
-                        {/* Triggers — only when workflow events enabled */}
-                        {settings.enableWorkflowEvents && <div>
-                          <Label className="text-xs flex items-center gap-1.5 mb-2 cursor-help" title="AI detects your workflow patterns and runs this pipe automatically">
+                        {/* Triggers — run pipe on local events */}
+                        <div>
+                          <Label className="text-xs flex items-center gap-1.5 mb-2 cursor-help" title="run this pipe when specific events happen (meeting starts, another pipe finishes, etc.)">
                             triggers
-                            <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">cloud</span>
                           </Label>
                           <div className="space-y-1.5">
-                            {/* Show built-in event triggers (from pipe.md frontmatter) */}
                             {(pipe.config.trigger?.events || []).map((event: string, i: number) => (
                               <div key={`ev-${i}`} className="flex items-center gap-1.5 group/item">
                                 <span className="text-xs bg-muted/50 border px-3 py-1.5 flex-1 font-mono">› {event.replace(/_/g, " ")}</span>
                                 <button className="text-xs text-muted-foreground/0 group-hover/item:text-muted-foreground hover:!text-destructive transition-all duration-150" onClick={() => {
                                   const updated = (pipe.config.trigger?.events || []).filter((_: string, j: number) => j !== i);
                                   const newTrigger = { ...pipe.config.trigger, events: updated };
+                                  if (!newTrigger.events?.length && !newTrigger.custom?.length) {
+                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: undefined } } : p));
+                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: null }) }).then(() => fetchPipes());
+                                  } else {
+                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
+                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
+                                  }
+                                }}>×</button>
+                              </div>
+                            ))}
+                            {(pipe.config.trigger?.custom || []).map((trigger: string, i: number) => (
+                              <div key={`custom-${i}`} className="flex items-center gap-1.5 group/item">
+                                <span className="text-xs bg-muted/50 px-2 py-1 rounded flex-1 font-mono">› {trigger}</span>
+                                <button className="text-xs text-muted-foreground/0 group-hover/item:text-muted-foreground hover:!text-destructive transition-all duration-150" onClick={() => {
+                                  const updated = (pipe.config.trigger?.custom || []).filter((_: string, j: number) => j !== i);
+                                  const newTrigger = { ...pipe.config.trigger, custom: updated };
                                   setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
                                   fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
                                 }}>×</button>
                               </div>
                             ))}
-                            {/* Show custom plain-language triggers */}
-                            {(pipe.config.trigger?.custom || []).map((trigger: string, i: number) => (
-                                <div key={i} className="flex items-center gap-1.5 group/item">
-                                  <span className="text-xs bg-muted/50 px-2 py-1 rounded flex-1 font-mono">› {trigger}</span>
-                                  <button className="text-xs text-muted-foreground/0 group-hover/item:text-muted-foreground hover:!text-destructive transition-all duration-150" onClick={() => {
-                                    const updated = (pipe.config.trigger?.custom || []).filter((_: string, j: number) => j !== i);
-                                    const newTrigger = { ...pipe.config.trigger, custom: updated };
-                                    setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
-                                    fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
-                                  }}>×</button>
-                                </div>
-                              ))}
-                              <form className="flex gap-1.5" onSubmit={(e) => {
-                                e.preventDefault();
-                                const input = e.currentTarget.querySelector("input") as HTMLInputElement;
-                                const value = input?.value?.trim();
+                            {/* Dropdown to add predefined triggers */}
+                            <select
+                              className="w-full h-7 text-xs font-mono bg-background border rounded px-2 text-muted-foreground"
+                              value=""
+                              onChange={(e) => {
+                                const value = e.target.value;
                                 if (!value) return;
-                                const existing = pipe.config.trigger?.custom || [];
-                                const newTrigger = { ...pipe.config.trigger, custom: [...existing, value] };
+                                const existing = pipe.config.trigger?.events || [];
+                                if (existing.includes(value)) return;
+                                const newTrigger = { ...pipe.config.trigger, events: [...existing, value] };
                                 setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, trigger: newTrigger } } : p));
                                 fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: newTrigger }) }).then(() => fetchPipes());
-                                input.value = "";
-                              }}>
-                                <Input placeholder="when should this pipe run?" className="h-7 text-xs flex-1 font-mono" spellCheck={false} autoCorrect="off" />
-                                <Button type="submit" variant="outline" size="sm" className="h-7 text-xs px-2 uppercase tracking-wider">+</Button>
-                              </form>
-                            </div>
-                          </div>}
+                              }}
+                            >
+                              <option value="">+ add trigger...</option>
+                              <option value="meeting_started">meeting started</option>
+                              <option value="meeting_ended">meeting ended</option>
+                              {pipes.filter((p) => p.config.name !== pipe.config.name && p.config.enabled).map((p) => (
+                                <option key={p.config.name} value={`pipe_completed:${p.config.name}`}>
+                                  after {p.config.name} finishes
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
 
                         {/* Notifications toggle */}
                         <div className="flex items-center justify-between border px-3 py-2.5">
@@ -2310,28 +2376,26 @@ export function PipesSection() {
                                   <span className="text-muted-foreground/60">{exec.trigger_type}</span>
                                   {exec.model && <span className="text-muted-foreground/60 truncate max-w-[100px]">{exec.model}</span>}
                                   {exec.status === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
-                                    <button className="ml-auto text-muted-foreground hover:text-foreground" title="open in chat" onClick={async () => {
-                                      const conv = pipeExecutionToConversation(exec.pipe_name, exec.id, exec.stdout, exec.started_at);
-                                      await saveConversationFile(conv);
-                                      localStorage.setItem("pending-chat-conversation", conv.id);
-                                      const url = new URL(window.location.href);
-                                      url.searchParams.set("section", "home");
-                                      window.location.href = url.toString();
-                                    }}>
-                                      <MessageSquare className="w-3.5 h-3.5" />
-                                    </button>
+                                    <div className="ml-auto flex items-center gap-1">
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="copy" onClick={() => navigator.clipboard.writeText(cleanPipeStdout(exec.stdout))}>
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="open in chat" onClick={async () => {
+                                        const conv = pipeExecutionToConversation(exec.pipe_name, exec.id, exec.stdout, exec.started_at);
+                                        await saveConversationFile(conv);
+                                        localStorage.setItem("pending-chat-conversation", conv.id);
+                                        const url = new URL(window.location.href);
+                                        url.searchParams.set("section", "home");
+                                        window.location.href = url.toString();
+                                      }}>
+                                        <MessageSquare className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                                 {exec.error_message && <p className="text-xs text-muted-foreground">{exec.error_message}</p>}
                                 {exec.status === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
-                                  <div className="relative group">
-                                    <button
-                                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
-                                      onClick={() => navigator.clipboard.writeText(cleanPipeStdout(exec.stdout))}
-                                      title="copy"
-                                    >
-                                      <Copy className="h-3 w-3 text-muted-foreground" />
-                                    </button>
+                                  <div>
                                     <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide"><MemoizedReactMarkdown className="prose prose-xs dark:prose-invert max-w-none break-words text-xs [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_li]:text-xs [&_code]:text-[10px]">{cleanPipeStdout(exec.stdout)}</MemoizedReactMarkdown></div>
                                   </div>
                                 )}

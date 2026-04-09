@@ -9,6 +9,7 @@ import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react"
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Popover,
   PopoverContent,
@@ -28,6 +29,40 @@ interface NotificationEntry {
 }
 
 const API_BASE = "http://localhost:11435";
+
+async function openNotificationLink(href: string) {
+  const raw = href.trim();
+  if (!raw) return;
+
+  let localPath: string | null = null;
+  if (raw.startsWith("~/")) {
+    const home = await import("@tauri-apps/api/path").then((m) => m.homeDir());
+    localPath = home + raw.slice(1);
+  } else if (raw.startsWith("/") && !raw.startsWith("//")) {
+    localPath = raw;
+  } else if (/^[A-Za-z]:[\\/]/.test(raw)) {
+    localPath = raw;
+  }
+
+  const { open } = await import("@tauri-apps/plugin-shell");
+
+  // Prefer opening markdown files in Obsidian if installed.
+  if (localPath && localPath.toLowerCase().endsWith(".md")) {
+    try {
+      await invoke("open_note_path", { path: localPath });
+      return;
+    } catch {
+      // Fallback to default system file opener below.
+    }
+  }
+
+  if (localPath) {
+    await invoke("open_note_path", { path: localPath });
+    return;
+  }
+
+  await open(raw);
+}
 
 export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
@@ -181,7 +216,31 @@ export function NotificationBell() {
                         </div>
                         {!isExpanded && entry.body && (
                           <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown>
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                a: ({ href, children }) => (
+                                  <a
+                                    onClick={async (e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (!href) return;
+                                      try {
+                                        await openNotificationLink(href);
+                                      } catch (err) {
+                                        console.error("failed to open url:", href, err);
+                                      }
+                                    }}
+                                    style={{ cursor: "pointer", textDecoration: "underline" }}
+                                    className="text-foreground"
+                                  >
+                                    {children}
+                                  </a>
+                                ),
+                              }}
+                            >
+                              {entry.body}
+                            </ReactMarkdown>
                           </div>
                         )}
                       </div>
@@ -213,19 +272,12 @@ export function NotificationBell() {
                                 <a
                                   onClick={async (e) => {
                                     e.preventDefault();
+                                    e.stopPropagation();
                                     if (!href) return;
                                     try {
-                                      let url = href;
-                                      if (url.startsWith("~/")) {
-                                        const home = await import("@tauri-apps/api/path").then(m => m.homeDir());
-                                        url = "file://" + home + url.slice(2);
-                                      } else if (url.startsWith("/") && !url.startsWith("//")) {
-                                        url = "file://" + url;
-                                      }
-                                      const { open } = await import("@tauri-apps/plugin-shell");
-                                      await open(url);
-                                    } catch {
-                                      console.error("failed to open url:", href);
+                                      await openNotificationLink(href);
+                                    } catch (err) {
+                                      console.error("failed to open url:", href, err);
                                     }
                                   }}
                                   style={{ cursor: "pointer", textDecoration: "underline" }}

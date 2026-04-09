@@ -8,8 +8,9 @@
 //! per-record `synced_at` tracking. The cleanup loop only deletes data before
 //! `min(watermark, now - retention_days)`.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::{Json, State}, http::StatusCode, response::Json as JsonResponse};
 use chrono::{DateTime, Duration, Utc};
+use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{BlobType, SyncClientConfig, SyncManager};
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
@@ -96,25 +97,25 @@ impl Default for ArchiveConfig {
 // Request / Response types
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, OaSchema)]
 pub struct ArchiveInitRequest {
     pub token: String,
     pub retention_days: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, OaSchema)]
 pub struct ArchiveInitResponse {
     pub success: bool,
     pub machine_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, OaSchema)]
 pub struct ArchiveConfigureRequest {
     pub enabled: Option<bool>,
     pub retention_days: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, OaSchema)]
 pub struct ArchiveStatusResponse {
     pub enabled: bool,
     pub retention_days: u32,
@@ -135,17 +136,18 @@ pub struct ArchiveStatusResponse {
 // ============================================================================
 
 /// POST /archive/init — initialize the archive system.
+#[oasgen]
 pub async fn archive_init(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ArchiveInitRequest>,
-) -> Result<Json<ArchiveInitResponse>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<ArchiveInitResponse>, (StatusCode, JsonResponse<Value>)> {
     // Check if already initialized
     {
         let guard = state.archive_state.inner.read().await;
         if guard.is_some() {
             return Err((
                 StatusCode::CONFLICT,
-                Json(json!({"error": "archive already initialized"})),
+                JsonResponse(json!({"error": "archive already initialized"})),
             ));
         }
     }
@@ -175,7 +177,7 @@ pub async fn archive_init(
             error!("archive: failed to create sync manager: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("failed to create sync manager: {}", e)})),
+                JsonResponse(json!({"error": format!("failed to create sync manager: {}", e)})),
             )
         })?;
 
@@ -190,7 +192,7 @@ pub async fn archive_init(
             error!("archive: failed to derive encryption keys: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("failed to initialize encryption: {}", e)})),
+                JsonResponse(json!({"error": format!("failed to initialize encryption: {}", e)})),
             )
         })?;
 
@@ -237,17 +239,18 @@ pub async fn archive_init(
 
     info!("archive: initialized, retention={}d", retention_days);
 
-    Ok(Json(ArchiveInitResponse {
+    Ok(JsonResponse(ArchiveInitResponse {
         success: true,
         machine_id,
     }))
 }
 
 /// POST /archive/configure — update retention or disable.
+#[oasgen]
 pub async fn archive_configure(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ArchiveConfigureRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     let mut guard = state.archive_state.inner.write().await;
 
     let runtime = match guard.as_mut() {
@@ -257,7 +260,7 @@ pub async fn archive_configure(
             let wants_enabled = request.enabled.unwrap_or(false);
             if !wants_enabled {
                 info!("archive: configure(disable) on uninitialized state — no-op");
-                return Ok(Json(json!({
+                return Ok(JsonResponse(json!({
                     "success": true,
                     "enabled": false,
                     "retention_days": request.retention_days.unwrap_or(7),
@@ -265,7 +268,7 @@ pub async fn archive_configure(
             }
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "archive not initialized, call /archive/init first"})),
+                JsonResponse(json!({"error": "archive not initialized, call /archive/init first"})),
             ));
         }
     };
@@ -297,7 +300,7 @@ pub async fn archive_configure(
         }
     }
 
-    Ok(Json(json!({
+    Ok(JsonResponse(json!({
         "success": true,
         "enabled": runtime.config.enabled,
         "retention_days": runtime.config.retention_days,
@@ -305,38 +308,40 @@ pub async fn archive_configure(
 }
 
 /// POST /archive/run — trigger an immediate archive run.
+#[oasgen]
 pub async fn archive_run(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     let guard = state.archive_state.inner.read().await;
     let runtime = guard.as_ref().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "archive not initialized"})),
+            JsonResponse(json!({"error": "archive not initialized"})),
         )
     })?;
 
     if !runtime.config.enabled {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "archive is disabled"})),
+            JsonResponse(json!({"error": "archive is disabled"})),
         ));
     }
 
     runtime.run_now.notify_one();
     info!("archive: manual run triggered");
 
-    Ok(Json(json!({"success": true})))
+    Ok(JsonResponse(json!({"success": true})))
 }
 
 /// GET /archive/status — return current state.
+#[oasgen]
 pub async fn archive_status(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ArchiveStatusResponse>, (StatusCode, Json<Value>)> {
+) -> Result<JsonResponse<ArchiveStatusResponse>, (StatusCode, JsonResponse<Value>)> {
     let guard = state.archive_state.inner.read().await;
 
     match guard.as_ref() {
-        None => Ok(Json(ArchiveStatusResponse {
+        None => Ok(JsonResponse(ArchiveStatusResponse {
             enabled: false,
             retention_days: 7,
             watermark: None,
@@ -361,7 +366,7 @@ pub async fn archive_status(
                 0
             };
 
-            Ok(Json(ArchiveStatusResponse {
+            Ok(JsonResponse(ArchiveStatusResponse {
                 enabled: runtime.config.enabled,
                 retention_days: runtime.config.retention_days,
                 watermark: if runtime.watermark == DateTime::<Utc>::MIN_UTC {

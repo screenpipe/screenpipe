@@ -25,7 +25,16 @@ pub struct SegmentationManager {
 }
 
 impl SegmentationManager {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(disabled: bool) -> Result<Self> {
+        if disabled {
+            return Ok(Self {
+                embedding_manager: Arc::new(StdMutex::new(EmbeddingManager::new(100))),
+                embedding_extractor: AsyncMutex::new(None),
+                embedding_model_path: AsyncMutex::new(None),
+                segmentation_model_path: AsyncMutex::new(None),
+            });
+        }
+
         let embedding_model_path = match get_or_download_model(PyannoteModel::Embedding).await {
             Ok(path) => Some(path),
             Err(e) => {

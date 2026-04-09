@@ -225,13 +225,13 @@ describe("cleanPipeStdout", () => {
   it("passes through plain text for non-JSON pipes", () => {
     const stdout = "task completed successfully\n3 items processed\n";
     expect(cleanPipeStdout(stdout)).toBe(
-      "task completed successfully3 items processed"
+      "task completed successfully\n\n3 items processed"
     );
   });
 
   it("filters out lines with quotes (JSON fragments) in plain text mode", () => {
     const stdout = 'some plain text\n"ocr","content": {"text": "hello"}\nanother line\n';
-    expect(cleanPipeStdout(stdout)).toBe("some plain textanother line");
+    expect(cleanPipeStdout(stdout)).toBe("some plain text\n\nanother line");
   });
 
   // ─── does not double-count text ──────────────────────────────────────

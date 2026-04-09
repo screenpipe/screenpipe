@@ -337,6 +337,91 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
         },
+        // Signal — voice/video calls
+        // macOS: "Signal" app with "End Call" / "Hang Up" button during active calls.
+        // Windows: "Signal.exe" Electron app, same button patterns.
+        // Signal also shows a call status bar with duration when a call is active.
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["signal"],
+                windows_process_names: &["signal.exe"],
+                browser_url_patterns: &[],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End Call"),
+                CallSignal::NameContains("Hang Up"),
+                // Windows UIA button patterns
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "Hang up",
+                },
+            ],
+            min_signals_required: 1,
+        },
+        // WhatsApp — voice/video calls
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["whatsapp"],
+                windows_process_names: &["whatsapp.exe"],
+                browser_url_patterns: &["web.whatsapp.com"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End call"),
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+            ],
+            min_signals_required: 1,
+        },
+        // Telegram — voice/video calls
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["telegram"],
+                windows_process_names: &["telegram.exe"],
+                browser_url_patterns: &["web.telegram.org"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End Call"),
+                CallSignal::NameContains("Hang Up"),
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+            ],
+            min_signals_required: 1,
+        },
         // Generic fallback — catches apps like Skype, Around, Whereby, etc.
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
@@ -1362,6 +1447,8 @@ pub enum MeetingState {
         app: String,
         started_at: DateTime<Utc>,
         last_seen: Instant,
+        /// Whether this meeting was detected in a browser (longer grace period on end).
+        is_browser: bool,
     },
     /// Meeting controls disappeared — waiting before marking ended.
     Ending {
@@ -1369,6 +1456,8 @@ pub enum MeetingState {
         app: String,
         started_at: DateTime<Utc>,
         since: Instant,
+        /// Whether this meeting was detected in a browser (longer grace period on end).
+        is_browser: bool,
     },
 }
 
@@ -1389,6 +1478,20 @@ const CONFIRM_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Timeout for ending a meeting (how long controls must be absent before we end).
 const ENDING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Longer timeout for browser-based meetings — tab switching hides AX controls,
+/// so we wait much longer before declaring the meeting ended.
+const ENDING_TIMEOUT_BROWSER: Duration = Duration::from_secs(300); // 5 minutes
+
+/// Check if an app name is a known browser.
+fn is_browser_app(app_name: &str) -> bool {
+    let lower = app_name.to_lowercase();
+    BROWSER_NAMES.iter().any(|b| lower.contains(b))
+        || lower.ends_with(".exe")
+            && ["chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe"]
+                .iter()
+                .any(|b| lower.contains(b))
+}
 
 /// Advance the state machine based on scan results.
 ///
@@ -1430,9 +1533,10 @@ pub fn advance_state(
             profile_index,
         } => {
             if let Some(result) = best_active {
+                let browser = is_browser_app(&result.app_name);
                 info!(
-                    "meeting v2: Confirming -> Active (app={}, signals={})",
-                    result.app_name, result.signals_found
+                    "meeting v2: Confirming -> Active (app={}, signals={}, browser={})",
+                    result.app_name, result.signals_found, browser
                 );
                 (
                     // meeting_id=-1 is a placeholder; the loop fills it after DB insert
@@ -1441,6 +1545,7 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at: Utc::now(),
                         last_seen: Instant::now(),
+                        is_browser: browser,
                     },
                     Some(StateAction::StartMeeting {
                         app: result.app_name.clone(),
@@ -1470,6 +1575,7 @@ pub fn advance_state(
             meeting_id,
             app,
             started_at,
+            is_browser,
             ..
         } => {
             if let Some(result) = best_active {
@@ -1483,13 +1589,15 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at,
                         last_seen: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
             } else {
+                let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
                 info!(
-                    "meeting v2: Active -> Ending (no controls, app={}, id={})",
-                    app, meeting_id
+                    "meeting v2: Active -> Ending (no controls, app={}, id={}, grace={:?})",
+                    app, meeting_id, timeout
                 );
                 (
                     MeetingState::Ending {
@@ -1497,6 +1605,7 @@ pub fn advance_state(
                         app,
                         started_at,
                         since: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
@@ -1508,7 +1617,9 @@ pub fn advance_state(
             app,
             started_at,
             since,
+            is_browser,
         } => {
+            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
             if let Some(result) = best_active {
                 info!(
                     "meeting v2: Ending -> Active (controls reappeared, app={}, id={})",
@@ -1520,13 +1631,14 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at, // preserve original start time
                         last_seen: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
-            } else if since.elapsed() >= ENDING_TIMEOUT {
+            } else if since.elapsed() >= timeout {
                 info!(
-                    "meeting v2: Ending -> Idle (timeout, app={}, id={})",
-                    app, meeting_id
+                    "meeting v2: Ending -> Idle (timeout={:?}, app={}, id={})",
+                    timeout, app, meeting_id
                 );
                 (
                     MeetingState::Idle,
@@ -1534,10 +1646,11 @@ pub fn advance_state(
                 )
             } else {
                 debug!(
-                    "meeting v2: Ending (app={}, id={}, elapsed={:?})",
+                    "meeting v2: Ending (app={}, id={}, elapsed={:?}/{:?})",
                     app,
                     meeting_id,
-                    since.elapsed()
+                    since.elapsed(),
+                    timeout,
                 );
                 (
                     MeetingState::Ending {
@@ -1545,6 +1658,7 @@ pub fn advance_state(
                         app,
                         started_at,
                         since,
+                        is_browser,
                     },
                     None,
                 )
@@ -2137,8 +2251,18 @@ pub async fn run_meeting_detection_loop(
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                if let Err(e) = db.end_meeting_with_typed_text(meeting_id, &now, true).await {
-                    error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
+                match db.end_meeting_with_typed_text(meeting_id, &now, true).await {
+                    Ok(()) => {
+                        if let Err(e) = screenpipe_events::send_event(
+                            "meeting_ended",
+                            serde_json::json!({ "meeting_id": meeting_id }),
+                        ) {
+                            warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
+                    }
                 }
             }
             sync_meeting_flag(
@@ -2281,6 +2405,7 @@ pub async fn run_meeting_detection_loop(
                         app: ref a,
                         started_at,
                         last_seen,
+                        is_browser,
                         ..
                     } = state
                     {
@@ -2289,6 +2414,7 @@ pub async fn run_meeting_detection_loop(
                             app: a.clone(),
                             started_at,
                             last_seen,
+                            is_browser,
                         };
                     }
                 }
@@ -2298,6 +2424,13 @@ pub async fn run_meeting_detection_loop(
                         match db.end_meeting_with_typed_text(meeting_id, &now, true).await {
                             Ok(()) => {
                                 info!("meeting v2: meeting ended (id={})", meeting_id);
+                                // Emit event so triggered pipes can react
+                                if let Err(e) = screenpipe_events::send_event(
+                                    "meeting_ended",
+                                    serde_json::json!({ "meeting_id": meeting_id }),
+                                ) {
+                                    warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                                }
                             }
                             Err(e) => {
                                 error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
@@ -2346,6 +2479,8 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             started_at,
             ..
         } => {
+            // When the app process exits, use a short timeout (not the browser one)
+            // because the process is actually gone, not just a tab switch.
             info!(
                 "meeting v2: Active -> Ending (app process exited, app={})",
                 app
@@ -2356,6 +2491,7 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
                     app,
                     started_at,
                     since: Instant::now(),
+                    is_browser: false, // process exited → use short timeout
                 },
                 None,
             )
@@ -2372,9 +2508,11 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             since,
             app,
             started_at,
+            is_browser,
         } => {
-            if since.elapsed() >= ENDING_TIMEOUT {
-                info!("meeting v2: Ending -> Idle (timeout, app={})", app);
+            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            if since.elapsed() >= timeout {
+                info!("meeting v2: Ending -> Idle (timeout={:?}, app={})", timeout, app);
                 let ended_id = if meeting_id >= 0 {
                     Some(meeting_id)
                 } else {
@@ -2388,6 +2526,7 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
                         since,
                         app,
                         started_at,
+                        is_browser,
                     },
                     None,
                 )
@@ -2464,6 +2603,13 @@ async fn insert_new_meeting(
                 "meeting v2: meeting started (id={}, app={}, title={:?})",
                 id, app, title
             );
+            // Emit event so triggered pipes can react
+            if let Err(e) = screenpipe_events::send_event(
+                "meeting_started",
+                serde_json::json!({ "meeting_id": id, "app": app, "title": title }),
+            ) {
+                warn!("meeting v2: failed to emit meeting_started event: {}", e);
+            }
             id
         }
         Err(e) => {
@@ -2511,7 +2657,13 @@ mod tests {
         });
         assert!(teams.is_some(), "Teams profile not found");
         let teams_profile = teams.unwrap();
-        assert!(teams_profile.app_identifiers.macos_app_names.contains(&"msteams"), "MSTeams not added to macos_app_names");
+        assert!(
+            teams_profile
+                .app_identifiers
+                .macos_app_names
+                .contains(&"msteams"),
+            "MSTeams not added to macos_app_names"
+        );
     }
 
     #[test]
@@ -2772,6 +2924,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
         let (new_state, action) = advance_state(state, &results);
@@ -2790,6 +2943,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2809,6 +2963,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: original_start,
             last_seen: Instant::now(),
+            is_browser: false,
         };
         // Transition to Ending
         let results: Vec<ScanResult> = vec![];
@@ -2836,6 +2991,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: started,
             since: Instant::now(),
+            is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
         let (new_state, action) = advance_state(state, &results);
@@ -2856,6 +3012,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2875,6 +3032,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             since,
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2896,6 +3054,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
 
         // First: Active -> Ending (no controls found)
@@ -2911,6 +3070,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (state, action) = advance_state(state, &[]);
         assert!(matches!(state, MeetingState::Idle));
@@ -2961,6 +3121,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Ending { .. }));
@@ -2988,6 +3149,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Idle));
@@ -3001,6 +3163,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             since: Instant::now(),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Ending { .. }));
@@ -3017,6 +3180,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (_, ended_id) = handle_no_apps_running(state);
         assert!(ended_id.is_none(), "should not end meeting with id=-1");

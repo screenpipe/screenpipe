@@ -19,6 +19,12 @@ use tracing::{debug, error};
 use cidre::cg::event::access as cg_access;
 use cidre::{ax, cf, cg, ns};
 
+/// Guard to serialize accessibility queries – concurrent calls to
+/// AXUIElementCopyElementAtPosition can corrupt AppKit's internal
+/// accessibility caches (NSAccessibilityIsSelectorUsingBaseImplementation)
+/// and cause a SIGABRT in CFDictionarySetValue / __CFBasicHashRehash.
+static AX_QUERY_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 // Keycodes for clipboard operations (macOS)
 const KEY_C: u16 = 8;
 const KEY_X: u16 = 7;
@@ -965,6 +971,11 @@ fn get_element_at_position(x: f64, y: f64, config: &UiCaptureConfig) -> Option<E
         return None;
     }
 
+    // Serialize accessibility queries to prevent concurrent calls that corrupt
+    // AppKit's internal accessibility caches. Use try_lock to avoid blocking
+    // the event tap callback path – if another query is in-flight, skip this one.
+    let _guard = AX_QUERY_LOCK.try_lock()?;
+
     let sys = ax::UiElement::sys_wide();
     let elem = sys.element_at_pos(x as f32, y as f32).ok()?;
 
@@ -1066,6 +1077,9 @@ fn get_focused_window_title(pid: i32) -> Option<String> {
 
 /// Get the currently focused UI element's context (for capturing text field values)
 fn get_focused_element_context(config: &UiCaptureConfig) -> Option<ElementContext> {
+    // Serialize accessibility queries (same guard as get_element_at_position)
+    let _guard = AX_QUERY_LOCK.try_lock()?;
+
     let sys = ax::UiElement::sys_wide();
     let focused = sys.attr_value(ax::attr::focused_ui_element()).ok()?;
 

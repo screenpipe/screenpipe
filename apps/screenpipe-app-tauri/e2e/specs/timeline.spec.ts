@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
-import { waitForAppReady } from "../helpers/test-utils.js";
+import { openHomeWindow, waitForAppReady } from "../helpers/test-utils.js";
 
 describe("Timeline", function () {
   this.timeout(240_000);
@@ -22,27 +22,7 @@ describe("Timeline", function () {
   });
 
   it("opens timeline, seeds capture with a UI event, and renders at least one frame", async () => {
-    const windowPayload = { Home: { page: null } };
-    await browser.execute(async (payload) => {
-      const inv =
-        (globalThis as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args: object) => Promise<unknown> } }; __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> } }).__TAURI__?.core?.invoke ??
-        (globalThis as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> } }).__TAURI_INTERNALS__?.invoke;
-      if (inv) await inv("show_window", { window: payload });
-    }, windowPayload);
-
-    const homeHandle = await browser.waitUntil(
-      async () => {
-        const handles = await browser.getWindowHandles();
-        return handles.find((x) => x === "home") || false;
-      },
-      {
-        timeout: 10_000,
-        timeoutMsg: "Home window did not appear",
-      }
-    );
-
-    expect(homeHandle).toBeTruthy();
-    await browser.switchToWindow(homeHandle as string);
+    await openHomeWindow();
 
     const homePage = await $('[data-testid="home-page"]');
     await homePage.waitForExist({ timeout: 15_000 });

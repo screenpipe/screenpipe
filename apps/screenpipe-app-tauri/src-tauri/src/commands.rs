@@ -1096,9 +1096,10 @@ pub async fn show_shortcut_reminder(
         }
     };
 
-    // If window exists, reposition to current screen and show
+    // If window exists, resize, reposition to current screen, and show
     if let Some(window) = app_handle.get_webview_window(label) {
-        info!("shortcut-reminder window exists, repositioning and showing");
+        info!("shortcut-reminder window exists, resizing/repositioning and showing");
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(window_width, window_height)));
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
         let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut);
         let _ = window.show();
@@ -1762,6 +1763,53 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         .set_text(text)
         .map_err(|e| format!("failed to set clipboard: {}", e))?;
     Ok(())
+}
+
+/// Open a local markdown note in Obsidian (if available), then fallback to OS default app.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_note_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let obsidian_uri = format!("obsidian://open?path={}", urlencoding::encode(&path));
+        // Treat successful process launch as success. `open` can return
+        // non-zero even when LaunchServices still opens the target app.
+        if Command::new("open").arg(&obsidian_uri).spawn().is_ok()
+            || Command::new("open").arg(&path).spawn().is_ok()
+        {
+            Ok(())
+        } else {
+            Err(format!("failed to open note path: {}", path))
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let obsidian_uri = format!("obsidian://open?path={}", urlencoding::encode(&path));
+        if Command::new("cmd")
+            .args(["/C", "start", "", &obsidian_uri])
+            .spawn()
+            .is_ok()
+            || Command::new("cmd")
+                .args(["/C", "start", "", &path])
+                .spawn()
+                .is_ok()
+        {
+            Ok(())
+        } else {
+            Err(format!("failed to open note path: {}", path))
+        }
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        use std::process::Command;
+        if Command::new("xdg-open").arg(&path).spawn().is_ok() {
+            Ok(())
+        } else {
+            Err(format!("failed to open note path: {}", path))
+        }
+    }
 }
 
 #[tauri::command]

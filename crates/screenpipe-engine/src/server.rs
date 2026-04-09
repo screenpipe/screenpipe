@@ -517,6 +517,32 @@ impl SCServer {
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .get("/activity-summary", get_activity_summary)
+            // Vault routes
+            .get("/vault/status", crate::routes::vault::vault_status)
+            .post("/vault/lock", crate::routes::vault::vault_lock)
+            .post("/vault/unlock", crate::routes::vault::vault_unlock)
+            .post("/vault/setup", crate::routes::vault::vault_setup)
+            // Cloud Sync API routes
+            .post("/sync/init", sync_api::sync_init)
+            .get("/sync/status", sync_api::sync_status)
+            .post("/sync/trigger", sync_api::sync_trigger)
+            .post("/sync/lock", sync_api::sync_lock)
+            .post("/sync/download", sync_api::sync_download)
+            .post("/sync/pipes/push", sync_api::sync_pipes_push)
+            .post("/sync/pipes/pull", sync_api::sync_pipes_pull)
+            // Cloud Archive API routes
+            .post("/archive/init", crate::archive::archive_init)
+            .post("/archive/configure", crate::archive::archive_configure)
+            .get("/archive/status", crate::archive::archive_status)
+            .post("/archive/run", crate::archive::archive_run)
+            // Local data retention (auto-delete old data)
+            .post("/retention/configure", crate::retention::retention_configure)
+            .get("/retention/status", crate::retention::retention_status)
+            .post("/retention/run", crate::retention::retention_run)
+            // Data management
+            .post("/data/delete-range", delete_time_range_handler)
+            .post("/data/delete-device", delete_device_data_handler)
+            .get("/data/device-storage", device_storage_handler)
             .route_yaml_spec("/openapi.yaml")
             .route_json_spec("/openapi.json")
             .freeze();
@@ -524,82 +550,20 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .merge(server.into_router())
-            // Vault lock/unlock routes
-            .route("/vault/status", get(crate::routes::vault::vault_status))
-            .route(
-                "/vault/lock",
-                axum::routing::post(crate::routes::vault::vault_lock),
-            )
-            .route(
-                "/vault/unlock",
-                axum::routing::post(crate::routes::vault::vault_unlock),
-            )
-            .route(
-                "/vault/setup",
-                axum::routing::post(crate::routes::vault::vault_setup),
-            )
-            // Cloud Sync API routes
-            .route("/sync/init", axum::routing::post(sync_api::sync_init))
-            .route("/sync/status", get(sync_api::sync_status))
-            .route("/sync/trigger", axum::routing::post(sync_api::sync_trigger))
-            .route("/sync/lock", axum::routing::post(sync_api::sync_lock))
-            .route(
-                "/sync/download",
-                axum::routing::post(sync_api::sync_download),
-            )
-            .route(
-                "/sync/pipes/push",
-                axum::routing::post(sync_api::sync_pipes_push),
-            )
-            .route(
-                "/sync/pipes/pull",
-                axum::routing::post(sync_api::sync_pipes_pull),
-            )
-            // Cloud Archive API routes
-            .route(
-                "/archive/init",
-                axum::routing::post(crate::archive::archive_init),
-            )
-            .route(
-                "/archive/configure",
-                axum::routing::post(crate::archive::archive_configure),
-            )
-            .route("/archive/status", get(crate::archive::archive_status))
-            .route(
-                "/archive/run",
-                axum::routing::post(crate::archive::archive_run),
-            )
-            // Local data retention (auto-delete old data)
-            .route(
-                "/retention/configure",
-                axum::routing::post(crate::retention::retention_configure),
-            )
-            .route("/retention/status", get(crate::retention::retention_status))
-            .route(
-                "/retention/run",
-                axum::routing::post(crate::retention::retention_run),
-            )
-            // Vision status endpoint (not in OpenAPI spec to avoid oasgen registration issues)
+            // Vision status endpoint (not in OpenAPI spec — no State param)
             .route("/vision/status", get(api_vision_status))
-            // Vision pipeline metrics (not in OpenAPI spec)
+            // Vision/audio pipeline metrics (not in OpenAPI spec — external types)
             .route("/vision/metrics", get(vision_metrics_handler))
             .route("/audio/metrics", get(audio_metrics_handler))
-            // Data management (not in OpenAPI spec)
-            .route(
-                "/data/delete-range",
-                axum::routing::post(delete_time_range_handler),
-            )
-            .route(
-                "/data/delete-device",
-                axum::routing::post(delete_device_data_handler),
-            )
-            .route(
-                "/data/device-storage",
-                axum::routing::get(device_storage_handler),
-            )
+            // Retranscribe/transcribe (not in OpenAPI spec — opaque Response / multipart)
             .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
+            )
+            .route(
+                "/v1/audio/transcriptions",
+                axum::routing::post(crate::routes::transcribe::transcribe_handler)
+                    .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)), // 250MB
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)

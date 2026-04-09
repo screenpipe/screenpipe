@@ -269,6 +269,10 @@ impl ShowRewindWindow {
             }
             #[cfg(not(target_os = "macos"))]
             {
+                #[cfg(target_os = "windows")]
+                if let Err(e) = crate::windows_overlay::set_display_affinity(window, capturable) {
+                    error!("Failed to set display affinity: {}", e);
+                }
                 window.unminimize().ok();
                 window.show().ok();
                 window.set_focus().ok();
@@ -349,6 +353,9 @@ impl ShowRewindWindow {
             }
             #[cfg(target_os = "windows")]
             {
+                if let Err(e) = crate::windows_overlay::set_display_affinity(window, capturable) {
+                    error!("Failed to set display affinity: {}", e);
+                }
                 window.show().ok();
                 // Reposition overlay to the monitor where the cursor is,
                 // matching macOS behavior where the panel moves to the active screen.
@@ -642,7 +649,6 @@ impl ShowRewindWindow {
                     .unwrap_or_default()
                     .unwrap_or_default();
                 let overlay_mode = settings.overlay_mode;
-                #[allow(unused_variables)] // used only on macOS
                 let show_in_recording =
                     crate::config::is_e2e_mode() || settings.show_overlay_in_screen_recording;
                 // Record what mode we're creating so we can detect changes later
@@ -683,6 +689,7 @@ impl ShowRewindWindow {
                     #[cfg(not(target_os = "macos"))]
                     let window = {
                         let app_clone = app.clone();
+                        let capturable = show_in_recording;
                         let builder = self
                             .window_builder_with_label(
                                 app,
@@ -701,6 +708,10 @@ impl ShowRewindWindow {
                                     payload.event(),
                                     tauri::webview::PageLoadEvent::Finished
                                 ) {
+                                    #[cfg(target_os = "windows")]
+                                    if let Err(e) = crate::windows_overlay::set_display_affinity(&win, capturable) {
+                                        tracing::error!("Failed to set display affinity: {}", e);
+                                    }
                                     win.show().ok();
                                     win.set_focus().ok();
                                     let _ = app_clone.emit("window-focused", true);
@@ -973,6 +984,7 @@ impl ShowRewindWindow {
                         min.1.min(logical_size.height),
                     );
                     let app_clone = app.clone();
+                    let capturable = show_in_recording;
                     let builder = self
                         .window_builder_with_label(
                             app,
@@ -1002,6 +1014,10 @@ impl ShowRewindWindow {
                                 // to handle keyboard events.
                                 if let Err(e) = crate::windows_overlay::setup_overlay(&win, false) {
                                     tracing::error!("Failed to setup Windows overlay: {}", e);
+                                }
+                                // Apply display affinity so OBS/screen recorders respect the setting
+                                if let Err(e) = crate::windows_overlay::set_display_affinity(&win, capturable) {
+                                    tracing::error!("Failed to set display affinity: {}", e);
                                 }
                                 // Activate so keyboard focus goes to the webview
                                 if let Err(e) =

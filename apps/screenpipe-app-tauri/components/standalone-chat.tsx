@@ -899,7 +899,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac } = usePlatform();
   const { items: appItems } = useSqlAutocomplete("app");
-  const { suggestions: autoSuggestions } = useAutoSuggestions();
+  const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
 
   // Custom summary templates (persisted in settings)
@@ -3218,6 +3218,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           <SummaryCards
             onSendMessage={sendMessage}
             autoSuggestions={autoSuggestions}
+            suggestionsRefreshing={suggestionsRefreshing}
+            onRefreshSuggestions={refreshSuggestions}
             customTemplates={customTemplates}
             onSaveCustomTemplate={saveCustomTemplate}
             onDeleteCustomTemplate={deleteCustomTemplate}
@@ -3554,20 +3556,28 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           )}
         </AnimatePresence>
 
-        {/* Auto-suggestions above input */}
+        {/* Persistent auto-suggestions above input */}
         {messages.length > 0 && !isLoading && autoSuggestions.length > 0 && (
-          <div className="px-3 pt-2 flex flex-wrap gap-1.5">
-            {autoSuggestions.slice(0, 3).map((s, i) => (
+          <div className="px-3 pt-2 flex flex-wrap gap-1.5 items-center">
+            {autoSuggestions.slice(0, 4).map((s, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => sendMessage(s.text)}
-                className="px-2.5 py-1 text-[11px] bg-muted/20 hover:bg-muted/50 rounded-full border border-border/20 hover:border-border/50 text-muted-foreground hover:text-foreground transition-colors cursor-pointer max-w-[280px] truncate"
-                title={s.text}
+                className="px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px] truncate"
+                title={s.preview ? `${s.text} — ${s.preview}` : s.text}
               >
                 {s.text}
               </button>
             ))}
+            <button
+              onClick={refreshSuggestions}
+              disabled={suggestionsRefreshing}
+              className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
+              title="refresh suggestions"
+            >
+              <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+            </button>
           </div>
         )}
 

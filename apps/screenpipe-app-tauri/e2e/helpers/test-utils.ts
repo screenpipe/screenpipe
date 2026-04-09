@@ -12,19 +12,9 @@ export async function waitForAppReady(): Promise<void> {
   await browser.pause(3000);
 }
 
-/**
- * Open the Home window via Tauri IPC and switch the WebDriver context into it.
- * Safe to call from any spec — waits for the window handle and page hydration.
- */
-export async function openHomeWindow(): Promise<void> {
-  const windowPayload = { Home: { page: null } };
-  await browser.execute(async (payload) => {
-    const inv =
-      (globalThis as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args: object) => Promise<unknown> } }; __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> } }).__TAURI__?.core?.invoke ??
-      (globalThis as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> } }).__TAURI_INTERNALS__?.invoke;
-    if (inv) await inv('show_window', { window: payload });
-  }, windowPayload);
+type ShowWindowPayload = { Home: { page: null } };
 
+async function finishOpenHomeWindow(): Promise<void> {
   await browser.pause(2500);
 
   const homeHandle = await browser
@@ -49,6 +39,37 @@ export async function openHomeWindow(): Promise<void> {
     { timeout: 15000, timeoutMsg: 'Home page did not hydrate' }
   );
   await browser.pause(3000);
+}
+
+/**
+ * Open the Home window via Tauri IPC and switch the WebDriver context into it.
+ * Safe to call from any spec — waits for the window handle and page hydration.
+ *
+ * Uses `executeAsync` for `invoke('show_window')`: `execute(async () => …)` returns a
+ * Promise from the script, which Safari/WebKit WebDriver rejects for execute/sync
+ * ("unsupported type"). Chrome often tolerates it.
+ */
+export async function openHomeWindow(): Promise<void> {
+  const windowPayload: ShowWindowPayload = { Home: { page: null } };
+  await browser.executeAsync(
+    (payload: ShowWindowPayload, done: (v?: unknown) => void) => {
+      const g = globalThis as unknown as {
+        __TAURI__?: { core?: { invoke: (cmd: string, args: object) => Promise<unknown> } };
+        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> };
+      };
+      const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
+      if (inv) {
+        void inv('show_window', { window: payload })
+          .then(() => done())
+          .catch(() => done());
+      } else {
+        done();
+      }
+    },
+    windowPayload
+  );
+
+  await finishOpenHomeWindow();
 }
 
 /**

@@ -193,9 +193,22 @@ function SettingsPageContent() {
         .then((health: { monitors?: string[]; device_status_details?: string } | null) => {
           if (cancelled || !health) return;
           const devices: RecordingDevice[] = [];
-          // Parse monitors
+          // Parse monitors — filter to only those actually being recorded
           if (health.monitors) {
+            const monitorIds: string[] = settings.monitorIds ?? ["default"];
+            const useAll = settings.useAllMonitors ?? true;
             for (const name of health.monitors) {
+              // If user selected specific monitors, filter to only those
+              if (!useAll && monitorIds.length > 0 && monitorIds[0] !== "default") {
+                // Health format: "Display 3 (1920x1080)"
+                // Stable ID format: "Display 3_1920x1080_0,0"
+                const healthName = name.split(" (")[0];
+                const matched = monitorIds.some((id) => {
+                  const idName = id.split("_")[0];
+                  return healthName === idName;
+                });
+                if (!matched) continue;
+              }
               devices.push({ name, kind: "monitor", active: true });
             }
           }
@@ -221,7 +234,7 @@ function SettingsPageContent() {
     fetchDevices();
     const interval = setInterval(fetchDevices, 10000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  }, [settings.monitorIds, settings.useAllMonitors]);
 
   // Active meeting state — lights up the phone icon for ANY active meeting
   // (manual OR auto-detected: Teams, Zoom, etc.). manualActive is true only
@@ -282,6 +295,15 @@ function SettingsPageContent() {
       setMeetingLoading(false);
     }
   }, [meetingState]);
+
+  // Native overlay: toggle meeting when user clicks phone icon in Swift overlay
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen("native-shortcut-toggle-meeting", () => {
+      toggleMeeting();
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [toggleMeeting]);
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useEffect(() => {

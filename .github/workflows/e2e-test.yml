@@ -309,3 +309,94 @@ jobs:
         name: linux-screenpipe-data
         include-hidden-files: true
         path: ./apps/screenpipe-app-tauri/.e2e
+
+  macos-e2e-test:
+    name: macOS E2E Tests
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.10
+
+    - name: Set up Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        rustflags: ""
+        target: aarch64-apple-darwin
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Configure sccache
+      shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: apps/screenpipe-app-tauri/src-tauri
+        shared-key: screenpipe-tauri-e2e
+
+    - name: Cache macOS build artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          apps/screenpipe-app-tauri/src-tauri/ffmpeg-aarch64-apple-darwin
+          apps/screenpipe-app-tauri/src-tauri/ffprobe-aarch64-apple-darwin
+          apps/screenpipe-app-tauri/src-tauri/bun-aarch64-apple-darwin
+          apps/screenpipe-app-tauri/src-tauri/bun-x86_64-apple-darwin
+        key: macOS-e2e-artifacts-v2-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
+        restore-keys: |
+          macOS-e2e-artifacts-v2-
+
+    - name: Install frontend dependencies
+      working-directory: apps/screenpipe-app-tauri
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    - name: Cache Next.js build
+      uses: actions/cache@v4
+      with:
+        path: ./apps/screenpipe-app-tauri/.next
+        key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        restore-keys: |
+          ${{ runner.os }}-next-v2-
+
+    - name: Build
+      uses: tauri-apps/tauri-action@v0.5.17
+      with:
+        args: "--no-sign --debug --no-bundle -- --features e2e"
+        projectPath: "./apps/screenpipe-app-tauri"
+        tauriScript: bunx tauri -v
+
+    - name: Run E2E Tests
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      env:
+        RECORD_VIDEO: "true"
+      run: |
+        bun run test:e2e
+
+    - name: Upload E2E Test Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: macos-e2e-test-artifacts
+        path: |
+          ./apps/screenpipe-app-tauri/e2e/videos
+          ./apps/screenpipe-app-tauri/e2e/screenshots
+
+    - name: Upload Screenpipe data
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: macos-screenpipe-data
+        include-hidden-files: true
+        path: ./apps/screenpipe-app-tauri/.e2e

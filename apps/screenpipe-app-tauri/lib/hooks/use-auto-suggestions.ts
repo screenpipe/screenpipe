@@ -9,6 +9,8 @@ const POLL_INTERVAL_MS = 30 * 1000; // 30 seconds (lightweight IPC read)
 
 export interface Suggestion {
   text: string;
+  preview?: string | null;
+  priority?: number;
 }
 
 export type ActivityMode =
@@ -57,9 +59,12 @@ export function useAutoSuggestions() {
     } catch {
       // Fallback if Tauri command not available yet
       setSuggestions([
-        { text: "what did I do in the last hour?" },
+        { text: "what did I work on in the last hour?", priority: 1 },
         { text: "summarize my day so far" },
-        { text: "which apps did I use most today?" },
+        { text: "which apps did I use most today" },
+        { text: "show my recent screen activity" },
+        { text: "what was I working on" },
+        { text: "how much time did I spend on each app" },
       ]);
       setMode("idle");
       setTags([]);

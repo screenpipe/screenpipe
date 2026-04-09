@@ -138,7 +138,18 @@ pub async fn oauth_connect(
         }
     }
 
-    // Auto-derive instance name from email in token response (for Google)
+    // For providers that don't return identity in the token response,
+    // fetch it from their user API so multi-instance works
+    if token_data["email"].is_null() && token_data["workspace_name"].is_null() {
+        if let Some(access_token) = token_data["access_token"].as_str() {
+            let identity = fetch_provider_identity(&client, &integration_id, access_token).await;
+            if let Some(name) = identity {
+                token_data["email"] = serde_json::Value::String(name);
+            }
+        }
+    }
+
+    // Auto-derive instance name from email/identity in token response
     let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
 
     // If no instance was explicitly provided and we couldn't derive one from the
@@ -259,4 +270,44 @@ fn extract_email_from_jwt(jwt: &str) -> Option<String> {
         .ok()?;
     let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
     v["email"].as_str().map(String::from)
+}
+
+/// Fetch the user's identity from the provider's API for providers that
+/// don't include it in the token response (e.g. GitHub, Notion).
+/// Returns a display name suitable for use as an instance identifier.
+async fn fetch_provider_identity(
+    client: &reqwest::Client,
+    integration_id: &str,
+    access_token: &str,
+) -> Option<String> {
+    match integration_id {
+        "github" => {
+            let resp: serde_json::Value = client
+                .get("https://api.github.com/user")
+                .bearer_auth(access_token)
+                .header("User-Agent", "screenpipe")
+                .send()
+                .await
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["login"].as_str().map(String::from)
+        }
+        "notion" => {
+            // Notion token response already has workspace_name, but if missing:
+            let resp: serde_json::Value = client
+                .get("https://api.notion.com/v1/users/me")
+                .bearer_auth(access_token)
+                .header("Notion-Version", "2022-06-28")
+                .send()
+                .await
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["name"].as_str().map(String::from)
+        }
+        _ => None,
+    }
 }

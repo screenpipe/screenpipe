@@ -72,6 +72,8 @@ pub struct AudioManagerOptions {
     pub batch_max_duration_secs: Option<u64>,
     /// Channel capacities for recording and transcription queues.
     pub channel_config: ChannelConfig,
+    /// Disable all audio functionality (no device polling, no model downloads)
+    pub is_disabled: bool,
 }
 
 impl Default for AudioManagerOptions {
@@ -101,6 +103,7 @@ impl Default for AudioManagerOptions {
             vocabulary: vec![],
             batch_max_duration_secs: None,
             channel_config: ChannelConfig::default(),
+            is_disabled: false,
         }
     }
 }
@@ -217,7 +220,7 @@ impl AudioManagerBuilder {
         self.validate_options()?;
         let options = &mut self.options;
 
-        if options.enabled_devices.is_empty() {
+        if !options.is_disabled && options.enabled_devices.is_empty() {
             // Gracefully collect available devices — don't crash if input or output is missing
             // (e.g., Mac Mini with no microphone, headless server with no audio hardware)
             let mut devices = Vec::new();
@@ -236,6 +239,11 @@ impl AudioManagerBuilder {
         }
 
         AudioManager::new(options.clone(), db).await
+    }
+
+    pub fn is_disabled(mut self, is_disabled: bool) -> Self {
+        self.options.is_disabled = is_disabled;
+        self
     }
 
     pub fn output_path(mut self, output_path: PathBuf) -> Self {

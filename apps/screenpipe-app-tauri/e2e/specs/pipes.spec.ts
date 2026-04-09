@@ -19,6 +19,20 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 let installedPipeName = '';
 let connectionPipeSlug = '';
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number
+): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 describe('Pipes: discover → install → play', function () {
   this.timeout(120_000);
 
@@ -27,15 +41,20 @@ describe('Pipes: discover → install → play', function () {
     await openHomeWindow();
   });
 
-  after(async () => {
-    // Cleanup: uninstall the pipe so state doesn't leak to the next run
-    if (installedPipeName) {
-      try {
-        await fetch(`http://localhost:3030/pipes/${installedPipeName}`, { method: 'DELETE' });
-        console.log(`[pipes-spec] cleaned up pipe "${installedPipeName}"`);
-      } catch {
-        // best-effort
-      }
+  // Bounded HTTP cleanup: a slow or stuck DELETE (e.g. while the pipe is still stopping) can
+  // block Mocha after-hooks and leave WDIO in "Ending WebDriver sessions…", which then fails
+  // the run (often reported as SIGTERM).
+  after(async function () {
+    this.timeout(25_000);
+    const name = installedPipeName;
+    if (!name) return;
+    const base = `http://localhost:3030/pipes/${encodeURIComponent(name)}`;
+    try {
+      await fetchWithTimeout(`${base}/stop`, { method: 'POST' }, 8_000).catch(() => {});
+      await fetchWithTimeout(base, { method: 'DELETE' }, 12_000);
+      console.log(`[pipes-spec] cleaned up pipe "${name}"`);
+    } catch {
+      // best-effort — next run may reuse pipe dir; CI/local should not hang on teardown
     }
   });
 

@@ -437,6 +437,14 @@ async fn main() {
     // This is critical because panics inside `tao::send_event` (called from Obj-C)
     // hit `panic_cannot_unwind` → `abort()`, and the default hook's output may be lost.
     // By logging here we capture the actual panic message for diagnosis.
+    //
+    // Truncate the crash log at startup so it only contains panics from THIS launch.
+    // The hook appends (not truncates) so that both the original panic and the
+    // subsequent panic_cannot_unwind are preserved in the same file.
+    {
+        let log_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+        let _ = std::fs::File::create(log_dir.join("last-panic.log")); // truncate
+    }
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Log the actual panic first — before any processing. Once unwinding hits
@@ -473,7 +481,13 @@ async fn main() {
         // (send_event, did_finish_launching) where panic_cannot_unwind → abort()
         let log_dir = screenpipe_core::paths::default_screenpipe_data_dir();
         let crash_path = log_dir.join("last-panic.log");
-        if let Ok(mut f) = std::fs::File::create(&crash_path) {
+        // Append instead of truncate — when panic_cannot_unwind fires after
+        // the original panic, both messages are preserved in the file.
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_path)
+        {
             use std::io::Write;
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
             let _ = writeln!(f, "[{}] {}", timestamp, crash_msg);
@@ -856,6 +870,7 @@ async fn main() {
             commands::copy_frame_to_clipboard,
             commands::copy_deeplink_to_clipboard,
             commands::copy_text_to_clipboard,
+            commands::open_note_path,
             // Overlay commands (Windows)
             commands::enable_overlay_click_through,
             commands::disable_overlay_click_through,
@@ -1533,7 +1548,7 @@ async fn main() {
 
             debug!(
                 "registered for autostart? {}",
-                autostart_manager.is_enabled().unwrap()
+                autostart_manager.is_enabled().unwrap_or(false)
             );
 
             // Use persistent analytics_id for PostHog (consistent across frontend and backend)
@@ -1599,11 +1614,13 @@ async fn main() {
                     if store.enhanced_ai {
                         let token = store.user.token.clone().unwrap_or_default();
                         if !token.is_empty() {
-                            let mut guard = suggestions_state.enhanced_ai.blocking_lock();
-                            *guard = Some(suggestions::EnhancedAIConfig {
-                                enabled: true,
-                                token,
-                            });
+                            // Use try_lock — blocking_lock panics inside a tokio runtime context
+                            if let Ok(mut guard) = suggestions_state.enhanced_ai.try_lock() {
+                                *guard = Some(suggestions::EnhancedAIConfig {
+                                    enabled: true,
+                                    token,
+                                });
+                            }
                         }
                     }
                 }

@@ -235,7 +235,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			// 2x safety margin: free=$10/day, subscribed=$50/day
 			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
 			const baseCap = getMaxDailyCostPerUser(env);
-			const maxCost = authResult.tier === 'subscribed' ? baseCap * 10 : baseCap * 2;
+			const maxCost = authResult.tier === 'subscribed' ? baseCap * 100 : baseCap * 2;
 			if (dailyCost >= maxCost) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: 'daily_cost_limit_exceeded',
