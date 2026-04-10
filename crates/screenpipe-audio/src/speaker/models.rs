@@ -52,13 +52,12 @@ pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<PathBuf>
         PyannoteModel::Embedding => "wespeaker_en_voxceleb_CAM++.onnx",
     };
 
-    // Check in-memory cache
-    {
-        let cached = model_path_lock.lock().await;
-        if let Some(path) = cached.as_ref() {
-            debug!("using cached {} model: {:?}", filename, path);
-            return Ok(path.clone());
-        }
+    // Check in-memory cache — verify the cached path still exists on disk.
+    // macOS periodically clears ~/Library/Caches, which leaves the in-memory
+    // path dangling and causes ORT to fail loading the ONNX model. On a miss,
+    // drop the stale entry and fall through to the disk-cache / download path.
+    if let Some(path) = take_valid_cached_path(model_path_lock, filename).await {
+        return Ok(path);
     }
 
     let cache_dir = get_cache_dir()?;
@@ -222,4 +221,84 @@ async fn download_model(model_type: &PyannoteModel) -> Result<()> {
 fn get_cache_dir() -> Result<PathBuf> {
     let proj_dirs = dirs::cache_dir().ok_or_else(|| anyhow::anyhow!("failed to get cache dir"))?;
     Ok(proj_dirs.join("screenpipe").join("models"))
+}
+
+/// Return the in-memory cached model path only if the underlying file still
+/// exists on disk. If the cache entry points at a file that has since been
+/// removed (e.g. macOS clearing `~/Library/Caches`), the entry is dropped so
+/// the caller falls through to the disk-cache / download path.
+async fn take_valid_cached_path(
+    model_path_lock: &Mutex<Option<PathBuf>>,
+    filename: &str,
+) -> Option<PathBuf> {
+    let mut cached = model_path_lock.lock().await;
+    match cached.as_ref() {
+        Some(path) if path.exists() => {
+            debug!("using cached {} model: {:?}", filename, path);
+            Some(path.clone())
+        }
+        Some(path) => {
+            warn!(
+                "cached {} model at {:?} no longer exists on disk, redownloading",
+                filename, path
+            );
+            *cached = None;
+            None
+        }
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn cached_path_returned_when_file_exists_on_disk() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("segmentation-3.0.onnx");
+        tokio::fs::write(&path, b"fake onnx bytes").await.unwrap();
+
+        let lock: Mutex<Option<PathBuf>> = Mutex::new(Some(path.clone()));
+        let resolved = take_valid_cached_path(&lock, "segmentation-3.0.onnx").await;
+
+        assert_eq!(resolved, Some(path));
+        assert!(
+            lock.lock().await.is_some(),
+            "cache entry should survive a successful lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_cached_path_is_dropped_when_file_missing() {
+        // Simulates macOS clearing `~/Library/Caches` out from under us:
+        // the in-memory cache still points at a path whose file is gone.
+        // Without the existence check, get_or_download_model would return
+        // this dangling path and ORT would fail to load the ONNX model.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("segmentation-3.0.onnx");
+        tokio::fs::write(&path, b"fake onnx bytes").await.unwrap();
+        tokio::fs::remove_file(&path).await.unwrap();
+        assert!(!path.exists());
+
+        let lock: Mutex<Option<PathBuf>> = Mutex::new(Some(path));
+        let resolved = take_valid_cached_path(&lock, "segmentation-3.0.onnx").await;
+
+        assert!(
+            resolved.is_none(),
+            "must not return a cached path whose file has been deleted"
+        );
+        assert!(
+            lock.lock().await.is_none(),
+            "stale cache entry should be cleared so the next call redownloads"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_cache_returns_none() {
+        let lock: Mutex<Option<PathBuf>> = Mutex::new(None);
+        let resolved = take_valid_cached_path(&lock, "segmentation-3.0.onnx").await;
+        assert!(resolved.is_none());
+    }
 }
