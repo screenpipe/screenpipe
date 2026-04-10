@@ -189,7 +189,8 @@ impl ScreenpipeSyncProvider {
         let time_end = frames.last().map(|f| f.1.clone()).unwrap();
 
         // Get OCR for these frames (include app_name/window_name for cross-machine sync)
-        let ocr_results: Vec<(i64, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
+        type OcrRow = (i64, String, bool, Option<String>, Option<String>);
+        let ocr_results: Vec<OcrRow> = sqlx::query_as(
             r#"
             SELECT frame_id, text, focused, app_name, window_name
             FROM ocr_text

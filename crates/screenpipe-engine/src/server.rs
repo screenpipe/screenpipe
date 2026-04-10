@@ -125,6 +125,9 @@ pub struct AppState {
     pub ws_connection_count: Arc<AtomicUsize>,
     /// LRU cache for search results (10x faster for repeated queries)
     pub search_cache: SearchCache,
+    /// Limits concurrent pipe DB queries to prevent pipes from starving recording.
+    /// When all permits are taken, pipe requests get 503 instead of queueing.
+    pub pipe_query_semaphore: Arc<tokio::sync::Semaphore>,
     /// Enable PII removal from text content
     pub use_pii_removal: bool,
     /// Cloud search client for hybrid local + cloud queries
@@ -446,6 +449,9 @@ impl SCServer {
             // queue rather than thrashing CPU with 15+ parallel ffmpeg processes
             // (typical when search results load all thumbnails at once).
             frame_extraction_semaphore: Arc::new(tokio::sync::Semaphore::new(3)),
+            // Limit pipe queries to 3 concurrent — protects recording from pipe overload.
+            // Pipes get 503 when all permits are taken; recording writes are unaffected.
+            pipe_query_semaphore: Arc::new(tokio::sync::Semaphore::new(3)),
             hot_frame_cache,
             archive_state: crate::archive::ArchiveState::new(),
             retention_state: crate::retention::RetentionState::new(),
@@ -536,7 +542,10 @@ impl SCServer {
             .get("/archive/status", crate::archive::archive_status)
             .post("/archive/run", crate::archive::archive_run)
             // Local data retention (auto-delete old data)
-            .post("/retention/configure", crate::retention::retention_configure)
+            .post(
+                "/retention/configure",
+                crate::retention::retention_configure,
+            )
             .get("/retention/status", crate::retention::retention_status)
             .post("/retention/run", crate::retention::retention_run)
             // Data management
@@ -736,6 +745,10 @@ impl SCServer {
                 get(handle_video_export_ws).post(handle_video_export_post),
             )
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::pipe_permissions_middleware::pipe_backpressure_layer,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::pipe_permissions_middleware::pipe_permissions_layer,

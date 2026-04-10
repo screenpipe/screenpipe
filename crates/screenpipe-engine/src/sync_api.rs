@@ -9,7 +9,11 @@
 //! - Trigger sync and check status
 //! - Download and import data from other devices
 
-use axum::{extract::{Json, State}, http::StatusCode, response::Json as JsonResponse};
+use axum::{
+    extract::{Json, State},
+    http::StatusCode,
+    response::Json as JsonResponse,
+};
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
     BlobType, SyncClientConfig, SyncManager, SyncService, SyncServiceConfig, SyncServiceHandle,
@@ -99,7 +103,7 @@ pub async fn sync_init(
     // Generate or use provided machine ID
     let machine_id = request
         .machine_id
-        .unwrap_or_else(|| screenpipe_core::sync::get_or_create_machine_id());
+        .unwrap_or_else(screenpipe_core::sync::get_or_create_machine_id);
 
     // Get device info
     let device_name = hostname::get()
@@ -432,7 +436,9 @@ pub async fn sync_trigger(
                     JsonResponse(json!({"error": format!("failed to trigger sync: {}", e)})),
                 )
             })?;
-            Ok(JsonResponse(json!({"success": true, "message": "sync triggered"})))
+            Ok(JsonResponse(
+                json!({"success": true, "message": "sync triggered"}),
+            ))
         }
         None => Err((
             StatusCode::BAD_REQUEST,
@@ -457,7 +463,9 @@ pub async fn sync_lock(
             // Lock the manager (clear keys from memory)
             runtime.manager.lock().await;
             info!("sync locked and service stopped");
-            Ok(JsonResponse(json!({"success": true, "message": "sync locked"})))
+            Ok(JsonResponse(
+                json!({"success": true, "message": "sync locked"}),
+            ))
         }
         None => Ok(JsonResponse(
             json!({"success": true, "message": "sync was not initialized"}),

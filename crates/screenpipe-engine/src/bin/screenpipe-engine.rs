@@ -666,7 +666,10 @@ async fn main() -> anyhow::Result<()> {
     let db_server = db.clone();
 
     let warning_audio_transcription_engine_clone = record_args.audio_transcription_engine.clone();
-    let monitor_ids: Vec<u32> = if config.monitor_ids.is_empty() {
+    let monitor_ids: Vec<u32> = if config.use_all_monitors || config.monitor_ids.is_empty() {
+        all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
+    } else if config.monitor_ids == vec!["default"] {
+        // "default" means primary monitor only — show all for display, VisionManager filters
         all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
     } else {
         config
@@ -793,6 +796,11 @@ async fn main() -> anyhow::Result<()> {
         let trigger_tx = vision_manager.trigger_sender();
 
         let vm_clone = vision_manager.clone();
+        let audio_manager_for_drm = if !config.disable_audio {
+            Some((*audio_manager).clone())
+        } else {
+            None
+        };
         let shutdown_tx_clone2 = shutdown_tx_clone.clone();
         let runtime = &tokio::runtime::Handle::current();
         let h = runtime.spawn(async move {
@@ -804,8 +812,8 @@ async fn main() -> anyhow::Result<()> {
                 return;
             }
 
-            // Start MonitorWatcher for dynamic detection
-            if let Err(e) = start_monitor_watcher(vm_clone.clone()).await {
+            // Start MonitorWatcher for dynamic detection (with audio DRM pause support)
+            if let Err(e) = start_monitor_watcher(vm_clone.clone(), audio_manager_for_drm).await {
                 error!("Failed to start monitor watcher: {:?}", e);
             }
 
@@ -947,6 +955,10 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "│ vision disabled        │ {:<34} │",
         record_args.disable_vision
+    );
+    println!(
+        "│ pause on DRM content   │ {:<34} │",
+        record_args.pause_on_drm_content
     );
     println!(
         "│ audio engine           │ {:<34} │",
@@ -1143,9 +1155,18 @@ async fn main() -> anyhow::Result<()> {
     // start recording after all this text
     if !config.disable_audio {
         let audio_manager_clone = audio_manager.clone();
+        let drm_pause = config.pause_on_drm_content;
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(10)).await;
             audio_manager_clone.start().await.unwrap();
+            // If DRM content was already focused at launch, the DRM callback
+            // fired before audio was ready. Stop the output device now so we
+            // don't hold an SCK session while DRM is active.
+            if drm_pause && screenpipe_engine::drm_detector::drm_content_paused() {
+                if let Err(e) = audio_manager_clone.stop_output_devices().await {
+                    tracing::warn!("failed to stop SCK audio after late DRM detection: {:?}", e);
+                }
+            }
         });
     }
 

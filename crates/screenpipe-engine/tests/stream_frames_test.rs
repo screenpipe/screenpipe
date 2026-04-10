@@ -103,7 +103,7 @@ mod tests {
 
         // Read initial frames (with timeout)
         let mut received_frames = Vec::new();
-        let initial_fetch = timeout(std::time::Duration::from_secs(5), async {
+        let _initial_fetch = timeout(std::time::Duration::from_secs(5), async {
             while let Some(Ok(msg)) = read.next().await {
                 if let Message::Text(text) = msg {
                     if text == "\"keep-alive-text\"" {

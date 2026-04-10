@@ -109,7 +109,7 @@ export const Providers = forwardRef<
     <Suspense>
     <NuqsAdapter>
       <SettingsProvider>
-        <ThemeProvider defaultTheme="light" storageKey="screenpipe-ui-theme">
+        <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
           <ChangelogDialogProvider>
             <PermissionMonitorProvider>
               <PostHogProvider client={posthog}>{children}</PostHogProvider>

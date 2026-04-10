@@ -170,14 +170,33 @@ pub fn compare_images_ssim(image1: &DynamicImage, image2: &DynamicImage) -> f64 
 /// Capture only the monitor screenshot (no window capture, no hash).
 /// Window capture is deferred until after frame comparison to avoid
 /// expensive work on frames that will be skipped.
+///
+/// `excluded_window_ids` — SCK window IDs to exclude from the capture
+/// (macOS only). The OS won't render those windows into the buffer.
+/// Pass an empty slice to capture everything.
 pub async fn capture_monitor_image(
     monitor: &SafeMonitor,
+    #[allow(unused_variables)] excluded_window_ids: &[u32],
 ) -> Result<(DynamicImage, Duration), anyhow::Error> {
     let capture_start = Instant::now();
+
+    #[cfg(target_os = "macos")]
+    let image = if excluded_window_ids.is_empty() {
+        monitor.capture_image().await
+    } else {
+        monitor.capture_image_excluding(excluded_window_ids).await
+    }
+    .map_err(|e| {
+        debug!("failed to capture monitor image: {}", e);
+        anyhow::anyhow!("monitor capture failed: {}", e)
+    })?;
+
+    #[cfg(not(target_os = "macos"))]
     let image = monitor.capture_image().await.map_err(|e| {
         debug!("failed to capture monitor image: {}", e);
         anyhow::anyhow!("monitor capture failed: {}", e)
     })?;
+
     let capture_duration = capture_start.elapsed();
     Ok((image, capture_duration))
 }

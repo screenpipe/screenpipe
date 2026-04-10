@@ -93,23 +93,17 @@ impl SegmentationManager {
 
         let mut segmentation_model_path = self.segmentation_model_path.lock().await;
         let previous_segmentation_model = segmentation_model_path.clone();
-        match get_or_download_model(PyannoteModel::Segmentation).await {
-            Ok(path) => {
-                if previous_segmentation_model.as_ref() != Some(&path) {
-                    *segmentation_model_path = Some(path);
-                    readiness_changed = true;
-                }
+        if let Ok(path) = get_or_download_model(PyannoteModel::Segmentation).await {
+            if previous_segmentation_model.as_ref() != Some(&path) {
+                *segmentation_model_path = Some(path);
+                readiness_changed = true;
             }
-            Err(_) => {}
         }
         drop(segmentation_model_path);
 
         let mut embedding_model_path = self.embedding_model_path.lock().await;
         let previous_embedding_model = embedding_model_path.clone();
-        let embedding_model = match get_or_download_model(PyannoteModel::Embedding).await {
-            Ok(path) => Some(path),
-            Err(_) => None,
-        };
+        let embedding_model = get_or_download_model(PyannoteModel::Embedding).await.ok();
 
         let mut embedding_extractor = self.embedding_extractor.lock().await;
         let had_embedding_extractor = embedding_extractor.is_some();

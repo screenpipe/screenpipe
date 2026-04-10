@@ -57,10 +57,8 @@ mod tests {
         // File field
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
-            )
-            .as_bytes(),
+            format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
         );
         body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
         body.extend_from_slice(file_bytes);
@@ -131,10 +129,7 @@ mod tests {
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("empty"));
+        assert!(json["error"]["message"].as_str().unwrap().contains("empty"));
     }
 
     #[tokio::test]
@@ -240,9 +235,9 @@ mod tests {
             &wav,
             "test.wav",
             &[
-                ("model", "whisper-1"),          // should be ignored
-                ("language", "en"),              // should be ignored
-                ("response_format", "json"),     // should be ignored
+                ("model", "whisper-1"),      // should be ignored
+                ("language", "en"),          // should be ignored
+                ("response_format", "json"), // should be ignored
             ],
         );
 

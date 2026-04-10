@@ -192,11 +192,13 @@ struct ShortcutReminderView: View {
                     .transition(.opacity.combined(with: .scale(scale: 1.2, anchor: .trailing)))
             }
         }
+        .fixedSize()
         .accessibilityHidden(true)
         .animation(.easeInOut(duration: kAnimDur), value: isExpanded)
         .onHover { hovering in
             isExpanded = hovering
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     // MARK: - Collapsed pill
@@ -575,7 +577,7 @@ class ShortcutReminderController: NSObject {
         if let hosting = hostingView {
             hosting.rootView = AnyView(view)
         } else {
-            let hosting = NSHostingView(rootView: AnyView(view))
+            let hosting = DraggableHostingView(rootView: AnyView(view))
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
@@ -589,7 +591,7 @@ class ShortcutReminderController: NSObject {
     }
 }
 
-// MARK: - Tracking view for hover/drag
+// MARK: - Tracking view for hover
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {
@@ -620,6 +622,23 @@ private class ReminderTrackingView: NSView {
     override func mouseExited(with event: NSEvent) {
         window?.enableCursorRects()
         NSCursor.arrow.set()
+    }
+}
+
+// MARK: - Draggable hosting view
+// NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
+// This subclass implements window drag for any mouseDown that SwiftUI doesn't
+// handle (i.e. not on buttons). performWindowDrag is the native Cocoa API for
+// this — no manual delta tracking needed.
+
+@available(macOS 13.0, *)
+private class DraggableHostingView<Content: View>: NSHostingView<Content> {
+    override func mouseDown(with event: NSEvent) {
+        // Let SwiftUI handle first (buttons etc.)
+        super.mouseDown(with: event)
+        // Then start a window drag — if a button already handled the click
+        // this is a no-op because the run loop already processed the event.
+        window?.performDrag(with: event)
     }
 }
 

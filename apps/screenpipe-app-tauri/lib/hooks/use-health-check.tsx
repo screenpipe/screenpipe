@@ -166,11 +166,8 @@ export function useHealthCheck() {
             serverDownTimerRef.current = null;
           }, SERVER_DOWN_GRACE_PERIOD_MS);
         }
-
-        // Start retry interval if not already running
-        if (!retryIntervalRef.current) {
-          retryIntervalRef.current = setInterval(fetchHealth, 10000);
-        }
+        // Retry interval is started in onclose, which always fires after onerror.
+        // Starting it here too would create duplicate intervals.
       };
 
       ws.onclose = (event) => {
@@ -199,8 +196,14 @@ export function useHealthCheck() {
           }, SERVER_DOWN_GRACE_PERIOD_MS);
         }
 
-        // Only start retry if this wasn't a manual close
-        if (!retryIntervalRef.current && event.code !== 1000) {
+        // Only start retry if this wasn't a manual close (code 1000).
+        // Always clear any stale interval first — reconnect cycles can leave one
+        // behind if onopen cleared it and then the fresh socket immediately dies.
+        if (event.code !== 1000) {
+          if (retryIntervalRef.current) {
+            clearInterval(retryIntervalRef.current);
+            retryIntervalRef.current = null;
+          }
           retryIntervalRef.current = setInterval(fetchHealth, 10000);
         }
       };
@@ -216,23 +219,22 @@ export function useHealthCheck() {
         }, SERVER_DOWN_GRACE_PERIOD_MS);
       }
 
-      if (!retryIntervalRef.current) {
-        retryIntervalRef.current = setInterval(fetchHealth, 10000);
+      if (retryIntervalRef.current) {
+        clearInterval(retryIntervalRef.current);
+        retryIntervalRef.current = null;
       }
+      retryIntervalRef.current = setInterval(fetchHealth, 10000);
     }
   }, [setServerDown]); // stable deps — no cycle
 
-  const debouncedFetchHealth = useCallback(() => {
-    return new Promise<void>((resolve) => {
-      debounce(() => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          fetchHealth().then(resolve);
-        } else {
-          resolve();
-        }
-      }, 1000)();
-    });
-  }, [fetchHealth]);
+  // Stable debounced wrapper — one instance for the lifetime of the hook.
+  // fetchHealth is itself stable (useCallback with stable deps), so this ref
+  // never needs to be recreated. Callers get proper 1-second coalescing.
+  const debouncedFetchHealthRef = useRef(debounce(fetchHealth, 1000));
+  const debouncedFetchHealth = useCallback((): Promise<void> => {
+    debouncedFetchHealthRef.current();
+    return Promise.resolve();
+  }, []);
 
   useEffect(() => {
     fetchHealth();

@@ -157,7 +157,7 @@ pub fn delete_oauth_token_instance(integration_id: &str, instance: Option<&str>)
 /// Returns a vec of instance names (None = default/unnamed instance).
 pub fn list_oauth_instances(integration_id: &str) -> Vec<Option<String>> {
     let dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let prefix = format!("{}", integration_id);
+    let prefix = integration_id.to_string();
     let suffix = "-oauth.json";
     let mut instances = Vec::new();
 

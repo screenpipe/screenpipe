@@ -5,12 +5,20 @@ import React, { useEffect } from "react";
 import {
   isPermissionGranted,
   requestPermission,
-  sendNotification,
+  sendNotification as _sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { platform } from "@tauri-apps/plugin-os";
 
 import { listen } from "@tauri-apps/api/event";
 import { showNotificationPanel } from "@/lib/hooks/use-notification-panel";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+
+// notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
+// which panics and kills the worker thread. Skip OS notifications on Linux.
+function sendNotification(options: { title: string; body: string }) {
+  if (platform() === "linux") return;
+  _sendNotification(options);
+}
 
 type NotificationRequested = {
   title: string;

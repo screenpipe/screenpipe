@@ -126,14 +126,18 @@ fn validate_tags(tags: &[String]) -> Result<(), (StatusCode, JsonResponse<Value>
     if tags.len() > MAX_TAGS_COUNT {
         return Err((
             StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": format!("too many tags: {} (max {})", tags.len(), MAX_TAGS_COUNT)})),
+            JsonResponse(
+                json!({"error": format!("too many tags: {} (max {})", tags.len(), MAX_TAGS_COUNT)}),
+            ),
         ));
     }
     for tag in tags {
         if tag.len() > MAX_TAG_LENGTH {
             return Err((
                 StatusCode::BAD_REQUEST,
-                JsonResponse(json!({"error": format!("tag too long: '{}...' ({} chars, max {})", &tag[..40.min(tag.len())], tag.len(), MAX_TAG_LENGTH)})),
+                JsonResponse(
+                    json!({"error": format!("tag too long: '{}...' ({} chars, max {})", &tag[..40.min(tag.len())], tag.len(), MAX_TAG_LENGTH)}),
+                ),
             ));
         }
     }
@@ -144,7 +148,9 @@ fn validate_content(content: &str) -> Result<(), (StatusCode, JsonResponse<Value
     if content.len() > MAX_CONTENT_LENGTH {
         return Err((
             StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": format!("content too long: {} chars (max {})", content.len(), MAX_CONTENT_LENGTH)})),
+            JsonResponse(
+                json!({"error": format!("content too long: {} chars (max {})", content.len(), MAX_CONTENT_LENGTH)}),
+            ),
         ));
     }
     Ok(())

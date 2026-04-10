@@ -18,6 +18,7 @@ use super::{
     embedding::EmbeddingExtractor, embedding_manager::EmbeddingManager, segment::SpeechSegment,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_segments(
     audio_data: &[f32],
     vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,

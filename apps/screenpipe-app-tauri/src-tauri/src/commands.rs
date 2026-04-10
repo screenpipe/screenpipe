@@ -92,6 +92,31 @@ extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c
                     native_shortcut_reminder::hide();
                 }
                 "toggle_meeting" => {
+                    // Directly call the meetings API instead of relying on JS
+                    // (the Main window may not be loaded when using the Swift overlay)
+                    let status: Option<bool> =
+                        reqwest::blocking::get("http://localhost:3030/meetings/status")
+                            .ok()
+                            .and_then(|r| r.json::<serde_json::Value>().ok())
+                            .and_then(|v| v["active"].as_bool());
+                    match status {
+                        Some(true) => {
+                            let _ = reqwest::blocking::Client::new()
+                                .post("http://localhost:3030/meetings/stop")
+                                .send();
+                        }
+                        Some(false) => {
+                            let _ = reqwest::blocking::Client::new()
+                                .post("http://localhost:3030/meetings/start")
+                                .header("Content-Type", "application/json")
+                                .body(r#"{"app":"manual"}"#)
+                                .send();
+                        }
+                        None => {
+                            warn!("failed to check meeting status");
+                        }
+                    }
+                    // Also emit to JS so the home page UI updates immediately if open
                     let _ = app_clone.emit("native-shortcut-toggle-meeting", "");
                 }
                 _ => {}
@@ -940,7 +965,7 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-    show_window(app_handle.clone(), ShowRewindWindow::Main).await?;
+    show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await?;
 
     Ok(())
 }
@@ -1099,7 +1124,10 @@ pub async fn show_shortcut_reminder(
     // If window exists, resize, reposition to current screen, and show
     if let Some(window) = app_handle.get_webview_window(label) {
         info!("shortcut-reminder window exists, resizing/repositioning and showing");
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(window_width, window_height)));
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            window_width,
+            window_height,
+        )));
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
         let _ = app_handle.emit_to(label, "shortcut-reminder-update", &shortcut);
         let _ = window.show();

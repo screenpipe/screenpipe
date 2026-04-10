@@ -216,7 +216,9 @@ pub(crate) async fn meeting_status_handler(
         state.db.has_active_meeting().await.unwrap_or(false)
     };
 
-    Ok(JsonResponse(json!({ "active": any_active })))
+    Ok(JsonResponse(
+        json!({ "active": any_active, "manual": manual_active }),
+    ))
 }
 
 #[oasgen]
@@ -273,12 +275,30 @@ pub(crate) async fn stop_meeting_handler(
         *lock
     };
 
-    let id = id.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "no active manual meeting"})),
-        )
-    })?;
+    // If no manual meeting, find any active meeting (auto-detected) and end it.
+    // This lets users stop auto-detected meetings (Google Meet, Zoom, etc.)
+    // from the overlay button.
+    let id = match id {
+        Some(id) => id,
+        None => {
+            let active_id = state
+                .db
+                .get_most_recent_active_meeting_id()
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        JsonResponse(json!({"error": e.to_string()})),
+                    )
+                })?;
+            active_id.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    JsonResponse(json!({"error": "no active meeting"})),
+                )
+            })?
+        }
+    };
 
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
@@ -299,10 +319,9 @@ pub(crate) async fn stop_meeting_handler(
     }
 
     // Emit event so triggered pipes can react
-    if let Err(e) = screenpipe_events::send_event(
-        "meeting_ended",
-        serde_json::json!({ "meeting_id": id }),
-    ) {
+    if let Err(e) =
+        screenpipe_events::send_event("meeting_ended", serde_json::json!({ "meeting_id": id }))
+    {
         tracing::warn!("failed to emit meeting_ended event: {}", e);
     }
 

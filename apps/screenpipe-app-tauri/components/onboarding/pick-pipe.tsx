@@ -9,7 +9,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Loader, Brain, Clock, Users } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
-import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 
 const PATHS = [
@@ -143,11 +142,6 @@ export default function PickPipe() {
             body: JSON.stringify(path.notification),
           });
         } catch {}
-
-        await commands.showWindow({ Home: { page: null } });
-        try {
-          window.close();
-        } catch {}
       } catch (err) {
         console.error("failed to enable pipes:", err);
         setError("Couldn't enable — try again or skip");
@@ -177,10 +171,6 @@ export default function PickPipe() {
     } catch {}
     try {
       scheduleFirstRunNotification();
-    } catch {}
-    try {
-      await commands.showWindow({ Home: { page: null } });
-      window.close();
     } catch {}
 
     isCompletingRef.current = false;

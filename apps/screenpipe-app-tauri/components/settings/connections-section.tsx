@@ -30,6 +30,7 @@ import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { VoiceMemosCard } from "./voice-memos-card";
+import posthog from "posthog-js";
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)
@@ -1162,6 +1163,7 @@ export function ConnectionCredentialForm({
       if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
       setStatus("idle");
       apiCache.invalidate("connections/list");
+      posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
     } catch (e: any) {
       setError(e?.message || "unknown error");
@@ -1488,6 +1490,15 @@ export function ConnectionsSection() {
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
           setIntegrationsLoaded(true);
+          // Track active connections as user property (IDs only, no credentials)
+          const connected = data.data
+            .filter((i: any) => i.connected)
+            .map((i: any) => i.id);
+          if (connected.length > 0) {
+            posthog.capture("connections_loaded", {
+              $set: { active_connections: connected, connection_count: connected.length },
+            });
+          }
           return;
         }
       } catch { /* server may not be running yet */ }

@@ -119,9 +119,10 @@ const TOOLS: Tool[] = [
   {
     name: "activity-summary",
     description:
-      "Lightweight activity overview (~200-500 tokens): app usage with active minutes, audio speakers, recent texts. " +
+      "Rich activity overview: app usage, window/tab titles with URLs and time spent, key text per context, audio transcriptions. " +
       "USE THIS FIRST for broad questions: 'what was I doing?', 'how long on X?', 'which apps?'. " +
-      "Only escalate to search-content if you need specific text content.",
+      "The 'windows' field shows exactly what the user worked on (e.g. 'Debug crash issue — 20 min', 'Stripe pricing page — 5 min'). " +
+      "Usually sufficient without further searches.",
     annotations: { title: "Activity Summary", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -709,14 +710,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         );
 
+        // Window/tab activity — what pages/documents were open
+        const windowLines = (data.windows || []).map(
+          (w: {
+            app_name: string;
+            window_name: string;
+            browser_url: string;
+            minutes: number;
+            frame_count: number;
+          }) => {
+            const url = w.browser_url ? ` (${w.browser_url})` : "";
+            return `  [${w.app_name}] ${w.window_name}${url} — ${w.minutes} min`;
+          }
+        );
+
         const speakerLines = (data.audio_summary?.speakers || []).map(
           (s: { name: string; segment_count: number }) =>
             `  ${s.name}: ${s.segment_count} segments`
         );
 
-        const textLines = (data.recent_texts || []).map(
-          (t: { text: string; app_name: string; timestamp: string }) =>
-            `  [${t.app_name}] ${t.text}`
+        // Actual audio transcriptions (not just counts)
+        const transcriptLines = (data.audio_summary?.top_transcriptions || []).map(
+          (t: { transcription: string; speaker: string; device: string; timestamp: string }) =>
+            `  [${t.speaker}, ${t.timestamp.slice(11, 19)}] ${t.transcription}`
+        );
+
+        // Key text content sampled across the time range
+        const textLines = (data.key_texts || data.recent_texts || []).map(
+          (t: { text: string; app_name: string; window_name?: string; timestamp: string }) => {
+            const win = t.window_name ? ` | ${t.window_name}` : "";
+            return `  [${t.app_name}${win}, ${t.timestamp.slice(11, 19)}] ${t.text}`;
+          }
         );
 
         const summary = [
@@ -726,11 +750,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "Apps:",
           ...(appsLines.length ? appsLines : ["  (none)"]),
           "",
+          "Windows & Tabs:",
+          ...(windowLines.length ? windowLines.slice(0, 20) : ["  (none)"]),
+          "",
           `Audio: ${data.audio_summary?.segment_count || 0} segments`,
           ...(speakerLines.length ? speakerLines : []),
+          ...(transcriptLines.length ? ["", "Audio transcriptions:", ...transcriptLines.slice(0, 15)] : []),
           "",
-          "Recent texts:",
-          ...(textLines.length ? textLines.slice(0, 10) : ["  (none)"]),
+          "Key content (sampled across time range):",
+          ...(textLines.length ? textLines.slice(0, 20) : ["  (none)"]),
         ].join("\n");
 
         return { content: [{ type: "text", text: summary }] };

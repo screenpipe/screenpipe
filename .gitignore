@@ -78,3 +78,4 @@ crates/screenpipe-audio/openblas-0.3.31-x64.zip
 crates/screenpipe-audio/openblas-0.3.31-woa64-dll.zip
 apps/screenpipe-app-tauri/src-tauri/openblas/
 apps/screenpipe-app-tauri/src-tauri/mlx.metallib
+.serena/

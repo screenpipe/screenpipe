@@ -3,7 +3,7 @@ use chrono::{Duration, Utc};
 use screenpipe_core::paths;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 use screenpipe_db::DatabaseManager;
 use screenpipe_engine::video_utils::extract_frame_from_video;
@@ -264,7 +264,7 @@ async fn test_concurrent_frame_loading() -> Result<()> {
 
     for handle in handles {
         match handle.await {
-            Ok((frame_id, Ok(Ok(_)))) => {
+            Ok((_frame_id, Ok(Ok(_)))) => {
                 success += 1;
             }
             Ok((frame_id, Ok(Err(e)))) => {
@@ -395,7 +395,7 @@ async fn test_video_file_write_status() -> Result<()> {
     );
     println!("{}", "-".repeat(110));
 
-    for (file_path, latest_frame) in &video_files {
+    for (file_path, _latest_frame) in &video_files {
         match tokio::fs::metadata(file_path).await {
             Ok(meta) => {
                 let size_mb = meta.len() as f64 / 1024.0 / 1024.0;
@@ -418,7 +418,7 @@ async fn test_video_file_write_status() -> Result<()> {
                 );
 
                 // Check if file might still be open for writing
-                if let Some(mtime) = meta.modified().ok() {
+                if let Ok(mtime) = meta.modified() {
                     let age = std::time::SystemTime::now()
                         .duration_since(mtime)
                         .unwrap_or_default();

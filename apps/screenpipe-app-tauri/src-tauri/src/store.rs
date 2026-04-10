@@ -11,8 +11,7 @@ use tracing::error;
 /// Uses Mutex instead of OnceLock so the cache can be invalidated when the
 /// Tauri resource table drops the underlying store (e.g. after an in-place
 /// update restart on Windows where resource IDs become stale).
-static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> =
-    Mutex::new(None);
+static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> = Mutex::new(None);
 
 /// Build (or rebuild) the store, retrying on TOCTOU races and stale resource IDs.
 fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
@@ -633,10 +632,12 @@ impl SettingsStore {
                                     "unknown AI provider '{}' in preset, falling back to 'custom'",
                                     provider
                                 );
-                                preset.as_object_mut().unwrap().insert(
-                                    "provider".to_string(),
-                                    Value::String("custom".to_string()),
-                                );
+                                if let Some(obj) = preset.as_object_mut() {
+                                    obj.insert(
+                                        "provider".to_string(),
+                                        Value::String("custom".to_string()),
+                                    );
+                                }
                             }
                         }
                     }
@@ -1002,5 +1003,29 @@ impl PipeSuggestionsSettingsStore {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("pipe_suggestions", json!(self));
         store.save().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_sanitize_legacy_fields_does_not_panic() {
+        let mut corrupted = json!({
+            "aiPresets": ["corrupted_string_not_an_object"]
+        });
+        
+        let sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
+        
+        // And let's test a valid object with missing/unknown provider to prove it works
+        let mut valid = json!({
+            "aiPresets": [{"provider": "unknown_provider"}]
+        });
+        let sanitized2 = SettingsStore::sanitize_legacy_fields(valid);
+        
+        let presets = sanitized2.get("aiPresets").unwrap().as_array().unwrap();
+        assert_eq!(presets[0].get("provider").unwrap().as_str().unwrap(), "custom");
     }
 }

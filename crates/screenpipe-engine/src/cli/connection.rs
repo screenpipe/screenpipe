@@ -150,13 +150,11 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 } else {
                     println!("{}: connected (via OAuth)", id);
                 }
+            } else if *use_json {
+                println!("{}", json!({ "id": id, "credentials": null }));
             } else {
-                if *use_json {
-                    println!("{}", json!({ "id": id, "credentials": null }));
-                } else {
-                    println!("{} is not connected", id);
-                    println!("\nhint: screenpipe connection set {} key=value ...", id);
-                }
+                println!("{} is not connected", id);
+                println!("\nhint: screenpipe connection set {} key=value ...", id);
             }
         }
 

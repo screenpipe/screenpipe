@@ -32,6 +32,7 @@ use crate::transcription::stt::OPENAI_COMPATIBLE_TIMEOUT_SECS;
 ///   (used by VibeVoice-ASR `--context`, Whisper `--initial-prompt`, etc.)
 /// * `custom_headers` - Optional custom HTTP headers to include in the request
 /// * `raw_audio` - If true, send uncompressed WAV instead of MP3
+#[allow(clippy::too_many_arguments)]
 pub async fn transcribe_with_openai_compatible(
     client: Option<Arc<Client>>,
     endpoint: &str,

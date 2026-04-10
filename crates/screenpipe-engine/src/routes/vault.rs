@@ -37,7 +37,9 @@ pub async fn vault_status(State(state): State<Arc<AppState>>) -> JsonResponse<Va
 
 /// POST /vault/lock
 #[oasgen]
-pub async fn vault_lock(State(state): State<Arc<AppState>>) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+pub async fn vault_lock(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     match state.vault.lock().await {
         Ok(_progress_rx) => Ok(JsonResponse(json!({ "success": true }))),
         Err(e) => Err((

@@ -4,8 +4,9 @@
 
 #[cfg(target_os = "macos")]
 use crate::apple::perform_ocr_apple;
-use crate::capture_screenshot_by_window::CapturedWindow;
-use crate::capture_screenshot_by_window::WindowFilters;
+use crate::capture_screenshot_by_window::{
+    get_excluded_sck_window_ids, CapturedWindow, WindowFilters,
+};
 use crate::custom_ocr::perform_ocr_custom;
 use crate::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use crate::metrics::PipelineMetrics;
@@ -208,7 +209,9 @@ pub async fn continuous_capture(
             let mut captured = None;
 
             for attempt in 0..=MAX_CAPTURE_RETRIES {
-                match capture_monitor_image(&monitor).await {
+                match capture_monitor_image(&monitor, &get_excluded_sck_window_ids(&window_filters))
+                    .await
+                {
                     Ok(result) => {
                         if attempt > 0 {
                             debug!(

@@ -514,6 +514,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced frame via the write queue. Returns the frame ID (0 if skipped due to conflict).
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_frame(
         &self,
         sync_id: &str,
@@ -570,6 +571,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced transcription via the write queue. Returns the audio_chunk_id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_transcription(
         &self,
         sync_id: &str,
@@ -600,6 +602,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced accessibility record via the write queue.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_accessibility(
         &self,
         sync_id: &str,
@@ -842,6 +845,23 @@ impl DatabaseManager {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// Returns true if there are audio transcriptions from output devices
+    /// within the given number of seconds. Used by meeting detection to keep
+    /// browser-based meetings alive when the user switches tabs but audio is
+    /// still flowing (i.e. the meeting is still going).
+    pub async fn has_recent_output_audio(&self, within_secs: i64) -> Result<bool, sqlx::Error> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM audio_transcriptions
+             WHERE is_input_device = 0
+               AND timestamp >= datetime('now', ?1)
+             LIMIT 1",
+        )
+        .bind(format!("-{} seconds", within_secs))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count > 0)
     }
 
     /// Returns recently transcribed chunks that still have no assigned speaker.
@@ -1102,6 +1122,7 @@ impl DatabaseManager {
     /// Replace all transcription rows for an audio chunk with a single new transcription.
     /// Used by the re-transcribe endpoint. Deletes existing rows first to avoid
     /// UNIQUE constraint violations on (audio_chunk_id, transcription).
+    #[allow(clippy::too_many_arguments)]
     pub async fn replace_audio_transcription(
         &self,
         audio_chunk_id: i64,
@@ -6766,6 +6787,15 @@ LIMIT ? OFFSET ?
         Ok(row.0 > 0)
     }
 
+    pub async fn get_most_recent_active_meeting_id(&self) -> Result<Option<i64>, SqlxError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM meetings WHERE meeting_end IS NULL ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     pub async fn list_meetings(
         &self,
         start_time: Option<&str>,
@@ -6831,6 +6861,7 @@ LIMIT ? OFFSET ?
         Ok(rows)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_meeting(
         &self,
         id: i64,
@@ -7084,6 +7115,7 @@ LIMIT ? OFFSET ?
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_memories(
         &self,
         query: Option<&str>,

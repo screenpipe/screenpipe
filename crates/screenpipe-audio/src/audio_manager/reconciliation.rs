@@ -28,11 +28,7 @@ use crate::transcription::engine::{TranscriptionEngine, TranscriptionSession};
 use crate::transcription::get_or_create_speaker_from_embedding;
 use crate::transcription::{AudioInsertCallback, AudioInsertInfo};
 
-use crate::transcription::VocabularyEntry;
 use crate::utils::ffmpeg::read_audio_from_file;
-use crate::OpenAICompatibleConfig;
-use screenpipe_core::Language;
-use whisper_rs::WhisperContext;
 
 /// A completed transcription result persisted to disk as a JSON file.
 /// If the DB write fails (e.g. pool timeout), this file survives and is
@@ -86,12 +82,7 @@ pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
     on_insert: Option<&AudioInsertCallback>,
-    _whisper_context: Option<Arc<WhisperContext>>,
     audio_engine: Arc<AudioTranscriptionEngine>,
-    _deepgram_api_key: Option<String>,
-    _openai_compatible_config: Option<OpenAICompatibleConfig>,
-    _languages: Vec<Language>,
-    _vocabulary: &[VocabularyEntry],
     segmentation_manager: Option<Arc<SegmentationManager>>,
     data_dir: Option<&Path>,
     batch_max_duration_secs: Option<u64>,

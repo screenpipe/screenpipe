@@ -295,6 +295,55 @@ impl SafeMonitor {
         Ok(image)
     }
 
+    /// Capture an image excluding the given SCK window IDs (macOS only).
+    /// The OS won't render excluded windows into the capture buffer.
+    #[cfg(target_os = "macos")]
+    pub async fn capture_image_excluding(
+        &self,
+        excluded_window_ids: &[u32],
+    ) -> Result<DynamicImage> {
+        if excluded_window_ids.is_empty() {
+            return self.capture_image().await;
+        }
+
+        let monitor_id = self.monitor_id;
+        let use_sck = self.use_sck;
+        let cached_sck = self.cached_sck.clone();
+        let ids = excluded_window_ids.to_vec();
+
+        let image = tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
+            cidre::objc::ar_pool(|| -> Result<DynamicImage, String> {
+                if use_sck {
+                    let monitor = match cached_sck {
+                        Some(m) => m,
+                        None => SckMonitor::all()
+                            .map_err(|e| format!("{}", e))?
+                            .into_iter()
+                            .find(|m| m.id() == monitor_id)
+                            .ok_or_else(|| "Monitor not found".to_string())?,
+                    };
+
+                    if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
+                        return Err("Invalid monitor dimensions".to_string());
+                    }
+
+                    monitor
+                        .capture_image_excluding(&ids)
+                        .map_err(|e| format!("{}", e))
+                        .map(DynamicImage::ImageRgba8)
+                } else {
+                    // xcap fallback doesn't support exclusion — capture normally
+                    Err("capture_image_excluding not supported on xcap path".to_string())
+                }
+            })
+            .map_err(|s| anyhow::anyhow!(s))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("capture task panicked: {}", e))??;
+
+        Ok(image)
+    }
+
     // Non-macOS: Use persistent WGC capture on Windows to avoid orange border flash.
     // Falls back to per-frame xcap capture if persistent session fails.
     #[cfg(not(target_os = "macos"))]

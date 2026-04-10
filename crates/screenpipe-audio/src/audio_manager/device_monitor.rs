@@ -622,7 +622,7 @@ pub async fn start_device_monitor(
                                         let is_permanent = is_permanent_output_error(&e);
                                         output_recovery_backoff.record_failure(is_permanent);
                                         if output_recovery_backoff.attempts <= 3
-                                            || output_recovery_backoff.attempts % 30 == 0
+                                            || output_recovery_backoff.attempts.is_multiple_of(30)
                                         {
                                             // Log first 3 attempts, then every 30th to avoid spam
                                             warn!(

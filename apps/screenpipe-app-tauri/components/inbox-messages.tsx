@@ -92,7 +92,7 @@ const MessageCard = React.memo(
         <div className="w-full overflow-hidden">
           <Suspense fallback={<div>loading...</div>}>
             <MemoizedReactMarkdown
-              className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 w-[35vw] text-sm"
+              className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 w-[35vw] text-sm select-text cursor-text"
               remarkPlugins={[remarkGfm, remarkMath]}
               components={{
                 p: ({ children }) => (
@@ -379,7 +379,7 @@ export function InboxMessages({
             <div className="mt-4">
               <Suspense fallback={<div>loading...</div>}>
                 <MemoizedReactMarkdown
-                  className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0"
+                  className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 select-text cursor-text"
                   remarkPlugins={[remarkGfm, remarkMath]}
                   components={{
                     p: ({ children }) => (

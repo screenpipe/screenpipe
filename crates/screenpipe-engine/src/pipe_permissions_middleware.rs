@@ -122,3 +122,70 @@ pub async fn pipe_permissions_layer(
 pub fn get_pipe_permissions(extensions: &axum::http::Extensions) -> Option<&Arc<PipePermissions>> {
     extensions.get::<Arc<PipePermissions>>()
 }
+
+/// Backpressure middleware: limits concurrent DB queries from pipes.
+///
+/// If a request comes from a pipe (has PipePermissions in extensions) and all
+/// semaphore permits are taken, returns 503 immediately instead of queueing.
+/// Also enforces a per-query timeout so a single slow pipe query can't hold
+/// a permit forever. User/app requests bypass this entirely.
+pub async fn pipe_backpressure_layer(
+    State(state): State<Arc<AppState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    // Only apply backpressure to pipe requests
+    let is_pipe = req.extensions().get::<Arc<PipePermissions>>().is_some();
+    if !is_pipe {
+        return next.run(req).await;
+    }
+
+    let pipe_name = req
+        .extensions()
+        .get::<Arc<PipePermissions>>()
+        .map(|p| p.pipe_name.clone())
+        .unwrap_or_default();
+
+    // Try to acquire a permit — don't block, fail fast
+    let permit = match state.pipe_query_semaphore.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            tracing::warn!(
+                pipe = %pipe_name,
+                path = %req.uri().path(),
+                "pipe query rejected: too many concurrent pipe queries (recording priority)"
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": "too many concurrent pipe queries — recording takes priority, retry later",
+                    "retry_after_ms": 1000
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Enforce a 30s timeout on pipe queries so a stuck query can't hold the permit forever
+    let response = tokio::time::timeout(std::time::Duration::from_secs(30), next.run(req)).await;
+
+    // Drop permit explicitly (also dropped on timeout)
+    drop(permit);
+
+    match response {
+        Ok(resp) => resp,
+        Err(_) => {
+            tracing::warn!(
+                pipe = %pipe_name,
+                "pipe query timed out after 30s — killed to protect recording"
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                axum::Json(serde_json::json!({
+                    "error": "pipe query timed out after 30s"
+                })),
+            )
+                .into_response()
+        }
+    }
+}

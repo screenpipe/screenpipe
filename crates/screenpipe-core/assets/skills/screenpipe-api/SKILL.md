@@ -87,7 +87,13 @@ Decision tree:
 curl "http://localhost:3030/activity-summary?start_time=1h%20ago&end_time=now"
 ```
 
-Returns app usage with accurate `active_minutes`, first/last seen, recent texts, audio summary. ~200-500 tokens. Best starting point.
+Returns a rich overview with:
+- **apps**: usage with `active_minutes`, first/last seen
+- **windows**: every distinct window/tab with title, `browser_url`, and time spent — this is the most valuable field, it tells you exactly what the user was working on
+- **key_texts**: one representative text snippet per window context (user input fields prioritized over static page text)
+- **audio_summary.top_transcriptions**: actual transcription text with speaker and timestamp (not just counts)
+
+This is usually enough to answer "what was I doing?" without further searches. Only drill into `/search` if you need verbatim quotes or specific content.
 
 ---
 

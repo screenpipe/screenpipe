@@ -160,8 +160,10 @@ pub async fn auto_start_scheduler(state: &SuggestionsState) {
         tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
 
         // Subscribe to meeting events for reactive refresh
-        let mut event_sub = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
-        let mut event_end_sub = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+        let mut event_sub =
+            screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+        let mut event_end_sub =
+            screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
 
         let mut timer = tokio::time::interval(tokio::time::Duration::from_secs(600));
         timer.tick().await; // consume immediate first tick
@@ -176,7 +178,10 @@ pub async fn auto_start_scheduler(state: &SuggestionsState) {
 
             // Debounce event triggers — wait a few seconds for context to settle
             if trigger != "timer" {
-                info!("suggestions scheduler: triggered by {} event, debouncing 5s", trigger);
+                info!(
+                    "suggestions scheduler: triggered by {} event, debouncing 5s",
+                    trigger
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
 
@@ -456,18 +461,34 @@ fn detect_mode(apps: &[AppActivity], windows: &[WindowActivity]) -> &'static str
 
 // ─── Template suggestions ───────────────────────────────────────────────────
 
-fn coding_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
+fn coding_suggestions(
+    top_apps: &[String],
+    apps: &[AppActivity],
+    windows: &[WindowActivity],
+) -> Vec<Suggestion> {
     let editor = top_apps.iter().find(|a| {
         [
-            "cursor", "code", "zed", "xcode", "intellij idea", "webstorm",
-            "pycharm", "neovim", "vim",
+            "cursor",
+            "code",
+            "zed",
+            "xcode",
+            "intellij idea",
+            "webstorm",
+            "pycharm",
+            "neovim",
+            "vim",
         ]
         .iter()
         .any(|c| *c == a.to_lowercase())
     });
     let terminal = top_apps.iter().find(|a| {
         [
-            "wezterm", "iterm2", "terminal", "alacritty", "kitty", "warp",
+            "wezterm",
+            "iterm2",
+            "terminal",
+            "alacritty",
+            "kitty",
+            "warp",
         ]
         .iter()
         .any(|c| *c == a.to_lowercase())
@@ -488,7 +509,10 @@ fn coding_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Wind
                 .take(3)
                 .map(|w| {
                     // Extract filename from window title (often "filename — App")
-                    let title = w.window_name.split(" — ").next()
+                    let title = w
+                        .window_name
+                        .split(" — ")
+                        .next()
                         .or_else(|| w.window_name.split(" - ").next())
                         .unwrap_or(&w.window_name);
                     if title.chars().count() > 30 {
@@ -503,7 +527,12 @@ fn coding_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Wind
 
     let editor_name = editor.map(|e| e.as_str()).unwrap_or("your editor");
     let editor_preview = if editor_mins > 0 && !editor_windows.is_empty() {
-        Some(format!("{}min in {} — {}", editor_mins, editor_name, editor_windows.join(", ")))
+        Some(format!(
+            "{}min in {} — {}",
+            editor_mins,
+            editor_name,
+            editor_windows.join(", ")
+        ))
     } else if editor_mins > 0 {
         Some(format!("{}min in {}", editor_mins, editor_name))
     } else {
@@ -594,8 +623,15 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
     let mut suggestions = vec![Suggestion {
         text: "summarize the pages I browsed".into(),
         preview: if browser_total_mins > 0 {
-            Some(format!("{}min browsing — {}", browser_total_mins,
-                if top_pages.is_empty() { "various pages".into() } else { top_pages.join(", ") }))
+            Some(format!(
+                "{}min browsing — {}",
+                browser_total_mins,
+                if top_pages.is_empty() {
+                    "various pages".into()
+                } else {
+                    top_pages.join(", ")
+                }
+            ))
         } else {
             None
         },
@@ -617,7 +653,11 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
 
     suggestions.push(Suggestion {
         text: "how much time did I spend browsing?".into(),
-        preview: if browser_total_mins > 0 { Some(format!("~{}min total", browser_total_mins)) } else { None },
+        preview: if browser_total_mins > 0 {
+            Some(format!("~{}min total", browser_total_mins))
+        } else {
+            None
+        },
         priority: 3,
     });
     suggestions.push(Suggestion {
@@ -631,23 +671,27 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
 
 fn meeting_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
     // Find meeting app and duration
-    let meeting_app = apps.iter().find(|a| {
-        MEETING_APPS.iter().any(|m| *m == a.app_name.to_lowercase())
-    });
+    let meeting_app = apps
+        .iter()
+        .find(|a| MEETING_APPS.iter().any(|m| *m == a.app_name.to_lowercase()));
     let meeting_mins = meeting_app.map(|a| a.cnt / 60).unwrap_or(0);
-    let meeting_name = meeting_app.map(|a| a.app_name.as_str()).unwrap_or("your call");
+    let meeting_name = meeting_app
+        .map(|a| a.app_name.as_str())
+        .unwrap_or("your call");
 
     // Try to get meeting title from window
-    let meeting_title = windows.iter().find(|w| {
-        MEETING_APPS.iter().any(|m| *m == w.app_name.to_lowercase())
-            && w.window_name.len() > 3
-    }).map(|w| {
-        if w.window_name.chars().count() > 40 {
-            format!("{}...", w.window_name.chars().take(37).collect::<String>())
-        } else {
-            w.window_name.clone()
-        }
-    });
+    let meeting_title = windows
+        .iter()
+        .find(|w| {
+            MEETING_APPS.iter().any(|m| *m == w.app_name.to_lowercase()) && w.window_name.len() > 3
+        })
+        .map(|w| {
+            if w.window_name.chars().count() > 40 {
+                format!("{}...", w.window_name.chars().take(37).collect::<String>())
+            } else {
+                w.window_name.clone()
+            }
+        });
 
     let preview = if meeting_mins > 0 {
         if let Some(title) = &meeting_title {
@@ -693,7 +737,11 @@ fn meeting_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<
     ]
 }
 
-fn writing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
+fn writing_suggestions(
+    top_apps: &[String],
+    apps: &[AppActivity],
+    windows: &[WindowActivity],
+) -> Vec<Suggestion> {
     let app = top_apps
         .iter()
         .find(|a| WRITING_APPS.iter().any(|w| *w == a.to_lowercase()));
@@ -705,11 +753,15 @@ fn writing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Win
     // Get document titles from windows
     let doc_titles: Vec<String> = app
         .map(|a| {
-            windows.iter()
+            windows
+                .iter()
                 .filter(|w| w.app_name.eq_ignore_ascii_case(a) && w.window_name.len() > 3)
                 .take(2)
                 .map(|w| {
-                    let title = w.window_name.split(" — ").next()
+                    let title = w
+                        .window_name
+                        .split(" — ")
+                        .next()
                         .or_else(|| w.window_name.split(" - ").next())
                         .unwrap_or(&w.window_name);
                     if title.chars().count() > 30 {
@@ -725,7 +777,12 @@ fn writing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Win
     let preview = if app_mins > 0 {
         let app_name = app.map(|a| a.as_str()).unwrap_or("writing app");
         if !doc_titles.is_empty() {
-            Some(format!("{}min in {} — {}", app_mins, app_name, doc_titles.join(", ")))
+            Some(format!(
+                "{}min in {} — {}",
+                app_mins,
+                app_name,
+                doc_titles.join(", ")
+            ))
         } else {
             Some(format!("{}min in {}", app_mins, app_name))
         }
@@ -741,7 +798,11 @@ fn writing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Win
     if let Some(app_name) = app {
         suggestions.push(Suggestion {
             text: format!("show my recent notes in {}", app_name),
-            preview: if !doc_titles.is_empty() { Some(doc_titles.join(", ")) } else { None },
+            preview: if !doc_titles.is_empty() {
+                Some(doc_titles.join(", "))
+            } else {
+                None
+            },
             priority: 2,
         });
     }
@@ -760,16 +821,29 @@ fn writing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Win
 }
 
 fn communication_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
-    let comm_apps: Vec<_> = apps.iter().filter(|a| {
-        COMMUNICATION_APPS.iter().any(|c| *c == a.app_name.to_lowercase())
-    }).collect();
+    let comm_apps: Vec<_> = apps
+        .iter()
+        .filter(|a| {
+            COMMUNICATION_APPS
+                .iter()
+                .any(|c| *c == a.app_name.to_lowercase())
+        })
+        .collect();
     let total_comm_mins: i64 = comm_apps.iter().map(|a| a.cnt / 60).sum();
-    let comm_app_names: Vec<String> = comm_apps.iter().take(3).map(|a| a.app_name.clone()).collect();
+    let comm_app_names: Vec<String> = comm_apps
+        .iter()
+        .take(3)
+        .map(|a| a.app_name.clone())
+        .collect();
 
     let mut suggestions = vec![Suggestion {
         text: "summarize my conversations".into(),
         preview: if total_comm_mins > 0 {
-            Some(format!("{}min across {}", total_comm_mins, comm_app_names.join(", ")))
+            Some(format!(
+                "{}min across {}",
+                total_comm_mins,
+                comm_app_names.join(", ")
+            ))
         } else {
             None
         },
@@ -828,28 +902,49 @@ fn communication_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -
     suggestions
 }
 
-fn video_editing_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
+fn video_editing_suggestions(
+    top_apps: &[String],
+    apps: &[AppActivity],
+    windows: &[WindowActivity],
+) -> Vec<Suggestion> {
     let app_entry = apps.iter().find(|a| {
-        VIDEO_EDITING_APPS.iter().any(|v| *v == a.app_name.to_lowercase())
+        VIDEO_EDITING_APPS
+            .iter()
+            .any(|v| *v == a.app_name.to_lowercase())
     });
-    let app = app_entry.map(|a| a.app_name.as_str())
-        .or_else(|| top_apps.iter().find(|a| VIDEO_EDITING_APPS.iter().any(|v| *v == a.to_lowercase())).map(|s| s.as_str()))
+    let app = app_entry
+        .map(|a| a.app_name.as_str())
+        .or_else(|| {
+            top_apps
+                .iter()
+                .find(|a| VIDEO_EDITING_APPS.iter().any(|v| *v == a.to_lowercase()))
+                .map(|s| s.as_str())
+        })
         .unwrap_or("my editor");
     let app_mins = app_entry.map(|a| a.cnt / 60).unwrap_or(0);
 
     // Get project name from window title
-    let project_name = windows.iter().find(|w| {
-        VIDEO_EDITING_APPS.iter().any(|v| *v == w.app_name.to_lowercase()) && w.window_name.len() > 3
-    }).map(|w| {
-        let title = w.window_name.split(" — ").next()
-            .or_else(|| w.window_name.split(" - ").next())
-            .unwrap_or(&w.window_name);
-        if title.chars().count() > 35 {
-            format!("{}...", title.chars().take(32).collect::<String>())
-        } else {
-            title.to_string()
-        }
-    });
+    let project_name = windows
+        .iter()
+        .find(|w| {
+            VIDEO_EDITING_APPS
+                .iter()
+                .any(|v| *v == w.app_name.to_lowercase())
+                && w.window_name.len() > 3
+        })
+        .map(|w| {
+            let title = w
+                .window_name
+                .split(" — ")
+                .next()
+                .or_else(|| w.window_name.split(" - ").next())
+                .unwrap_or(&w.window_name);
+            if title.chars().count() > 35 {
+                format!("{}...", title.chars().take(32).collect::<String>())
+            } else {
+                title.to_string()
+            }
+        });
 
     vec![
         Suggestion {
@@ -879,7 +974,11 @@ fn video_editing_suggestions(top_apps: &[String], apps: &[AppActivity], windows:
     ]
 }
 
-fn idle_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<Suggestion> {
+fn idle_suggestions(
+    top_apps: &[String],
+    apps: &[AppActivity],
+    windows: &[WindowActivity],
+) -> Vec<Suggestion> {
     let skip = [
         "finder",
         "screenpipe",
@@ -889,12 +988,15 @@ fn idle_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Window
     ];
 
     // Compute total active time
-    let total_mins: i64 = apps.iter()
+    let total_mins: i64 = apps
+        .iter()
         .filter(|a| !skip.contains(&a.app_name.to_lowercase().as_str()))
         .map(|a| a.cnt / 60)
         .sum();
 
-    let top_app = top_apps.iter().find(|a| !skip.contains(&a.to_lowercase().as_str()));
+    let top_app = top_apps
+        .iter()
+        .find(|a| !skip.contains(&a.to_lowercase().as_str()));
     let top_app_mins = top_app
         .and_then(|a| apps.iter().find(|act| act.app_name.eq_ignore_ascii_case(a)))
         .map(|a| a.cnt / 60);
@@ -902,7 +1004,10 @@ fn idle_suggestions(top_apps: &[String], apps: &[AppActivity], windows: &[Window
     let mut suggestions = vec![Suggestion {
         text: "what did I work on in the last hour?".into(),
         preview: if total_mins > 0 {
-            let app_count = apps.iter().filter(|a| !skip.contains(&a.app_name.to_lowercase().as_str())).count();
+            let app_count = apps
+                .iter()
+                .filter(|a| !skip.contains(&a.app_name.to_lowercase().as_str()))
+                .count();
             Some(format!("{}min across {} apps", total_mins, app_count))
         } else {
             None
@@ -1366,7 +1471,11 @@ async fn generate_ai_suggestions(
     debug!(
         "suggestions: AI prompt ~{} tokens, backend={}",
         context.len() / 4,
-        if use_cloud { "screenpipe-cloud" } else { "apple-intelligence" }
+        if use_cloud {
+            "screenpipe-cloud"
+        } else {
+            "apple-intelligence"
+        }
     );
 
     let client = reqwest::Client::new();
@@ -1416,13 +1525,19 @@ async fn generate_ai_suggestions(
             parse_ai_response(content)
         }
         Ok(r) => {
-            warn!("suggestions: AI returned status {} (backend={})",
-                r.status(), if use_cloud { "cloud" } else { "apple" });
+            warn!(
+                "suggestions: AI returned status {} (backend={})",
+                r.status(),
+                if use_cloud { "cloud" } else { "apple" }
+            );
             None
         }
         Err(e) => {
-            warn!("suggestions: AI request failed: {} (backend={})",
-                e, if use_cloud { "cloud" } else { "apple" });
+            warn!(
+                "suggestions: AI request failed: {} (backend={})",
+                e,
+                if use_cloud { "cloud" } else { "apple" }
+            );
             None
         }
     }

@@ -151,6 +151,7 @@ impl PiExecutor {
         use crate::pipes::permissions::PipePermissions;
         let perms = PipePermissions::from_config(config);
 
+        #[allow(clippy::type_complexity)]
         let all_skills: &[(&str, &str, Box<dyn Fn(&PipePermissions) -> bool>)] = &[
             (
                 "screenpipe-api",

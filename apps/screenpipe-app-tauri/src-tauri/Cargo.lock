@@ -464,6 +464,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6841,7 +6850,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9641,6 +9650,7 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
@@ -9660,7 +9670,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.3.42"
+version = "2.3.51"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9762,7 +9772,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -9817,7 +9827,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -9829,7 +9839,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9857,7 +9867,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9903,7 +9913,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9928,7 +9938,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9991,7 +10001,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10007,7 +10017,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -10043,7 +10053,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.271"
+version = "0.3.278"
 dependencies = [
  "argon2",
  "chacha20poly1305",

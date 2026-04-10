@@ -6,6 +6,7 @@ use crate::activity_feed::{ActivityFeed, ActivityKind};
 use crate::config::UiCaptureConfig;
 use crate::events::{ElementContext, EventData, Modifiers, UiEvent};
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
@@ -170,9 +171,9 @@ impl UiRecorder {
 
         let mut threads = Vec::new();
 
-        // Shared state for current app/window between threads
-        let current_app = Arc::new(Mutex::new(None::<String>));
-        let current_window = Arc::new(Mutex::new(None::<String>));
+        // Shared state for current app/window between threads (lock-free)
+        let current_app = Arc::new(ArcSwap::from_pointee(None::<String>));
+        let current_window = Arc::new(ArcSwap::from_pointee(None::<String>));
 
         // Thread 1: CGEventTap for input events
         let tx1 = tx.clone();
@@ -210,15 +211,45 @@ impl UiRecorder {
 // Event Tap Implementation
 // ============================================================================
 
+/// Request to capture element context for a click — processed by a
+/// dedicated worker thread instead of spawning a thread per click.
+struct ContextCaptureRequest {
+    x: f64,
+    y: f64,
+    config: UiCaptureConfig,
+    app_name: Option<String>,
+    window_title: Option<String>,
+    start: Instant,
+    tx: Sender<UiEvent>,
+}
+
+/// Clipboard capture request — processed by a dedicated worker thread.
+struct ClipboardRequest {
+    operation: char,
+    delay_ms: u64,
+    capture_content: bool,
+    apply_pii: bool,
+    start: Instant,
+    tx: Sender<UiEvent>,
+}
+
 struct TapState {
     tx: Sender<UiEvent>,
     start: Instant,
     config: UiCaptureConfig,
     last_mouse: Mutex<(f64, f64)>,
     text_buf: Mutex<TextBuffer>,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
+    /// Lock-free reads for app/window context — no mutex contention in the
+    /// event tap callback (the hot path for every input event).
+    current_app: Arc<ArcSwap<Option<String>>>,
+    current_window: Arc<ArcSwap<Option<String>>>,
     activity_feed: Option<ActivityFeed>,
+    /// Bounded channel for context capture requests — a single worker thread
+    /// processes these instead of spawning a thread per click.
+    context_tx: Sender<ContextCaptureRequest>,
+    /// Bounded channel for clipboard capture — avoids spawning a thread per
+    /// Cmd+C/X/V and blocks the event tap with get_clipboard().
+    clipboard_tx: Sender<ClipboardRequest>,
 }
 
 struct TextBuffer {
@@ -267,8 +298,8 @@ fn run_event_tap(
     stop: Arc<AtomicBool>,
     start: Instant,
     config: UiCaptureConfig,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
+    current_app: Arc<ArcSwap<Option<String>>>,
+    current_window: Arc<ArcSwap<Option<String>>>,
     activity_feed: Option<ActivityFeed>,
 ) {
     // Build event mask - always include KEY_UP for activity tracking
@@ -286,6 +317,77 @@ fn run_event_tap(
             | cg::EventType::RIGHT_MOUSE_DRAGGED.mask();
     }
 
+    // Single worker thread for context capture — avoids spawning a thread per click
+    let (context_tx, context_rx) = bounded::<ContextCaptureRequest>(4);
+    thread::Builder::new()
+        .name("ctx-capture".into())
+        .spawn(move || {
+            while let Ok(req) = context_rx.recv() {
+                if let Some(element) = get_element_at_position(req.x, req.y, &req.config) {
+                    let ctx_event = UiEvent {
+                        id: None,
+                        timestamp: Utc::now(),
+                        relative_ms: req.start.elapsed().as_millis() as u64,
+                        data: EventData::Click {
+                            x: req.x as i32,
+                            y: req.y as i32,
+                            button: 0,
+                            click_count: 0,
+                            modifiers: 0,
+                        },
+                        app_name: req.app_name,
+                        window_title: req.window_title,
+                        browser_url: None,
+                        element: Some(element),
+                        frame_id: None,
+                    };
+                    let _ = req.tx.try_send(ctx_event);
+                }
+            }
+        })
+        .ok();
+
+    // Single worker thread for clipboard capture — avoids spawning a thread per
+    // Cmd+C/X and avoids blocking the event tap callback on Cmd+V.
+    let (clipboard_tx, clipboard_rx) = bounded::<ClipboardRequest>(4);
+    thread::Builder::new()
+        .name("clipboard-capture".into())
+        .spawn(move || {
+            while let Ok(req) = clipboard_rx.recv() {
+                if req.delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(req.delay_ms));
+                }
+                let content = if req.capture_content {
+                    get_clipboard().map(|s| {
+                        let truncated = truncate(&s, 1000);
+                        if req.apply_pii {
+                            remove_pii(&truncated)
+                        } else {
+                            truncated
+                        }
+                    })
+                } else {
+                    None
+                };
+                let event = UiEvent {
+                    id: None,
+                    timestamp: Utc::now(),
+                    relative_ms: req.start.elapsed().as_millis() as u64,
+                    data: EventData::Clipboard {
+                        operation: req.operation,
+                        content,
+                    },
+                    app_name: None,
+                    window_title: None,
+                    browser_url: None,
+                    element: None,
+                    frame_id: None,
+                };
+                let _ = req.tx.try_send(event);
+            }
+        })
+        .ok();
+
     let state = Box::leak(Box::new(TapState {
         tx,
         start,
@@ -295,6 +397,8 @@ fn run_event_tap(
         current_app,
         current_window,
         activity_feed,
+        context_tx,
+        clipboard_tx,
     }));
 
     let tap = cg::EventTap::new(
@@ -369,9 +473,9 @@ extern "C" fn tap_callback(
     let flags = event.flags().0;
     let mods = Modifiers::from_cg_flags(flags);
 
-    // Get current app/window context
-    let app_name = state.current_app.lock().clone();
-    let window_title = state.current_window.lock().clone();
+    // Lock-free reads — no mutex contention in the input event path
+    let app_name = (**state.current_app.load()).clone();
+    let window_title = (**state.current_window.load()).clone();
 
     // Check if we should capture based on app/window exclusions
     if let Some(ref app) = app_name {
@@ -417,38 +521,16 @@ extern "C" fn tap_callback(
 
             let _ = state.tx.try_send(ui_event);
 
-            // Capture element context in background
+            // Send context capture request to dedicated worker (non-blocking)
             if state.config.capture_context {
-                let tx = state.tx.clone();
-                let x = loc.x;
-                let y = loc.y;
-                let start = state.start;
-                let config = state.config.clone();
-                let app = app_name.clone();
-                let window = window_title.clone();
-
-                std::thread::spawn(move || {
-                    if let Some(element) = get_element_at_position(x, y, &config) {
-                        // Create a context-only event that can be associated with the click
-                        let ctx_event = UiEvent {
-                            id: None,
-                            timestamp: Utc::now(),
-                            relative_ms: start.elapsed().as_millis() as u64,
-                            data: EventData::Click {
-                                x: x as i32,
-                                y: y as i32,
-                                button: 0,
-                                click_count: 0, // Mark as context-only
-                                modifiers: 0,
-                            },
-                            app_name: app,
-                            window_title: window,
-                            browser_url: None,
-                            element: Some(element),
-                            frame_id: None,
-                        };
-                        let _ = tx.try_send(ctx_event);
-                    }
+                let _ = state.context_tx.try_send(ContextCaptureRequest {
+                    x: loc.x,
+                    y: loc.y,
+                    config: state.config.clone(),
+                    app_name: app_name.clone(),
+                    window_title: window_title.clone(),
+                    start: state.start,
+                    tx: state.tx.clone(),
                 });
             }
         }
@@ -535,110 +617,24 @@ extern "C" fn tap_callback(
             let keycode = event.field_i64(cg::EventField::KEYBOARD_EVENT_KEYCODE) as u16;
 
             // Check for clipboard operations (Cmd+C, Cmd+X, Cmd+V)
+            // All routed to a single worker thread via bounded channel —
+            // no thread spawning, no blocking the event tap callback.
             if mods.has_cmd() && !mods.has_ctrl() && state.config.capture_clipboard {
-                match keycode {
-                    KEY_C => {
-                        let tx = state.tx.clone();
-                        let start = state.start;
-                        let capture_content = state.config.capture_clipboard_content;
-                        let apply_pii = state.config.apply_pii_removal;
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            let content = if capture_content {
-                                get_clipboard().map(|s| {
-                                    let truncated = truncate(&s, 1000);
-                                    if apply_pii {
-                                        remove_pii(&truncated)
-                                    } else {
-                                        truncated
-                                    }
-                                })
-                            } else {
-                                None
-                            };
-                            let event = UiEvent {
-                                id: None,
-                                timestamp: Utc::now(),
-                                relative_ms: start.elapsed().as_millis() as u64,
-                                data: EventData::Clipboard {
-                                    operation: 'c',
-                                    content,
-                                },
-                                app_name: None,
-                                window_title: None,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = tx.try_send(event);
-                        });
-                    }
-                    KEY_X => {
-                        let tx = state.tx.clone();
-                        let start = state.start;
-                        let capture_content = state.config.capture_clipboard_content;
-                        let apply_pii = state.config.apply_pii_removal;
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            let content = if capture_content {
-                                get_clipboard().map(|s| {
-                                    let truncated = truncate(&s, 1000);
-                                    if apply_pii {
-                                        remove_pii(&truncated)
-                                    } else {
-                                        truncated
-                                    }
-                                })
-                            } else {
-                                None
-                            };
-                            let event = UiEvent {
-                                id: None,
-                                timestamp: Utc::now(),
-                                relative_ms: start.elapsed().as_millis() as u64,
-                                data: EventData::Clipboard {
-                                    operation: 'x',
-                                    content,
-                                },
-                                app_name: None,
-                                window_title: None,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = tx.try_send(event);
-                        });
-                    }
-                    KEY_V => {
-                        let content = if state.config.capture_clipboard_content {
-                            get_clipboard().map(|s| {
-                                let truncated = truncate(&s, 1000);
-                                if state.config.apply_pii_removal {
-                                    remove_pii(&truncated)
-                                } else {
-                                    truncated
-                                }
-                            })
-                        } else {
-                            None
-                        };
-                        let event = UiEvent {
-                            id: None,
-                            timestamp,
-                            relative_ms: t,
-                            data: EventData::Clipboard {
-                                operation: 'v',
-                                content,
-                            },
-                            app_name: app_name.clone(),
-                            window_title: window_title.clone(),
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = state.tx.try_send(event);
-                    }
-                    _ => {}
+                let (op, delay) = match keycode {
+                    KEY_C => (Some('c'), 50),
+                    KEY_X => (Some('x'), 50),
+                    KEY_V => (Some('v'), 0), // paste: clipboard already set, no delay needed
+                    _ => (None, 0),
+                };
+                if let Some(operation) = op {
+                    let _ = state.clipboard_tx.try_send(ClipboardRequest {
+                        operation,
+                        delay_ms: delay,
+                        capture_content: state.config.capture_clipboard_content,
+                        apply_pii: state.config.apply_pii_removal,
+                        start: state.start,
+                        tx: state.tx.clone(),
+                    });
                 }
             }
 
@@ -704,8 +700,8 @@ struct ObserverCallbackState {
     tx: Sender<UiEvent>,
     start: Instant,
     config: UiCaptureConfig,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
+    current_app: Arc<ArcSwap<Option<String>>>,
+    current_window: Arc<ArcSwap<Option<String>>>,
     focus: Mutex<FocusState>,
     refresh_requested: Arc<AtomicBool>,
 }
@@ -723,7 +719,7 @@ fn emit_focus_state(state: &ObserverCallbackState) {
     let app_changed = focus.last_app.as_ref() != Some(&name) || focus.last_pid != pid;
 
     if app_changed {
-        *state.current_app.lock() = Some(name.clone());
+        state.current_app.store(Arc::new(Some(name.clone())));
 
         if state.config.capture_app_switch {
             let focused_element = get_focused_element_context(&state.config);
@@ -749,7 +745,7 @@ fn emit_focus_state(state: &ObserverCallbackState) {
         .unwrap_or(true);
 
     if should_capture && (window_title != focus.last_window || app_changed) {
-        *state.current_window.lock() = window_title.clone();
+        state.current_window.store(Arc::new(window_title.clone()));
 
         if state.config.capture_window_focus {
             let focused_element = get_focused_element_context(&state.config);
@@ -801,8 +797,8 @@ fn run_app_observer(
     stop: Arc<AtomicBool>,
     start: Instant,
     config: UiCaptureConfig,
-    current_app: Arc<Mutex<Option<String>>>,
-    current_window: Arc<Mutex<Option<String>>>,
+    current_app: Arc<ArcSwap<Option<String>>>,
+    current_window: Arc<ArcSwap<Option<String>>>,
 ) {
     let workspace = ns::Workspace::shared();
     let mut notification_center = workspace.notification_center();

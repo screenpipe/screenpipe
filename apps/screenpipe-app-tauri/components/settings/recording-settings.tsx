@@ -33,7 +33,6 @@ import {
   Monitor,
   Volume2,
   Headphones,
-  Folder,
   AppWindowMac,
   EyeOff,
   Key,
@@ -964,42 +963,6 @@ The average knowledge worker switches between four hundred different windows per
 
 Your screen is a pipe. Everything you see, hear, and type flows through it. Screenpipe just makes sure nothing valuable leaks away.`;
 
-  const handleDataDirChange = async () => {
-    try {
-      const dataDir = await getDataDir();
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: dataDir,
-      });
-      if (!selected) return;
-
-      const result = await commands.validateDataDir(selected);
-      if (result.status === "error") {
-        toast({
-          title: "invalid directory",
-          description: String(result.error),
-          variant: "destructive",
-          duration: 5000,
-        });
-        return;
-      }
-      handleSettingsChange({ dataDir: selected }, true);
-    } catch (error) {
-      console.error("failed to change data directory:", error);
-      toast({
-        title: "error",
-        description: "failed to change data directory",
-        variant: "destructive",
-        duration: 5000,
-      });
-    }
-  };
-
-  const handleDataDirReset = () => {
-    handleSettingsChange({ dataDir: "default" }, true);
-  };
-
   const handleIgnoredWindowsChange = (values: string[]) => {
     // Convert all values to lowercase for comparison
     const lowerCaseValues = values.map((v) => v.toLowerCase());
@@ -1158,56 +1121,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
         }}
       />
-
-      {/* Data Directory */}
-      <LockedSetting settingKey="data_directory">
-      <div className="space-y-2">
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Folder className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Data directory
-                  </h3>
-                  <p className="text-xs text-muted-foreground truncate max-w-[250px]">
-                    {!settings.dataDir || settings.dataDir === "default"
-                      ? "~/.screenpipe (default)"
-                      : settings.dataDir}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                    changing directory starts fresh recordings
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {settings.dataDir &&
-                  settings.dataDir !== "default" &&
-                  settings.dataDir !== "" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleDataDirReset}
-                      className="h-7 text-xs shrink-0"
-                    >
-                      Reset
-                    </Button>
-                  )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDataDirChange}
-                  className="h-7 text-xs shrink-0"
-                >
-                  Change
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-      </LockedSetting>
 
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">

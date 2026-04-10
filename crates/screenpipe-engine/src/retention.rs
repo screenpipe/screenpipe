@@ -5,7 +5,11 @@
 //! Local data retention — auto-deletes old data after a configurable number of
 //! days. Free alternative to cloud archive: no upload, just permanent deletion.
 
-use axum::{extract::{Json, State}, http::StatusCode, response::Json as JsonResponse};
+use axum::{
+    extract::{Json, State},
+    http::StatusCode,
+    response::Json as JsonResponse,
+};
 use chrono::{DateTime, Duration, Utc};
 use oasgen::{oasgen, OaSchema};
 use screenpipe_db::DatabaseManager;

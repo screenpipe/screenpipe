@@ -601,10 +601,24 @@ impl TranscriptionSession {
             #[cfg(feature = "parakeet-mlx")]
             Self::ParakeetMlx { model, .. } => {
                 let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
+                // Clear GPU cache before transcription to reduce Metal command buffer
+                // errors from GPU memory pressure (prevents abort in MLX completion handler)
+                mlx_memory::clear_cache();
                 let opts = audiopipe::TranscribeOptions::default();
-                let result = engine
-                    .transcribe_with_sample_rate(audio, sample_rate, opts)
-                    .map_err(|e| anyhow!("{}", e))?;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.transcribe_with_sample_rate(audio, sample_rate, opts)
+                }))
+                .map_err(|panic| {
+                    // Clear cache after panic to release any held GPU resources
+                    mlx_memory::clear_cache();
+                    let msg = panic
+                        .downcast_ref::<String>()
+                        .map(|s| s.as_str())
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("unknown panic");
+                    anyhow!("mlx transcription panic (likely Metal GPU error): {}", msg)
+                })?
+                .map_err(|e| anyhow!("{}", e))?;
                 // Free cached Metal buffers after each transcription to prevent
                 // unbounded GPU memory growth from variable-length audio tensors
                 mlx_memory::clear_cache();

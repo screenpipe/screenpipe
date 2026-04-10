@@ -196,6 +196,17 @@ impl VisionManager {
             }
         }
 
+        // Aborting capture tasks does NOT release sck_rs's global SCStream handles.
+        // Explicitly tear them down so macOS sees no active ScreenCaptureKit usage.
+        #[cfg(target_os = "macos")]
+        {
+            screenpipe_screen::stream_invalidation::invalidate_streams();
+            // MonitorStream::drop spawns a detached thread to call stream.stop().
+            // Give those threads time to complete so the OS tears down the SCK session
+            // and the purple recording dot disappears.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
         let mut status = self.status.write().await;
         *status = VisionManagerStatus::Stopped;
 
@@ -338,8 +349,17 @@ impl VisionManager {
             // Abort the task
             handle.abort();
 
-            // Wait for it to finish
-            let _ = handle.await;
+            // Wait for it to finish with a timeout — if the capture task is stuck
+            // in a spawn_blocking AX tree walk, cancellation can be delayed.
+            match tokio::time::timeout(std::time::Duration::from_secs(3), handle).await {
+                Ok(_) => {}
+                Err(_) => {
+                    warn!(
+                        "monitor {} capture task did not finish within 3s after abort, moving on",
+                        monitor_id
+                    );
+                }
+            }
 
             Ok(())
         } else {
@@ -392,5 +412,81 @@ impl VisionManager {
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down VisionManager");
         self.stop().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that stop_monitor completes promptly when the task finishes normally.
+    #[tokio::test]
+    async fn test_stop_monitor_normal_task() {
+        let tasks: Arc<DashMap<u32, JoinHandle<()>>> = Arc::new(DashMap::new());
+        let handle = tokio::spawn(async {
+            // Task that finishes quickly
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        });
+        tasks.insert(1, handle);
+
+        // Simulate stop_monitor logic
+        if let Some((_, handle)) = tasks.remove(&1) {
+            handle.abort();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            // Should complete well before 3s
+            assert!(result.is_ok(), "normal task should finish within timeout");
+        }
+    }
+
+    /// Verify that stop_monitor doesn't hang on a slow task — the 3s timeout fires.
+    #[tokio::test]
+    async fn test_stop_monitor_timeout_on_slow_task() {
+        let tasks: Arc<DashMap<u32, JoinHandle<()>>> = Arc::new(DashMap::new());
+        let handle = tokio::spawn(async {
+            // Simulate a task stuck in spawn_blocking-like work.
+            // We use a long sleep; abort won't cancel it instantly in all cases.
+            tokio::task::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            })
+            .await
+            .ok();
+        });
+        tasks.insert(1, handle);
+
+        if let Some((_, handle)) = tasks.remove(&1) {
+            handle.abort();
+            let start = std::time::Instant::now();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            let elapsed = start.elapsed();
+
+            // The timeout should fire around 3s, not 30s
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "should not wait for the full 30s task, elapsed: {:?}",
+                elapsed
+            );
+            // The result is either Ok (abort completed) or Err (timeout). Either is acceptable —
+            // the important thing is we didn't hang.
+            let _ = result;
+        }
+    }
+
+    /// Verify that an already-finished task completes instantly on stop_monitor.
+    #[tokio::test]
+    async fn test_stop_monitor_already_finished() {
+        let tasks: Arc<DashMap<u32, JoinHandle<()>>> = Arc::new(DashMap::new());
+        let handle = tokio::spawn(async {});
+        // Let it finish
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tasks.insert(1, handle);
+
+        if let Some((_, handle)) = tasks.remove(&1) {
+            handle.abort();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            assert!(
+                result.is_ok(),
+                "already-finished task should resolve instantly"
+            );
+        }
     }
 }

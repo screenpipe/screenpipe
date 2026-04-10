@@ -738,8 +738,10 @@ export function TeamSection() {
               className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50"
             >
               <div className="flex items-center gap-2">
-                <span className="text-sm font-mono truncate max-w-[180px]">
-                  {m.user_id === settings.user?.id ? "you" : m.user_id}
+                <span className="text-sm truncate max-w-[180px]">
+                  {m.user_id === settings.user?.id
+                    ? (settings.user?.name || "you")
+                    : (m.name || m.email?.split("@")[0] || m.user_id.slice(0, 8) + "…")}
                 </span>
                 <Badge variant="outline" className="text-[10px]">
                   {m.role}

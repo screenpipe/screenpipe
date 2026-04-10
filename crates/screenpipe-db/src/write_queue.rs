@@ -529,20 +529,18 @@ async fn execute_batch(
                 *result = Err(sqlx::Error::WorkerCrashed);
             }
         }
-    } else {
-        if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
-            warn!("write_queue: COMMIT failed: {}", e);
-            let msg = e.to_string().to_lowercase();
-            if !msg.contains("no transaction is active") {
-                warn!("write_queue: detaching connection due to commit failure");
-                let _raw = conn.detach();
-            }
-            // All results become the commit error
-            for pw in batch.drain(..) {
-                let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
-            }
-            return;
+    } else if let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await {
+        warn!("write_queue: COMMIT failed: {}", e);
+        let msg = e.to_string().to_lowercase();
+        if !msg.contains("no transaction is active") {
+            warn!("write_queue: detaching connection due to commit failure");
+            let _raw = conn.detach();
         }
+        // All results become the commit error
+        for pw in batch.drain(..) {
+            let _ = pw.respond.send(Err(sqlx::Error::WorkerCrashed));
+        }
+        return;
     }
 
     // Send results to callers

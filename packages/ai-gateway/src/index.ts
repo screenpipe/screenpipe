@@ -10,7 +10,7 @@ import { handleFileTranscription, handleABTestAdmin } from './handlers/transcrip
 import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleVoiceChat } from './handlers/voice';
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
-import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, isZeroCostModel } from './services/cost-tracker';
+import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, isZeroCostModel } from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { getModelWeight } from './services/usage-tracker';
 import { pruneModelHealth } from './services/model-health';
@@ -50,7 +50,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
 			// Enrich with cost-based limit info
 			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-			const maxCost = getMaxDailyCostPerUser(env);
+			const maxCost = getTierDailyCostCap(authResult.tier, env);
 			const enriched = {
 				...status,
 				cost_limit_reached: dailyCost >= maxCost,
@@ -102,8 +102,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			const modelWeight = getModelWeight(body.model);
 			if (!isZeroCostModel(body.model) && modelWeight >= 3) {
 				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const baseCap = getMaxDailyCostPerUser(env);
-				const maxCost = authResult.tier === 'subscribed' ? baseCap * 5 : baseCap;
+				const maxCost = getTierDailyCostCap(authResult.tier, env);
 				if (dailyCost >= maxCost) {
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
@@ -338,8 +337,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			const msgModelWeight = getModelWeight(parsedModel);
 			if (!isZeroCostModel(parsedModel) && msgModelWeight >= 3) {
 				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const baseCap = getMaxDailyCostPerUser(env);
-				const maxCost = authResult.tier === 'subscribed' ? baseCap * 5 : baseCap;
+				const maxCost = getTierDailyCostCap(authResult.tier, env);
 				if (dailyCost >= maxCost) {
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
@@ -438,8 +436,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			const ocModelWeight = getModelWeight(ocModel);
 			if (!isZeroCostModel(ocModel) && ocModelWeight >= 3) {
 				const dailyCost = await getDailyUserCost(env, authResult.deviceId);
-				const baseCap = getMaxDailyCostPerUser(env);
-				const maxCost = authResult.tier === 'subscribed' ? baseCap * 5 : baseCap;
+				const maxCost = getTierDailyCostCap(authResult.tier, env);
 				if (dailyCost >= maxCost) {
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',

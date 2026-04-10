@@ -80,7 +80,7 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
 
         mermaid.initialize({
           startOnLoad: false,
-          securityLevel: "loose",
+          securityLevel: "strict",
           suppressErrorRendering: true,
           ...theme,
         });

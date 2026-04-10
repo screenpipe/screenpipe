@@ -635,13 +635,16 @@ function PipePresetSelector({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ preset: presetValue }),
     })
-      .then(() => {
+      .then(async () => {
+        await new Promise((r) => setTimeout(r, 500));
         delete pendingConfigSaves.current[pipeName];
         fetchPipes();
       })
       .catch(() => {
         delete pendingConfigSaves.current[pipeName];
       });
+
+    // Register guard so background fetchPipes never overwrites with stale data.
     pendingConfigSaves.current[pipeName] = savePromise;
   };
 
@@ -1319,19 +1322,22 @@ export function PipesSection() {
       if (pipeEvent?.type === "raw_line") {
         text = pipeEvent.text || "";
       } else if (pipeEvent) {
-        // For structured events (Pi NDJSON), show a summary line
+        // For structured events (Pi NDJSON), show only meaningful content
         if (pipeEvent.type === "message_update" && pipeEvent.assistantMessageEvent) {
           const evt = pipeEvent.assistantMessageEvent;
           if (evt.type === "text_delta" && evt.delta) {
             text = evt.delta;
           } else if (evt.type === "thinking" && evt.thinking) {
             text = `[thinking] ${evt.thinking}`;
+          } else if (evt.type === "toolcall_start" && evt.toolName) {
+            text = `\n> running ${evt.toolName}...\n`;
           }
         } else if (pipeEvent.type === "tool_use") {
-          text = `[tool] ${pipeEvent.name || "unknown"}`;
-        } else {
-          text = JSON.stringify(pipeEvent);
+          text = `\n> running ${pipeEvent.name || "unknown"}...\n`;
         }
+        // Silently skip all other event types (turn_start, turn_end,
+        // message_start, message_end, tool_execution_start/end/update,
+        // session, agent_start/end, etc.) — they are metadata, not content
       }
 
       if (text) {
@@ -1921,7 +1927,8 @@ export function PipesSection() {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ schedule: value }),
-                          }).then(() => {
+                          }).then(async () => {
+                            await new Promise((r) => setTimeout(r, 500));
                             delete pendingConfigSaves.current[pipeName];
                             fetchPipes();
                           }).catch(() => {
@@ -2402,6 +2409,20 @@ export function PipesSection() {
                                 {exec.status === "failed" && exec.stderr && !exec.error_message && (
                                   <pre className="text-xs text-muted-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto scrollbar-hide">{exec.stderr}</pre>
                                 )}
+                                {exec.status === "running" && (() => {
+                                  const key = `${exec.pipe_name}:${exec.id}`;
+                                  const lines = liveOutput[key];
+                                  if (!lines || lines.length === 0) return null;
+                                  return (
+                                    <pre
+                                      ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+                                      className="text-xs text-muted-foreground whitespace-pre-wrap break-words max-h-48 overflow-y-auto bg-muted/50 rounded p-2 font-mono"
+                                    >
+                                      {lines.slice(-200).join("")}
+                                      <span className="animate-pulse">▊</span>
+                                    </pre>
+                                  );
+                                })()}
                               </div>
                             ))
                           ) : (
@@ -2452,7 +2473,8 @@ export function PipesSection() {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ history: checked }),
-                          }).then(() => {
+                          }).then(async () => {
+                            await new Promise((r) => setTimeout(r, 500));
                             delete pendingConfigSaves.current[pipeName];
                             fetchPipes();
                           }).catch(() => {

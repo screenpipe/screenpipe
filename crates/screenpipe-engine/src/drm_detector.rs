@@ -557,6 +557,11 @@ pub fn poll_drm_clear() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that touch the global DRM_CONTENT_PAUSED flag must hold this
+    /// mutex to avoid racing with each other (cargo test runs in parallel).
+    static DRM_FLAG_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_is_drm_app_positive() {
@@ -631,6 +636,7 @@ mod tests {
 
     #[test]
     fn test_global_flag() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         assert!(!drm_content_paused());
         set_drm_paused(true);
@@ -641,6 +647,7 @@ mod tests {
 
     #[test]
     fn test_check_and_update_disabled() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
         let result = check_and_update_drm_state(false, Some("Netflix"), None);
         assert!(!result);
@@ -649,6 +656,7 @@ mod tests {
 
     #[test]
     fn test_check_and_update_enabled() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         let result = check_and_update_drm_state(true, Some("Netflix"), None);
         assert!(result);
@@ -663,6 +671,7 @@ mod tests {
 
     #[test]
     fn test_pre_capture_drm_check_disabled() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         let result = pre_capture_drm_check(false, Some("Netflix"));
         assert!(!result, "should be no-op when setting is off");
@@ -671,6 +680,7 @@ mod tests {
 
     #[test]
     fn test_pre_capture_drm_check_native_app() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         let result = pre_capture_drm_check(true, Some("Netflix"));
         assert!(result, "should detect native DRM app");
@@ -681,6 +691,7 @@ mod tests {
 
     #[test]
     fn test_pre_capture_drm_check_non_drm_app() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         let result = pre_capture_drm_check(true, Some("Finder"));
         assert!(!result, "should not flag Finder as DRM");
@@ -689,6 +700,7 @@ mod tests {
 
     #[test]
     fn test_pre_capture_drm_check_already_paused() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
         DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
         let result = pre_capture_drm_check(true, Some("Finder"));
         assert!(result, "should stay paused when already paused");
@@ -851,6 +863,87 @@ mod tests {
             );
         }
 
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    // ── check_and_update_drm_state tests ─────────────────────────
+
+    #[test]
+    fn test_check_and_update_drm_state_sets_flag_on_drm_app() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = check_and_update_drm_state(true, Some("Netflix"), None);
+        assert!(result, "should return true for DRM app");
+        assert!(drm_content_paused(), "global flag should be set");
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_check_and_update_drm_state_sets_flag_on_drm_url() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result =
+            check_and_update_drm_state(true, Some("Chrome"), Some("https://netflix.com/watch"));
+        assert!(result, "should return true for DRM URL");
+        assert!(drm_content_paused(), "global flag should be set");
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_check_and_update_drm_state_clears_flag_on_non_drm() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+        let result = check_and_update_drm_state(true, Some("Finder"), Some("https://google.com"));
+        assert!(!result, "should return false for non-DRM content");
+        assert!(!drm_content_paused(), "global flag should be cleared");
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_check_and_update_drm_state_noop_when_disabled() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = check_and_update_drm_state(false, Some("Netflix"), None);
+        assert!(!result, "should return false when feature is disabled");
+        assert!(
+            !drm_content_paused(),
+            "global flag should stay false when disabled"
+        );
+    }
+
+    #[test]
+    fn test_check_and_update_drm_state_clears_flag_when_disabled() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        // If the flag was somehow set and the feature is disabled, it should clear
+        DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+        let result = check_and_update_drm_state(false, Some("Netflix"), None);
+        assert!(!result);
+        assert!(
+            !drm_content_paused(),
+            "disabling the feature should clear any existing DRM pause"
+        );
+    }
+
+    #[test]
+    fn test_check_and_update_drm_state_none_app_preserves_current() {
+        let _lock = DRM_FLAG_LOCK.lock().unwrap();
+        // When app_name is None (empty string), check_and_update_drm_state
+        // preserves the current flag rather than clearing it (unknown = keep state).
+        DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
+        let result = check_and_update_drm_state(true, None, None);
+        // With flag=false and no DRM info, it returns false (current state)
+        assert!(
+            !result,
+            "should return false when flag was false and app unknown"
+        );
+
+        DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
+        let result = check_and_update_drm_state(true, None, None);
+        // With flag=true and no DRM info, it preserves true (unknown = keep)
+        assert!(
+            result,
+            "should return true when flag was true and app unknown"
+        );
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
     }
 }

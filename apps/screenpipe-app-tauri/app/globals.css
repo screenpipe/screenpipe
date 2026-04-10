@@ -364,12 +364,50 @@
     background-color: rgba(255, 255, 255, 0.06) !important;
   }
 
-  /* System dark mode fallback — covers the gap before JS applies .dark class */
+  /* System dark mode fallback — covers the gap before JS applies .dark class.
+     Applies to BOTH background and all text colors so there is no flash of
+     dark-vibrancy-background + light-mode text (= invisible text) on first
+     paint when macOS is in Auto/dark mode. */
   @media (prefers-color-scheme: dark) {
     html:not(.light) .vibrant-sidebar {
       background-color: rgba(255, 255, 255, 0.06) !important;
     }
+    html:not(.light) .vibrant-sidebar-fg {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 60%) !important;
+    }
+    html:not(.light) .vibrant-nav-active {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-nav-hover:hover {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-nav-item {
+      color: hsl(0 0% 60%) !important;
+    }
+    html:not(.light) .vibrant-nav-item:hover {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-heading {
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-card-border {
+      border-color: hsl(0 0% 100% / 0.1) !important;
+    }
+    html:not(.light) .vibrant-btn-border {
+      border-color: hsl(0 0% 100% / 0.2) !important;
+      color: hsl(0 0% 100%) !important;
+    }
+    html:not(.light) .vibrant-btn-border:hover {
+      color: hsl(0 0% 100% / 0.8) !important;
+    }
+    html:not(.light) .vibrant-sidebar-border {
+      border-color: hsl(0 0% 100% / 0.08) !important;
+    }
   }
+
   .vibrant-sidebar-border {
     border-color: transparent;
   }

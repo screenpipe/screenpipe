@@ -154,6 +154,19 @@ export function getMaxDailyCostPerUser(env?: Env): number {
   return parseFloat((env as any)?.MAX_DAILY_COST_PER_USER || '') || DEFAULT_MAX_DAILY_COST_USD;
 }
 
+// Tier-aware daily cost cap:
+//   anonymous:  ~5 opus reqs/day  ($1.60)
+//   logged_in:  ~10 opus reqs/day ($3.20)
+//   subscribed: ~109 opus reqs/day ($35)
+export function getTierDailyCostCap(tier: string, env?: Env): number {
+  const baseCap = getMaxDailyCostPerUser(env);
+  switch (tier) {
+    case 'subscribed': return baseCap * 7;   // $35
+    case 'logged_in':  return baseCap * 0.64; // $3.20
+    default:           return baseCap * 0.32; // $1.60 (anonymous)
+  }
+}
+
 /**
  * Get a user's estimated cost for today. Used to enforce per-user daily cost caps.
  */

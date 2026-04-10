@@ -20,12 +20,13 @@ import {
   Check,
   X,
   Loader2,
-  ExternalLink,
   Copy,
   Search,
-  ArrowUpDown,
   Tag,
   Plus,
+  Pencil,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { MemoizedReactMarkdown } from "@/components/markdown";
@@ -121,6 +122,18 @@ export function MemoriesSection() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
 
+  // expanded content rows
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const toggleExpanded = (id: number) =>
+    setExpandedIds((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+
+  // show all tag filter pills
+  const [showAllTags, setShowAllTags] = useState(false);
+
   // batch selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -199,8 +212,10 @@ export function MemoriesSection() {
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
-      if (offset === 0) setLoading(true);
-      else {
+      if (offset === 0) {
+        setLoading(true);
+        setExpandedIds(new Set());
+      } else {
         setLoadingMore(true);
         loadingMoreRef.current = true;
       }
@@ -410,7 +425,7 @@ export function MemoriesSection() {
           content: trimmed,
           source: "user",
           tags: newTags,
-          importance: 5,
+          importance: 0.5,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -552,7 +567,7 @@ export function MemoriesSection() {
         {allTags.length > 0 && (
           <>
             <div className="w-px h-4 bg-border" />
-            {allTags.slice(0, 8).map((tag) => (
+            {(showAllTags ? allTags : allTags.slice(0, 6)).map((tag) => (
               <button
                 key={tag}
                 onClick={() =>
@@ -569,59 +584,46 @@ export function MemoriesSection() {
                 <span className="truncate">{tag}</span>
               </button>
             ))}
+            {allTags.length > 6 && (
+              <button
+                onClick={() => setShowAllTags((v) => !v)}
+                className="inline-flex items-center px-2 py-0.5 text-[10px] rounded-full border border-dashed border-border text-muted-foreground hover:bg-muted transition-colors"
+              >
+                {showAllTags ? "show less" : `+${allTags.length - 6} more`}
+              </button>
+            )}
           </>
         )}
 
-        {/* sort toggle */}
+        {/* sort controls */}
         <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={() => {
-              if (sortField === "created_at") {
-                setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-              } else {
-                setSortField("created_at");
-                setSortDir("desc");
-              }
-            }}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border transition-colors ${
-              sortField === "created_at"
-                ? "bg-foreground/10 border-foreground/20"
-                : "border-border text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            <ArrowUpDown className="h-2.5 w-2.5" />
-            {sortField === "created_at" && sortDir === "desc"
-              ? "newest"
-              : sortField === "created_at" && sortDir === "asc"
-                ? "oldest"
-                : "date"}
-          </button>
-          <button
-            onClick={() => {
-              if (sortField === "importance") {
-                setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-              } else {
-                setSortField("importance");
-                setSortDir("desc");
-              }
-            }}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border transition-colors ${
-              sortField === "importance"
-                ? "bg-foreground/10 border-foreground/20"
-                : "border-border text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            <ArrowUpDown className="h-2.5 w-2.5" />
-            {sortField === "importance" && sortDir === "desc"
-              ? "important"
-              : sortField === "importance" && sortDir === "asc"
-                ? "least"
-                : "importance"}
-          </button>
+          {(
+            [
+              { field: "created_at", descLabel: "newest", ascLabel: "oldest" },
+              { field: "importance", descLabel: "importance ↓", ascLabel: "importance ↑" },
+            ] as { field: SortField; descLabel: string; ascLabel: string }[]
+          ).map(({ field, descLabel, ascLabel }) => (
+            <button
+              key={field}
+              onClick={() => {
+                if (sortField === field) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+                else { setSortField(field); setSortDir("desc"); }
+              }}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border transition-colors ${
+                sortField === field
+                  ? "bg-foreground/10 border-foreground/20 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {sortField === field
+                ? sortDir === "desc" ? descLabel : ascLabel
+                : field === "created_at" ? "date" : "importance"}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* batch delete bar */}
+      {/* batch delete bar — only visible when items are selected */}
       {memories.length > 0 && (
         <div className="flex items-center gap-2 text-xs">
           <Checkbox
@@ -630,9 +632,7 @@ export function MemoriesSection() {
             className="h-3.5 w-3.5"
           />
           <span className="text-muted-foreground">
-            {selectedIds.size > 0
-              ? `${selectedIds.size} selected`
-              : "select all"}
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : "select all"}
           </span>
           {selectedIds.size > 0 && (
             <Button
@@ -697,7 +697,11 @@ export function MemoriesSection() {
                 <Checkbox
                   checked={selectedIds.has(memory.id)}
                   onCheckedChange={() => toggleSelected(memory.id)}
-                  className="h-3.5 w-3.5 mt-0.5 shrink-0"
+                  className={`h-3.5 w-3.5 mt-0.5 shrink-0 transition-opacity ${
+                    selectedIds.size === 0
+                      ? "opacity-0 group-hover:opacity-100"
+                      : "opacity-100"
+                  }`}
                 />
                 <div
                   className="flex-1 min-w-0 cursor-text"
@@ -724,53 +728,77 @@ export function MemoriesSection() {
                       className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
                       rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
                     />
-                  ) : (
-                    <div className="text-sm text-foreground">
-                      <MemoizedReactMarkdown
-                        className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          p({ children }) {
-                            return <p className="mb-1 last:mb-0">{children}</p>;
-                          },
-                          a({ href, children }) {
-                            return (
-                              <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-500 hover:underline"
-                              >
-                                {children}
-                              </a>
-                            );
-                          },
-                          code({ className, children, ...props }) {
-                            const isInline = !className;
-                            if (isInline) {
+                  ) : (() => {
+                    const TRUNCATE_LEN = 150;
+                    const isLong = memory.content.length > TRUNCATE_LEN;
+                    const isExpanded = expandedIds.has(memory.id);
+                    const displayContent =
+                      isLong && !isExpanded
+                        ? memory.content.slice(0, TRUNCATE_LEN) + "…"
+                        : memory.content;
+                    return (
+                      <div className="text-sm text-foreground">
+                        <MemoizedReactMarkdown
+                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p({ children }) {
+                              return <p className="mb-1 last:mb-0">{children}</p>;
+                            },
+                            a({ href, children }) {
                               return (
-                                <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
+                                <a
+                                  href={href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline hover:text-foreground/70 transition-colors"
+                                >
                                   {children}
-                                </code>
+                                </a>
                               );
-                            }
-                            return (
-                              <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
-                                <code className={className} {...props}>
-                                  {children}
-                                </code>
-                              </pre>
-                            );
-                          },
-                        }}
-                      >
-                        {memory.content}
-                      </MemoizedReactMarkdown>
-                      {savingId === memory.id && (
-                        <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                      )}
-                    </div>
-                  )}
+                            },
+                            code({ className, children, ...props }) {
+                              const isInline = !className;
+                              if (isInline) {
+                                return (
+                                  <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              }
+                              return (
+                                <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
+                                  <code className={className} {...props}>
+                                    {children}
+                                  </code>
+                                </pre>
+                              );
+                            },
+                          }}
+                        >
+                          {displayContent}
+                        </MemoizedReactMarkdown>
+                        {savingId === memory.id && (
+                          <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                        )}
+                        {isLong && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpanded(memory.id);
+                            }}
+                            className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-1"
+                          >
+                            {isExpanded ? (
+                              <><ChevronUp className="h-2.5 w-2.5" /> show less</>
+                            ) : (
+                              <><ChevronDown className="h-2.5 w-2.5" /> show more</>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
@@ -851,16 +879,38 @@ export function MemoriesSection() {
                           ))}
                       </>
                     )}
-                    {memory.frame_id && (
-                      <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5">
-                        <ExternalLink className="h-2.5 w-2.5" />
-                        frame #{memory.frame_id}
+                    {memory.importance > 0 && (
+                      <span
+                        className="flex items-center gap-1"
+                        title={`importance: ${(memory.importance * 100).toFixed(0)}%`}
+                      >
+                        <span className="relative inline-block w-10 h-1 bg-border overflow-hidden">
+                          <span
+                            className="absolute inset-y-0 left-0 bg-foreground/40"
+                            style={{ width: `${memory.importance * 100}%` }}
+                          />
+                        </span>
+                        <span className="text-[10px] text-muted-foreground/50 tabular-nums">
+                          {(memory.importance * 100).toFixed(0)}%
+                        </span>
                       </span>
                     )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-0.5 shrink-0">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(memory);
+                    }}
+                    title="edit"
+                  >
+                    <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
                   <Button
                     size="icon"
                     variant="ghost"

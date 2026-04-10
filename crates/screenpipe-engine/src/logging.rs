@@ -610,8 +610,8 @@ mod tests {
         // Pre-create two files for today.
         let f0 = tmp.path().join(format!("test.{}.0.log", today));
         let f1 = tmp.path().join(format!("test.{}.1.log", today));
-        fs::write(&f0, &[b'A'; 20]).unwrap();
-        fs::write(&f1, &[b'B'; 20]).unwrap();
+        fs::write(&f0, [b'A'; 20]).unwrap();
+        fs::write(&f1, [b'B'; 20]).unwrap();
 
         // Build writer — should resume at index 1 (latest for today).
         let mut w = test_writer(tmp.path(), 100, 10_000);
@@ -630,7 +630,7 @@ mod tests {
 
         // Pre-create a file that's already at the size limit.
         let f0 = tmp.path().join(format!("test.{}.0.log", today));
-        fs::write(&f0, &[b'X'; 50]).unwrap();
+        fs::write(&f0, [b'X'; 50]).unwrap();
 
         // max_file_size = 50, so builder should start at index 1.
         let mut w = test_writer(tmp.path(), 50, 10_000);
@@ -658,7 +658,7 @@ mod tests {
         // Create files with indices 0, 2, 5 (gaps are fine).
         for i in [0, 2, 5] {
             let name = format!("test.{}.{}.log", today, i);
-            fs::write(tmp.path().join(name), &[0u8; 10]).unwrap();
+            fs::write(tmp.path().join(name), [0u8; 10]).unwrap();
         }
 
         let (max_idx, total) = scan_existing(tmp.path(), "test", "log", &today);
@@ -672,9 +672,9 @@ mod tests {
         let today = today_string();
 
         // File for a different date.
-        fs::write(tmp.path().join("test.1999-01-01.0.log"), &[0u8; 100]).unwrap();
+        fs::write(tmp.path().join("test.1999-01-01.0.log"), [0u8; 100]).unwrap();
         // File for today.
-        fs::write(tmp.path().join(format!("test.{}.3.log", today)), &[0u8; 10]).unwrap();
+        fs::write(tmp.path().join(format!("test.{}.3.log", today)), [0u8; 10]).unwrap();
 
         let (max_idx, total) = scan_existing(tmp.path(), "test", "log", &today);
         assert_eq!(max_idx, 3);
@@ -689,8 +689,8 @@ mod tests {
 
         // Simulate old-style daily files (no index segment).
         // These match `test.*.log` so collect_log_files picks them up.
-        fs::write(tmp.path().join("test.2026-01-01.log"), &[0u8; 80]).unwrap();
-        fs::write(tmp.path().join("test.2026-01-02.log"), &[0u8; 80]).unwrap();
+        fs::write(tmp.path().join("test.2026-01-01.log"), [0u8; 80]).unwrap();
+        fs::write(tmp.path().join("test.2026-01-02.log"), [0u8; 80]).unwrap();
 
         // Total cap 100.  Two old files = 160, exceeds cap.
         let mut w = test_writer(tmp.path(), 1024, 100);

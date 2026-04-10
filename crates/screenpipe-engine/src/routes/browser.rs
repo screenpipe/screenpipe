@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 /// Shared state for the browser bridge.
 pub struct BrowserBridge {
     /// Sender to the connected extension (None if disconnected)
+    #[allow(clippy::type_complexity)]
     extension_tx: RwLock<Option<Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>>>,
     /// Pending eval requests keyed by request ID
     pending: Mutex<std::collections::HashMap<String, oneshot::Sender<EvalResult>>>,
@@ -148,10 +149,8 @@ pub async fn browser_eval_handler(
 
     let send_result = {
         let mut sink = ext_tx.lock().await;
-        sink.send(Message::Text(
-            serde_json::to_string(&ws_msg).unwrap().into(),
-        ))
-        .await
+        sink.send(Message::Text(serde_json::to_string(&ws_msg).unwrap()))
+            .await
     };
 
     if let Err(e) = send_result {

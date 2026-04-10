@@ -221,11 +221,14 @@ struct NotificationContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
 
-            // Body — render basic markdown inline
-            MarkdownText(payload.body)
-                .padding(.horizontal, 14)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
+            // Body — render basic markdown inline, scrollable when long
+            ScrollView(.vertical, showsIndicators: true) {
+                MarkdownText(payload.body)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            }
+            .frame(maxHeight: 200)
 
             // Action buttons
             if !payload.actions.isEmpty {

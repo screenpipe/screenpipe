@@ -272,6 +272,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1003,9 +1012,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.59"
+version = "1.2.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7a4d3ec6524d28a329fc53654bbadc9bdd7b0431f5d65f1a56ffb28a1ee5283"
+checksum = "e1e928d4b69e3077709075a938a05ffbedfa53a84c8f766efbf8220bb1ff60e1"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1141,7 +1150,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.0"
-source = "git+https://github.com/yury/cidre.git#ee0a48a2f8be4b4433e34db06bee46c3346a91a8"
+source = "git+https://github.com/yury/cidre.git#34638ae16c5226d3c349953fcdd46533e3379a17"
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
@@ -1977,7 +1986,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2267,7 +2276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3233,7 +3242,7 @@ dependencies = [
  "hyper",
  "libc",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3583,7 +3592,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4542,7 +4551,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5792,7 +5801,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5869,7 +5878,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.37",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5906,9 +5915,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6507,7 +6516,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6693,7 +6702,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs#c088aedbba5c07dfbf5ac43870fbdf93fa401ca0"
+source = "git+https://github.com/screenpipe/sck-rs#8151b16b705f91716ed8c10c54fb42c94fce9b8d"
 dependencies = [
  "cidre 0.15.0",
  "image",
@@ -6720,6 +6729,7 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
@@ -6755,7 +6765,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6815,7 +6825,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6828,7 +6838,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6856,7 +6866,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6902,7 +6912,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6928,7 +6938,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6998,7 +7008,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7016,7 +7026,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7056,7 +7066,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.272"
+version = "0.3.278"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -8284,7 +8294,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9560,7 +9570,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

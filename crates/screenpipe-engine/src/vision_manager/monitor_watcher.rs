@@ -19,8 +19,13 @@ use crate::drm_detector;
 
 static MONITOR_WATCHER: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
 
-/// Start the monitor watcher that polls for monitor changes
-pub async fn start_monitor_watcher(vision_manager: Arc<VisionManager>) -> anyhow::Result<()> {
+/// Start the monitor watcher that polls for monitor changes.
+/// When `audio_manager` is provided, SCK-based (output) audio devices are also
+/// stopped/restarted alongside vision during DRM pause/resume.
+pub async fn start_monitor_watcher(
+    vision_manager: Arc<VisionManager>,
+    audio_manager: Option<screenpipe_audio::audio_manager::AudioManager>,
+) -> anyhow::Result<()> {
     // Stop existing watcher if any
     stop_monitor_watcher().await?;
 
@@ -66,6 +71,11 @@ pub async fn start_monitor_watcher(vision_manager: Arc<VisionManager>) -> anyhow
                     if let Err(e) = vision_manager.stop().await {
                         warn!("failed to stop vision manager for DRM pause: {:?}", e);
                     }
+                    if let Some(ref am) = audio_manager {
+                        if let Err(e) = am.stop_output_devices().await {
+                            warn!("failed to stop SCK audio for DRM pause: {:?}", e);
+                        }
+                    }
                     drm_stopped = true;
                 }
                 // Poll focused app (Accessibility API only, no SCK) to detect
@@ -84,6 +94,11 @@ pub async fn start_monitor_watcher(vision_manager: Arc<VisionManager>) -> anyhow
                 info!("DRM content no longer focused — restarting vision monitors");
                 if let Err(e) = vision_manager.start().await {
                     warn!("failed to restart vision manager after DRM pause: {:?}", e);
+                }
+                if let Some(ref am) = audio_manager {
+                    if let Err(e) = am.start_output_devices().await {
+                        warn!("failed to restart SCK audio after DRM clear: {:?}", e);
+                    }
                 }
                 drm_stopped = false;
                 // Re-populate known_monitors after restart

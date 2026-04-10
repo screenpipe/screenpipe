@@ -959,6 +959,64 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
         .collect())
 }
 
+/// Resolve ignored/included window filters to SCK window IDs (macOS only).
+///
+/// Enumerates all on-screen windows, checks each against `WindowFilters::is_valid()`,
+/// and returns the SCK window IDs of windows that should be excluded from capture.
+/// These IDs can be passed to `capture_image_excluding()` so ScreenCaptureKit
+/// never renders those windows into the capture buffer.
+///
+/// Returns an empty vec if no windows match the filters or on error.
+#[cfg(target_os = "macos")]
+pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
+    if window_filters.ignore_set.is_empty() && window_filters.include_set.is_empty() {
+        return Vec::new();
+    }
+
+    let windows = match SckWindow::all() {
+        Ok(w) => w,
+        Err(e) => {
+            debug!(
+                "get_excluded_sck_window_ids: failed to enumerate windows: {}",
+                e
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut excluded = Vec::new();
+    for w in &windows {
+        let app_name = w.app_name().unwrap_or_default();
+        let title = w.title().unwrap_or_default();
+
+        if app_name.is_empty() {
+            continue;
+        }
+
+        if !window_filters.is_valid(&app_name, &title) {
+            if let Ok(id) = w.id() {
+                excluded.push(id);
+            }
+        }
+    }
+
+    if !excluded.is_empty() {
+        debug!(
+            "resolved {} ignored window(s) to SCK IDs: {:?}",
+            excluded.len(),
+            excluded
+        );
+    }
+
+    excluded
+}
+
+/// Non-macOS stub — SCK exclusion is not available.
+#[cfg(not(target_os = "macos"))]
+pub fn get_excluded_sck_window_ids(_window_filters: &WindowFilters) -> Vec<u32> {
+    Vec::new()
+}
+
 pub async fn capture_all_visible_windows(
     monitor: &SafeMonitor,
     window_filters: &WindowFilters,

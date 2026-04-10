@@ -72,9 +72,9 @@ impl SileroVad {
             return Ok(path);
         }
 
-        if !DOWNLOADING
+        if DOWNLOADING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
+            .is_err()
         {
             return Err(anyhow::anyhow!(
                 "silero vad model download already in progress"

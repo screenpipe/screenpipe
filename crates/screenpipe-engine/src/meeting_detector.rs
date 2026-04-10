@@ -752,6 +752,7 @@ impl MeetingUiScanner {
 /// Uses `PrecomputedSignal` to avoid per-signal `.to_lowercase()` allocations.
 /// Lowercases node title/desc/identifier ONCE per node, not once per signal.
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 fn walk_for_signals(
     elem: &cidre::ax::UiElement,
     signals: &[PrecomputedSignal],
@@ -883,15 +884,15 @@ fn check_signal_match(
 ) -> bool {
     match signal {
         CallSignal::AutomationId(id) => {
-            identifier.map_or(false, |ident| ident.eq_ignore_ascii_case(id))
+            identifier.is_some_and(|ident| ident.eq_ignore_ascii_case(id))
         }
-        CallSignal::AutomationIdContains(substr) => identifier.map_or(false, |ident| {
-            ident.to_lowercase().contains(&substr.to_lowercase())
-        }),
+        CallSignal::AutomationIdContains(substr) => {
+            identifier.is_some_and(|ident| ident.to_lowercase().contains(&substr.to_lowercase()))
+        }
         CallSignal::KeyboardShortcut(shortcut) => {
             let shortcut_lower = shortcut.to_lowercase();
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&shortcut_lower));
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&shortcut_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&shortcut_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&shortcut_lower));
             in_desc || in_title
         }
         CallSignal::RoleWithName {
@@ -902,8 +903,8 @@ fn check_signal_match(
                 return false;
             }
             let name_lower = name_contains.to_lowercase();
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&name_lower));
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&name_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&name_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&name_lower));
             in_title || in_desc
         }
         CallSignal::MenuBarItem { title_contains } => {
@@ -912,26 +913,26 @@ fn check_signal_match(
                 return false;
             }
             let needle = title_contains.to_lowercase();
-            title.map_or(false, |t| t.to_lowercase().contains(&needle))
+            title.is_some_and(|t| t.to_lowercase().contains(&needle))
         }
         CallSignal::MenuItemId(expected_id) => {
             // Match AXMenuItem by automation ID (Zoom's "onMuteAudio:" etc.)
             if role != "AXMenuItem" {
                 return false;
             }
-            identifier.map_or(false, |ident| ident == *expected_id)
+            identifier == Some(*expected_id)
         }
         CallSignal::NameContains(needle) => {
             let needle_lower = needle.to_lowercase();
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&needle_lower));
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&needle_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&needle_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&needle_lower));
             in_title || in_desc
         }
         CallSignal::WindowTitle { title_contains } => {
             // WindowTitle is checked separately against the root window element,
             // not during descendant walking. But handle it here for completeness.
             let needle = title_contains.to_lowercase();
-            title.map_or(false, |t| t.to_lowercase().contains(&needle))
+            title.is_some_and(|t| t.to_lowercase().contains(&needle))
         }
     }
 }
@@ -947,46 +948,46 @@ fn check_signal_match_precomputed(
 ) -> bool {
     match &ps.signal {
         CallSignal::AutomationId(id) => {
-            identifier_lower.map_or(false, |ident| ident.eq_ignore_ascii_case(id))
+            identifier_lower.is_some_and(|ident| ident.eq_ignore_ascii_case(id))
         }
         CallSignal::AutomationIdContains(_) => {
-            identifier_lower.map_or(false, |ident| ident.contains(&ps.lower[..]))
+            identifier_lower.is_some_and(|ident| ident.contains(&ps.lower[..]))
         }
         CallSignal::KeyboardShortcut(_) => {
-            let in_desc = desc_lower.map_or(false, |d| d.contains(&ps.lower[..]));
-            let in_title = title_lower.map_or(false, |t| t.contains(&ps.lower[..]));
+            let in_desc = desc_lower.is_some_and(|d| d.contains(&ps.lower[..]));
+            let in_title = title_lower.is_some_and(|t| t.contains(&ps.lower[..]));
             in_desc || in_title
         }
         CallSignal::RoleWithName { role: r, .. } => {
             if role != *r {
                 return false;
             }
-            let in_title = title_lower.map_or(false, |t| t.contains(&ps.lower[..]));
-            let in_desc = desc_lower.map_or(false, |d| d.contains(&ps.lower[..]));
+            let in_title = title_lower.is_some_and(|t| t.contains(&ps.lower[..]));
+            let in_desc = desc_lower.is_some_and(|d| d.contains(&ps.lower[..]));
             in_title || in_desc
         }
         CallSignal::MenuBarItem { .. } => {
             if role != "AXMenuBarItem" {
                 return false;
             }
-            title_lower.map_or(false, |t| t.contains(&ps.lower[..]))
+            title_lower.is_some_and(|t| t.contains(&ps.lower[..]))
         }
         CallSignal::MenuItemId(_) => {
             if role != "AXMenuItem" {
                 return false;
             }
-            identifier_lower.map_or(false, |ident| ident == &ps.lower[..])
+            identifier_lower.is_some_and(|ident| ident == &ps.lower[..])
         }
         CallSignal::NameContains(_) => {
             // Role-agnostic: match any element whose title or description contains the text
-            let in_title = title_lower.map_or(false, |t| t.contains(&ps.lower[..]));
-            let in_desc = desc_lower.map_or(false, |d| d.contains(&ps.lower[..]));
+            let in_title = title_lower.is_some_and(|t| t.contains(&ps.lower[..]));
+            let in_desc = desc_lower.is_some_and(|d| d.contains(&ps.lower[..]));
             in_title || in_desc
         }
         CallSignal::WindowTitle { .. } => {
             // Checked separately against root window element, not during tree walk.
             // But support it here for completeness (matches on title).
-            title_lower.map_or(false, |t| t.contains(&ps.lower[..]))
+            title_lower.is_some_and(|t| t.contains(&ps.lower[..]))
         }
     }
 }
@@ -1044,7 +1045,7 @@ fn get_ax_identifier(elem: &cidre::ax::UiElement) -> Option<String> {
     // Try AXIdentifier (native apps)
     let ident_name = cidre::cf::String::from_str("AXIdentifier");
     let ident_attr = cidre::ax::Attr::with_string(&ident_name);
-    if let Some(val) = get_ax_string_attr(elem, &ident_attr) {
+    if let Some(val) = get_ax_string_attr(elem, ident_attr) {
         if !val.is_empty() {
             return Some(val);
         }
@@ -1053,7 +1054,7 @@ fn get_ax_identifier(elem: &cidre::ax::UiElement) -> Option<String> {
     // Try AXDOMIdentifier (web content in browsers/Electron)
     let dom_ident_name = cidre::cf::String::from_str("AXDOMIdentifier");
     let dom_ident_attr = cidre::ax::Attr::with_string(&dom_ident_name);
-    if let Some(val) = get_ax_string_attr(elem, &dom_ident_attr) {
+    if let Some(val) = get_ax_string_attr(elem, dom_ident_attr) {
         if !val.is_empty() {
             return Some(val);
         }
@@ -1488,18 +1489,28 @@ fn is_browser_app(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
     BROWSER_NAMES.iter().any(|b| lower.contains(b))
         || lower.ends_with(".exe")
-            && ["chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe"]
-                .iter()
-                .any(|b| lower.contains(b))
+            && [
+                "chrome.exe",
+                "firefox.exe",
+                "msedge.exe",
+                "brave.exe",
+                "opera.exe",
+            ]
+            .iter()
+            .any(|b| lower.contains(b))
 }
 
 /// Advance the state machine based on scan results.
 ///
 /// Returns the new state plus an optional action to perform (DB insert/update).
 /// This function is pure — it does not perform side effects, making it easy to test.
+///
+/// `has_output_audio`: when true, audio output device has recent data — keeps
+/// browser meetings alive even when AX controls are hidden (tab switched).
 pub fn advance_state(
     state: MeetingState,
     scan_results: &[ScanResult],
+    has_output_audio: bool,
 ) -> (MeetingState, Option<StateAction>) {
     // Find the best scan result (one that found the most signals and is in-call)
     let best_active = scan_results
@@ -1594,7 +1605,11 @@ pub fn advance_state(
                     None,
                 )
             } else {
-                let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+                let timeout = if is_browser {
+                    ENDING_TIMEOUT_BROWSER
+                } else {
+                    ENDING_TIMEOUT
+                };
                 info!(
                     "meeting v2: Active -> Ending (no controls, app={}, id={}, grace={:?})",
                     app, meeting_id, timeout
@@ -1619,7 +1634,11 @@ pub fn advance_state(
             since,
             is_browser,
         } => {
-            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            let timeout = if is_browser {
+                ENDING_TIMEOUT_BROWSER
+            } else {
+                ENDING_TIMEOUT
+            };
             if let Some(result) = best_active {
                 info!(
                     "meeting v2: Ending -> Active (controls reappeared, app={}, id={})",
@@ -1630,6 +1649,23 @@ pub fn advance_state(
                         meeting_id,
                         app: result.app_name.clone(),
                         started_at, // preserve original start time
+                        last_seen: Instant::now(),
+                        is_browser,
+                    },
+                    None,
+                )
+            } else if is_browser && has_output_audio {
+                // Audio output is still active — the user likely just switched
+                // tabs/apps while the meeting continues. Keep alive.
+                info!(
+                    "meeting v2: Ending -> Active (output audio still active, app={}, id={})",
+                    app, meeting_id
+                );
+                (
+                    MeetingState::Active {
+                        meeting_id,
+                        app,
+                        started_at,
                         last_seen: Instant::now(),
                         is_browser,
                     },
@@ -1776,16 +1812,15 @@ pub fn find_running_meeting_apps(
                 // Check browser URL patterns — only if this is a browser
                 if !profile.app_identifiers.browser_url_patterns.is_empty()
                     && BROWSER_NAMES.iter().any(|b| name_lower.contains(b))
+                    && has_browser_meeting_url(pid, profile.app_identifiers.browser_url_patterns)
                 {
-                    if has_browser_meeting_url(pid, &profile.app_identifiers.browser_url_patterns) {
-                        results.push(RunningMeetingApp {
-                            pid,
-                            app_name: name.clone(),
-                            profile_index: idx,
-                            browser_url: None,
-                        });
-                        break;
-                    }
+                    results.push(RunningMeetingApp {
+                        pid,
+                        app_name: name.clone(),
+                        profile_index: idx,
+                        browser_url: None,
+                    });
+                    break;
                 }
             }
         }
@@ -2276,7 +2311,7 @@ pub async fn run_meeting_detection_loop(
                 current_interval = IDLE_NO_APPS_SCAN_INTERVAL;
                 idle_scan_count += 1;
                 // Periodic summary every ~60s (2 cycles at 30s)
-                if idle_scan_count % 2 == 0 {
+                if idle_scan_count.is_multiple_of(2) {
                     debug!(
                         "meeting v2: idle, no meeting apps (scans={})",
                         idle_scan_count
@@ -2316,8 +2351,23 @@ pub async fn run_meeting_detection_loop(
             scan_results.iter().filter(|r| r.is_in_call).count()
         );
 
+        // 2b. Check output audio when in Ending state for browser meetings.
+        // If the audio output device still has data, the meeting is likely
+        // still going — the user just switched tabs/apps.
+        let has_output_audio = if matches!(
+            state,
+            MeetingState::Ending {
+                is_browser: true,
+                ..
+            }
+        ) {
+            db.has_recent_output_audio(30).await.unwrap_or(false)
+        } else {
+            false
+        };
+
         // 3. Advance state machine
-        let (new_state, action) = advance_state(state, &scan_results);
+        let (new_state, action) = advance_state(state, &scan_results, has_output_audio);
         state = new_state;
 
         // Adaptive interval based on state
@@ -2510,9 +2560,16 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             started_at,
             is_browser,
         } => {
-            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            let timeout = if is_browser {
+                ENDING_TIMEOUT_BROWSER
+            } else {
+                ENDING_TIMEOUT
+            };
             if since.elapsed() >= timeout {
-                info!("meeting v2: Ending -> Idle (timeout={:?}, app={})", timeout, app);
+                info!(
+                    "meeting v2: Ending -> Idle (timeout={:?}, app={})",
+                    timeout, app
+                );
                 let ended_id = if meeting_id >= 0 {
                     Some(meeting_id)
                 } else {
@@ -2846,7 +2903,7 @@ mod tests {
     fn test_idle_to_confirming() {
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Confirming { .. }));
         assert!(action.is_none());
@@ -2856,7 +2913,7 @@ mod tests {
     fn test_idle_stays_idle_no_results() {
         let state = MeetingState::Idle;
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2866,7 +2923,7 @@ mod tests {
     fn test_idle_stays_idle_no_call() {
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Zoom", false, 0)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2880,7 +2937,7 @@ mod tests {
             profile_index: 0,
         };
         let results = vec![make_scan_result("Zoom", true, 2)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Active { .. }));
         assert!(matches!(action, Some(StateAction::StartMeeting { .. })));
@@ -2896,7 +2953,7 @@ mod tests {
             profile_index: 0,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2911,7 +2968,7 @@ mod tests {
             profile_index: 0,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Confirming { .. }));
         assert!(action.is_none());
@@ -2927,7 +2984,7 @@ mod tests {
             is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -2946,7 +3003,7 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -2967,11 +3024,11 @@ mod tests {
         };
         // Transition to Ending
         let results: Vec<ScanResult> = vec![];
-        let (ending_state, _) = advance_state(state, &results);
+        let (ending_state, _) = advance_state(state, &results, false);
 
         // Transition back to Active (controls reappear)
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (active_again, _) = advance_state(ending_state, &results);
+        let (active_again, _) = advance_state(ending_state, &results, false);
 
         if let MeetingState::Active { started_at, .. } = active_again {
             assert_eq!(
@@ -2994,7 +3051,7 @@ mod tests {
             is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -3015,7 +3072,7 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(matches!(
@@ -3035,13 +3092,62 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
             MeetingState::Ending { meeting_id: 42, .. }
         ));
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_browser_ending_stays_active_with_output_audio() {
+        // Browser meeting: user switched tabs but audio output is still active
+        let state = MeetingState::Ending {
+            meeting_id: 42,
+            app: "Google Chrome".to_string(),
+            started_at: Utc::now(),
+            since: Instant::now(),
+            is_browser: true,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+
+        assert!(
+            matches!(
+                new_state,
+                MeetingState::Active {
+                    meeting_id: 42,
+                    is_browser: true,
+                    ..
+                }
+            ),
+            "browser meeting should stay Active when output audio is flowing"
+        );
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_native_ending_ignores_output_audio() {
+        // Native app: output audio should NOT prevent ending (controls are reliable)
+        let state = MeetingState::Ending {
+            meeting_id: 42,
+            app: "Zoom".to_string(),
+            started_at: Utc::now(),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
+            is_browser: false,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+
+        assert!(matches!(new_state, MeetingState::Idle));
+        assert!(matches!(
+            action,
+            Some(StateAction::EndMeeting { meeting_id: 42 })
+        ));
     }
 
     // ── Edge case tests ────────────────────────────────────────────────
@@ -3058,7 +3164,7 @@ mod tests {
         };
 
         // First: Active -> Ending (no controls found)
-        let (state, action) = advance_state(state, &[]);
+        let (state, action) = advance_state(state, &[], false);
         assert!(matches!(state, MeetingState::Ending { .. }));
         assert!(action.is_none());
 
@@ -3072,7 +3178,7 @@ mod tests {
                 .unwrap_or(Instant::now()),
             is_browser: false,
         };
-        let (state, action) = advance_state(state, &[]);
+        let (state, action) = advance_state(state, &[], false);
         assert!(matches!(state, MeetingState::Idle));
         assert!(matches!(
             action,
@@ -3088,17 +3194,17 @@ mod tests {
         // Scan 1: Teams detected
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Teams", true, 1)];
-        let (state, _) = advance_state(state, &results);
+        let (state, _) = advance_state(state, &results, false);
         assert!(matches!(state, MeetingState::Confirming { .. }));
 
         // Scan 2: No controls (switched to VS Code, Teams AX tree inaccessible)
-        let (state, _) = advance_state(state, &[]);
+        let (state, _) = advance_state(state, &[], false);
         // Still confirming (within timeout)
         assert!(matches!(state, MeetingState::Confirming { .. }));
 
         // Scan 3: Teams detected again
         let results = vec![make_scan_result("Teams", true, 1)];
-        let (state, action) = advance_state(state, &results);
+        let (state, action) = advance_state(state, &results, false);
         // Should transition to Active
         assert!(matches!(state, MeetingState::Active { .. }));
         assert!(matches!(action, Some(StateAction::StartMeeting { .. })));
@@ -3110,7 +3216,7 @@ mod tests {
         // Should stay Idle.
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Teams", false, 0)];
-        let (state, _) = advance_state(state, &results);
+        let (state, _) = advance_state(state, &results, false);
         assert!(matches!(state, MeetingState::Idle));
     }
 
@@ -3232,7 +3338,7 @@ mod tests {
             make_scan_result("Zoom", true, 3),
             make_scan_result("Chrome", false, 0),
         ];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         if let MeetingState::Confirming { app, .. } = new_state {
             assert_eq!(app, "Zoom", "should pick the result with most signals");
         } else {
@@ -3560,7 +3666,7 @@ mod tests {
         // Simulate Zoom idle: only "Meeting" menu bar item found (1 signal).
         // With min_signals_required=2, this should NOT trigger detection.
         let profiles = load_detection_profiles();
-        let zoom = profiles
+        let _zoom = profiles
             .iter()
             .find(|p| p.app_identifiers.macos_app_names.contains(&"zoom.us"))
             .expect("Zoom profile not found");
@@ -3574,7 +3680,7 @@ mod tests {
             signals_found: 1,
             matched_signals: vec!["menu_bar_item=Meeting".to_string()],
         }];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         assert!(
             matches!(new_state, MeetingState::Idle),
             "Zoom with only 1 signal should stay Idle, got {:?}",
@@ -3597,7 +3703,7 @@ mod tests {
                 "role=AXButton name=End Meeting".to_string(),
             ],
         }];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         assert!(
             matches!(new_state, MeetingState::Confirming { .. }),
             "Zoom with 2 signals should transition to Confirming, got {:?}",
@@ -3648,8 +3754,7 @@ mod tests {
         let has_broad_pattern = meet
             .app_identifiers
             .browser_url_patterns
-            .iter()
-            .any(|p| *p == "google meet");
+            .contains(&"google meet");
         assert!(
             !has_broad_pattern,
             "Google Meet browser_url_patterns must NOT include bare 'google meet' — \
@@ -3756,7 +3861,7 @@ mod tests {
         // Cmd+D / Ctrl+D should NOT match any meeting signal for browser-based
         // profiles, because it's the universal bookmark shortcut.
         let signal_cmd_d = CallSignal::KeyboardShortcut("\u{2318}D");
-        let signal_ctrl_d = CallSignal::KeyboardShortcut("Ctrl+D");
+        let _signal_ctrl_d = CallSignal::KeyboardShortcut("Ctrl+D");
 
         // A random AXButton with ⌘D in its description (e.g. bookmark button)
         // should not be detected as a meeting signal
@@ -3804,7 +3909,7 @@ mod tests {
         // Patterns without dots should NOT match titles
         let non_domain_patterns = ["google meet", "zoom meeting", "slack huddle"];
         let title = "Join with Google Meet - Calendar";
-        let title_lower = title.to_lowercase();
+        let _title_lower = title.to_lowercase();
 
         for pattern in &non_domain_patterns {
             // Domain-only filter: patterns without dots are excluded from title matching
