@@ -4,6 +4,8 @@
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use anyhow::anyhow;
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+use cpal::traits::{DeviceTrait, HostTrait};
 use anyhow::Result;
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -152,8 +154,8 @@ impl AudioStream {
             let error_callback = create_error_callback(
                 device_name.clone(),
                 is_running_weak,
-                is_disconnected,
-                stream_control_tx,
+                is_disconnected.clone(),
+                stream_control_tx.clone(),
             );
 
             let stream = build_input_stream(&device, &config, channels, tx, error_callback);
@@ -172,7 +174,80 @@ impl AudioStream {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to build input stream: {}", e);
+                    let err_str = e.to_string();
+                    error!(
+                        "Failed to build input stream for {}: {}",
+                        device_name, err_str
+                    );
+
+                    // If the device is no longer available at build time (e.g. a
+                    // Bluetooth headset that was unplugged just before startup),
+                    // fall back to the system default device so recording can still
+                    // start.
+                    if err_str.contains("no longer available")
+                        || err_str.contains("device is no longer valid")
+                    {
+                        warn!(
+                            "device {} unavailable at startup, attempting fallback to system default device",
+                            device_name
+                        );
+
+                        let fallback_device = if device_name.ends_with("(output)") {
+                            cpal::default_host().default_output_device()
+                        } else {
+                            cpal::default_host().default_input_device()
+                        };
+
+                        if let Some(fallback) = fallback_device {
+                            let fallback_name = fallback
+                                .name()
+                                .unwrap_or_else(|_| "default".to_string());
+                            warn!(
+                                "building input stream on fallback device: {}",
+                                fallback_name
+                            );
+
+                            // Rebuild callback so error messages reference the correct
+                            // device name.
+                            let fallback_callback = create_error_callback(
+                                fallback_name.clone(),
+                                is_running_weak.clone(),
+                                is_disconnected.clone(),
+                                stream_control_tx.clone(),
+                            );
+
+                            let fallback_stream =
+                                build_input_stream(&fallback, &config, channels, tx, fallback_callback);
+
+                            match fallback_stream {
+                                Ok(fallback_stream) => {
+                                    if let Err(play_err) = fallback_stream.play() {
+                                        error!(
+                                            "failed to play fallback stream for {}: {}",
+                                            fallback_name, play_err
+                                        );
+                                        return;
+                                    }
+                                    if let Ok(StreamControl::Stop(response)) =
+                                        stream_control_rx.recv()
+                                    {
+                                        fallback_stream.pause().ok();
+                                        drop(fallback_stream);
+                                        response.send(()).ok();
+                                    }
+                                    return;
+                                }
+                                Err(fallback_err) => {
+                                    error!(
+                                        "failed to build fallback input stream for {}: {}",
+                                        fallback_name, fallback_err
+                                    );
+                                }
+                            }
+                        } else {
+                            warn!("no fallback audio device available");
+                        }
+                    }
                 }
             }
         }))
@@ -321,10 +396,8 @@ fn build_input_stream(
 impl Drop for AudioStream {
     fn drop(&mut self) {
         let set = LocalSet::new();
-
         let stream_control = self.stream_control.clone();
         let is_disconnected = self.is_disconnected.clone();
-
         set.spawn_local(async move {
             let _ = stream_control.send(StreamControl::Stop(oneshot::channel().0));
             is_disconnected.store(true, Ordering::Relaxed);
