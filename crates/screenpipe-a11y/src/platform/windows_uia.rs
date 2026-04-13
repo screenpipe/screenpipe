@@ -882,42 +882,12 @@ fn get_window_info(hwnd: HWND) -> (String, Option<String>, u32) {
 
 /// Get text content from the Windows clipboard
 pub fn get_clipboard_text_impl() -> Option<String> {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Foundation::HGLOBAL;
-    use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-    use windows::Win32::System::Ole::CF_UNICODETEXT;
-
-    unsafe {
-        if OpenClipboard(HWND::default()).is_err() {
-            return None;
-        }
-
-        let result = (|| -> Option<String> {
-            let handle: HANDLE = GetClipboardData(CF_UNICODETEXT.0 as u32).ok()?;
-            let hglobal = HGLOBAL(handle.0);
-            let ptr = GlobalLock(hglobal) as *const u16;
-            if ptr.is_null() {
-                return None;
-            }
-
-            // Find null terminator
-            let mut len = 0;
-            while *ptr.add(len) != 0 {
-                len += 1;
-                if len > 1_000_000 {
-                    break; // Safety cap: 1M chars
-                }
-            }
-
-            let slice = std::slice::from_raw_parts(ptr, len);
-            let text = String::from_utf16_lossy(slice);
-            let _ = GlobalUnlock(hglobal);
-            Some(text)
-        })();
-
-        let _ = CloseClipboard();
-        result
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
     }
 }
 
@@ -1104,51 +1074,17 @@ mod tests {
                 AccessibilityNode {
                     control_type: "Button".to_string(),
                     name: Some("A".to_string()),
-                    automation_id: None,
-                    class_name: None,
-                    value: None,
-                    bounds: None,
-                    is_enabled: true,
-                    is_focused: None,
-                    is_keyboard_focusable: None,
-                    children: vec![],
+                    ..Default::default()
                 },
                 AccessibilityNode {
                     control_type: "Text".to_string(),
                     name: Some("B".to_string()),
-                    automation_id: None,
-                    class_name: None,
-                    value: None,
-                    bounds: None,
-                    is_enabled: true,
-                    is_focused: None,
-                    is_keyboard_focusable: None,
-                    help_text: None,
-                    is_password: None,
-                    is_selected: None,
-                    is_expanded: None,
-                    accelerator_key: None,
-                    access_key: None,
-                    localized_control_type: None,
                     children: vec![AccessibilityNode {
                         control_type: "Text".to_string(),
                         name: Some("C".to_string()),
-                        automation_id: None,
-                        class_name: None,
-                        value: None,
-                        bounds: None,
-                        is_enabled: true,
-                        is_focused: None,
-                        is_keyboard_focusable: None,
-                        help_text: None,
-                        is_password: None,
-                        is_selected: None,
-                        is_expanded: None,
-                        accelerator_key: None,
-                        access_key: None,
-                        localized_control_type: None,
-                        children: vec![],
+                        ..Default::default()
                     }],
+                    ..Default::default()
                 },
             ],
         };

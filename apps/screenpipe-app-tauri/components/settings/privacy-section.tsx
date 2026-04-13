@@ -386,6 +386,59 @@ export function PrivacySection() {
           )}
       </div>
 
+      {/* Security */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+          Security
+        </h2>
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    require API authentication
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    remote devices must use the same account to access this API. localhost is always allowed.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={settings.apiAuth ?? false}
+                onCheckedChange={(checked) => {
+                  handleSettingsChange({ apiAuth: checked });
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    encrypt settings at rest
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    encrypt store.bin with a key stored in your OS keychain. requires keychain access.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={settings.encryptStore ?? false}
+                onCheckedChange={(checked) => {
+                  handleSettingsChange({ encryptStore: checked });
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Offline Mode */}
       <LockedSetting settingKey="offline_mode">
       <div className="space-y-2">

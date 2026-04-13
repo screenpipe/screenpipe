@@ -20,7 +20,7 @@ import {
 import { platform } from "@tauri-apps/plugin-os";
 import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
-import { getStore } from "@/lib/hooks/use-settings";
+import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 
 const STORE_KEY = "calendarUserDisconnected";
 const ENABLED_KEY = "calendarEnabled";
@@ -39,7 +39,7 @@ async function setCalendarPref(key: string, value: boolean): Promise<void> {
   try {
     const store = await getStore();
     await store.set(key, value);
-    await store.save();
+    await saveAndEncrypt(store);
   } catch {}
 }
 

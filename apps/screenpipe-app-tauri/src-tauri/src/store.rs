@@ -1,11 +1,160 @@
 use super::get_base_dir;
+use super::secrets;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::error;
+
+/// Magic header for encrypted store.bin files.
+const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
+
+/// Decrypt store.bin in place if it's encrypted and keychain key is available.
+/// No-op if the file is already plain JSON or keychain is unavailable.
+fn decrypt_store_file(path: &Path) {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if data.len() < 8 || &data[..8] != STORE_MAGIC {
+        return; // already plain JSON (or empty)
+    }
+    let key = match secrets::get_key() {
+        secrets::KeyResult::Found(k) => k,
+        secrets::KeyResult::AccessDenied => {
+            tracing::warn!(
+                "store.bin is encrypted but keychain access was denied — \
+                 please grant keychain access and restart. \
+                 Your settings are preserved in the encrypted file."
+            );
+            // Don't overwrite — the file is still valid, user just needs to grant access
+            return;
+        }
+        secrets::KeyResult::NotFound | secrets::KeyResult::Unavailable => {
+            tracing::warn!(
+                "store.bin is encrypted but keychain key not found — \
+                 saving backup as store.bin.encrypted.bak and resetting to defaults"
+            );
+            let backup = path.with_extension("bin.encrypted.bak");
+            let _ = std::fs::copy(path, &backup);
+            let _ = std::fs::write(path, b"{}");
+            return;
+        }
+    };
+    match screenpipe_vault::crypto::decrypt_small(&data[8..], &key) {
+        Ok(plaintext) => {
+            let tmp = path.with_extension("bin.dec.tmp");
+            if std::fs::write(&tmp, &plaintext).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                "failed to decrypt store.bin: {} — saving backup as store.bin.encrypted.bak",
+                e
+            );
+            let backup = path.with_extension("bin.encrypted.bak");
+            let _ = std::fs::copy(path, &backup);
+            let _ = std::fs::write(path, b"{}");
+        }
+    }
+}
+
+/// Encrypt store.bin in place if keychain key is available AND encryption is opted-in.
+///
+/// DISABLED BY DEFAULT — the macOS keychain doesn't reliably persist keys across
+/// app updates (code signing identity changes), causing settings loss on every update.
+/// The 0o600 file permissions are sufficient protection for now.
+///
+/// To opt in: create ~/.screenpipe/.encrypt-store or set SCREENPIPE_ENCRYPT_STORE=1.
+fn encrypt_store_file(path: &Path) {
+    // Check opt-in flag
+    let opted_in = std::env::var("SCREENPIPE_ENCRYPT_STORE").map(|v| v == "1").unwrap_or(false)
+        || path.parent().map(|p| p.join(".encrypt-store").exists()).unwrap_or(false);
+    if !opted_in {
+        return;
+    }
+
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if data.len() >= 8 && &data[..8] == STORE_MAGIC {
+        return; // already encrypted
+    }
+    let key = match secrets::get_or_create_key() {
+        Some(k) => k,
+        None => {
+            // Keychain access denied or unavailable — disable encryption
+            // and remove the opt-in flag so user isn't stuck in a broken state
+            if let Some(parent) = path.parent() {
+                let flag = parent.join(".encrypt-store");
+                if flag.exists() {
+                    let _ = std::fs::remove_file(&flag);
+                    tracing::warn!(
+                        "store encryption disabled — keychain access denied. \
+                         re-enable in Settings > Privacy after granting keychain access."
+                    );
+                }
+            }
+            return;
+        }
+    };
+    match screenpipe_vault::crypto::encrypt_small(&data, &key) {
+        Ok(ciphertext) => {
+            let mut out = Vec::with_capacity(8 + ciphertext.len());
+            out.extend_from_slice(STORE_MAGIC);
+            out.extend(ciphertext);
+            let tmp = path.with_extension("bin.enc.tmp");
+            if std::fs::write(&tmp, &out).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+        Err(e) => {
+            tracing::error!("failed to encrypt store.bin: {}", e);
+        }
+    }
+}
+
+/// Re-encrypt store.bin on disk. Called after the Tauri store plugin writes plain JSON.
+/// Also syncs the .encrypt-store flag file from the encryptStore setting.
+pub fn reencrypt_store_file(app: &AppHandle) {
+    if let Ok(base_dir) = get_base_dir(app, None) {
+        // Sync the flag file from the store's encryptStore setting
+        let flag_path = base_dir.join(".encrypt-store");
+        let store_path = base_dir.join("store.bin");
+
+        // Read the setting from the store JSON on disk
+        let encrypt_enabled = std::fs::read(&store_path)
+            .ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+            .and_then(|json| {
+                json.get("settings")
+                    .and_then(|s| s.get("encryptStore"))
+                    .and_then(|v| v.as_bool())
+            })
+            .unwrap_or(false);
+
+        if encrypt_enabled && !flag_path.exists() {
+            let _ = std::fs::write(&flag_path, b"");
+        } else if !encrypt_enabled && flag_path.exists() {
+            let _ = std::fs::remove_file(&flag_path);
+        }
+
+        encrypt_store_file(&store_path);
+    }
+}
+
+/// Tauri command: re-encrypt store.bin after frontend saves.
+#[tauri::command]
+#[specta::specta]
+pub fn reencrypt_store(app: AppHandle) -> Result<(), String> {
+    reencrypt_store_file(&app);
+    Ok(())
+}
 
 /// Cached store instance — reusable across the process lifetime.
 /// Uses Mutex instead of OnceLock so the cache can be invalidated when the
@@ -18,10 +167,26 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
     let base_dir = get_base_dir(app, None)?;
     let store_path = base_dir.join("store.bin");
 
+    // Decrypt store.bin before the plugin reads it (no-op if plain JSON or keychain unavailable)
+    if store_path.exists() {
+        decrypt_store_file(&store_path);
+    }
+
     let mut last_err = None;
+    // Ensure store.bin has restrictive permissions (contains API keys)
+    #[cfg(unix)]
+    if store_path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&store_path, std::fs::Permissions::from_mode(0o600));
+    }
+
     for attempt in 0..3u32 {
         match StoreBuilder::new(app, store_path.clone()).build() {
-            Ok(s) => return Ok(s),
+            Ok(s) => {
+                // Re-encrypt immediately after the plugin loaded the file
+                encrypt_store_file(&store_path);
+                return Ok(s);
+            }
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("os error 17") || msg.contains("File exists") {
@@ -49,7 +214,10 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
                         .create_new()
                         .build()
                     {
-                        Ok(s) => return Ok(s),
+                        Ok(s) => {
+                            encrypt_store_file(&store_path);
+                            return Ok(s);
+                        }
                         Err(e2) => {
                             tracing::warn!("fresh store build also failed: {}", e2);
                             last_err = Some(e);
@@ -145,6 +313,7 @@ impl OnboardingStore {
         update(&mut onboarding);
         store.set("onboarding", json!(onboarding));
         store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
         Ok(())
     }
 
@@ -154,7 +323,9 @@ impl OnboardingStore {
         };
 
         store.set("onboarding", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 
     pub fn complete(&mut self) {
@@ -446,7 +617,7 @@ impl Default for SettingsStore {
             "Settings".to_string(),
             "Keepass".to_string(),
             "Recorder".to_string(),
-            "Vaults".to_string(),
+            "vault".to_string(),
             "OBS Studio".to_string(),
             "screenpipe".to_string(),
         ];
@@ -659,6 +830,7 @@ impl SettingsStore {
                 if sanitized != raw {
                     store.set("settings", sanitized.clone());
                     let _ = store.save();
+                    reencrypt_store_file(app);
                 }
                 let settings = serde_json::from_value(sanitized);
                 match settings {
@@ -713,11 +885,20 @@ impl SettingsStore {
     ) -> screenpipe_engine::RecordingConfig {
         let resolved_engine = self.resolve_audio_engine();
         let settings = self.to_recording_settings();
-        screenpipe_engine::RecordingConfig::from_settings(
+        let mut config = screenpipe_engine::RecordingConfig::from_settings(
             &settings,
             data_dir,
             Some(&resolved_engine),
-        )
+        );
+        // Set the API auth key from the user's token/api_key for remote auth
+        if config.api_auth {
+            config.api_auth_key = self
+                .user
+                .api_key
+                .clone()
+                .or_else(|| self.user.token.clone());
+        }
+        config
     }
 
     fn resolve_audio_engine(&self) -> String {
@@ -749,7 +930,9 @@ impl SettingsStore {
         };
 
         store.set("settings", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -890,7 +1073,9 @@ impl CloudSyncSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_sync", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -923,7 +1108,9 @@ impl CloudArchiveSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_archive", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -957,7 +1144,9 @@ impl IcsCalendarSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("ics_calendars", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -1002,7 +1191,9 @@ impl PipeSuggestionsSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("pipe_suggestions", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -1016,16 +1207,19 @@ mod tests {
         let mut corrupted = json!({
             "aiPresets": ["corrupted_string_not_an_object"]
         });
-        
+
         let sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
-        
+
         // And let's test a valid object with missing/unknown provider to prove it works
         let mut valid = json!({
             "aiPresets": [{"provider": "unknown_provider"}]
         });
         let sanitized2 = SettingsStore::sanitize_legacy_fields(valid);
-        
+
         let presets = sanitized2.get("aiPresets").unwrap().as_array().unwrap();
-        assert_eq!(presets[0].get("provider").unwrap().as_str().unwrap(), "custom");
+        assert_eq!(
+            presets[0].get("provider").unwrap().as_str().unwrap(),
+            "custom"
+        );
     }
 }

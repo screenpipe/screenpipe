@@ -62,6 +62,7 @@ mod server;
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 mod space_monitor;
+mod secrets;
 mod store;
 mod suggestions;
 mod sync;
@@ -369,9 +370,21 @@ async fn main() {
 
     // Check if telemetry is disabled via store setting (analyticsEnabled) or offline mode
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
-    let store_json = std::fs::read_to_string(&store_path)
+    let store_json = std::fs::read(&store_path)
         .ok()
-        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok());
+        .and_then(|data| {
+            if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
+                // Encrypted store — try to decrypt with keychain key
+                let key = match secrets::get_key() {
+                    secrets::KeyResult::Found(k) => k,
+                    _ => return None,
+                };
+                let plain = screenpipe_vault::crypto::decrypt_small(&data[8..], &key).ok()?;
+                serde_json::from_slice::<serde_json::Value>(&plain).ok()
+            } else {
+                serde_json::from_slice::<serde_json::Value>(&data).ok()
+            }
+        });
     // Helper: look up a bool key in the store JSON (check both top-level and nested "settings")
     let store_bool = |key: &str| -> Option<bool> {
         store_json.as_ref().and_then(|data| {
@@ -679,6 +692,8 @@ async fn main() {
                 config::validate_data_dir,
                 // Hardware detection
                 hardware::get_hardware_capability,
+                // Store encryption
+                store::reencrypt_store,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -968,6 +983,7 @@ async fn main() {
             remote_sync_commands::remote_sync_stop_scheduler,
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
+            store::reencrypt_store,
         ])
         .setup(move |app| {
             //deep link register_all
@@ -1022,7 +1038,7 @@ async fn main() {
                             // Defer off event stack (same as tray: runs from tao::send_event).
                             let app_for_closure = app_handle.clone();
                             let _ = app_handle.run_on_main_thread(move || {
-                                let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
+                                let _ = ShowRewindWindow::Home { page: Some("general".to_string()) }.show(&app_for_closure);
                             });
                         }
                         "check_for_updates" => {

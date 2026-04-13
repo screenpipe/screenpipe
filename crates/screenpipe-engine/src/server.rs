@@ -18,7 +18,8 @@ use crate::{
     routes::{
         activity_summary::get_activity_summary,
         audio::{
-            api_list_audio_devices, start_audio, start_audio_device, stop_audio, stop_audio_device,
+            api_list_audio_devices, audio_device_status, start_audio, start_audio_device,
+            stop_audio, stop_audio_device,
         },
         content::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
@@ -41,7 +42,7 @@ use crate::{
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
-            list_memories_handler, update_memory_handler,
+            list_memories_handler, list_memory_tags_handler, update_memory_handler,
         },
         search::{keyword_search_handler, search},
         speakers::{
@@ -165,6 +166,12 @@ pub struct AppState {
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
     /// Browser extension bridge — relays JS eval requests to the connected extension
     pub browser_bridge: Arc<crate::routes::browser::BrowserBridge>,
+    /// When true, non-localhost requests require Authorization: Bearer <api_key>
+    pub api_auth: bool,
+    /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
+    pub api_auth_key: Option<String>,
+    /// Unified credential store for OAuth tokens, API keys, etc.
+    pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
 
 pub struct SCServer {
@@ -189,6 +196,12 @@ pub struct SCServer {
         Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
     /// Shared manual meeting lock — pass in from binary so persister and server share the same state.
     pub manual_meeting: Option<Arc<tokio::sync::RwLock<Option<i64>>>>,
+    /// Require auth for remote API access
+    pub api_auth: bool,
+    /// API key for remote auth validation
+    pub api_auth_key: Option<String>,
+    /// Unified credential store for OAuth tokens, API keys, etc.
+    pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
 
 impl SCServer {
@@ -221,6 +234,9 @@ impl SCServer {
             power_manager: None,
             pipe_permissions: Arc::new(DashMap::new()),
             manual_meeting: None,
+            api_auth: false,
+            api_auth_key: None,
+            secret_store: None,
         }
     }
 
@@ -462,6 +478,9 @@ impl SCServer {
                 .clone()
                 .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(None))),
             browser_bridge: crate::routes::browser::BrowserBridge::new(),
+            api_auth: self.api_auth,
+            api_auth_key: self.api_auth_key.clone(),
+            secret_store: self.secret_store.clone(),
         });
 
         let cors = CorsLayer::new()
@@ -510,6 +529,7 @@ impl SCServer {
             .put("/meetings/:id", update_meeting_handler)
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
+            .get("/memories/tags", list_memory_tags_handler)
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
@@ -520,6 +540,7 @@ impl SCServer {
             .get("/search/keyword", keyword_search_handler)
             .post("/audio/device/start", start_audio_device)
             .post("/audio/device/stop", stop_audio_device)
+            .get("/audio/device/status", audio_device_status)
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .get("/activity-summary", get_activity_summary)
@@ -687,7 +708,10 @@ impl SCServer {
             }
         }
 
-        let router = router.nest("/connections", crate::connections_api::router(cm, wa));
+        let router = router.nest(
+            "/connections",
+            crate::connections_api::router(cm, wa, self.secret_store.clone()),
+        );
 
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {
@@ -769,6 +793,57 @@ impl SCServer {
             .layer(axum::middleware::from_fn(
                 crate::routes::timezone::timestamp_middleware,
             ))
+            .layer({
+                // Remote API auth middleware — when api_auth is enabled,
+                // non-localhost requests must include a valid bearer token.
+                let auth_enabled = self.api_auth;
+                let auth_key = self.api_auth_key.clone();
+                axum::middleware::from_fn(
+                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+                        let auth_enabled = auth_enabled;
+                        let auth_key = auth_key.clone();
+                        async move {
+                            if !auth_enabled {
+                                return next.run(req).await;
+                            }
+
+                            // Always allow localhost
+                            let is_localhost = req
+                                .extensions()
+                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                                .map(|ci| ci.0.ip().is_loopback())
+                                .unwrap_or(true); // default to allow if no connect info
+
+                            if is_localhost {
+                                return next.run(req).await;
+                            }
+
+                            // Check bearer token
+                            let authorized = req
+                                .headers()
+                                .get(axum::http::header::AUTHORIZATION)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|v| v.strip_prefix("Bearer "))
+                                .map(|token| {
+                                    auth_key.as_deref() == Some(token)
+                                })
+                                .unwrap_or(false);
+
+                            if authorized {
+                                next.run(req).await
+                            } else {
+                                axum::response::Response::builder()
+                                    .status(403)
+                                    .header("Content-Type", "application/json")
+                                    .body(axum::body::Body::from(
+                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <SCREENPIPE_API_KEY>"}"#,
+                                    ))
+                                    .unwrap()
+                            }
+                        }
+                    },
+                )
+            })
             .layer(cors)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
     }

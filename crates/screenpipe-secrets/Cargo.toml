@@ -1,0 +1,19 @@
+[package]
+name = "screenpipe-secrets"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"

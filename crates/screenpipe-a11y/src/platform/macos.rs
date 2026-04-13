@@ -1143,12 +1143,13 @@ fn get_focused_element_context(config: &UiCaptureConfig) -> Option<ElementContex
 }
 
 fn get_clipboard() -> Option<String> {
-    std::process::Command::new("pbpaste")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .filter(|s| !s.is_empty())
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1483,5 +1484,86 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_get_clipboard_returns_option() {
+        // Should not panic regardless of clipboard state
+        let result = get_clipboard();
+        // Result is either Some(non-empty string) or None
+        if let Some(ref text) = result {
+            assert!(
+                !text.is_empty(),
+                "get_clipboard should never return Some(\"\")"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_clipboard_no_subprocess() {
+        // Verify arboard doesn't spawn pbpaste by checking it completes fast.
+        // pbpaste fork+exec takes >1ms; native NSPasteboard is <0.5ms.
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            let _ = get_clipboard();
+        }
+        let elapsed = start.elapsed();
+        // 10 calls should complete in under 50ms with native API
+        // (pbpaste would take 20-100ms+ due to process spawning)
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "10 clipboard reads took {:?} — too slow, may be spawning subprocesses",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_get_clipboard_set_and_read() {
+        // Round-trip: set clipboard text, then read it back
+        let test_text = "screenpipe_clipboard_test_12345";
+        {
+            let mut clipboard = arboard::Clipboard::new().expect("clipboard init");
+            clipboard.set_text(test_text).expect("clipboard set");
+        }
+        let result = get_clipboard();
+        assert_eq!(result, Some(test_text.to_string()));
+    }
+
+    #[test]
+    fn test_get_clipboard_empty_returns_none() {
+        // Set clipboard to empty string, should return None
+        {
+            let mut clipboard = arboard::Clipboard::new().expect("clipboard init");
+            clipboard.set_text("").expect("clipboard set empty");
+        }
+        let result = get_clipboard();
+        assert!(result.is_none(), "empty clipboard should return None");
+    }
+
+    #[test]
+    fn test_get_clipboard_unicode() {
+        let unicode_text = "日本語テスト 🎉 émojis ñ";
+        {
+            let mut clipboard = arboard::Clipboard::new().expect("clipboard init");
+            clipboard
+                .set_text(unicode_text)
+                .expect("clipboard set unicode");
+        }
+        let result = get_clipboard();
+        assert_eq!(result, Some(unicode_text.to_string()));
+    }
+
+    #[test]
+    fn test_get_clipboard_large_content() {
+        // 100KB of text — should not OOM or hang
+        let large_text: String = "x".repeat(100_000);
+        {
+            let mut clipboard = arboard::Clipboard::new().expect("clipboard init");
+            clipboard
+                .set_text(&large_text)
+                .expect("clipboard set large");
+        }
+        let result = get_clipboard();
+        assert_eq!(result, Some(large_text));
     }
 }

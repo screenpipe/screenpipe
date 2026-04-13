@@ -23,15 +23,19 @@
         "groups": [
           {
             "group": "get started",
-            "pages": ["home", "getting-started", "architecture"]
+            "pages": ["home", "quickstart", "getting-started", "use-cases", "architecture"]
+          },
+          {
+            "group": "pipes",
+            "pages": ["pipe-store", "pipes", "pipe-permissions"]
+          },
+          {
+            "group": "connect",
+            "pages": ["mcp-server", "mcp-apps", "connections", "cloud-sync", "cloud-archive", "teams"]
           },
           {
             "group": "use cases",
             "pages": ["search-screen-history", "meeting-transcription", "ai-memory", "for-developers"]
-          },
-          {
-            "group": "guides",
-            "pages": ["pipes", "pipe-permissions", "mcp-server", "mcp-apps", "cloud-sync", "cloud-archive", "teams"]
           },
           {
             "group": "integrations",
@@ -44,11 +48,11 @@
 
           {
             "group": "compare",
-            "pages": ["vs-rewind", "vs-recall", "vs-limitless"]
+            "pages": ["vs-pieces", "vs-littlebird", "vs-omi", "vs-granola", "vs-rewind", "vs-recall", "vs-limitless", "vs-otter", "vs-fathom", "vs-fireflies"]
           },
           {
             "group": "resources",
-            "pages": ["faq", "contributing"]
+            "pages": ["troubleshooting", "faq", "contributing"]
           }
         ]
       },

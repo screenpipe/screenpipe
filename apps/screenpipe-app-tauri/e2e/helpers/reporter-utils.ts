@@ -30,5 +30,7 @@ export function getReporters(): unknown[] {
 }
 
 export function getMochaTimeout(): number {
-  return isRecordVideoEnabled() ? 300000 : 60000;
+  const base = isRecordVideoEnabled() ? 300000 : 60000;
+  // Double timeout in CI — cold caches, model downloads, slower runners
+  return process.env.CI ? base * 2 : base;
 }

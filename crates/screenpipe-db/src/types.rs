@@ -77,7 +77,7 @@ impl StdError for DatabaseError {}
 
 /// Search result variants for different content types.
 ///
-/// Note: `UI` is for accessibility text traversal (ui_monitoring table).
+/// Note: `UI` is for accessibility text traversal (accessibility table).
 /// `Input` is for user actions like clicks/keystrokes (ui_events table).
 #[derive(OaSchema, Debug, Serialize, Deserialize)]
 pub enum SearchResult {

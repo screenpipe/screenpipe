@@ -8,15 +8,12 @@ import OpenAI from 'openai';
 import type { ChatCompletionMessage, ChatCompletionCreateParams } from 'openai/resources/chat';
 import type { ResponseFormatJSONSchema } from 'openai/resources';
 
-// Models we expose through OpenRouter (curated for quality/price, March 2026)
+// Models we expose through OpenRouter — only models NOT available on Vertex MaaS.
+// DeepSeek, Llama, Qwen3 Coder are routed via Vertex MaaS (GCP infra, no China data risk).
 const OPENROUTER_MODELS = [
 	{ id: 'qwen/qwen3.5-flash-02-23', name: 'Qwen3.5 Flash (1M ctx, cheapest)', provider: 'openrouter' },
-	{ id: 'deepseek/deepseek-chat', name: 'DeepSeek V3.2', provider: 'openrouter' },
 	{ id: 'deepseek/deepseek-v3.2-speciale', name: 'DeepSeek V3.2 Speciale (reasoning)', provider: 'openrouter' },
 	{ id: 'qwen/qwen3.5-397b-a17b', name: 'Qwen3.5 397B (vision, SOTA)', provider: 'openrouter' },
-	{ id: 'meta-llama/llama-4-scout', name: 'Llama 4 Scout', provider: 'openrouter' },
-	{ id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick', provider: 'openrouter' },
-	{ id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder 480B (free)', provider: 'openrouter' },
 	{ id: 'stepfun/step-3.5-flash:free', name: 'Step 3.5 Flash (free, 256K)', provider: 'openrouter' },
 ];
 
@@ -35,6 +32,11 @@ export class OpenRouterProvider implements AIProvider {
 				'X-Title': 'screenpipe',
 			},
 		});
+	}
+
+	/** Build ZDR provider config — tells OpenRouter to deny data collection */
+	private get zdrConfig() {
+		return { provider: { data_collection: 'deny' } };
 	}
 
 	private createJSONSchemaFormat(schema: Record<string, unknown>, name: string, description?: string): ResponseFormatJSONSchema {
@@ -69,7 +71,8 @@ export class OpenRouterProvider implements AIProvider {
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
 			tool_choice: body.tool_choice as ChatCompletionCreateParams['tool_choice'],
-		};
+			...this.zdrConfig,
+		} as any;
 
 		const response = await this.client.chat.completions.create(params);
 		return new Response(JSON.stringify(this.formatResponse(response)), {
@@ -86,7 +89,8 @@ export class OpenRouterProvider implements AIProvider {
 			stream_options: { include_usage: true },
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
-		});
+			...this.zdrConfig,
+		} as ChatCompletionCreateParams & { stream: true });
 
 		return new ReadableStream({
 			async start(controller) {

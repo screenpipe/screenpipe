@@ -5,20 +5,10 @@
 
 import React, { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import {
-  Brain,
-  Video,
-  Keyboard,
-  User,
   Settings as SettingsIcon,
-  HardDrive,
-  Plug,
-  Shield,
-  Layout,
   Workflow,
-  Users,
   Home,
   Clock,
-  X,
   Gift,
   HelpCircle,
   UserPlus,
@@ -27,44 +17,28 @@ import {
   Volume2,
   PanelLeftClose,
   PanelLeftOpen,
-  Phone,
   Sparkles,
-  Bell,
-  BarChart3,
-  History,
+  Phone,
+  X,
 } from "lucide-react";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
-import { AccountSection } from "@/components/settings/account-section";
-import ShortcutSection from "@/components/settings/shortcut-section";
-import { AIPresets } from "@/components/settings/ai-presets";
-import { RecordingSettings } from "@/components/settings/recording-settings";
-import GeneralSettings from "@/components/settings/general-settings";
-import { ConnectionsSection } from "@/components/settings/connections-section";
+import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
-import { TeamSection } from "@/components/settings/team-section";
-import { DisplaySection } from "@/components/settings/display-section";
-import { PrivacySection } from "@/components/settings/privacy-section";
-import { StorageSection } from "@/components/settings/storage-section";
-import { MeetingsSection } from "@/components/settings/meetings-section";
 import { MemoriesSection } from "@/components/settings/memories-section";
-import { NotificationsSettings } from "@/components/settings/notifications-settings";
-import { UsageSection } from "@/components/settings/usage-section";
-import { SpeakersSection } from "@/components/settings/speakers-section";
 import { StandaloneChat } from "@/components/standalone-chat";
 import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { commands } from "@/lib/utils/tauri";
 import { computeMeetingActive, type MeetingRow } from "@/lib/utils/meeting-state";
-import { toast } from "@/components/ui/use-toast";
+import { useRouter } from "next/navigation";
 import {
   Tooltip,
   TooltipContent,
@@ -74,58 +48,46 @@ import {
 
 type MainSection = "home" | "timeline" | "memories" | "pipes" | "help";
 
-type SettingsModalSection =
-  | "account"
-  | "recording"
-  | "ai"
-  | "general"
-  | "display"
-  | "shortcuts"
-  | "connections"
-  | "privacy"
-  | "storage"
-  | "meetings"
-  | "team"
-  | "notifications"
-  | "referral"
-  | "usage"
-  | "speakers";
-
-type SettingsModalSectionItem = {
-  id: SettingsModalSection;
-  label: string;
-  icon: React.ReactNode;
-  group?: string;
-};
-
-// All valid URL sections (main + modal)
+// All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help",
-  "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "connections", "privacy", "storage", "meetings", "memories", "speakers", "team", "referral", "usage",
+  "home", "timeline", "pipes", "help", "memories",
   "feedback", // backwards compat → maps to "help"
-  "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ];
 
-const MODAL_SECTIONS = new Set<string>([
+// Settings sections that should redirect to /settings
+const SETTINGS_SECTIONS = new Set<string>([
   "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "connections", "privacy", "storage", "meetings", "team", "referral", "usage",
+  "connections", "privacy", "storage", "meetings", "team", "referral", "usage", "speakers",
+  "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ]);
 
-function SettingsPageContent() {
+function HomeContent() {
+  const router = useRouter();
   const [activeSection, setActiveSection] = useQueryState("section", {
     defaultValue: "home",
     parse: (value) => {
       if (value === "feedback") return "help"; // backwards compat
-      if (value === "disk-usage" || value === "cloud-archive" || value === "cloud-sync") return "storage"; // backwards compat
+      // Settings sections redirect to /settings page
+      if (SETTINGS_SECTIONS.has(value)) return value; // handled by redirect effect below
       return ALL_SECTIONS.includes(value) ? value : "home";
     },
     serialize: (value) => value,
   });
 
   const { settings } = useSettings();
+  const { isTranslucent } = useSidebarContext();
   const teamState = useTeam();
   const { isSectionHidden, isSettingLocked, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
+
+  // Redirect settings sections to the standalone settings page
+  useEffect(() => {
+    if (SETTINGS_SECTIONS.has(activeSection)) {
+      const section = activeSection === "disk-usage" || activeSection === "cloud-archive" || activeSection === "cloud-sync"
+        ? "storage"
+        : activeSection;
+      router.push(`/settings?section=${section}`);
+    }
+  }, [activeSection, router]);
 
   // If current section is hidden by enterprise policy, redirect to first visible one
   useEffect(() => {
@@ -133,9 +95,6 @@ function SettingsPageContent() {
     const fallback = ["home", "timeline", "pipes"].find((s) => !isSectionHidden(s));
     setActiveSection(fallback ?? "home");
   }, [activeSection, isSectionHidden, setActiveSection]);
-
-  // Default true: treat undefined (settings still loading) as enabled to avoid opaque flash on init
-  const isTranslucent = settings?.translucentSidebar !== false;
 
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -146,19 +105,6 @@ function SettingsPageContent() {
     if (stored === "true") setSidebarCollapsed(true);
     if (localStorage.getItem("team-promo-dismissed") === "true") setTeamPromoDismissed(true);
   }, []);
-
-  // Set global transparency when sidebar is translucent
-  // This allows the native macOS WindowEffect to show through the webview
-  useEffect(() => {
-    if (isTranslucent) {
-      document.documentElement.classList.add("macos-vibrancy");
-      document.body.classList.add("macos-vibrancy");
-      return () => {
-        document.documentElement.classList.remove("macos-vibrancy");
-        document.body.classList.remove("macos-vibrancy");
-      };
-    }
-  }, [isTranslucent]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
@@ -314,43 +260,19 @@ function SettingsPageContent() {
     return () => { unlisten?.(); };
   }, [setActiveSection]);
 
-  // Settings modal state
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [modalSection, setModalSection] = useState<SettingsModalSection>("display");
-
-  // Open modal when URL points to a modal section
-  useEffect(() => {
-    if (MODAL_SECTIONS.has(activeSection)) {
-      setModalSection(activeSection as SettingsModalSection);
-      setSettingsModalOpen(true);
-    }
-  }, [activeSection]);
-
-  const openModal = useCallback((section: SettingsModalSection) => {
-    setModalSection(section);
-    setSettingsModalOpen(true);
-    setActiveSection(section);
-  }, [setActiveSection]);
-
-  const closeModal = useCallback(() => {
-    setSettingsModalOpen(false);
-    // Reset URL to last main section
-    if (MODAL_SECTIONS.has(activeSection)) {
-      setActiveSection("home");
-    }
-  }, [activeSection, setActiveSection]);
+  const openSettings = useCallback((section: string = "general") => {
+    router.push(`/settings?section=${section}`);
+  }, [router]);
 
   // Listen for open-settings events from child components (e.g. connections strip)
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.section) {
-        openModal(detail.section as SettingsModalSection);
-      }
+      openSettings(detail?.section ?? "general");
     };
     window.addEventListener("open-settings", handler);
     return () => window.removeEventListener("open-settings", handler);
-  }, [openModal]);
+  }, [openSettings]);
 
   const renderMainSection = () => {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
@@ -382,41 +304,6 @@ function SettingsPageContent() {
     }
   };
 
-  const renderModalSection = () => {
-    switch (modalSection) {
-      case "general":
-        return <GeneralSettings />;
-      case "display":
-        return <DisplaySection />;
-      case "ai":
-        return <AIPresets />;
-      case "account":
-        return <AccountSection />;
-      case "recording":
-        return <RecordingSettings />;
-      case "shortcuts":
-        return <ShortcutSection />;
-      case "privacy":
-        return <PrivacySection />;
-      case "storage":
-        return <StorageSection />;
-      case "meetings":
-        return <MeetingsSection />;
-      case "connections":
-        return <ConnectionsSection />;
-      case "team":
-        return <TeamSection />;
-      case "notifications":
-        return <NotificationsSettings />;
-      case "referral":
-        return <ReferralSection />;
-      case "usage":
-        return <UsageSection />;
-      case "speakers":
-        return <SpeakersSection />;
-    }
-  };
-
   // Top-level nav items (filtered by enterprise policy)
   const mainSections = [
     { id: "home", label: "Home", icon: <Home className="h-4 w-4" /> },
@@ -425,46 +312,23 @@ function SettingsPageContent() {
     { id: "memories", label: "Memories", icon: <Sparkles className="h-4 w-4" /> },
   ].filter((s) => !isSectionHidden(s.id));
 
-  // Settings modal sidebar items (filtered by enterprise policy)
-  const settingsModalSections = ([
-    { id: "display", label: "Display", icon: <Layout className="h-4 w-4" />, group: "app" },
-    { id: "general", label: "General", icon: <SettingsIcon className="h-4 w-4" />, group: "app" },
-    { id: "ai", label: "AI models", icon: <Brain className="h-4 w-4" />, group: "app" },
-    { id: "recording", label: "Recording", icon: <Video className="h-4 w-4" />, group: "app" },
-    { id: "shortcuts", label: "Shortcuts", icon: <Keyboard className="h-4 w-4" />, group: "app" },
-    { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" />, group: "app" },
-    { id: "usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" />, group: "data" },
-    { id: "privacy", label: "Privacy", icon: <Shield className="h-4 w-4" />, group: "data" },
-    { id: "storage", label: "Storage", icon: <HardDrive className="h-4 w-4" />, group: "data" },
-    { id: "meetings", label: "Meetings", icon: <Phone className="h-4 w-4" />, group: "data" },
-    { id: "speakers", label: "Speakers", icon: <Mic className="h-4 w-4" />, group: "data" },
-    { id: "connections", label: "Connections", icon: <Plug className="h-4 w-4" />, group: "data" },
-    { id: "team", label: "Team", icon: <Users className="h-4 w-4" />, group: "account" },
-    { id: "account", label: "Account", icon: <User className="h-4 w-4" />, group: "account" },
-    { id: "referral", label: "Get free month", icon: <Gift className="h-4 w-4" />, group: "account" },
-  ] satisfies SettingsModalSectionItem[]).filter((s) => !isSectionHidden(s.id));
-
-  const appGroup = settingsModalSections.filter(s => s.group === "app");
-  const dataGroup = settingsModalSections.filter(s => s.group === "data");
-  const accountGroup = settingsModalSections.filter(s => s.group === "account");
-
-  // Listen for navigation events from other windows
+  // Listen for navigation events from other windows (e.g. tray, Rust-side links)
   useEffect(() => {
     const unlisten = listen<{ url: string }>("navigate", (event) => {
       const url = new URL(event.payload.url, window.location.origin);
       const section = url.searchParams.get("section");
-      if (section && ALL_SECTIONS.includes(section)) {
-        const mapped = section === "feedback" ? "help"
-          : (section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync") ? "storage"
-          : section;
-        setActiveSection(mapped);
+      if (!section) return;
+      if (SETTINGS_SECTIONS.has(section)) {
+        const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
+          ? "storage" : section;
+        router.push(`/settings?section=${mapped}`);
+      } else {
+        const mapped = section === "feedback" ? "help" : section;
+        if (ALL_SECTIONS.includes(mapped)) setActiveSection(mapped);
       }
     });
-
-    return () => {
-      unlisten.then((unlistenFn) => unlistenFn());
-    };
-  }, [setActiveSection]);
+    return () => { unlisten.then((fn) => fn()); };
+  }, [setActiveSection, router]);
 
   const isFullHeight = activeSection === "home" || activeSection === "timeline";
 
@@ -478,57 +342,30 @@ function SettingsPageContent() {
       <div className="h-screen flex min-h-0">
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
-          <div
-            className={cn(
-              "border-r flex flex-col min-h-0 transition-all duration-300 overflow-x-hidden overflow-y-auto flex-shrink-0 pl-4 pt-8",
-              // When translucent: let vibrancy show through. When disabled: solid bg with transition.
-              isTranslucent ? "vibrant-sidebar" : "bg-background",
-              sidebarCollapsed ? "w-18" : "w-[calc(14rem+1rem)]",
-            )}
-          >
+          <AppSidebar collapsed={sidebarCollapsed} className="pl-4">
             <div className={cn(isTranslucent ? "vibrant-sidebar-border" : "", "border-b", sidebarCollapsed ? "px-2 py-3" : "px-4 py-3")}>
               {/* Row 1: name + phone + collapse */}
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
                 {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
-                <div className="flex items-center gap-1.5">
-                  <NotificationBell />
-                  <button
-                    onClick={toggleMeeting}
-                    disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
-                    className={cn("relative flex items-center justify-center h-5 w-5 transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                    title={
-                      meetingState.manualActive
-                        ? "stop meeting"
-                        : meetingState.active
-                          ? "meeting detected"
-                          : "start meeting"
-                    }
-                  >
-                    {meetingState.active && (
-                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
-                    )}
-                    <Phone className="h-3.5 w-3.5" />
-                  </button>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={toggleSidebar}
-                        className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                      >
-                        {sidebarCollapsed ? (
-                          <PanelLeftOpen className="h-4 w-4" />
-                        ) : (
-                          <PanelLeftClose className="h-4 w-4" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={toggleSidebar}
+                      className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
+                    >
+                      {sidebarCollapsed ? (
+                        <PanelLeftOpen className="h-4 w-4" />
+                      ) : (
+                        <PanelLeftClose className="h-4 w-4" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                  </TooltipContent>
+                </Tooltip>
               </div>
-              {/* Row 2: device icons */}
+              {/* Row 2: device status + action buttons */}
               {!sidebarCollapsed && (() => {
                 const monitors = recordingDevices.filter((d) => d.kind === "monitor");
                 const inputs = recordingDevices.filter((d) => d.kind === "input");
@@ -536,25 +373,79 @@ function SettingsPageContent() {
                 const screenOpacity = overlayData.screenActive ? 0.5 + Math.min(overlayData.captureFps / 2, 0.5) : 0.2;
                 const audioOpacity = overlayData.audioActive ? 0.5 + Math.min(overlayData.speechRatio, 0.5) : 0.2;
 
-                const groups: { key: string; icon: typeof Monitor; count: number; title: string; opacity: number }[] = [];
-                if (monitors.length > 0) groups.push({ key: "monitor", icon: Monitor, count: monitors.length, title: monitors.map((d) => d.name).join(", "), opacity: screenOpacity });
-                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity });
-                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity });
+                const groups: { key: string; icon: typeof Monitor; count: number; title: string; opacity: number; devices: RecordingDevice[] }[] = [];
+                if (monitors.length > 0) groups.push({ key: "monitor", icon: Monitor, count: monitors.length, title: monitors.map((d) => d.name).join(", "), opacity: screenOpacity, devices: monitors });
+                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: inputs });
+                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: outputs });
 
-                if (groups.length === 0) return null;
                 return (
                   <div className="flex items-center gap-2 mt-1.5">
-                    {groups.map(({ key, icon: Icon, count, title, opacity }) => (
-                      <span key={key} className="flex items-center gap-0.5" title={title}>
-                        <Icon
-                          className={cn("h-3 w-3 transition-opacity duration-500", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
-                          style={{ opacity }}
-                        />
-                        {count > 1 && (
-                          <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
-                        )}
-                      </span>
+                    {groups.map(({ key, icon: Icon, count, title, opacity, devices: groupDevices }) => (
+                      <Tooltip key={key}>
+                        <TooltipTrigger asChild>
+                          <button
+                            className={cn(
+                              "flex items-center gap-0.5 rounded px-0.5 transition-all",
+                              key === "monitor"
+                                ? "cursor-default"
+                                : cn(
+                                    "cursor-pointer",
+                                    isTranslucent ? "hover:bg-white/10" : "hover:bg-muted"
+                                  )
+                            )}
+                            onClick={key === "monitor" ? undefined : async () => {
+                              const allActive = groupDevices.every((d: RecordingDevice) => d.active);
+                              const endpoint = allActive
+                                ? "http://localhost:3030/audio/device/stop"
+                                : "http://localhost:3030/audio/device/start";
+                              for (const d of groupDevices) {
+                                if (allActive || !d.active) {
+                                  const suffix = d.kind === "input" ? "input" : "output";
+                                  await fetch(endpoint, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ device_name: `${d.name} (${suffix})` }),
+                                  }).catch(() => {});
+                                }
+                              }
+                            }}
+                          >
+                            <Icon
+                              className={cn("h-3 w-3 transition-opacity duration-500", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
+                              style={{ opacity }}
+                            />
+                            {count > 1 && (
+                              <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="text-xs">
+                          {key === "monitor" ? title : `${title} — click to ${groupDevices.every((d: RecordingDevice) => d.active) ? "mute" : "unmute"}`}
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
+                    <div className="w-px h-3 bg-border mx-0.5" />
+                    <NotificationBell />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={toggleMeeting}
+                          disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
+                          className={cn(
+                            "relative flex items-center justify-center h-5 w-5 rounded transition-colors",
+                            isTranslucent ? "vibrant-nav-item hover:bg-white/10" : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                          )}
+                        >
+                          {meetingState.active && (
+                            <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
+                          )}
+                          <Phone className="h-3 w-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="text-xs">
+                        {meetingState.manualActive ? "stop meeting" : meetingState.active ? "meeting detected" : "start meeting"}
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                 );
               })()}
@@ -565,14 +456,13 @@ function SettingsPageContent() {
               {/* Main sections */}
               <div className="space-y-0.5">
                 {mainSections.map((section) => {
-                  const isActive = activeSection === section.id && !settingsModalOpen;
+                  const isActive = activeSection === section.id;
                   const btn = (
                     <button
                       key={section.id}
                       data-testid={`nav-${section.id}`}
                       onClick={() => {
                         setActiveSection(section.id);
-                        setSettingsModalOpen(false);
                       }}
                       className={cn(
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
@@ -632,7 +522,7 @@ function SettingsPageContent() {
                     Push pipe configs and content filters to all members.
                   </p>
                   <button
-                    onClick={() => openModal("team")}
+                    onClick={() => openSettings("team")}
                     className={cn("mt-2.5 px-3 py-1.5 text-xs font-medium border transition-colors duration-150", isTranslucent ? "vibrant-btn-border" : "border-border bg-background hover:bg-foreground hover:text-background")}
                   >
                     ADD YOUR TEAM
@@ -649,7 +539,7 @@ function SettingsPageContent() {
                     : "Invite your team";
                   const btn = (
                     <button
-                      onClick={() => openModal("team")}
+                      onClick={() => openSettings("team")}
                       className={cn(
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
@@ -675,7 +565,7 @@ function SettingsPageContent() {
                 {!isSectionHidden("referral") && (() => {
                   const btn = (
                     <button
-                      onClick={() => openModal("referral")}
+                      onClick={() => openSettings("referral")}
                       className={cn(
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
@@ -697,29 +587,23 @@ function SettingsPageContent() {
                   return btn;
                 })()}
 
-                {/* Settings */}
-                {!isSectionHidden("settings") && (() => {
+                {/* Settings — always visible; individual sections are enterprise-filtered inside /settings */}
+                {(() => {
                   const btn = (
                     <button
                       data-testid="nav-settings"
-                      onClick={() => openModal("general")}
+                      onClick={() => openSettings("general")}
                       className={cn(
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
-                        settingsModalOpen
-                          ? isTranslucent
-                            ? "vibrant-nav-active"
-                            : "bg-card shadow-sm border border-border text-foreground"
-                          : isTranslucent
-                            ? "vibrant-nav-item vibrant-nav-hover"
-                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                        isTranslucent
+                          ? "vibrant-nav-item vibrant-nav-hover"
+                          : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
                       <div className={cn(
                         "transition-colors flex-shrink-0",
-                        settingsModalOpen
-                          ? isTranslucent ? "" : "text-primary"
-                          : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
+                        isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         <SettingsIcon className="h-4 w-4" />
                       </div>
@@ -739,13 +623,12 @@ function SettingsPageContent() {
 
                 {/* Help */}
                 {!isSectionHidden("help") && (() => {
-                  const isActive = activeSection === "help" && !settingsModalOpen;
+                  const isActive = activeSection === "help";
                   const btn = (
                     <button
                       data-testid="nav-help"
                       onClick={() => {
                         setActiveSection("help");
-                        setSettingsModalOpen(false);
                       }}
                       className={cn(
                         "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
@@ -782,7 +665,7 @@ function SettingsPageContent() {
                 })()}
               </div>
             </div>
-          </div>
+          </AppSidebar>
           </TooltipProvider>
 
           {/* Content */}
@@ -799,277 +682,20 @@ function SettingsPageContent() {
               </div>
             )}
 
-            {/* Settings modal overlay */}
-            {settingsModalOpen && (
-              <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm" onClick={closeModal}>
-                <div
-                  className="bg-background border border-border flex w-[960px] max-w-[calc(100%-2rem)] h-[calc(100%-2rem)] overflow-hidden"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* Modal sidebar */}
-                  <div className="w-48 border-r border-border flex flex-col flex-shrink-0 overflow-y-auto">
-                    <div className="p-3 space-y-3">
-                      {/* App group */}
-                      <div>
-                        <div className="px-2 pb-1">
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                            App
-                          </span>
-                        </div>
-                        <div className="space-y-0.5">
-                          {appGroup.map((section) => (
-                            <button
-                              key={section.id}
-                              data-testid={`settings-nav-${section.id}`}
-                              onClick={() => {
-                                setModalSection(section.id);
-                                setActiveSection(section.id);
-                              }}
-                              className={cn(
-                                "w-full flex items-center space-x-2 px-2 py-1.5 rounded transition-all duration-150 text-left text-sm",
-                                modalSection === section.id
-                                  ? "bg-card border border-border text-foreground"
-                                  : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                              )}
-                            >
-                              <div className={cn(
-                                "flex-shrink-0",
-                                modalSection === section.id ? "text-foreground" : "text-muted-foreground"
-                              )}>
-                                {section.icon}
-                              </div>
-                              <span className="truncate">{section.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Data & Privacy group */}
-                      <div>
-                        <div className="px-2 pb-1">
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                            Data & Privacy
-                          </span>
-                        </div>
-                        <div className="space-y-0.5">
-                          {dataGroup.map((section) => (
-                            <button
-                              key={section.id}
-                              data-testid={`settings-nav-${section.id}`}
-                              onClick={() => {
-                                setModalSection(section.id);
-                                setActiveSection(section.id);
-                              }}
-                              className={cn(
-                                "w-full flex items-center space-x-2 px-2 py-1.5 rounded transition-all duration-150 text-left text-sm",
-                                modalSection === section.id
-                                  ? "bg-card border border-border text-foreground"
-                                  : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                              )}
-                            >
-                              <div className={cn(
-                                "flex-shrink-0",
-                                modalSection === section.id ? "text-foreground" : "text-muted-foreground"
-                              )}>
-                                {section.icon}
-                              </div>
-                              <span className="truncate">{section.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Account group */}
-                      <div>
-                        <div className="px-2 pb-1">
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                            Account
-                          </span>
-                        </div>
-                        <div className="space-y-0.5">
-                          {accountGroup.map((section) => (
-                            <button
-                              key={section.id}
-                              data-testid={`settings-nav-${section.id}`}
-                              onClick={() => {
-                                setModalSection(section.id);
-                                setActiveSection(section.id);
-                              }}
-                              className={cn(
-                                "w-full flex items-center space-x-2 px-2 py-1.5 rounded transition-all duration-150 text-left text-sm",
-                                modalSection === section.id
-                                  ? "bg-card border border-border text-foreground"
-                                  : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                              )}
-                            >
-                              <div className={cn(
-                                "flex-shrink-0",
-                                modalSection === section.id ? "text-foreground" : "text-muted-foreground"
-                              )}>
-                                {section.icon}
-                              </div>
-                              <span className="truncate">{section.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Modal content */}
-                  <div className="flex-1 flex flex-col min-w-0">
-                    {/* Modal header */}
-                    <div className="flex items-center justify-between px-6 py-3 border-b border-border flex-shrink-0">
-                      <h2 className="text-sm font-medium text-foreground">
-                        {settingsModalSections.find(s => s.id === modalSection)?.label}
-                      </h2>
-                      <button
-                        onClick={closeModal}
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-
-                    {/* Modal body */}
-                    <div className="flex-1 overflow-y-auto p-6">
-                      {renderModalSection()}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
       </div>
     </div>
   );
 }
 
-function ReferralSection() {
-  const { settings } = useSettings();
-  const [copied, setCopied] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [sending, setSending] = useState(false);
-  const referralCode = settings.user?.id ? `REF-${settings.user.id.slice(0, 8).toUpperCase()}` : "";
-  const referralLink = referralCode ? `https://screenpi.pe/?ref=${referralCode}` : "";
-
-  const handleCopy = async () => {
-    if (!referralLink) return;
-    await navigator.clipboard.writeText(referralLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleInvite = async () => {
-    if (!inviteEmail || !referralLink || sending) return;
-    setSending(true);
-    try {
-      const res = await fetch("https://screenpi.pe/api/referral/invite", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.user?.token}`,
-        },
-        body: JSON.stringify({
-          email: inviteEmail,
-          referralLink,
-          senderName: settings.user?.email,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "failed to send invite");
-      }
-      setInviteEmail("");
-      toast({ title: "invite sent!" });
-    } catch (e: any) {
-      toast({ title: e.message || "failed to send invite", variant: "destructive" });
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-muted-foreground mb-4">
-        give <span className="font-semibold text-foreground">10% off</span> screenpipe and get <span className="font-semibold text-foreground">1 free month</span> for each person you refer.
-      </p>
-
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium text-foreground mb-2">how it works</h3>
-          <div className="space-y-1.5 text-sm text-muted-foreground">
-            <p>1. share your invite link</p>
-            <p>2. they sign up and get <span className="font-semibold text-foreground">10% off</span> screenpipe</p>
-            <p>3. you get a <span className="font-semibold text-foreground">free month</span> when they start using it</p>
-          </div>
-        </div>
-
-        {settings.user?.token ? (
-          <div>
-            <h3 className="text-sm font-medium text-foreground mb-2">your invite link</h3>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={referralLink}
-                className="flex-1 px-3 py-2 text-xs font-mono border border-border bg-card text-foreground"
-              />
-              <button
-                onClick={handleCopy}
-                className="px-4 py-2 text-xs font-medium border border-border bg-background hover:bg-foreground hover:text-background transition-colors duration-150"
-              >
-                {copied ? "COPIED" : "COPY"}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              rewards auto-applied to your next subscription payment.
-            </p>
-
-            <div className="mt-4 pt-4 border-t border-border">
-              <h3 className="text-sm font-medium text-foreground mb-2">invite by email</h3>
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  placeholder="friend@email.com"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleInvite()}
-                  className="flex-1 px-3 py-2 text-xs border border-border bg-card text-foreground"
-                />
-                <button
-                  onClick={handleInvite}
-                  disabled={!inviteEmail || sending}
-                  className="px-4 py-2 text-xs font-medium border border-border bg-background hover:bg-foreground hover:text-background transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  {sending ? "SENDING..." : "INVITE"}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="border border-border p-4 bg-card">
-            <p className="text-sm text-muted-foreground mb-3">
-              sign in to get your referral link
-            </p>
-            <button
-              onClick={() => commands.openLoginWindow()}
-              className="px-4 py-2 text-xs font-medium border border-border bg-background hover:bg-foreground hover:text-background transition-colors duration-150"
-            >
-              SIGN IN
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function SettingsPage() {
+export default function HomePage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-muted-foreground">Loading settings...</div>
+      <div className="text-muted-foreground">Loading...</div>
     </div>}>
-      <SettingsPageContent />
+      <SidebarProvider>
+        <HomeContent />
+      </SidebarProvider>
     </Suspense>
   );
 }

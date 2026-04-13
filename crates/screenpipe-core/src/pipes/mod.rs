@@ -698,7 +698,14 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
             }
         });
         if let Ok(json) = serde_json::to_string_pretty(&default_store) {
-            let _ = std::fs::write(&store_path, json);
+            let _ = std::fs::write(&store_path, &json);
+            // Restrict permissions — file contains API keys and credentials
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&store_path, std::fs::Permissions::from_mode(0o600));
+            }
             info!("created store.bin with default preset (screenpipe cloud)");
         }
     }

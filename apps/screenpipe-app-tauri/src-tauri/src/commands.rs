@@ -11,14 +11,14 @@ use crate::{
 use tauri::{Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
-use std::sync::OnceLock;
-
 /// Global app handle stored so the native notification action callback can emit events.
-static GLOBAL_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 /// Callback invoked from Swift when user clicks a notification action.
 /// Handles "manage" directly in Rust (opens home window to notifications settings).
 /// Other actions are forwarded as Tauri events to JS.
+#[cfg(target_os = "macos")]
 extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char) {
     if json_ptr.is_null() {
         return;
@@ -57,6 +57,7 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
 }
 
 /// Callback invoked from Swift when user clicks a shortcut reminder action.
+#[cfg(target_os = "macos")]
 extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c_char) {
     if action_ptr.is_null() {
         return;
@@ -746,14 +747,14 @@ pub async fn show_window(
 /// gestures (magnifyWithEvent:) reach the WKWebView for zoom handling.
 #[tauri::command]
 #[specta::specta]
-pub async fn ensure_webview_focus(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn ensure_webview_focus(_app_handle: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use crate::window::run_on_main_thread_safe;
         use tauri_nspanel::ManagerExt;
 
-        let app = app_handle.clone();
-        run_on_main_thread_safe(&app_handle, move || {
+        let app = _app_handle.clone();
+        run_on_main_thread_safe(&_app_handle, move || {
             for label in &["main", "main-window"] {
                 if let Ok(panel) = app.get_webview_panel(label) {
                     unsafe {

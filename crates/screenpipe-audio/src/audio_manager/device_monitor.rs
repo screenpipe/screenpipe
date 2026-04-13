@@ -359,40 +359,48 @@ pub async fn start_device_monitor(
 
                     // Check if system default input changed
                     if let Some(new_default_input) = default_tracker.check_input_changed() {
-                        info!("system default input changed to: {}", new_default_input);
+                        if audio_manager
+                            .user_disabled_devices()
+                            .await
+                            .contains(&new_default_input)
+                        {
+                            debug!("[DEVICE_RECOVERY] skipping default input change: {} is user-disabled", new_default_input);
+                        } else {
+                            info!("system default input changed to: {}", new_default_input);
 
-                        // Stop all current input devices
-                        for device_name in enabled_devices.iter() {
-                            if let Ok(device) = parse_audio_device(device_name) {
-                                if device.device_type == DeviceType::Input {
-                                    let _ = audio_manager.stop_device(device_name).await;
+                            // Stop all current input devices
+                            for device_name in enabled_devices.iter() {
+                                if let Ok(device) = parse_audio_device(device_name) {
+                                    if device.device_type == DeviceType::Input {
+                                        let _ = audio_manager.stop_device(device_name).await;
+                                    }
                                 }
                             }
-                        }
 
-                        // Start the new default input device (reset cooldown on change)
-                        if let Ok(new_device) = parse_audio_device(&new_default_input) {
-                            failed_devices.remove(&new_default_input);
-                            match audio_manager.start_device(&new_device).await {
-                                Ok(()) => {
-                                    info!(
-                                        "switched to new system default input: {}",
-                                        new_default_input
-                                    );
-                                }
-                                Err(e) => {
-                                    let count = failed_devices
-                                        .entry(new_default_input.clone())
-                                        .or_insert((0, Instant::now()));
-                                    count.0 += 1;
-                                    count.1 = Instant::now();
-                                    error!(
+                            // Start the new default input device (reset cooldown on change)
+                            if let Ok(new_device) = parse_audio_device(&new_default_input) {
+                                failed_devices.remove(&new_default_input);
+                                match audio_manager.start_device(&new_device).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "switched to new system default input: {}",
+                                            new_default_input
+                                        );
+                                    }
+                                    Err(e) => {
+                                        let count = failed_devices
+                                            .entry(new_default_input.clone())
+                                            .or_insert((0, Instant::now()));
+                                        count.0 += 1;
+                                        count.1 = Instant::now();
+                                        error!(
                                         "failed to start new default input {}: {} (will back off)",
                                         new_default_input, e
                                     );
+                                    }
                                 }
                             }
-                        }
+                        } // else: skip user-disabled
                     }
 
                     // Check if system default output changed.
@@ -400,59 +408,68 @@ pub async fn start_device_monitor(
                     // This ensures continuous audio capture — if the new device
                     // fails to start, the old devices keep running as fallback.
                     if let Some(new_default_output) = default_tracker.check_output_changed().await {
-                        info!(
-                            "[DEVICE_RECOVERY] system default output changed to: {}",
-                            new_default_output
-                        );
-
-                        let new_started = if let Ok(new_device) =
-                            parse_audio_device(&new_default_output)
+                        // Skip if new default is user-disabled
+                        if audio_manager
+                            .user_disabled_devices()
+                            .await
+                            .contains(&new_default_output)
                         {
-                            failed_devices.remove(&new_default_output);
-                            match audio_manager.start_device(&new_device).await {
-                                Ok(()) => {
-                                    info!(
+                            debug!("[DEVICE_RECOVERY] skipping default output change: {} is user-disabled", new_default_output);
+                        } else {
+                            info!(
+                                "[DEVICE_RECOVERY] system default output changed to: {}",
+                                new_default_output
+                            );
+
+                            let new_started = if let Ok(new_device) =
+                                parse_audio_device(&new_default_output)
+                            {
+                                failed_devices.remove(&new_default_output);
+                                match audio_manager.start_device(&new_device).await {
+                                    Ok(()) => {
+                                        info!(
                                         "[DEVICE_RECOVERY] started new system default output: {}",
                                         new_default_output
                                     );
-                                    true
-                                }
-                                Err(e) => {
-                                    warn!(
+                                        true
+                                    }
+                                    Err(e) => {
+                                        warn!(
                                             "[DEVICE_RECOVERY] failed to start new default output {}: {} — keeping old devices running",
                                             new_default_output, e
                                         );
-                                    false
+                                        false
+                                    }
                                 }
-                            }
-                        } else {
-                            false
-                        };
+                            } else {
+                                false
+                            };
 
-                        // Only stop old output devices if the new one started successfully
-                        if new_started {
-                            // Don't stop the communications output device during swap
-                            #[cfg(target_os = "windows")]
-                            let comm_name = default_tracker.last_communications_output.clone();
-                            for device_name in audio_manager.enabled_devices().await.iter() {
-                                if *device_name == new_default_output {
-                                    continue; // don't stop the one we just started
-                                }
+                            // Only stop old output devices if the new one started successfully
+                            if new_started {
+                                // Don't stop the communications output device during swap
                                 #[cfg(target_os = "windows")]
-                                if comm_name.as_deref() == Some(device_name.as_str()) {
-                                    continue; // don't stop the communications device
-                                }
-                                if let Ok(device) = parse_audio_device(device_name) {
-                                    if device.device_type == DeviceType::Output {
-                                        info!(
-                                            "[DEVICE_RECOVERY] stopping old output device: {}",
-                                            device_name
-                                        );
-                                        let _ = audio_manager.stop_device(device_name).await;
+                                let comm_name = default_tracker.last_communications_output.clone();
+                                for device_name in audio_manager.enabled_devices().await.iter() {
+                                    if *device_name == new_default_output {
+                                        continue; // don't stop the one we just started
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    if comm_name.as_deref() == Some(device_name.as_str()) {
+                                        continue; // don't stop the communications device
+                                    }
+                                    if let Ok(device) = parse_audio_device(device_name) {
+                                        if device.device_type == DeviceType::Output {
+                                            info!(
+                                                "[DEVICE_RECOVERY] stopping old output device: {}",
+                                                device_name
+                                            );
+                                            let _ = audio_manager.stop_device(device_name).await;
+                                        }
                                     }
                                 }
                             }
-                        }
+                        } // else: skip user-disabled
                     }
 
                     // Windows: check if the eCommunications output device changed.
@@ -504,13 +521,21 @@ pub async fn start_device_monitor(
                     // No backoff — missing input audio is critical.
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
+                        let user_disabled = audio_manager.user_disabled_devices().await;
                         let has_input = current_enabled.iter().any(|name| {
                             parse_audio_device(name)
                                 .map(|d| d.device_type == DeviceType::Input)
                                 .unwrap_or(false)
                         });
+                        // Don't try to recover if user explicitly disabled all inputs
+                        let all_inputs_user_disabled = !has_input && {
+                            match default_input_device() {
+                                Ok(d) => user_disabled.contains(&d.to_string()),
+                                Err(_) => false,
+                            }
+                        };
 
-                        if !has_input {
+                        if !has_input && !all_inputs_user_disabled {
                             no_input_retry_count += 1;
 
                             // Throttle logging after many retries to avoid spamming logs
@@ -575,13 +600,21 @@ pub async fn start_device_monitor(
                     // or output device was lost during a device change.
                     {
                         let current_enabled = audio_manager.enabled_devices().await;
+                        let user_disabled = audio_manager.user_disabled_devices().await;
                         let has_output = current_enabled.iter().any(|name| {
                             parse_audio_device(name)
                                 .map(|d| d.device_type == DeviceType::Output)
                                 .unwrap_or(false)
                         });
+                        // Don't try to recover if user explicitly disabled output
+                        let output_user_disabled = !has_output && {
+                            match default_output_device().await {
+                                Ok(d) => user_disabled.contains(&d.to_string()),
+                                Err(_) => false,
+                            }
+                        };
 
-                        if !has_output {
+                        if !has_output && !output_user_disabled {
                             // Apply backoff: skip this cycle if we haven't waited long enough.
                             // Transient errors (SCK not ready) use short backoff (2-8s).
                             // Permanent errors (no display) use longer backoff (up to 120s).
@@ -644,7 +677,17 @@ pub async fn start_device_monitor(
                 // Check for stale recording handles (tasks that have finished/crashed)
                 // This handles cases where audio stream was hijacked by another app
                 let stale_devices = audio_manager.check_stale_recording_handles().await;
+                let user_disabled_for_stale = audio_manager.user_disabled_devices().await;
                 for device_name in stale_devices {
+                    // Don't restart user-disabled devices — they're supposed to be stopped
+                    if user_disabled_for_stale.contains(&device_name) {
+                        debug!(
+                            "[DEVICE_RECOVERY] stale handle for user-disabled device {}, cleaning up only",
+                            device_name
+                        );
+                        let _ = audio_manager.cleanup_stale_device(&device_name).await;
+                        continue;
+                    }
                     warn!(
                         "[DEVICE_RECOVERY] detected stale recording handle for {}, cleaning up for restart",
                         device_name
@@ -792,7 +835,14 @@ pub async fn start_device_monitor(
                     }
                 }
 
+                let user_disabled_for_reconnect = audio_manager.user_disabled_devices().await;
                 for device_name in disconnected_devices.clone() {
+                    // Skip user-disabled devices — they're intentionally stopped
+                    if user_disabled_for_reconnect.contains(&device_name) {
+                        disconnected_devices.remove(&device_name);
+                        continue;
+                    }
+
                     let device = match parse_audio_device(&device_name) {
                         Ok(device) => device,
                         Err(e) => {
@@ -860,6 +910,15 @@ pub async fn start_device_monitor(
                         }
 
                         if !audio_manager.enabled_devices().await.contains(device_name) {
+                            continue;
+                        }
+
+                        // Skip user-disabled (paused) devices — don't restart them
+                        if audio_manager
+                            .user_disabled_devices()
+                            .await
+                            .contains(device_name)
+                        {
                             continue;
                         }
 

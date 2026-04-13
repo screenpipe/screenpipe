@@ -390,6 +390,9 @@
     html:not(.light) .vibrant-nav-item:hover {
       color: hsl(0 0% 100%) !important;
     }
+    html:not(.light) .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
+      color: hsl(0 0% 100%) !important;
+    }
     html:not(.light) .vibrant-heading {
       color: hsl(0 0% 100%) !important;
     }
@@ -428,6 +431,10 @@
     color: hsl(var(--muted-foreground));
   }
   .vibrant-nav-item:hover {
+    color: hsl(var(--foreground));
+  }
+  /* Icon inside a hovered nav item inherits the foreground color */
+  .vibrant-nav-item:hover .vibrant-sidebar-fg-muted {
     color: hsl(var(--foreground));
   }
   .vibrant-heading {

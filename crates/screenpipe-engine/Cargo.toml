@@ -25,6 +25,7 @@ screenpipe-apple-intelligence = { path = "../screenpipe-apple-intelligence", opt
 screenpipe-config = { path = "../screenpipe-config" }
 screenpipe-connect = { path = "../screenpipe-connect" }
 screenpipe-vault = { path = "../screenpipe-vault" }
+screenpipe-secrets = { path = "../screenpipe-secrets" }
 
 
 # Image processing

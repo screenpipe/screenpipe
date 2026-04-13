@@ -109,6 +109,15 @@ pub struct RecordingConfig {
 
     /// Maximum width for stored snapshots (0 = no limit). Default: 1920.
     pub max_snapshot_width: u32,
+
+    /// Require authentication for remote (non-localhost) API access.
+    /// When true, requests from other devices must include
+    /// `Authorization: Bearer <SCREENPIPE_API_KEY>`.
+    pub api_auth: bool,
+
+    /// The API key for this instance (from SCREENPIPE_API_KEY env or auth.json).
+    /// Used to validate incoming remote requests when api_auth is enabled.
+    pub api_auth_key: Option<String>,
 }
 
 impl RecordingConfig {
@@ -196,6 +205,8 @@ impl RecordingConfig {
             schedule_enabled: settings.schedule_enabled,
             schedule_rules: settings.schedule_rules.clone(),
             max_snapshot_width: settings.max_snapshot_width,
+            api_auth: settings.api_auth,
+            api_auth_key: None,
         }
     }
 

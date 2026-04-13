@@ -201,7 +201,7 @@ pub async fn retention_status(
     match guard.as_ref() {
         None => Ok(JsonResponse(RetentionStatusResponse {
             enabled: false,
-            retention_days: 30,
+            retention_days: 14,
             last_cleanup: None,
             last_error: None,
             total_deleted: 0,
@@ -386,6 +386,11 @@ async fn do_local_cleanup(db: &Arc<DatabaseManager>, cutoff: DateTime<Utc>) -> a
     if any_deleted {
         if let Err(e) = db.cleanup_orphaned_chunks().await {
             warn!("retention: orphan chunk cleanup failed: {}", e);
+        }
+        // Reclaim disk space — without VACUUM, SQLite keeps deleted pages
+        info!("retention: running incremental vacuum to reclaim disk space");
+        if let Err(e) = db.execute_raw_sql("PRAGMA incremental_vacuum(1000)").await {
+            warn!("retention: incremental vacuum failed: {}", e);
         }
     }
 

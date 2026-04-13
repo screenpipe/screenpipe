@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { spawnTransientForegroundApp } from "../helpers/seed-capture-activity.js";
-import { openHomeWindow, waitForAppReady } from "../helpers/test-utils.js";
+import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 
 describe("Timeline", function () {
   this.timeout(240_000);

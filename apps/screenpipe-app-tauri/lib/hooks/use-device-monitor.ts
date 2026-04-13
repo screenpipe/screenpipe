@@ -89,10 +89,12 @@ async function fetchWithTimeout(
   }
 }
 
-async function remotePost(address: string, path: string, body?: object) {
+async function remotePost(address: string, path: string, body?: object, authToken?: string) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   const res = await fetchWithTimeout(`http://${address}${path}`, FETCH_TIMEOUT_MS, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -100,6 +102,10 @@ async function remotePost(address: string, path: string, body?: object) {
     throw new Error(`${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json().catch(() => ({}));
+}
+
+function authHeaders(token?: string): Record<string, string> {
+  return token ? { "Authorization": `Bearer ${token}` } : {};
 }
 
 export function useDeviceMonitor() {
@@ -118,14 +124,18 @@ export function useDeviceMonitor() {
   // Stable key for effect dependency
   const deviceKey = registeredDevices.map((d) => d.address).sort().join(",");
 
+  const apiKey = settings.user?.api_key || settings.user?.token;
+
   const pollDevice = useCallback(
     async (address: string, label?: string): Promise<DeviceMonitorData> => {
       try {
+        const headers = authHeaders(apiKey ?? undefined);
         const [healthRes, pipesRes] = await Promise.all([
-          fetchWithTimeout(`http://${address}/health`, FETCH_TIMEOUT_MS),
+          fetchWithTimeout(`http://${address}/health`, FETCH_TIMEOUT_MS, { headers }),
           fetchWithTimeout(
             `http://${address}/pipes?include_executions=true`,
-            FETCH_TIMEOUT_MS
+            FETCH_TIMEOUT_MS,
+            { headers }
           ),
         ]);
 
@@ -306,20 +316,20 @@ export function useDeviceMonitor() {
 
   // Remote control actions
   const runPipe = useCallback(async (address: string, pipeName: string) => {
-    await remotePost(address, `/pipes/${encodeURIComponent(pipeName)}/run`);
-  }, []);
+    await remotePost(address, `/pipes/${encodeURIComponent(pipeName)}/run`, undefined, apiKey ?? undefined);
+  }, [apiKey]);
 
   const stopPipe = useCallback(async (address: string, pipeName: string) => {
-    await remotePost(address, `/pipes/${encodeURIComponent(pipeName)}/stop`);
-  }, []);
+    await remotePost(address, `/pipes/${encodeURIComponent(pipeName)}/stop`, undefined, apiKey ?? undefined);
+  }, [apiKey]);
 
   const enablePipe = useCallback(
     async (address: string, pipeName: string, enabled: boolean) => {
       await remotePost(address, `/pipes/${encodeURIComponent(pipeName)}/enable`, {
         enabled,
-      });
+      }, apiKey ?? undefined);
     },
-    []
+    [apiKey]
   );
 
   // Fetch full execution history for a specific pipe

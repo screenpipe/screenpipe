@@ -18,14 +18,19 @@ use screenpipe_a11y::tree::{create_tree_walker, TreeSnapshot, TreeWalkerConfig};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(not(target_os = "windows"))]
+use std::sync::OnceLock;
 use std::time::Instant;
+#[cfg(not(target_os = "windows"))]
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 /// Limits concurrent OCR tasks to avoid CPU spikes when multiple monitors
 /// trigger capture simultaneously.
+#[cfg(not(target_os = "windows"))]
 static OCR_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+#[cfg(not(target_os = "windows"))]
 fn ocr_semaphore() -> &'static Semaphore {
     OCR_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }

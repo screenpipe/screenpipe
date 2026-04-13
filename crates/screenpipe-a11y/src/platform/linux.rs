@@ -1101,42 +1101,15 @@ fn run_activity_only_evdev(activity_feed: ActivityFeed, stop: Arc<AtomicBool>) {
 // Clipboard helpers
 // ============================================================================
 
-/// Get clipboard content. Tries wl-paste (Wayland) first, then xclip (X11).
+/// Get clipboard content using arboard (native Wayland/X11 support).
 fn get_clipboard() -> Option<String> {
-    // Try wl-paste (Wayland)
-    if let Ok(output) = std::process::Command::new("wl-paste")
-        .args(["--no-newline"])
-        .output()
-    {
-        if output.status.success() {
-            let content = String::from_utf8_lossy(&output.stdout).to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
     }
-
-    // Try xclip (X11)
-    if let Ok(output) = std::process::Command::new("xclip")
-        .args(["-o", "-selection", "clipboard"])
-        .output()
-    {
-        if output.status.success() {
-            let content = String::from_utf8_lossy(&output.stdout).to_string();
-            if !content.is_empty() {
-                return Some(content);
-            }
-        }
-    }
-
-    // Try xsel (X11 alternative)
-    std::process::Command::new("xsel")
-        .args(["--clipboard", "--output"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .filter(|s| !s.is_empty())
 }
 
 // ============================================================================

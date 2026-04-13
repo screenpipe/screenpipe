@@ -80,6 +80,31 @@ pub fn get_recording_info() -> RecordingInfo {
         .clone()
 }
 
+/// Cached audio device status from /audio/device/status API.
+/// Updated by the health polling loop so the tray can read it without blocking.
+#[derive(Clone, Debug)]
+pub struct AudioDeviceEntry {
+    pub name: String,
+    pub is_running: bool,
+}
+
+static AUDIO_DEVICE_STATUS: Lazy<RwLock<Vec<AudioDeviceEntry>>> =
+    Lazy::new(|| RwLock::new(Vec::new()));
+
+pub fn get_audio_device_status() -> Vec<AudioDeviceEntry> {
+    AUDIO_DEVICE_STATUS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+pub fn set_audio_device_status(devices: Vec<AudioDeviceEntry>) {
+    let mut guard = AUDIO_DEVICE_STATUS
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = devices;
+}
+
 #[allow(dead_code)]
 fn set_recording_status(status: RecordingStatus) {
     RECORDING_INFO
@@ -392,6 +417,60 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                             health_name == allowed_short
                         })
                     });
+                }
+            }
+
+            // Fetch all audio devices (including user-disabled) for tray display
+            if let Ok(res) = reqwest::get("http://localhost:3030/audio/device/status").await {
+                if let Ok(devs) = res.json::<Vec<serde_json::Value>>().await {
+                    let mut entries = Vec::new();
+                    for d in &devs {
+                        let name = d["name"].as_str().unwrap_or("").to_string();
+                        let is_running = d["is_running"].as_bool().unwrap_or(false);
+                        let is_user_disabled =
+                            d["is_user_disabled"].as_bool().unwrap_or(false);
+                        entries.push(AudioDeviceEntry {
+                            name: name.clone(),
+                            is_running,
+                        });
+
+                        // Add user-paused devices to the tray list so they
+                        // stay visible with active=false (unchecked).
+                        if is_user_disabled {
+                            let already_listed = devices.iter().any(|dev| {
+                                let full = format!(
+                                    "{} ({})",
+                                    dev.name,
+                                    if dev.kind == DeviceKind::AudioInput {
+                                        "input"
+                                    } else {
+                                        "output"
+                                    }
+                                );
+                                full == name
+                            });
+                            if !already_listed {
+                                let kind = if name.contains("(input)") {
+                                    DeviceKind::AudioInput
+                                } else if name.contains("(output)") {
+                                    DeviceKind::AudioOutput
+                                } else {
+                                    continue;
+                                };
+                                let display_name = name
+                                    .replace(" (input)", "")
+                                    .replace(" (output)", "");
+                                devices.push(DeviceInfo {
+                                    name: display_name,
+                                    kind,
+                                    active: false,
+                                    last_seen_secs_ago: 0,
+                                });
+                            }
+                        }
+                    }
+
+                    set_audio_device_status(entries);
                 }
             }
 

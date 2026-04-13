@@ -12,7 +12,7 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { getStore } from "@/lib/hooks/use-settings";
+import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { X, Phone } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
@@ -163,7 +163,7 @@ export default function ShortcutReminderPage() {
       const store = await getStore();
       const settings = await store.get<Record<string, unknown>>("settings") || {};
       await store.set("settings", { ...settings, showShortcutOverlay: false });
-      await store.save();
+      await saveAndEncrypt(store);
       posthog.capture("shortcut_reminder_dismissed");
       // Use Tauri command instead of getCurrentWindow().hide() for better panel support
       await invoke("hide_shortcut_reminder");

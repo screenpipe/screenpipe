@@ -47,6 +47,11 @@ const VERTEX_MAAS_MODELS: Record<string, { vertexId: string; region: string }> =
 	'kimi-k2.5': { vertexId: 'moonshotai/kimi-k2-thinking-maas', region: 'global' },
 	'llama-4-maverick': { vertexId: 'meta/llama-4-maverick-17b-128e-instruct-maas', region: 'us-east5' },
 	'llama-4-scout': { vertexId: 'meta/llama-4-scout-17b-16e-instruct-maas', region: 'us-east5' },
+	'deepseek-r1': { vertexId: 'deepseek-ai/deepseek-r1-0528-maas', region: 'global' },
+	'deepseek-v3.2': { vertexId: 'deepseek-ai/deepseek-v3.2-maas', region: 'global' },
+	'qwen3-coder': { vertexId: 'qwen/qwen3-coder-480b-a35b-instruct-maas', region: 'global' },
+	'qwen3-next': { vertexId: 'qwen/qwen3-next-80b-instruct-maas', region: 'global' },
+	'qwen3-next-thinking': { vertexId: 'qwen/qwen3-next-80b-thinking-maas', region: 'global' },
 };
 
 export function isVertexMaasModel(model: string): boolean {
@@ -54,7 +59,7 @@ export function isVertexMaasModel(model: string): boolean {
 	// Exact match first (e.g. "llama-4-maverick"), then substring for legacy names.
 	// This prevents "meta-llama/llama-4-maverick" (OpenRouter) from matching.
 	return Object.keys(VERTEX_MAAS_MODELS).some((key) => lower === key) ||
-		['glm-', 'kimi-'].some((prefix) => lower.includes(prefix));
+		['glm-', 'kimi-', 'qwen3-coder', 'qwen3-next'].some((prefix) => lower.includes(prefix));
 }
 
 export function resolveVertexMaasModel(model: string): { vertexId: string; region: string } | null {
@@ -205,6 +210,11 @@ export class VertexMaasProvider implements AIProvider {
 			{ id: 'kimi-k2.5', name: 'Kimi K2.5 (strong all-rounder)', provider: 'vertex-maas' },
 			{ id: 'llama-4-maverick', name: 'Llama 4 Maverick (vision, 400B MoE)', provider: 'vertex-maas' },
 			{ id: 'llama-4-scout', name: 'Llama 4 Scout (vision, 109B MoE)', provider: 'vertex-maas' },
+			{ id: 'deepseek-r1', name: 'DeepSeek R1 (reasoning, 671B MoE)', provider: 'vertex-maas' },
+			{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2 (fast, 671B MoE)', provider: 'vertex-maas' },
+			{ id: 'qwen3-coder', name: 'Qwen3 Coder (coding, 480B MoE)', provider: 'vertex-maas' },
+			{ id: 'qwen3-next', name: 'Qwen3 Next (80B instruct)', provider: 'vertex-maas' },
+			{ id: 'qwen3-next-thinking', name: 'Qwen3 Next Thinking (80B reasoning)', provider: 'vertex-maas' },
 		];
 	}
 }

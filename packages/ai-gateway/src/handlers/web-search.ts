@@ -7,7 +7,8 @@ interface WebSearchRequest {
 }
 
 /**
- * Handle web search requests using Gemini's Google Search grounding
+ * Handle web search requests using Gemini's Google Search grounding.
+ * Prefers Vertex AI for shorter data retention and enterprise ToS.
  */
 export async function handleWebSearch(request: Request, env: Env): Promise<Response> {
 	try {
@@ -20,14 +21,22 @@ export async function handleWebSearch(request: Request, env: Env): Promise<Respo
 			})));
 		}
 
-		if (!env.GEMINI_API_KEY) {
+		// Prefer Vertex AI for Gemini (shorter data retention, enterprise ToS)
+		let provider: GeminiProvider;
+		if (env.VERTEX_SERVICE_ACCOUNT_JSON && env.VERTEX_PROJECT_ID) {
+			provider = new GeminiProvider({
+				serviceAccountJson: env.VERTEX_SERVICE_ACCOUNT_JSON,
+				projectId: env.VERTEX_PROJECT_ID,
+				region: 'us-central1',
+			});
+		} else if (env.GEMINI_API_KEY) {
+			provider = new GeminiProvider(env.GEMINI_API_KEY);
+		} else {
 			return addCorsHeaders(createErrorResponse(500, JSON.stringify({
 				error: 'configuration_error',
-				message: 'Gemini API key not configured',
+				message: 'Gemini credentials not configured',
 			})));
 		}
-
-		const provider = new GeminiProvider(env.GEMINI_API_KEY);
 
 		const result = await provider.executeWebSearch(body.query.trim());
 

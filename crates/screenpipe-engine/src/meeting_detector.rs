@@ -839,12 +839,14 @@ fn walk_for_signals(
 }
 
 /// A signal with pre-lowercased match strings to avoid per-node allocations.
+#[cfg(target_os = "macos")]
 struct PrecomputedSignal {
     signal: CallSignal,
     /// Pre-lowercased match string (the substring to search for).
     lower: String,
 }
 
+#[cfg(target_os = "macos")]
 impl PrecomputedSignal {
     fn from_signals(signals: &[CallSignal]) -> Vec<PrecomputedSignal> {
         signals
@@ -939,6 +941,7 @@ fn check_signal_match(
 
 /// Optimized signal match using pre-lowercased signal strings and pre-lowercased node fields.
 /// Avoids per-signal and per-node `.to_lowercase()` allocations on the hot path.
+#[cfg(target_os = "macos")]
 fn check_signal_match_precomputed(
     ps: &PrecomputedSignal,
     role: &str,
@@ -1898,12 +1901,7 @@ pub fn find_running_meeting_apps(
     profiles: &[MeetingDetectionProfile],
     currently_tracking: Option<&ActiveTracking>,
 ) -> Vec<RunningMeetingApp> {
-    use std::collections::{HashMap, HashSet};
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-    };
+    use std::collections::HashSet;
 
     let mut results = Vec::new();
     let mut seen_pids = HashSet::new();
@@ -2085,6 +2083,7 @@ async fn db_find_browser_meetings(
 
     for (app_name, window_name, browser_url) in &rows {
         let window_lower = window_name.to_lowercase();
+        #[cfg(target_os = "macos")]
         let app_lower = app_name.to_lowercase();
         let url_lower = browser_url.as_deref().unwrap_or("").to_lowercase();
         for (idx, profile) in profiles.iter().enumerate() {

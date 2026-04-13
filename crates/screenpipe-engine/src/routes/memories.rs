@@ -337,3 +337,16 @@ pub(crate) async fn delete_memory_handler(
 
     Ok(JsonResponse(json!({"ok": true})))
 }
+
+#[oasgen]
+pub(crate) async fn list_memory_tags_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<Vec<String>>, (StatusCode, JsonResponse<Value>)> {
+    let tags = state.db.list_memory_tags().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": e.to_string()})),
+        )
+    })?;
+    Ok(JsonResponse(tags))
+}

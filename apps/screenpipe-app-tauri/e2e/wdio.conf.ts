@@ -36,7 +36,7 @@ export const config: Options.Testrunner = {
   port: WEBDRIVER_PORT,
   path: '/',
   logLevel: 'warn',
-  waitforTimeout: 10000,
+  waitforTimeout: process.env.CI ? 20000 : 10000,
   connectionRetryTimeout: 60000,
   connectionRetryCount: 3,
   framework: 'mocha',

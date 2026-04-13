@@ -139,6 +139,7 @@ pub fn init_magnify_handler(app: tauri::AppHandle) {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub fn init_magnify_handler(_app: tauri::AppHandle) {}
 
 /// Attach an NSMagnificationGestureRecognizer to the given view.

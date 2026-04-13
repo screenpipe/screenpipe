@@ -95,9 +95,15 @@ pub struct AudioManager {
     on_transcription_insert: Option<crate::transcription::AudioInsertCallback>,
     /// Unified transcription engine. Set after model loading in start_audio_receiver_handler.
     engine: Arc<RwLock<Option<TranscriptionEngine>>>,
+    /// Handle to the reconciliation background task so we can abort it on shutdown.
+    reconciliation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     /// Output devices temporarily stopped due to DRM content detection.
     /// Stored so they can be restarted when DRM clears.
     drm_stopped_devices: Arc<RwLock<Vec<AudioDevice>>>,
+    /// Devices explicitly disabled by the user via the API/UI.
+    /// The device monitor must never auto-start devices in this set.
+    /// Cleared on global start/stop but preserved across reconnects.
+    user_disabled_devices: Arc<RwLock<HashSet<String>>>,
 }
 
 /// Result of checking / restarting the two central handler tasks.
@@ -158,7 +164,9 @@ impl AudioManager {
             transcription_paused: Arc::new(AtomicBool::new(false)),
             on_transcription_insert: None,
             engine: Arc::new(RwLock::new(None)),
+            reconciliation_handle: Arc::new(RwLock::new(None)),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
+            user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
         };
 
         Ok(manager)
@@ -196,7 +204,7 @@ impl AudioManager {
             let options_ref = self.options.clone();
             let seg_mgr = self.segmentation_manager.clone();
             let output_path_bg = self.options.read().await.output_path.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 // Wait for model to load + initial recordings
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 loop {
@@ -226,6 +234,7 @@ impl AudioManager {
                     tokio::time::sleep(Duration::from_secs(120)).await;
                 }
             });
+            *self.reconciliation_handle.write().await = Some(handle);
         }
 
         start_device_monitor(self_arc.clone(), self.device_manager.clone()).await?;
@@ -259,6 +268,32 @@ impl AudioManager {
 
         stop_device_monitor().await?;
 
+        // Stop producers FIRST: abort per-device recording tasks and the OS audio streams.
+        // This must happen before killing the consumer so any audio already queued in the
+        // crossbeam channel (including the final 30s flush) can still be drained.
+        for pair in self.recording_handles.iter() {
+            let handle = pair.value();
+            handle.lock().await.abort();
+        }
+        self.recording_handles.clear();
+        self.device_manager.stop_all_devices().await?;
+
+        // Drain the channel: wait until the pipeline handler has consumed all queued chunks
+        // (or a hard timeout expires). The early persist — file write + DB insert — happens
+        // at the very start of each chunk's processing, before any deferral decision.
+        // A 5s window is enough: the persist itself takes <100ms per chunk.
+        const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+        const DRAIN_POLL: Duration = Duration::from_millis(100);
+        let drain_start = std::time::Instant::now();
+        while drain_start.elapsed() < DRAIN_TIMEOUT {
+            if self.recording_receiver.is_empty() {
+                break;
+            }
+            tokio::time::sleep(DRAIN_POLL).await;
+        }
+
+        // Now it is safe to kill the consumer — any remaining chunks are already persisted
+        // to disk and the DB, so the background reconciliation sweep will transcribe them.
         let mut recording_receiver_handle = self.recording_receiver_handle.write().await;
         if let Some(handle) = recording_receiver_handle.take() {
             handle.abort();
@@ -269,13 +304,6 @@ impl AudioManager {
             handle.abort();
         }
 
-        for pair in self.recording_handles.iter() {
-            let handle = pair.value();
-            handle.lock().await.abort();
-        }
-
-        self.recording_handles.clear();
-        self.device_manager.stop_all_devices().await?;
         info!("audio manager stopped");
         Ok(())
     }
@@ -306,21 +334,89 @@ impl AudioManager {
             .enabled_devices
             .remove(device_name);
 
-        self.device_manager.stop_device(&device).await?;
+        self.stop_device_recording(&device).await
+    }
 
-        if let Some(pair) = self.recording_handles.get(&device) {
+    /// Stop a device's recording without removing it from enabled_devices.
+    /// Idempotent — safe to call on already-stopped devices.
+    async fn stop_device_recording(&self, device: &AudioDevice) -> Result<()> {
+        // Signal the recording loop to stop BEFORE aborting the handle,
+        // so it exits cleanly without triggering "stream dead" warnings.
+        if let Some(is_running) = self.device_manager.is_running_mut(device) {
+            is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // Ignore "already stopped" errors
+        if let Err(e) = self.device_manager.stop_device(device).await {
+            let msg = e.to_string();
+            if !msg.contains("already stopped") && !msg.contains("not running") {
+                return Err(e);
+            }
+        }
+
+        if let Some(pair) = self.recording_handles.get(device) {
             let handle = pair.value();
-
             handle.lock().await.abort();
         }
 
-        self.recording_handles.remove(&device);
+        self.recording_handles.remove(device);
 
         Ok(())
     }
 
     pub async fn status(&self) -> AudioManagerStatus {
         self.status.read().await.clone()
+    }
+
+    /// Temporarily pause a device without changing the configured device list.
+    /// Idempotent — safe to call if already paused. Never errors.
+    pub async fn pause_device(&self, device_name: &str) -> Result<()> {
+        // Mark as disabled FIRST so no monitor path can race and restart it
+        self.user_disabled_devices
+            .write()
+            .await
+            .insert(device_name.to_string());
+
+        // Best-effort stop — ignore all errors (already stopped, not found, etc.)
+        if let Ok(device) = parse_audio_device(device_name) {
+            let _ = self.stop_device_recording(&device).await;
+        }
+        info!("user paused audio device: {}", device_name);
+        Ok(())
+    }
+
+    /// Resume a previously paused device. Idempotent — safe to call if already running.
+    pub async fn resume_device(&self, device_name: &str) -> Result<()> {
+        // Remove from disabled FIRST so start_device gate allows it
+        self.user_disabled_devices.write().await.remove(device_name);
+
+        let device = match parse_audio_device(device_name) {
+            Ok(device) => device,
+            Err(_) => return Err(anyhow!("Device {} not found", device_name)),
+        };
+        self.start_device(&device).await?;
+        info!("user resumed audio device: {}", device_name);
+        Ok(())
+    }
+
+    /// Mark a device as user-disabled. The device monitor will not auto-start it.
+    pub async fn user_disable_device(&self, device_name: &str) {
+        self.user_disabled_devices
+            .write()
+            .await
+            .insert(device_name.to_string());
+        info!("user disabled audio device: {}", device_name);
+    }
+
+    /// Remove a device from the user-disabled set, allowing auto-start again.
+    pub async fn user_enable_device(&self, device_name: &str) {
+        self.user_disabled_devices.write().await.remove(device_name);
+        info!("user re-enabled audio device: {}", device_name);
+    }
+
+    /// Returns the set of devices the user has explicitly disabled.
+    pub async fn user_disabled_devices(&self) -> HashSet<String> {
+        self.user_disabled_devices.read().await.clone()
     }
 
     pub async fn start_device(&self, device: &AudioDevice) -> Result<()> {
@@ -333,6 +429,17 @@ impl AudioManager {
             .iter()
             .any(|d| d == device)
         {
+            return Ok(());
+        }
+
+        // Don't restart devices the user explicitly disabled via API/UI.
+        if self
+            .user_disabled_devices
+            .read()
+            .await
+            .contains(&device.to_string())
+        {
+            debug!("skipping auto-start of user-disabled device: {}", device);
             return Ok(());
         }
 
@@ -726,6 +833,13 @@ impl AudioManager {
 
     pub async fn shutdown(&self) -> Result<()> {
         self.stop().await?;
+
+        // Abort reconciliation first — it holds an engine read-lock during transcription,
+        // so it must be cancelled before we drop the engine to avoid use-after-free.
+        if let Some(handle) = self.reconciliation_handle.write().await.take() {
+            handle.abort();
+        }
+
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
         let transcript = self.transcription_receiver_handle.clone();
@@ -1220,9 +1334,14 @@ impl Drop for AudioManager {
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
         let transcript = self.transcription_receiver_handle.clone();
+        let reconciliation = self.reconciliation_handle.clone();
         let device_manager = self.device_manager.clone();
 
         tokio::spawn(async move {
+            // Abort reconciliation first to stop MLX usage before engine is dropped
+            if let Some(handle) = reconciliation.write().await.take() {
+                handle.abort();
+            }
             let _ = stop_device_monitor().await;
             let _ = device_manager.stop_all_devices().await;
             if let Some(handle) = recording.write().await.take() {

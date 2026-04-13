@@ -55,7 +55,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { useSettings, getStore } from "@/lib/hooks/use-settings";
+import { useSettings, getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { motion } from "framer-motion";
 import Lottie from "lottie-react";
 import cloudSyncAnimation from "@/public/animations/cloud-sync.json";
@@ -797,7 +797,7 @@ export function SyncSettings() {
         // Migration: save to store.bin, remove from localStorage
         const store = await getStore();
         await store.set("sync_password", password);
-        await store.save();
+        await saveAndEncrypt(store);
         localStorage.removeItem("sync_password");
         console.log("[sync] step 2b - migration succeeded");
         return true;
@@ -826,7 +826,7 @@ export function SyncSettings() {
       console.log("[sync] step 3 - legacy password worked, saving to store.bin");
       const store = await getStore();
       await store.set("sync_password", legacyDerived);
-      await store.save();
+      await saveAndEncrypt(store);
       return true;
     } catch (e) {
       console.log("[sync] step 3 - legacy deterministic password failed:", e);
@@ -840,7 +840,7 @@ export function SyncSettings() {
       console.log("[sync] step 4 - init_sync with random password succeeded");
       const store = await getStore();
       await store.set("sync_password", randomPassword);
-      await store.save();
+      await saveAndEncrypt(store);
       return true;
     } catch (e) {
       console.log("[sync] step 4 - init_sync failed, showing password prompt:", e);
@@ -1080,7 +1080,7 @@ export function SyncSettings() {
       try {
         const store = await getStore();
         await store.set("sync_password", password);
-        await store.save();
+        await saveAndEncrypt(store);
         // Clean up any old localStorage entry
         localStorage.removeItem("sync_password");
       } catch {
@@ -1231,7 +1231,7 @@ export function SyncSettings() {
     try {
       const store = await getStore();
       await store.delete("sync_password");
-      await store.save();
+      await saveAndEncrypt(store);
     } catch {
       // Non-critical
     }

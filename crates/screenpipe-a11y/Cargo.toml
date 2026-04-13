@@ -29,6 +29,9 @@ arc-swap = "1"
 # Regex for privacy patterns
 regex = "1.10"
 
+# Clipboard access (native NSPasteboard/Win32/X11 — no subprocess)
+arboard = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app"] }
 

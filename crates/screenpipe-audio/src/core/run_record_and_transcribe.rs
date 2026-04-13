@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{core::update_device_capture_time, metrics::AudioPipelineMetrics, AudioInput};
 
+use super::source_buffer::SourceBuffer;
 use super::AudioStream;
 
 /// Timeout for receiving audio data before considering the stream dead.
@@ -48,9 +49,15 @@ pub async fn run_record_and_transcribe(
     const OVERLAP_SECONDS: usize = 2;
     let overlap_samples = OVERLAP_SECONDS * sample_rate;
 
+    // Per-device source buffer: detects Bluetooth packet-drop gaps and inserts
+    // digital silence in place of crackle/noise. Silence is filtered by VAD before
+    // reaching Whisper, so it has no transcription impact.
+    let mut source_buffer = SourceBuffer::new(device_name.as_str(), sample_rate as u32);
+
     info!(
-        "starting continuous recording for {} ({}s segments)",
+        "starting continuous recording for {} ({} / {}s segments)",
         device_name,
+        source_buffer.device_kind().label(),
         duration.as_secs()
     );
     let audio_samples_len = sample_rate * duration.as_secs() as usize;
@@ -58,6 +65,7 @@ pub async fn run_record_and_transcribe(
     let mut collected_audio = Vec::new();
     let mut segment_start_time = now_epoch_secs();
     let stream_start = std::time::Instant::now();
+    let mut segment_count: u64 = 0;
 
     while is_running.load(Ordering::Relaxed)
         && !audio_stream.is_disconnected.load(Ordering::Relaxed)
@@ -72,9 +80,20 @@ pub async fn run_record_and_transcribe(
             )
             .await?
             {
-                Some(chunk) => collected_audio.extend(chunk),
+                Some(chunk) => {
+                    // Route through the source buffer so Bluetooth packet-drop gaps
+                    // are converted to silence instead of crackle.
+                    source_buffer.push(chunk);
+                    collected_audio.extend(source_buffer.drain_all());
+                }
                 None => continue,
             }
+        }
+
+        segment_count += 1;
+        // Log per-device stats every 10 segments (~5 min at 30 s/segment).
+        if segment_count % 10 == 0 {
+            source_buffer.log_stats();
         }
 
         flush_audio(

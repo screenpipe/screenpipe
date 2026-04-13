@@ -322,6 +322,17 @@ impl MacosTreeWalker {
         // Walk the accessibility tree
         walk_element(window, 0, &mut state);
 
+        // If a browser extension popup matching an ignored window was detected,
+        // skip the entire capture — including the screenshot — to prevent the
+        // popup content from appearing in the timeline.
+        if state.hit_ignored_extension {
+            debug!(
+                "skipping capture: browser extension popup matched ignored window in app={}",
+                app_name
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
+        }
+
         let text_content = state.text_buffer;
         // Don't bail on empty text — we still need the app_name and window_name
         // for frame metadata. Some apps may return empty text on the first walk
@@ -401,6 +412,12 @@ struct WalkState {
     monitor_y: f64,
     monitor_w: f64,
     monitor_h: f64,
+    /// User-configured ignored window patterns (lowercase) for filtering browser
+    /// extension popups whose AXWebArea title matches an ignored keyword.
+    ignored_windows_lower: Vec<String>,
+    /// Set to true when a browser extension popup matching an ignored pattern is
+    /// detected. Signals the caller to skip the entire capture (including screenshot).
+    hit_ignored_extension: bool,
 }
 
 impl WalkState {
@@ -425,6 +442,12 @@ impl WalkState {
             monitor_y: config.monitor_y,
             monitor_w: config.monitor_width,
             monitor_h: config.monitor_height,
+            ignored_windows_lower: config
+                .ignored_windows
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
+            hit_ignored_extension: false,
         }
     }
 
@@ -523,8 +546,34 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
     // Extract text from this element
     if should_extract_text(&role_str) {
         extract_text(elem, &role_str, depth, state);
-    } else if role_str == "AXGroup" || role_str == "AXWebArea" {
+    } else if role_str == "AXWebArea" {
+        // Browser extension popup detection: AXWebArea nodes inside Chrome/Arc/Edge
+        // carry the extension name as their title and a chrome-extension:// URL.
+        // If the title matches an ignored-window pattern, skip the entire subtree
+        // to prevent capturing password manager or other sensitive extension content.
+        if !state.ignored_windows_lower.is_empty() {
+            let matches = |val: &str| {
+                let lower = val.to_lowercase();
+                state
+                    .ignored_windows_lower
+                    .iter()
+                    .any(|ig| lower.contains(ig.as_str()))
+            };
+            if get_string_attr(elem, ax::attr::title()).is_some_and(|t| matches(&t))
+                || get_string_attr(elem, ax::attr::url()).is_some_and(|u| matches(&u))
+            {
+                state.hit_ignored_extension = true;
+                return;
+            }
+        }
         // Groups and web areas: only extract if they have a direct value
+        if let Some(val) = get_string_attr(elem, ax::attr::value()) {
+            if !val.is_empty() {
+                append_text(&mut state.text_buffer, &val);
+            }
+        }
+    } else if role_str == "AXGroup" {
+        // Groups: only extract if they have a direct value
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);

@@ -236,7 +236,7 @@ pub async fn livetext_analyze(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (image_path, x, y, w, h);
+        let _ = (image_path, frame_id, x, y, w, h);
         Err("live text is only available on macOS".to_string())
     }
 }

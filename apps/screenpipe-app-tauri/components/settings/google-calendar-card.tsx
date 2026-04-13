@@ -13,16 +13,10 @@ import {
   RefreshCw,
   Users,
   LogOut,
-  Cloud,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { listen } from "@tauri-apps/api/event";
-import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
-
-const API_BASE = "https://screenpi.pe/api/google-calendar";
 
 interface CalendarEventItem {
   id: string;
@@ -38,9 +32,6 @@ interface CalendarEventItem {
 }
 
 export function GoogleCalendarCard() {
-  const { settings } = useSettings();
-  const token = settings.user?.token;
-
   const [connected, setConnected] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -65,20 +56,14 @@ export function GoogleCalendarCard() {
     posthog.capture(val ? "google_calendar_enabled" : "google_calendar_disabled");
   };
 
-  // Fetch connection status
+  // Fetch connection status via local OAuth
   const fetchStatus = useCallback(async () => {
-    if (!token) return;
     try {
-      const res = await tauriFetch(`${API_BASE}/status`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setConnected(data.connected);
-        setEmail(data.email || null);
-        if (data.connected && !enabled) {
-          // auto-enable on first connection
+      const status = await commands.oauthStatus("google-calendar", null);
+      if (status.status === "ok") {
+        setConnected(status.data.connected);
+        setEmail(status.data.display_name ?? null);
+        if (status.data.connected && !enabled) {
           const stored = localStorage?.getItem("google-calendar-enabled");
           if (stored === null) {
             setEnabled(true);
@@ -91,27 +76,22 @@ export function GoogleCalendarCard() {
     } catch (e) {
       console.error("failed to fetch google calendar status:", e);
     }
-  }, [token, enabled]);
+  }, [enabled]);
 
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
 
-  // Fetch upcoming events
+  // Fetch upcoming events via local API
   const fetchEvents = useCallback(async () => {
-    if (!token) return;
     setIsLoadingEvents(true);
     try {
       const res = await tauriFetch(
-        `${API_BASE}/events?hours_back=0&hours_ahead=8`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${token}` },
-        }
+        `http://localhost:3030/connections/google-calendar/events?hours_back=0&hours_ahead=8`,
+        { method: "GET" }
       );
       if (res.ok) {
         const raw: CalendarEventItem[] = await res.json();
-        // format display times in user's local timezone
         const events = raw.map((e) => ({
           ...e,
           startDisplay: e.start
@@ -137,7 +117,7 @@ export function GoogleCalendarCard() {
       setUpcomingEvents([]);
     }
     setIsLoadingEvents(false);
-  }, [token]);
+  }, []);
 
   // Fetch events when connected + enabled
   useEffect(() => {
@@ -146,67 +126,34 @@ export function GoogleCalendarCard() {
     }
   }, [connected, enabled, fetchEvents]);
 
-  // Listen for deep link auth result
-  useEffect(() => {
-    const unlisten = listen<{ success: boolean; error?: string }>(
-      "google-calendar-auth-result",
-      async (event) => {
-        setIsConnecting(false);
-        if (event.payload.success) {
-          posthog.capture("google_calendar_connected");
-          await fetchStatus();
-          setEnabled(true);
-          try {
-            localStorage?.setItem("google-calendar-enabled", "true");
-          } catch {}
-        }
-      }
-    );
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [fetchStatus]);
-
-  // Connect flow — opens in-app webview (same as login) so we can intercept
-  // the screenpipe:// deep-link redirect. Safari blocks custom-scheme redirects.
-  // Falls back to external browser if the webview command isn't available.
+  // Connect flow — uses local OAuth (same as Gmail)
   const handleConnect = async () => {
-    if (!token) return;
     setIsConnecting(true);
-    const authUrl = `${API_BASE}/auth?token=${token}`;
     try {
-      const result = await commands.openGoogleCalendarAuthWindow(authUrl);
-      if (result.status === "error") {
-        console.warn("webview command failed, falling back to openUrl:", result.error);
-        await openUrl(authUrl);
+      const res = await commands.oauthConnect("google-calendar", null);
+      if (res.status === "ok" && res.data.connected) {
+        posthog.capture("google_calendar_connected");
+        await fetchStatus();
+        setEnabled(true);
+        try {
+          localStorage?.setItem("google-calendar-enabled", "true");
+        } catch {}
       }
     } catch (e) {
-      console.warn("webview command not available, falling back to openUrl:", e);
-      try {
-        await openUrl(authUrl);
-      } catch (e2) {
-        console.error("failed to open google calendar auth:", e2);
-        setIsConnecting(false);
-      }
+      console.error("google calendar oauth failed:", e);
     }
+    setIsConnecting(false);
   };
 
   // Disconnect flow
   const handleDisconnect = async () => {
-    if (!token) return;
     setIsDisconnecting(true);
     try {
-      const res = await tauriFetch(`${API_BASE}/disconnect`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        setConnected(false);
-        setEmail(null);
-        setUpcomingEvents([]);
-        posthog.capture("google_calendar_disconnected");
-      }
+      await commands.oauthDisconnect("google-calendar", null);
+      setConnected(false);
+      setEmail(null);
+      setUpcomingEvents([]);
+      posthog.capture("google_calendar_disconnected");
     } catch (e) {
       console.error("failed to disconnect google calendar:", e);
     }
@@ -231,10 +178,6 @@ export function GoogleCalendarCard() {
               <h3 className="text-sm font-semibold text-foreground">
                 Google Calendar
               </h3>
-              <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full inline-flex items-center gap-1">
-                <Cloud className="h-2.5 w-2.5" />
-                cloud
-              </span>
               {connected && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
                   connected
@@ -243,8 +186,8 @@ export function GoogleCalendarCard() {
             </div>
 
             <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-              Reads your Google Calendar to detect meetings. Requires a
-              screenpipe account. Read-only — never writes to your calendar.
+              Reads your Google Calendar to detect meetings.
+              Read-only — never writes to your calendar.
             </p>
 
             {!connected ? (
@@ -253,7 +196,7 @@ export function GoogleCalendarCard() {
                   variant="outline"
                   size="sm"
                   onClick={handleConnect}
-                  disabled={!token || isConnecting}
+                  disabled={isConnecting}
                   className="text-xs"
                 >
                   {isConnecting ? (
@@ -265,13 +208,6 @@ export function GoogleCalendarCard() {
                     ? "Waiting for Google..."
                     : "Connect Google Calendar"}
                 </Button>
-
-                {!token && (
-                  <p className="text-xs text-muted-foreground">
-                    Sign in to your screenpipe account first to connect Google
-                    Calendar.
-                  </p>
-                )}
               </div>
             ) : (
               <div className="space-y-3">

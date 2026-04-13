@@ -1576,17 +1576,34 @@ export function PipesSection() {
                 </p>
               </>
             ) : pipeFilter === "all" ? (
-              <>
-                <p>no pipes installed</p>
-                <p className="text-sm mt-2">
-                  <a
-                    href="?section=pipes&tab=discover"
-                    className="underline text-foreground hover:text-foreground/80 transition-colors"
-                  >
-                    browse the store
-                  </a>
-                </p>
-              </>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-foreground font-medium text-base">no pipes installed yet</p>
+                  <p className="text-sm mt-1">
+                    pipes are AI automations that run on your screen data — summarize your day, track time, sync notes, and more.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 text-sm text-left max-w-sm mx-auto">
+                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                    <span>🧠</span>
+                    <span><strong>digital clone</strong> — builds a persistent AI memory of you</span>
+                  </div>
+                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                    <span>📋</span>
+                    <span><strong>day recap</strong> — summarizes what you accomplished today</span>
+                  </div>
+                  <div className="flex items-center gap-2 p-2 rounded-md bg-muted/50">
+                    <span>🧘‍♂</span>
+                    <span><strong>focus assistant</strong> — notifies you when you get distracted</span>
+                  </div>
+                </div>
+                <a
+                  href="?section=pipes&tab=discover"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors"
+                >
+                  browse the pipe store →
+                </a>
+              </div>
             ) : pipeFilter === "team" ? (
               <p>no pipes shared with team yet</p>
             ) : (

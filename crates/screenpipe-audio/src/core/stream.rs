@@ -212,7 +212,34 @@ impl AudioStream {
     pub fn is_disconnected(&self) -> bool {
         self.is_disconnected.load(Ordering::Relaxed)
     }
-}
+
+    /// Test-only constructor: creates an `AudioStream` backed by a caller-owned
+    /// broadcast sender instead of a real CPAL device.
+    ///
+    /// The test can push audio chunks (and deliberate timing gaps) directly into
+    /// the sender, driving the full pipeline without hardware. The returned sender
+    /// is wrapped in `Arc` so multiple test threads can share it.
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn from_sender_for_test(
+        device: Arc<AudioDevice>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> (Self, Arc<broadcast::Sender<Vec<f32>>>) {
+        let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
+        let tx_arc = Arc::new(tx);
+        let (stream_control_tx, _rx) = mpsc::channel();
+        let stream = AudioStream {
+            device,
+            device_config: AudioStreamConfig::new(sample_rate, channels),
+            transmitter: tx_arc.clone(),
+            stream_control: stream_control_tx,
+            stream_thread: None,
+            is_disconnected: Arc::new(AtomicBool::new(false)),
+        };
+        (stream, tx_arc)
+    }
+} // end impl AudioStream
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 fn create_error_callback(

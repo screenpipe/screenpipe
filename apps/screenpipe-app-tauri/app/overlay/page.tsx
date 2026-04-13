@@ -4,7 +4,7 @@
 
 "use client";
 
-import { getStore, useSettings } from "@/lib/hooks/use-settings";
+import { getStore, saveAndEncrypt, useSettings } from "@/lib/hooks/use-settings";
 
 import React, { useEffect, useState, useRef, useCallback, ErrorInfo } from "react";
 import NotificationHandler from "@/components/notification-handler";
@@ -209,7 +209,7 @@ export default function OverlayPage() {
           try {
             const store = await getStore();
             await store.set("sync_password", password);
-            await store.save();
+            await saveAndEncrypt(store);
             localStorage.removeItem("sync_password");
             console.log("migrated sync password from localStorage to store.bin");
           } catch {

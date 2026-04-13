@@ -17,7 +17,9 @@
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, warn};
+#[cfg(target_os = "macos")]
+use tracing::warn;
+use tracing::{debug, info};
 
 /// Global flag — when `true`, all monitors skip screen capture.
 static DRM_CONTENT_PAUSED: AtomicBool = AtomicBool::new(false);
@@ -176,6 +178,7 @@ pub fn check_and_update_drm_state(
 }
 
 /// Known browser app names for URL-based DRM checking in poll_drm_clear.
+#[cfg(target_os = "macos")]
 const BROWSER_APPS: &[&str] = &[
     "arc",
     "google chrome",
@@ -194,6 +197,7 @@ const BROWSER_APPS: &[&str] = &[
     "comet",
 ];
 
+#[cfg(target_os = "macos")]
 fn is_browser(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
     BROWSER_APPS.iter().any(|&b| lower.contains(b))

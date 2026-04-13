@@ -128,6 +128,7 @@ const STATE_EXPANDED: u32 = 9;
 const STATE_FOCUSABLE: u32 = 10;
 const STATE_FOCUSED: u32 = 12;
 const STATE_SELECTED: u32 = 18;
+const STATE_PASSWORD_TEXT: u32 = 30;
 
 fn has_state(state_set: &[u32], bit: u32) -> bool {
     let word = (bit / 32) as usize;
@@ -472,6 +473,11 @@ struct WalkState {
     window_y: f64,
     window_w: f64,
     window_h: f64,
+    /// User-configured ignored window patterns (lowercase) for filtering browser
+    /// extension popups whose DocumentWeb name matches an ignored keyword.
+    ignored_windows_lower: Vec<String>,
+    /// Set to true when a browser extension popup matching an ignored pattern is detected.
+    hit_ignored_extension: bool,
 }
 
 impl WalkState {
@@ -491,6 +497,12 @@ impl WalkState {
             window_y: 0.0,
             window_w: 0.0,
             window_h: 0.0,
+            ignored_windows_lower: config
+                .ignored_windows
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
+            hit_ignored_extension: false,
         }
     }
 
@@ -533,6 +545,22 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     // Skip decorative roles
     if should_skip_role(role) {
         return;
+    }
+
+    // Browser extension popup detection: DocumentWeb/DocumentFrame nodes in
+    // Chromium carry the extension name as their accessible name. If it matches
+    // an ignored-window pattern, skip the entire subtree.
+    if matches!(role, 95 | 94 | 82) && !state.ignored_windows_lower.is_empty() {
+        let name = get_accessible_name(conn, aref).to_lowercase();
+        if !name.is_empty()
+            && state
+                .ignored_windows_lower
+                .iter()
+                .any(|ig| name.contains(ig.as_str()))
+        {
+            state.hit_ignored_extension = true;
+            return;
+        }
     }
 
     // Extract text from text-bearing elements
@@ -593,7 +621,12 @@ fn extract_text(
     let role_str = role_name(role);
 
     // For editable text (Entry, Text, ComboBox), prefer Text interface content
+    // Never extract the value of password fields
     if matches!(role, 79 | 61 | 11) {
+        let state_set = get_accessible_state(conn, aref);
+        if has_state(&state_set, STATE_PASSWORD_TEXT) {
+            return;
+        }
         if let Some(text) = get_text_content(conn, aref) {
             append_text(&mut state.text_buffer, &text);
             let mut node = AccessibilityTreeNode::new(
@@ -938,6 +971,14 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
 
         // Walk the accessibility tree
         walk_accessible(conn, &window_ref, 0, &mut state);
+
+        if state.hit_ignored_extension {
+            debug!(
+                "skipping capture: browser extension popup matched ignored window in app={}",
+                app_name
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
+        }
 
         let text_content = state.text_buffer;
 

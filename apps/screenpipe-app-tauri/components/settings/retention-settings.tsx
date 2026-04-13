@@ -65,7 +65,7 @@ export function RetentionSettings() {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const enabled = settings.localRetentionEnabled ?? false;
-  const retentionDays = settings.localRetentionDays ?? 30;
+  const retentionDays = settings.localRetentionDays ?? 14;
 
   const fetchStatus = useCallback(async () => {
     try {

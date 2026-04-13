@@ -72,10 +72,10 @@ impl EmbeddedServerHandle {
         // device is released cleanly (avoids SIGABRT in C++ static destructors).
         if let Some(audio_manager) = self.audio_manager.take() {
             info!("Shutting down audio manager (releasing ggml Metal resources)...");
-            match tokio::time::timeout(Duration::from_secs(5), audio_manager.shutdown()).await {
+            match tokio::time::timeout(Duration::from_secs(15), audio_manager.shutdown()).await {
                 Ok(Ok(())) => info!("Audio manager shut down cleanly"),
                 Ok(Err(e)) => warn!("Audio manager shutdown error: {:?}", e),
-                Err(_) => warn!("Audio manager shutdown timed out after 5s"),
+                Err(_) => warn!("Audio manager shutdown timed out after 15s"),
             }
             drop(audio_manager);
         }
@@ -374,7 +374,14 @@ pub async fn start_embedded_server(
     let ui_recorder_handle = {
         let ui_config = config.to_ui_recorder_config();
         let db_clone = db.clone();
-        match start_ui_recording(db_clone, ui_config, capture_trigger_tx).await {
+        match start_ui_recording(
+            db_clone,
+            ui_config,
+            capture_trigger_tx,
+            config.ignored_windows.clone(),
+        )
+        .await
+        {
             Ok(handle) => {
                 info!("UI event recording started successfully");
                 // Register stop flag with DRM detector so it can stop the UI recorder
@@ -452,6 +459,40 @@ pub async fn start_embedded_server(
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
     server.manual_meeting = Some(manual_meeting);
+    server.api_auth = config.api_auth;
+    server.api_auth_key = config.api_auth_key.clone();
+
+    // Initialize secret store for unified credential management
+    {
+        let secret_key = match crate::secrets::get_or_create_key() {
+            Some(k) => Some(k),
+            None => {
+                warn!("keychain unavailable — secret store will not encrypt");
+                None
+            }
+        };
+        match screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await {
+            Ok(store) => {
+                let fixed =
+                    screenpipe_secrets::fix_secret_file_permissions(&config.data_dir);
+                if fixed > 0 {
+                    info!("fixed permissions on {} credential files", fixed);
+                }
+                match screenpipe_secrets::migrate_legacy_secrets(&store, &config.data_dir).await {
+                    Ok(report) => {
+                        if !report.migrated.is_empty() {
+                            info!("migrated {} legacy secrets", report.migrated.len());
+                        }
+                    }
+                    Err(e) => warn!("legacy secret migration failed: {}", e),
+                }
+                server.secret_store = Some(std::sync::Arc::new(store));
+            }
+            Err(e) => {
+                warn!("failed to initialize secret store: {}", e);
+            }
+        }
+    }
 
     // Initialize pipe manager
     let pipes_dir = config.data_dir.join("pipes");

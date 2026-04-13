@@ -204,6 +204,7 @@ pub async fn start_ui_recording(
     db: Arc<DatabaseManager>,
     config: UiRecorderConfig,
     capture_trigger_tx: Option<crate::event_driven_capture::TriggerSender>,
+    ignored_windows: Vec<String>,
 ) -> Result<UiRecorderHandle> {
     if !config.enabled {
         info!("UI event capture is disabled");
@@ -273,19 +274,35 @@ pub async fn start_ui_recording(
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
 
-                    // Send capture triggers for event-driven capture
+                    // Send capture triggers for event-driven capture.
+                    // Skip triggers when the target app/window is ignored —
+                    // no point capturing frames that will be excluded by SCK.
                     if let Some(ref trigger_tx) = capture_trigger_tx {
                         use crate::event_driven_capture::CaptureTrigger;
                         let trigger = match &db_event.event_type {
                             screenpipe_db::UiEventType::AppSwitch => {
-                                Some(CaptureTrigger::AppSwitch {
-                                    app_name: db_event.app_name.clone().unwrap_or_default(),
-                                })
+                                let app = db_event.app_name.clone().unwrap_or_default();
+                                let app_lower = app.to_lowercase();
+                                if ignored_windows
+                                    .iter()
+                                    .any(|ig| app_lower.contains(&ig.to_lowercase()))
+                                {
+                                    None
+                                } else {
+                                    Some(CaptureTrigger::AppSwitch { app_name: app })
+                                }
                             }
                             screenpipe_db::UiEventType::WindowFocus => {
-                                Some(CaptureTrigger::WindowFocus {
-                                    window_name: db_event.window_title.clone().unwrap_or_default(),
-                                })
+                                let title = db_event.window_title.clone().unwrap_or_default();
+                                let title_lower = title.to_lowercase();
+                                if ignored_windows
+                                    .iter()
+                                    .any(|ig| title_lower.contains(&ig.to_lowercase()))
+                                {
+                                    None
+                                } else {
+                                    Some(CaptureTrigger::WindowFocus { window_name: title })
+                                }
                             }
                             screenpipe_db::UiEventType::Click => Some(CaptureTrigger::Click),
                             screenpipe_db::UiEventType::Clipboard => {
@@ -299,7 +316,24 @@ pub async fn start_ui_recording(
                     }
 
                     if record_input_events {
-                        batch.push(db_event);
+                        // Don't store input events from ignored windows/apps
+                        let app_lower = db_event
+                            .app_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let title_lower = db_event
+                            .window_title
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let is_ignored = ignored_windows.iter().any(|ig| {
+                            let ig_lower = ig.to_lowercase();
+                            app_lower.contains(&ig_lower) || title_lower.contains(&ig_lower)
+                        });
+                        if !is_ignored {
+                            batch.push(db_event);
+                        }
                     }
 
                     // Flush if batch is full

@@ -253,6 +253,10 @@ pub struct RecordingSettings {
     /// Per-day schedule rules (only used when schedule_enabled is true)
     #[serde(rename = "scheduleRules", default)]
     pub schedule_rules: Vec<ScheduleRule>,
+
+    /// Require authentication for remote (non-localhost) API access.
+    #[serde(rename = "apiAuth", default)]
+    pub api_auth: bool,
 }
 
 impl RecordingSettings {
@@ -329,6 +333,7 @@ impl Default for RecordingSettings {
             device_tier: None,
             schedule_enabled: false,
             schedule_rules: vec![],
+            api_auth: false,
         }
     }
 }

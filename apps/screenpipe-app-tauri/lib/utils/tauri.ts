@@ -1015,6 +1015,17 @@ async validateDataDir(path: string) : Promise<Result<null, string>> {
 },
 async getHardwareCapability() : Promise<HardwareCapability> {
     return await TAURI_INVOKE("get_hardware_capability");
+},
+/**
+ * Tauri command: re-encrypt store.bin after frontend saves.
+ */
+async reencryptStore() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reencrypt_store") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -1337,7 +1348,11 @@ scheduleEnabled?: boolean;
 /**
  * Per-day schedule rules (only used when schedule_enabled is true)
  */
-scheduleRules?: ScheduleRule[] }) & 
+scheduleRules?: ScheduleRule[]; 
+/**
+ * Require authentication for remote (non-localhost) API access.
+ */
+apiAuth?: boolean }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would

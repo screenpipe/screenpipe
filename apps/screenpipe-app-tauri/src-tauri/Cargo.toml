@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.3.53"
+version = "2.3.71"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -38,6 +38,8 @@ tauri-plugin-http = "=2.5.7"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
+base64 = "0.22"
 
 tower-http = { version = "0.4.0", features = ["cors", "trace"] }
 http = "0.2"
@@ -117,6 +119,7 @@ screenpipe-audio = { path = "../../../crates/screenpipe-audio" }
 screenpipe-db = { path = "../../../crates/screenpipe-db" }
 screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect" }
+screenpipe-secrets = { path = "../../../crates/screenpipe-secrets" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
 image = "0.25.5"
 icalendar = "0.17"

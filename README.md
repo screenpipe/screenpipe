@@ -80,9 +80,12 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 
 ## specs
 
+- captures full accessibility tree, OCR as fallback, transcription, speakers, keyboard inputs, app switches
 - 5-10% cpu usage
 - 0.5-3gb ram
 - ~20gb storage/month
+- filters (window, app, chrome extensions, passwords, PII)
+- optional encryption at rest
 - works offline
 
 ---

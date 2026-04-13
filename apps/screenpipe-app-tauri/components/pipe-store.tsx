@@ -319,14 +319,42 @@ function ConnectionsStrip() {
 }
 
 export function PipeStoreView() {
+  // Track installed pipe count to auto-switch to Discover for new users
+  const [installedCount, setInstalledCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch("http://localhost:3030/pipes")
+      .then((r) => r.json())
+      .then((data) => {
+        const list = Array.isArray(data) ? data : data.data || data.pipes || [];
+        setInstalledCount(list.length);
+      })
+      .catch(() => setInstalledCount(0));
+  }, []);
+
   // Read initial tab from URL param (e.g. ?section=pipes&tab=discover)
+  // Default to "discover" when user has no pipes installed
   const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       if (params.get("tab") === "discover") return "discover";
+      if (params.get("tab") === "my-pipes") return "my-pipes";
     }
     return "my-pipes";
   });
+
+  // Once we know installed count, switch new users to discover
+  useEffect(() => {
+    if (installedCount !== null && installedCount === 0) {
+      // Only auto-switch if no explicit tab param was set
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get("tab")) {
+          setActiveTab("discover");
+        }
+      }
+    }
+  }, [installedCount]);
 
   const tabs = [
     { key: "my-pipes" as const, label: "My Pipes" },
@@ -706,8 +734,40 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     );
   }
 
+  // First-visit banner — show once, dismiss permanently
+  const [showWelcome, setShowWelcome] = useState(() => {
+    if (typeof window !== "undefined") {
+      return !localStorage.getItem("screenpipe:pipes-welcome-dismissed");
+    }
+    return true;
+  });
+
+  const dismissWelcome = () => {
+    setShowWelcome(false);
+    localStorage.setItem("screenpipe:pipes-welcome-dismissed", "1");
+  };
+
   return (
     <div className="space-y-6">
+      {/* First-visit welcome banner */}
+      {showWelcome && (
+        <div className="relative border border-foreground/20 bg-muted/50 rounded-md p-4">
+          <button
+            onClick={dismissWelcome}
+            className="absolute top-2 right-2 text-muted-foreground hover:text-foreground text-sm px-1.5"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+          <p className="text-sm font-medium text-foreground">
+            pipes are AI automations that run on your screen data
+          </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            they can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. install one below to get started — click GET, then enable it in My Pipes.
+          </p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

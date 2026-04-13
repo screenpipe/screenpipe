@@ -118,10 +118,9 @@ async fn handle_focus(
 }
 
 async fn kill_process_on_port(port: u16) {
-    let my_pid = std::process::id().to_string();
-
     #[cfg(unix)]
     {
+        let my_pid = std::process::id().to_string();
         // lsof can hang indefinitely on macOS — always enforce a timeout
         // and kill the child if it exceeds it, to avoid zombie lsof processes.
         let child = match tokio::process::Command::new("lsof")

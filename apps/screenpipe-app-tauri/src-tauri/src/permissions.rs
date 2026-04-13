@@ -427,6 +427,7 @@ pub fn check_arc_installed() -> bool {
 }
 
 /// Returns the names of installed Chromium browsers that need Automation permission
+#[allow(dead_code)]
 #[tauri::command(async)]
 #[specta::specta]
 pub fn get_installed_browsers() -> Vec<String> {
@@ -447,6 +448,7 @@ pub fn get_installed_browsers() -> Vec<String> {
 
 /// Check if Automation permission is granted for all installed Chromium browsers.
 /// Returns true only if ALL installed browsers have automation granted.
+#[allow(dead_code)]
 #[tauri::command(async)]
 #[specta::specta]
 pub fn check_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
@@ -480,6 +482,7 @@ pub fn check_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
 /// Request Automation permission for installed Chromium browsers that are already running.
 /// Never force-launches browsers — only prompts for ones the user already has open.
 /// Opens System Settings > Automation as fallback for browsers not running.
+#[allow(dead_code)]
 #[tauri::command(async)]
 #[specta::specta]
 pub fn request_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
@@ -543,6 +546,7 @@ pub fn request_browsers_automation_permission(_app: tauri::AppHandle) -> bool {
 
 /// Per-browser automation status: "granted", "denied", or "not_asked".
 /// Also includes whether the browser is currently running.
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationStatus {
@@ -552,6 +556,7 @@ pub struct BrowserAutomationStatus {
 }
 
 /// Returns per-browser automation permission status for all installed Chromium browsers.
+#[allow(dead_code)]
 #[tauri::command(async)]
 #[specta::specta]
 pub fn get_browsers_automation_status() -> Vec<BrowserAutomationStatus> {
@@ -596,6 +601,7 @@ pub fn get_browsers_automation_status() -> Vec<BrowserAutomationStatus> {
 
 /// Request automation permission for a single browser by name.
 /// Returns the new status: "granted", "denied", or "not_asked".
+#[allow(dead_code)]
 #[tauri::command(async)]
 #[specta::specta]
 pub fn request_single_browser_automation(browser_name: String) -> String {
@@ -639,6 +645,7 @@ pub fn request_single_browser_automation(browser_name: String) -> String {
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = browser_name;
         "not_asked".to_string()
     }
 }

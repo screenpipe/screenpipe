@@ -521,10 +521,17 @@ fn validate_raw_sql(query: &str) -> Result<(), String> {
         .join(" ");
     let upper = normalized.to_uppercase();
 
-    // Only SELECT queries need limit validation
+    // Only allow read-only queries — block writes via /raw_sql
     let trimmed = upper.trim_start();
-    if !trimmed.starts_with("SELECT") {
-        return Ok(());
+    if !trimmed.starts_with("SELECT")
+        && !trimmed.starts_with("WITH")
+        && !trimmed.starts_with("EXPLAIN")
+    {
+        return Err(
+            "Query rejected: /raw_sql only allows SELECT, WITH, and EXPLAIN queries. \
+             Use the dedicated API endpoints for writes."
+                .to_string(),
+        );
     }
 
     // Check for LIMIT clause

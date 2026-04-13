@@ -345,6 +345,11 @@ pub async fn event_driven_capture_loop(
         );
     }
 
+    // Cache sorted excluded SCK window IDs to avoid recreating the persistent
+    // SCK stream every time a transient window (tooltip, popup, badge) appears
+    // or disappears.  Only update when the sorted set actually changes.
+    let mut cached_excluded_ids: Vec<u32> = Vec::new();
+
     loop {
         if stop_signal.load(Ordering::Relaxed) {
             info!("event-driven capture stopping for monitor {}", monitor_id);
@@ -441,6 +446,9 @@ pub async fn event_driven_capture_loop(
         // Visual change detection: periodically screenshot + frame diff
         // Re-check DRM pause before touching SCK — the flag may have been set
         // between the top-of-loop check and here.
+        // Use the same window exclusions as the full capture so the diff image
+        // matches what we'd actually store — avoids triggering on excluded
+        // windows and seeing phantom "visual changes" from their pixels.
         if trigger.is_none()
             && visual_check_enabled
             && state.can_capture()
@@ -448,8 +456,19 @@ pub async fn event_driven_capture_loop(
             && last_visual_check.elapsed() >= visual_check_interval
         {
             last_visual_check = Instant::now();
+            let vc_filters = WindowFilters::new(
+                &capture_params.tree_walker_config.ignored_windows,
+                &capture_params.tree_walker_config.included_windows,
+                &[],
+            );
+            let mut fresh_ids = get_excluded_sck_window_ids(&vc_filters);
+            fresh_ids.sort_unstable();
+            fresh_ids.dedup();
+            if fresh_ids != cached_excluded_ids {
+                cached_excluded_ids = fresh_ids;
+            }
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor, &[]).await {
+                match capture_monitor_image(&monitor, &cached_excluded_ids).await {
                     Ok((image, _dur)) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
@@ -471,6 +490,21 @@ pub async fn event_driven_capture_loop(
         }
 
         if let Some(trigger) = trigger {
+            // Clipboard events don't need a full capture cycle (screenshot +
+            // tree walk + OCR). The clipboard text is already stored by the
+            // UI recorder's input event batch. Triggering a full paired
+            // capture here causes 250-800ms of blocking work (pbpaste +
+            // spawn_blocking tree walk + OCR semaphore) which saturates the
+            // thread pool and causes input lag on USB HID devices.
+            if matches!(trigger, CaptureTrigger::Clipboard) {
+                debug!(
+                    "clipboard trigger on monitor {} — skipping capture (text stored via input events)",
+                    monitor_id
+                );
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
             if matches!(
@@ -770,12 +804,16 @@ async fn do_capture(
 
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
     // excludes them from the capture buffer (zero overhead, pixel-perfect).
+    // Sort + dedup so the persistent stream isn't needlessly recreated when
+    // transient windows (tooltips, popups) cause ordering changes.
     let window_filters = WindowFilters::new(
         &params.tree_walker_config.ignored_windows,
         &params.tree_walker_config.included_windows,
         &[],
     );
-    let excluded_ids = get_excluded_sck_window_ids(&window_filters);
+    let mut excluded_ids = get_excluded_sck_window_ids(&window_filters);
+    excluded_ids.sort_unstable();
+    excluded_ids.dedup();
 
     // Take screenshot (with ignored windows excluded at the OS level)
     let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
@@ -783,6 +821,24 @@ async fn do_capture(
         "screenshot captured in {:?} for monitor {}",
         capture_dur, params.monitor_id
     );
+
+    // When an ignored window covers most of a monitor, SCK replaces its
+    // pixels with black.  The resulting frame is nearly all-black — storing
+    // it wastes the tree walk, OCR, DB write, and produces ugly black frames
+    // in the timeline.  Detect this cheaply by sampling pixels: if >95% are
+    // near-black, skip everything but still return the image so the frame
+    // comparer stays updated (prevents re-triggering on the same black frame).
+    if is_frame_mostly_black(&image) {
+        debug!(
+            "captured frame is mostly black on monitor {} — skipping DB write (likely ignored window covering screen)",
+            params.monitor_id
+        );
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+        });
+    }
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
     // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
@@ -866,6 +922,33 @@ async fn do_capture(
         TreeWalkResult::NotFound => None,
     };
 
+    // Safety net: when the tree walk returned NotFound (AX failure, budget skip,
+    // etc.) the Skipped(UserIgnored) path didn't fire.  If the focused app still
+    // matches an ignored-window pattern, bail out now to prevent OCR from
+    // capturing text from an excluded window (e.g. startup capture while
+    // Bitwarden is focused but AX hadn't initialized yet).
+    if tree_snapshot.is_none() {
+        if let Some(ref app) = trigger_app {
+            let app_lower = app.to_lowercase();
+            if params
+                .tree_walker_config
+                .ignored_windows
+                .iter()
+                .any(|ig| app_lower.contains(&ig.to_lowercase()))
+            {
+                debug!(
+                    "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
+                    app, params.monitor_id
+                );
+                return Ok(CaptureOutput {
+                    result: None,
+                    image,
+                    elements_deduped: false,
+                });
+            }
+        }
+    }
+
     // Content dedup: skip capture if accessibility text hasn't changed.
     // Never dedup Idle/Manual triggers — these are fallback captures that must
     // always write so the timeline is never completely empty.
@@ -942,6 +1025,32 @@ async fn do_capture(
         });
     }
 
+    // Final ignored-window gate: check resolved metadata (app + window) against
+    // ignored patterns. This catches edge cases where the tree walk succeeded but
+    // didn't return Skipped (e.g. the trigger carried the app name, not the tree).
+    {
+        let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
+        let check_win = window_name_owned
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
+        if params.tree_walker_config.ignored_windows.iter().any(|ig| {
+            let ig_lower = ig.to_lowercase();
+            (!check_app.is_empty() && check_app.contains(&ig_lower))
+                || (!check_win.is_empty() && check_win.contains(&ig_lower))
+        }) {
+            debug!(
+                "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
+                check_app, check_win, params.monitor_id
+            );
+            return Ok(CaptureOutput {
+                result: None,
+                image,
+                elements_deduped: false,
+            });
+        }
+    }
+
     // DRM content detection: check if the focused app/URL is a streaming service.
     // When detected, set the global pause flag so ALL monitors stop capture
     // and the monitor watcher releases all SCK handles.
@@ -999,6 +1108,49 @@ fn get_focused_app_name_lightweight() -> Option<String> {
     ns::RunningApp::with_pid(pid)
         .and_then(|app| app.localized_name())
         .map(|s| s.to_string())
+}
+
+/// Cheaply detect if a captured frame is predominantly black.
+///
+/// When ScreenCaptureKit excludes an ignored window, the excluded pixels
+/// become black.  If the window covers most of the monitor the frame is
+/// nearly all-black — we want to skip storing it.
+///
+/// Strategy: sample a grid of pixels (≈200 points) and check if >95% have
+/// an RGB sum below a threshold.  Real content — even dark-mode apps — has
+/// variation (scrollbars, text, status bar).  Pure SCK-excluded regions are
+/// exactly `(0, 0, 0)` or very close to it.
+fn is_frame_mostly_black(image: &image::DynamicImage) -> bool {
+    let rgb = image.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    if w == 0 || h == 0 {
+        return true;
+    }
+
+    // Sample on a ~15×15 grid ≈ 225 points (sub-microsecond)
+    let step_x = (w / 15).max(1);
+    let step_y = (h / 15).max(1);
+    let mut total = 0u32;
+    let mut black = 0u32;
+
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            total += 1;
+            let px = rgb.get_pixel(x, y);
+            // Threshold: R+G+B < 15 — catches pure black and near-black
+            // from JPEG compression artifacts but not real dark-mode content.
+            if (px[0] as u16 + px[1] as u16 + px[2] as u16) < 15 {
+                black += 1;
+            }
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    let ratio = black as f64 / total as f64;
+    ratio > 0.95
 }
 
 #[cfg(test)]
@@ -1109,5 +1261,64 @@ mod tests {
         assert!(config.capture_on_clipboard);
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_all_black_frame_detected() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(1920, 1080));
+        assert!(is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_normal_frame_not_detected() {
+        let mut buf = image::RgbImage::new(1920, 1080);
+        // Fill with typical content colors
+        for px in buf.pixels_mut() {
+            *px = image::Rgb([120, 130, 140]);
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_frame_with_visible_menubar_not_skipped() {
+        // A menu bar at y=0 gets sampled by the grid → enough non-black
+        // pixels to keep the frame (it has real content visible).
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..22 {
+            for x in 0..1920 {
+                buf.put_pixel(x, y, image::Rgb([200, 200, 200]));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        // Menu bar is ~2% of pixels but hits a full grid row (~7% of samples)
+        // so the frame is NOT detected as mostly black — correct, it has content.
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_pure_black_with_single_bright_pixel_still_black() {
+        // A single bright pixel shouldn't prevent detection
+        let mut buf = image::RgbImage::new(1920, 1080);
+        buf.put_pixel(960, 540, image::Rgb([255, 255, 255]));
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_dark_mode_app_not_falsely_detected() {
+        // Dark mode: dark grey background (30, 30, 30) — NOT pure black
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for px in buf.pixels_mut() {
+            *px = image::Rgb([30, 30, 30]);
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_empty_image_detected() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(0, 0));
+        assert!(is_frame_mostly_black(&img));
     }
 }

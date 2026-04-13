@@ -4,7 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { useSettings, getStore } from "@/lib/hooks/use-settings";
+import { useSettings, getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -104,7 +104,7 @@ export function ArchiveSettings() {
     try {
       const store = await getStore();
       await store.set("cloud_archive", { enabled, retention_days: days });
-      await store.save();
+      await saveAndEncrypt(store);
     } catch {
       // best effort
     }

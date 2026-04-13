@@ -1888,29 +1888,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       </div>
       </LockedSetting>
 
-        {/* Workflow event detection (cloud) */}
-        {settings.user?.cloud_subscribed && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Workflow events
-                    <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">cloud</span>
-                  </h3>
-                  <p className="text-xs text-muted-foreground">AI detects your workflow patterns and triggers event-based pipes</p>
-                </div>
-              </div>
-              <Switch
-                checked={settings.enableWorkflowEvents || false}
-                onCheckedChange={(checked) => handleSettingsChange({ enableWorkflowEvents: checked } as any, true)}
-              />
-            </div>
-          </CardContent>
-        </Card>
-        )}
 
       {/* System */}
       <div className="space-y-2 pt-2">

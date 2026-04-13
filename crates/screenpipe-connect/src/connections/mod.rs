@@ -19,6 +19,7 @@ pub mod email;
 pub mod github_issues;
 pub mod glean;
 pub mod gmail;
+pub mod google_calendar;
 pub mod granola;
 pub mod hubspot;
 pub mod intercom;
@@ -154,6 +155,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(calendly::Calendly),
         Box::new(glean::Glean),
         Box::new(gmail::Gmail),
+        Box::new(google_calendar::GoogleCalendar),
     ]
 }
 
@@ -213,7 +215,9 @@ impl ConnectionManager {
                 let def = i.def();
                 let is_oauth = i.oauth_config().is_some();
                 let connected = if is_oauth {
-                    !oauth::list_oauth_instances(def.id).is_empty()
+                    oauth::list_oauth_instances(def.id)
+                        .iter()
+                        .any(|inst| oauth::is_oauth_instance_connected(def.id, inst.as_deref()))
                 } else {
                     store
                         .get(def.id)

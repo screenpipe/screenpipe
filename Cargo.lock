@@ -272,6 +272,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "arboard"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
+dependencies = [
+ "clipboard-win",
+ "image",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "parking_lot",
+ "percent-encoding",
+ "windows-sys 0.59.0",
+ "x11rb",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,7 +1170,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.0"
-source = "git+https://github.com/yury/cidre.git#34638ae16c5226d3c349953fcdd46533e3379a17"
+source = "git+https://github.com/yury/cidre.git#61e5e77ed1b33ff9a8758626b6266b8509df5506"
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
@@ -1232,6 +1252,15 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "clipboard-win"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+dependencies = [
+ "error-code",
+]
 
 [[package]]
 name = "cmake"
@@ -2280,6 +2309,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-code"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
 name = "esaxx-rs"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2747,6 +2782,16 @@ dependencies = [
  "generic-array 0.14.7",
  "rustversion",
  "typenum",
+]
+
+[[package]]
+name = "gethostname"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
+dependencies = [
+ "rustix 1.1.4",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -6702,7 +6747,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs#8151b16b705f91716ed8c10c54fb42c94fce9b8d"
+source = "git+https://github.com/screenpipe/sck-rs#cc39b0fee819f470b881d37658c940e7172c6431"
 dependencies = [
  "cidre 0.15.0",
  "image",
@@ -6729,6 +6774,7 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "arc-swap",
  "chrono",
  "cidre 0.13.1",
@@ -6765,7 +6811,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6825,7 +6871,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6838,7 +6884,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6866,7 +6912,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6912,7 +6958,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6938,7 +6984,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6982,6 +7028,7 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-events",
  "screenpipe-screen",
+ "screenpipe-secrets",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -7008,7 +7055,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7026,7 +7073,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7065,8 +7112,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-secrets"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "screenpipe-vault"
-version = "0.3.278"
+version = "0.3.279"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -10274,6 +10337,23 @@ checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
 ]
+
+[[package]]
+name = "x11rb"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
+dependencies = [
+ "gethostname",
+ "rustix 1.1.4",
+ "x11rb-protocol",
+]
+
+[[package]]
+name = "x11rb-protocol"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xattr"

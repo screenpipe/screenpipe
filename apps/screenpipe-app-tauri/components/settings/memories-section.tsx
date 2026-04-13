@@ -193,22 +193,18 @@ export function MemoriesSection() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const sortMemories = useCallback(
-    (data: MemoryRecord[]) => {
-      return [...data].sort((a, b) => {
-        const aVal =
-          sortField === "created_at"
-            ? new Date(a.created_at).getTime()
-            : a.importance;
-        const bVal =
-          sortField === "created_at"
-            ? new Date(b.created_at).getTime()
-            : b.importance;
-        return sortDir === "desc" ? bVal - aVal : aVal - bVal;
-      });
-    },
-    [sortField, sortDir],
-  );
+  // fetch all tags once on mount
+  useEffect(() => {
+    fetch("http://localhost:3030/memories/tags")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((tags: string[]) => {
+        const filtered = tags.filter(
+          (t) => t.length > 0 && !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)
+        );
+        setAllTags(filtered);
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -238,33 +234,9 @@ export function MemoriesSection() {
         clearTimeout(timeout);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: MemoryListResponse = await res.json();
-        const sorted = sortMemories(data.data);
-
-        // collect all unique tags, filtering out ISO timestamps and date-like strings
-        const isUsefulTag = (t: string) =>
-          t.length > 0 &&
-          !/^\d{4}-\d{2}-\d{2}/.test(t) && // ISO date or timestamp
-          !/^\d+$/.test(t); // pure numbers
-
-        if (offset === 0) {
-          const tags = new Set<string>();
-          data.data.forEach((m) => m.tags.filter(isUsefulTag).forEach((t) => tags.add(t)));
-          setAllTags((prev) => {
-            const merged = new Set([...prev, ...tags]);
-            return Array.from(merged).sort();
-          });
-        } else {
-          data.data.forEach((m) =>
-            m.tags.filter(isUsefulTag).forEach((t) =>
-              setAllTags((prev) =>
-                prev.includes(t) ? prev : [...prev, t].sort(),
-              ),
-            ),
-          );
-        }
 
         setMemories((prev) =>
-          append ? sortMemories([...prev, ...sorted]) : sorted,
+          append ? [...prev, ...data.data] : data.data,
         );
         setTotal(data.pagination.total);
       } catch (err) {
@@ -281,7 +253,7 @@ export function MemoriesSection() {
         loadingMoreRef.current = false;
       }
     },
-    [toast, debouncedQuery, activeTag, sortField, sortDir, sortMemories],
+    [toast, debouncedQuery, activeTag, sortField, sortDir],
   );
 
   // fetch on mount + refetch when search/tag filter changes
@@ -556,10 +528,10 @@ export function MemoriesSection() {
       {/* filters row */}
       <div className="flex items-center gap-2 flex-wrap">
         {loading ? (
-          <Skeleton className="h-6 w-12 rounded-full" />
+          <Skeleton className="h-6 w-16 rounded-full" />
         ) : total > 0 ? (
           <Badge variant="secondary" className="text-xs">
-            {total}
+            {total} {total === 1 ? "memory" : "memories"}
           </Badge>
         ) : null}
 
@@ -739,7 +711,7 @@ export function MemoriesSection() {
                     return (
                       <div className="text-sm text-foreground">
                         <MemoizedReactMarkdown
-                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
+                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
                           remarkPlugins={[remarkGfm]}
                           components={{
                             p({ children }) {

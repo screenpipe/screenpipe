@@ -588,7 +588,14 @@ async fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("port already in use"));
     }
 
-    let all_monitors = list_monitors().await;
+    // Only enumerate monitors when vision is enabled — on macOS, calling
+    // SCK's ShareableContent::current() triggers the "Currently Sharing"
+    // indicator in Control Center even if we never capture a frame (#2897).
+    let all_monitors = if config.disable_vision {
+        Vec::new()
+    } else {
+        list_monitors().await
+    };
 
     let mut audio_devices = Vec::new();
 
@@ -856,6 +863,44 @@ async fn main() -> anyhow::Result<()> {
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
     server.manual_meeting = Some(manual_meeting.clone());
+    server.api_auth = config.api_auth;
+    server.api_auth_key = config.api_auth_key.clone();
+
+    // Initialize secret store for unified credential management
+    {
+        let secret_store_result = screenpipe_secrets::SecretStore::new(db.pool.clone(), None).await;
+        match secret_store_result {
+            Ok(store) => {
+                // Run startup permission sweep
+                let fixed = screenpipe_secrets::fix_secret_file_permissions(&local_data_dir);
+                if fixed > 0 {
+                    info!("fixed permissions on {} credential files", fixed);
+                }
+
+                // Run legacy migration
+                match screenpipe_secrets::migrate_legacy_secrets(&store, &local_data_dir).await {
+                    Ok(report) => {
+                        if !report.migrated.is_empty() {
+                            info!(
+                                "migrated {} legacy secrets: {:?}",
+                                report.migrated.len(),
+                                report.migrated
+                            );
+                        }
+                        if !report.errors.is_empty() {
+                            warn!("secret migration errors: {:?}", report.errors);
+                        }
+                    }
+                    Err(e) => warn!("legacy secret migration failed: {}", e),
+                }
+
+                server.secret_store = Some(Arc::new(store));
+            }
+            Err(e) => {
+                warn!("failed to initialize secret store: {}", e);
+            }
+        }
+    }
 
     // Attach sync handle if sync is enabled
     let server = if let Some(ref handle) = sync_service_handle {
@@ -1174,7 +1219,14 @@ async fn main() -> anyhow::Result<()> {
     let ui_recorder_handle = {
         if ui_recorder_config.enabled {
             info!("starting UI event capture");
-            match start_ui_recording(db.clone(), ui_recorder_config, capture_trigger_tx).await {
+            match start_ui_recording(
+                db.clone(),
+                ui_recorder_config,
+                capture_trigger_tx,
+                record_args.ignored_windows.clone(),
+            )
+            .await
+            {
                 Ok(handle) => Some(handle),
                 Err(e) => {
                     error!("failed to start UI event recording: {}", e);

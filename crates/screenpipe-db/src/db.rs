@@ -4535,14 +4535,8 @@ impl DatabaseManager {
         .await?;
         let audio_chunks_deleted = audio_chunks_result.rows_affected();
 
-        // 9. Delete accessibility records
-        let accessibility_result =
-            sqlx::query("DELETE FROM accessibility WHERE timestamp BETWEEN ?1 AND ?2")
-                .bind(&start_str)
-                .bind(&end_str)
-                .execute(&mut **tx.conn())
-                .await?;
-        let accessibility_deleted = accessibility_result.rows_affected();
+        // 9. accessibility table was dropped by migration 20260312000000
+        let accessibility_deleted: u64 = 0;
 
         // 10. Delete ui_events — triggers ui_events_fts delete
         let ui_events_result =
@@ -4727,14 +4721,8 @@ impl DatabaseManager {
         .await?;
         let audio_chunks_deleted = audio_chunks_result.rows_affected();
 
-        // 11. Delete accessibility records
-        let accessibility_result =
-            sqlx::query("DELETE FROM accessibility WHERE timestamp BETWEEN ?1 AND ?2")
-                .bind(&start_str)
-                .bind(&end_str)
-                .execute(&mut **tx.conn())
-                .await?;
-        let accessibility_deleted = accessibility_result.rows_affected();
+        // 11. accessibility table was dropped by migration 20260312000000
+        let accessibility_deleted: u64 = 0;
 
         // 12. Delete ui_events
         let ui_events_result =
@@ -4922,14 +4910,8 @@ impl DatabaseManager {
 
         // NO orphan audio_chunks cleanup here — done separately
 
-        // Delete accessibility records
-        let accessibility_result =
-            sqlx::query("DELETE FROM accessibility WHERE timestamp BETWEEN ?1 AND ?2")
-                .bind(&start_str)
-                .bind(&end_str)
-                .execute(&mut **tx.conn())
-                .await?;
-        let accessibility_deleted = accessibility_result.rows_affected();
+        // accessibility table was dropped by migration 20260312000000
+        let accessibility_deleted: u64 = 0;
 
         // Delete ui_events
         let ui_events_result =
@@ -7246,6 +7228,18 @@ LIMIT ? OFFSET ?
             .bind(end_time)
             .fetch_one(&self.pool)
             .await
+    }
+
+    pub async fn list_memory_tags(&self) -> Result<Vec<String>, SqlxError> {
+        // Tags are stored as JSON arrays. Extract all unique tag values across all memories.
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT j.value FROM memories, json_each(memories.tags) j \
+             WHERE j.value IS NOT NULL AND j.value != '' \
+             ORDER BY j.value",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }
 
