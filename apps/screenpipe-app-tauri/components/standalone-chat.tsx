@@ -112,6 +112,34 @@ function buildDailyLimitMessage(errorStr: string): string {
   }
 }
 
+function classifyQuotaError(errorStr: string): "daily" | "rate" | "none" {
+  const normalized = errorStr.toLowerCase();
+  const isDailyLimit =
+    normalized.includes("credits_exhausted") ||
+    normalized.includes("daily_limit_exceeded") ||
+    normalized.includes("daily_cost_limit_exceeded");
+  if (isDailyLimit) {
+    return "daily";
+  }
+
+  const isRateLimit =
+    normalized.includes("429") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("rate_limit") ||
+    normalized.includes("requests per minute") ||
+    normalized.includes("too many requests");
+  return isRateLimit ? "rate" : "none";
+}
+
+function buildRateLimitMessage(errorStr: string): string {
+  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
+  const waitTime = waitMatch ? waitMatch[1] : "a moment";
+  const isPerMinuteRate = /rate limit exceeded|requests per minute/i.test(errorStr);
+  return isPerMinuteRate
+    ? `Rate limited — please wait ${waitTime} seconds and try again.`
+    : "Rate limited — try again in a moment or switch to a different model.";
+}
+
 /** Extract the gateway-reported tier from an error string, if present. */
 // Helper to get timezone offset string (e.g., "+1" or "-5")
 function getTimezoneOffsetString(): string {
@@ -1895,7 +1923,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            if (errMsg.includes("credits_exhausted") || errMsg.includes("daily_limit_exceeded") || errMsg.includes("daily_cost_limit_exceeded") || errMsg.includes("429")) {
+            const quotaErrorType = classifyQuotaError(errMsg);
+            if (quotaErrorType === "daily") {
               try {
                 const resetsAtMatch = errMsg.match(/"resets_at":\s*"([^"]+)"/);
                 } catch {}
@@ -1903,9 +1932,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errMsg) } : m)
               );
-            } else if (errMsg.includes("rate limit") || errMsg.includes("rate_limit")) {
+            } else if (quotaErrorType === "rate") {
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: "Rate limited — try again in a moment." } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: buildRateLimitMessage(errMsg) } : m)
               );
             } else {
               setMessages((prev) =>
@@ -1950,13 +1979,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             // Surface credits_exhausted / rate limit errors from agent_end
             if (agentEndError && !content) {
               const errStr = agentEndError;
-              if (errStr.includes("credits_exhausted") || errStr.includes("daily_limit_exceeded") || errStr.includes("daily_cost_limit_exceeded") || errStr.includes("429")) {
+              const quotaErrorType = classifyQuotaError(errStr);
+              if (quotaErrorType === "daily") {
                 try {
                   const resetsAtMatch = errStr.match(/"resets_at":\s*"([^"]+)"/);
                     } catch {}
                                   content = buildDailyLimitMessage(errStr);
-              } else if (errStr.includes("rate limit")) {
-                  content = "Rate limited — try again in a moment.";
+              } else if (quotaErrorType === "rate") {
+                  content = buildRateLimitMessage(errStr);
               } else {
                 content = `Error: ${errStr}`;
               }
