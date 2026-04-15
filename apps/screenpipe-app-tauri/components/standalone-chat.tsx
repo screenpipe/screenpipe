@@ -1072,6 +1072,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
@@ -1605,6 +1606,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     // Prevent '/' from triggering app shortcuts while typing
     if (e.key === '/') {
       e.stopPropagation();
+    }
+
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+    const nativeIsComposing = nativeEvent.isComposing || nativeEvent.keyCode === 229;
+
+    // Ignore Enter while an IME composition is active so confirmation does not submit the message.
+    if (isComposing || nativeIsComposing) {
+      return;
     }
 
     // Enter without shift submits the form
@@ -3950,6 +3959,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 ref={inputRef}
                 value={input}
                 onChange={handleInputChange}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   disabledReason
