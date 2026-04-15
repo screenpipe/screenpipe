@@ -94,14 +94,14 @@ pub async fn migrate_legacy_secrets(
                         if let Err(e) = store.set(&store_key, &contents).await {
                             report.errors.push(format!("{}: {}", filename, e));
                         } else {
-                            // Delete the legacy file — SecretStore handles refresh now
-                            if let Err(e) = std::fs::remove_file(&path) {
-                                warn!("migrated {} but failed to delete: {}", filename, e);
-                            }
+                            // Keep the legacy file — Phase 1 per module doc. Readers
+                            // (e.g. chatgpt_oauth::read_tokens) still consult the file;
+                            // deleting it here breaks OAuth restore across restarts.
+                            // Phase 2 (reader migration to SecretStore) can delete later.
                             report
                                 .migrated
                                 .push(format!("{} -> {}", filename, store_key));
-                            info!("migrated {} -> {} (file deleted)", filename, store_key);
+                            info!("migrated {} -> {} (file kept for legacy readers)", filename, store_key);
                         }
                     }
                     Err(e) => {
