@@ -42,3 +42,7 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 
 ## git usage
 - make sure to understand there is always bunch of other agents working on the same codebase in parallel, never delete local code or use git reset or such
+
+## Local File Rules
+
+.local/ is local-only and must never be git added. Research logs, design notes, experiment code, and anything not required for build/run/test belong in .local/. .claude/ is also excluded from git.
