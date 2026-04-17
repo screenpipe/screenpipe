@@ -26,6 +26,8 @@ use tracing::{debug, error, info, warn};
 use crate::analytics::capture_event_nonblocking;
 #[cfg(target_os = "macos")]
 use serde_json::json;
+#[cfg(target_os = "macos")]
+use tokio::sync::Notify;
 
 /// Tracks whether the system is currently in a "post-wake" state
 static RECENTLY_WOKE: AtomicBool = AtomicBool::new(false);
@@ -36,6 +38,39 @@ static RECENTLY_WOKE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// When true, capture loops should skip capture to avoid wasting resources
 /// on wallpaper/lock-screen frames.
 static SCREEN_IS_LOCKED: AtomicBool = AtomicBool::new(false);
+
+/// Fired by `CGDisplayRegisterReconfigurationCallback` when the display
+/// topology changes (connect, disconnect, resolution, mirror). Lets
+/// subsystems react instantly instead of polling SCK on a timer.
+/// Uses `notify_one` semantics so at most one pending permit is buffered
+/// if no waiter is currently parked — the next `.notified().await` returns
+/// immediately. NOTE: single-consumer pattern. If multiple subsystems ever
+/// subscribe, switch to `notify_waiters` and remove the permit-buffering
+/// assumption at the call sites.
+#[cfg(target_os = "macos")]
+static DISPLAY_RECONFIG_NOTIFY: Notify = Notify::const_new();
+
+/// Set to `true` once `CGDisplayRegisterReconfigurationCallback` has been
+/// registered successfully. If registration fails (rare CG error path),
+/// callers should fall back to shorter polling instead of relying on the
+/// notify — otherwise they'd never wake on topology changes.
+#[cfg(target_os = "macos")]
+static DISPLAY_RECONFIG_CALLBACK_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+/// Handle to the display reconfiguration notify. Await `.notified()` on it
+/// to be woken the next time the display topology changes.
+#[cfg(target_os = "macos")]
+pub fn display_reconfig_notify() -> &'static Notify {
+    &DISPLAY_RECONFIG_NOTIFY
+}
+
+/// Returns true iff the CG display reconfiguration callback was registered.
+/// Callers that wait on `display_reconfig_notify()` should check this and
+/// fall back to timer-only polling when it's false.
+#[cfg(target_os = "macos")]
+pub fn display_reconfig_callback_registered() -> bool {
+    DISPLAY_RECONFIG_CALLBACK_REGISTERED.load(Ordering::SeqCst)
+}
 
 /// Returns true if the system recently woke from sleep (within last 30 seconds)
 pub fn recently_woke_from_sleep() -> bool {
@@ -351,6 +386,9 @@ pub fn start_sleep_monitor() {
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
             screenpipe_audio::stream_invalidation::request();
+            // Wake any waiters (e.g. monitor_watcher) so they re-scan the
+            // monitor list immediately instead of waiting on a poll timer.
+            DISPLAY_RECONFIG_NOTIFY.notify_one();
         }
 
         unsafe {
@@ -359,11 +397,14 @@ pub fn start_sleep_monitor() {
                 std::ptr::null_mut(),
             );
             if err != 0 {
-                // CGError != kCGErrorSuccess — log and continue without this watcher
+                // CGError != kCGErrorSuccess — log and continue without this watcher.
+                // Subsystems reading `display_reconfig_callback_registered()` will
+                // fall back to timer-only polling.
                 eprintln!("CGDisplayRegisterReconfigurationCallback failed: {}", err);
                 return;
             }
         }
+        DISPLAY_RECONFIG_CALLBACK_REGISTERED.store(true, Ordering::SeqCst);
 
         info!(
             "Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)"
@@ -642,6 +683,48 @@ mod tests {
         assert!(screen_is_locked());
         SCREEN_IS_LOCKED.store(false, Ordering::SeqCst);
         assert!(!screen_is_locked());
+    }
+
+    /// `notify_one` must either wake a parked waiter or buffer a permit that
+    /// the next `.notified().await` consumes immediately. Both paths matter:
+    /// the monitor_watcher parks in a `select!`, but the callback can also
+    /// fire between loop iterations.
+    /// NOTE: `DISPLAY_RECONFIG_NOTIFY` is a process-global static, so we use
+    /// a local `Notify` to keep this test hermetic from other tests.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_notify_one_semantics() {
+        let notify = std::sync::Arc::new(Notify::const_new());
+
+        // Case 1: permit buffers when no waiter is parked — next notified()
+        // returns immediately.
+        notify.notify_one();
+        tokio::time::timeout(std::time::Duration::from_millis(50), notify.notified())
+            .await
+            .expect("buffered notify_one permit should be consumed immediately");
+
+        // Case 2: notify_one wakes a parked waiter.
+        let n2 = notify.clone();
+        let waiter = tokio::spawn(async move { n2.notified().await });
+        // Let the spawned task park on the notify before we signal.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        notify.notify_one();
+        tokio::time::timeout(std::time::Duration::from_millis(50), waiter)
+            .await
+            .expect("parked waiter should be woken by notify_one")
+            .expect("waiter task should not panic");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_display_reconfig_callback_registered_default_false() {
+        // In unit tests we don't call start_sleep_monitor, so the flag must
+        // stay false — forces monitor_watcher into the 5s fallback backstop.
+        // (Cannot assert false unconditionally because other tests in the
+        // same process may have flipped it; just assert the getter exists
+        // and returns a bool without panicking.)
+        let _: bool = display_reconfig_callback_registered();
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

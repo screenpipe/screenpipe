@@ -31,6 +31,11 @@ pub async fn start_monitor_watcher(
     // Stop existing watcher if any
     stop_monitor_watcher().await?;
 
+    #[cfg(target_os = "macos")]
+    info!(
+        "Starting monitor watcher (event-driven via CGDisplayRegisterReconfigurationCallback, 60s backstop poll)"
+    );
+    #[cfg(not(target_os = "macos"))]
     info!("Starting monitor watcher (polling every 5 seconds)");
 
     let handle = tokio::spawn(async move {
@@ -254,8 +259,32 @@ pub async fn start_monitor_watcher(
                 }
             }
 
-            // Poll every 5 seconds — monitor connect/disconnect is not latency-sensitive
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Wait for the next display reconfiguration event. On macOS the
+            // CG display callback (registered in `sleep_monitor`) fires
+            // instantly on connect/disconnect/resolution changes, so polling
+            // SCK every 5s just adds steady load without adding responsiveness.
+            // Backstop:
+            //   - 60s when the callback is active (event-driven, rare wake)
+            //   -  5s when the callback failed to register (fall back to the
+            //      previous behavior so hot-plug detection doesn't silently
+            //      regress to once-a-minute)
+            #[cfg(target_os = "macos")]
+            {
+                let backstop = if crate::sleep_monitor::display_reconfig_callback_registered() {
+                    Duration::from_secs(60)
+                } else {
+                    Duration::from_secs(5)
+                };
+                let notify = crate::sleep_monitor::display_reconfig_notify();
+                tokio::select! {
+                    _ = notify.notified() => {}
+                    _ = tokio::time::sleep(backstop) => {}
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
         }
     });
 
