@@ -628,7 +628,7 @@ export function PrivacySection() {
       </Card>
 
       {/* Window Filtering */}
-      {/* DRM Streaming Pause */}
+      {/* Pause for content-protected apps (DRM streaming + remote desktop) */}
       <Card>
         <CardContent className="px-3 py-2.5">
           <div className="flex items-center justify-between">
@@ -636,11 +636,11 @@ export function PrivacySection() {
               <Tv className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Pause for Streaming Apps
-                  <HelpTooltip text="pauses all screen capture when netflix, disney+, hulu, prime video, and other DRM streaming apps are focused. this prevents black screens caused by DRM copy protection detecting screen recording. capture resumes automatically when you switch to a non-browser app." />
+                  Pause for DRM & Remote Desktop
+                  <HelpTooltip text="pauses all screen capture when a DRM-protected streaming app (netflix, disney+, hulu, prime video, apple tv, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused. these apps blank their windows when any app is recording the screen — pausing capture while they're focused keeps them usable. capture resumes automatically when you switch away." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Avoid DRM black screens on Netflix, Disney+, etc.
+                  Avoid DRM black screens (Netflix, Disney+) and gray Horizon windows.
                 </p>
               </div>
             </div>

@@ -1286,10 +1286,12 @@ ignoredUrls?: string[];
  */
 ignoreIncognitoWindows: boolean; 
 /**
- * Experimental: pause screen capture when a DRM streaming app or site is focused.
+ * Experimental: pause screen capture when a DRM-protected streaming app
+ * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon)
+ * is focused. These apps blank their windows while screen recording is active.
  * Off by default; engine-only pause (no full app shutdown).
  */
-pauseOnDrmContent?: boolean; 
+pauseOnDrmContent?: boolean;
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).

@@ -357,7 +357,10 @@ pub struct RecordArgs {
     #[arg(long)]
     pub sync_machine_id: Option<String>,
 
-    /// Pause screen and audio capture when DRM content (Netflix, Disney+, etc.) is detected
+    /// Pause screen and audio capture when a DRM-protected streaming app
+    /// (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
+    /// Horizon) is focused — these blank their windows while any app is
+    /// recording the screen.
     #[arg(long, default_value_t = false)]
     pub pause_on_drm_content: bool,
 

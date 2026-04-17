@@ -140,7 +140,10 @@ pub struct RecordingSettings {
     #[serde(rename = "ignoreIncognitoWindows")]
     pub ignore_incognito_windows: bool,
 
-    /// Experimental: pause screen capture when a DRM streaming app or site is focused.
+    /// Experimental: pause screen capture when a DRM-protected streaming app
+    /// (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
+    /// Horizon) is focused. These apps blank their windows while screen
+    /// recording is active.
     /// Off by default; engine-only pause (no full app shutdown).
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,

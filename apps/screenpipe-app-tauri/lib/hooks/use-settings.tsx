@@ -158,7 +158,7 @@ export type Settings = SettingsStore & {
 	showRestartNotifications?: boolean;
 	/** Offline mode — blocks all external network from pipes, disables PostHog telemetry, keeps Sentry crash reports */
 	offlineMode?: boolean;
-	/** Pause all screen capture when a DRM streaming app (Netflix, Disney+, etc.) is focused */
+	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
