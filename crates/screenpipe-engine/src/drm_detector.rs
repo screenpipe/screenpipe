@@ -61,7 +61,9 @@ pub fn set_drm_paused(paused: bool) {
     }
 }
 
-/// Known DRM streaming app names (lowercased for comparison).
+/// Apps that trigger macOS content protection while ScreenCaptureKit is active
+/// (DRM streaming services plus remote-desktop clients that defensively blank
+/// their windows when any app holds an SCK session). Lowercased for comparison.
 const DRM_APPS: &[&str] = &[
     "netflix",
     "disney+",
@@ -74,6 +76,10 @@ const DRM_APPS: &[&str] = &[
     "max",
     "crunchyroll",
     "dazn",
+    // Remote-desktop clients using macOS content protection.
+    // Matches Omnissa Horizon Client, Omnissa Horizon Client Next,
+    // and the legacy VMware Horizon Client branding.
+    "horizon client",
 ];
 
 /// Check whether `app_name` matches a known DRM streaming app.
@@ -592,6 +598,17 @@ mod tests {
         assert!(!is_drm_app("Max Mustermann"));
         assert!(!is_drm_app("3ds Max"));
         assert!(!is_drm_app("Terminal"));
+    }
+
+    #[test]
+    fn test_is_drm_app_horizon_variants() {
+        assert!(is_drm_app("Omnissa Horizon Client"));
+        assert!(is_drm_app("Omnissa Horizon Client Next"));
+        assert!(is_drm_app("VMware Horizon Client"));
+        assert!(is_drm_app("horizon client"));
+        // Guard against overly broad matches.
+        assert!(!is_drm_app("Horizon Zero Dawn"));
+        assert!(!is_drm_app("Blue Horizon"));
     }
 
     #[test]
