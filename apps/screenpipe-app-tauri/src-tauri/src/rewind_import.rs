@@ -5,25 +5,45 @@
 //! Tauri commands for Rewind AI import.
 
 use screenpipe_config::DbConfig;
-use screenpipe_db::DatabaseManager;
-use screenpipe_engine::rewind_migration::{
-    MigrationProgress, MigrationState, RewindMigration, RewindScanResult,
+use screenpipe_connect::imports::rewind::{
+    MigrationProgress, MigrationState, OcrFn, RewindMigration, RewindScanResult,
 };
+use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
+fn make_ocr_fn() -> OcrFn {
+    #[cfg(target_os = "macos")]
+    {
+        use screenpipe_core::Language;
+        use screenpipe_screen::perform_ocr_apple;
+
+        Arc::new(|image: &image::DynamicImage| {
+            let (text, _, _) = perform_ocr_apple(image, &[Language::English]);
+            Ok(text)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Arc::new(|_image: &image::DynamicImage| Ok(String::new()))
+    }
+}
+
 /// Managed state for the rewind import.
 pub struct RewindImportState {
     migration: Mutex<Option<Arc<RewindMigration>>>,
+    db: Mutex<Option<Arc<DatabaseManager>>>,
 }
 
 impl Default for RewindImportState {
     fn default() -> Self {
         Self {
             migration: Mutex::new(None),
+            db: Mutex::new(None),
         }
     }
 }
@@ -75,12 +95,11 @@ impl From<MigrationProgress> for RewindProgressResponse {
     }
 }
 
-async fn ensure_migration(
-    state: &RewindImportState,
-) -> Result<Arc<RewindMigration>, String> {
-    let mut lock = state.migration.lock().await;
-    if let Some(ref m) = *lock {
-        return Ok(m.clone());
+/// Get or create the shared DatabaseManager for rewind imports.
+async fn get_or_create_db(state: &RewindImportState) -> Result<Arc<DatabaseManager>, String> {
+    let mut lock = state.db.lock().await;
+    if let Some(ref db) = *lock {
+        return Ok(db.clone());
     }
 
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
@@ -92,8 +111,23 @@ async fn ensure_migration(
             .map_err(|e| format!("failed to open database: {}", e))?,
     );
 
-    // No whisper context for scan — will be created on import start
-    let migration = RewindMigration::new(db, &data_dir, None, None, None)
+    *lock = Some(db.clone());
+    Ok(db)
+}
+
+async fn ensure_migration(
+    state: &RewindImportState,
+) -> Result<Arc<RewindMigration>, String> {
+    let mut lock = state.migration.lock().await;
+    if let Some(ref m) = *lock {
+        return Ok(m.clone());
+    }
+
+    let db = get_or_create_db(state).await?;
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+
+    // No transcription endpoint for scan — will be set on import start
+    let migration = RewindMigration::new(db, &data_dir, None, None, None, Some(make_ocr_fn()))
         .await
         .map_err(|e| format!("failed to init migration: {}", e))?;
 
@@ -145,32 +179,19 @@ pub async fn rewind_start_import(
     state: State<'_, RewindImportState>,
     fresh: bool,
 ) -> Result<(), String> {
-    // Re-create the migration with Whisper context for audio support
+    let db = get_or_create_db(&state).await?;
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = format!("{}/db.sqlite", data_dir.to_string_lossy());
 
-    let db = Arc::new(
-        DatabaseManager::new(&db_path, DbConfig::default())
-            .await
-            .map_err(|e| format!("failed to open database: {}", e))?,
-    );
+    // Use the local screenpipe transcription API for audio
+    let transcription_endpoint = Some("http://localhost:3030".to_string());
 
-    // Load Whisper model
-    let whisper_ctx = match load_whisper() {
-        Ok(ctx) => Some(ctx),
-        Err(e) => {
-            info!("whisper not available, audio import will be skipped: {}", e);
-            None
-        }
-    };
-
-    let migration = RewindMigration::new(db, &data_dir, None, None, whisper_ctx)
+    let migration = RewindMigration::new(db, &data_dir, None, None, transcription_endpoint, Some(make_ocr_fn()))
         .await
         .map_err(|e| format!("failed to init migration: {}", e))?;
 
     let arc = Arc::new(migration);
 
-    // Store the new migration with whisper context
+    // Store the new migration
     {
         let mut lock = state.migration.lock().await;
         *lock = Some(arc.clone());
@@ -212,21 +233,4 @@ pub async fn rewind_cancel_import(
         migration.cancel();
     }
     Ok(())
-}
-
-fn load_whisper() -> anyhow::Result<Arc<whisper_rs::WhisperContext>> {
-    use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-    use screenpipe_audio::transcription::whisper::model::{
-        create_whisper_context_parameters, download_whisper_model,
-    };
-
-    let engine = Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo);
-    let model_path = download_whisper_model(engine.clone())?;
-    let ctx_params = create_whisper_context_parameters(engine)?;
-    let ctx = whisper_rs::WhisperContext::new_with_params(
-        model_path.to_str().unwrap(),
-        ctx_params,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to create whisper context: {}", e))?;
-    Ok(Arc::new(ctx))
 }

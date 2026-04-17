@@ -5,18 +5,30 @@
 //! CLI import subcommand handlers.
 
 use super::ImportCommand;
-use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-use screenpipe_audio::transcription::whisper::model::{
-    create_whisper_context_parameters, download_whisper_model,
-};
 use screenpipe_config::DbConfig;
+use screenpipe_connect::imports::rewind::{MigrationState, OcrFn, RewindMigration};
 use screenpipe_db::DatabaseManager;
 use std::io::Write;
 use std::sync::Arc;
 use tracing::error;
-use whisper_rs::WhisperContext;
 
-use crate::rewind_migration::{MigrationState, RewindMigration};
+fn make_ocr_fn() -> OcrFn {
+    #[cfg(target_os = "macos")]
+    {
+        use screenpipe_core::Language;
+        use screenpipe_screen::perform_ocr_apple;
+
+        Arc::new(|image: &image::DynamicImage| {
+            let (text, _, _) = perform_ocr_apple(image, &[Language::English]);
+            Ok(text)
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Arc::new(|_image: &image::DynamicImage| Ok(String::new()))
+    }
+}
 
 fn screenpipe_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(screenpipe_core::paths::default_screenpipe_data_dir())
@@ -27,16 +39,6 @@ fn get_base_dir(data_dir: &Option<String>) -> anyhow::Result<std::path::PathBuf>
         Some(dir) => Ok(std::path::PathBuf::from(dir)),
         None => screenpipe_dir(),
     }
-}
-
-fn init_whisper() -> anyhow::Result<Arc<WhisperContext>> {
-    let engine = Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo);
-    println!("Downloading/loading Whisper model...");
-    let model_path = download_whisper_model(engine.clone())?;
-    let ctx_params = create_whisper_context_parameters(engine)?;
-    let ctx = WhisperContext::new_with_params(model_path.to_str().unwrap(), ctx_params)
-        .map_err(|e| anyhow::anyhow!("Failed to create Whisper context: {}", e))?;
-    Ok(Arc::new(ctx))
 }
 
 pub async fn handle_import_command(command: &ImportCommand) -> anyhow::Result<()> {
@@ -73,19 +75,28 @@ pub async fn handle_import_command(command: &ImportCommand) -> anyhow::Result<()
                 })?,
             );
 
-            // Load Whisper for audio transcription unless --skip-audio
-            let whisper_context = if *skip_audio {
+            // Use the screenpipe transcription API unless --skip-audio
+            let transcription_endpoint = if *skip_audio {
                 None
             } else {
-                match init_whisper() {
-                    Ok(ctx) => {
-                        println!("Whisper model loaded.");
-                        Some(ctx)
+                // Check that the screenpipe server is reachable
+                let endpoint = "http://localhost:3030".to_string();
+                match reqwest::Client::new()
+                    .get(format!("{}/health", endpoint))
+                    .timeout(std::time::Duration::from_secs(3))
+                    .send()
+                    .await
+                {
+                    Ok(_) => {
+                        println!("Screenpipe server detected — audio will be transcribed via API.");
+                        Some(endpoint)
                     }
-                    Err(e) => {
+                    Err(_) => {
                         eprintln!(
-                            "Warning: could not load Whisper model ({}). Audio import will be skipped.",
-                            e
+                            "Warning: screenpipe server not reachable at localhost:3030. Audio import will be skipped."
+                        );
+                        eprintln!(
+                            "Start screenpipe first, or use --skip-audio to import only video/OCR."
                         );
                         None
                     }
@@ -97,7 +108,8 @@ pub async fn handle_import_command(command: &ImportCommand) -> anyhow::Result<()
                 &local_data_dir,
                 date_from,
                 date_to,
-                whisper_context,
+                transcription_endpoint,
+                Some(make_ocr_fn()),
             )
             .await?;
 

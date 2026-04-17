@@ -21,6 +21,7 @@ tokio = { version = "1.0", features = ["full"] }
 log = "0.4"
 anyhow = "1.0"
 screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-secrets = { path = "../screenpipe-secrets" }
 tracing = { workspace = true }
 # NOTE: dropped the `rsa` feature — it pulls `rsa = "0.10.0-rc.12"` which
@@ -39,6 +40,7 @@ uuid = { version = "1.5.0", features = ["v4"] }
 thiserror = "1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mdns-sd = "0.13"
+tempfile = "3.3.0"
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 
