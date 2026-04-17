@@ -13,6 +13,7 @@ mod macos;
 mod windows;
 
 pub mod cache;
+pub mod enhanced_mode_cache;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};

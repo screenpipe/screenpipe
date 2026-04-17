@@ -159,6 +159,9 @@ fn looks_like_url(s: &str) -> bool {
 pub struct MacosTreeWalker {
     config: TreeWalkerConfig,
     incognito_detector: Box<dyn crate::incognito::IncognitoDetector>,
+    /// Gates the per-walk `AXEnhancedUserInterface` toggle so we only poke a
+    /// given renderer at most once per TTL instead of on every walk.
+    enhanced_mode_cache: super::enhanced_mode_cache::EnhancedModeCache,
 }
 
 impl MacosTreeWalker {
@@ -166,6 +169,7 @@ impl MacosTreeWalker {
         Self {
             config,
             incognito_detector: crate::incognito::create_detector(),
+            enhanced_mode_cache: super::enhanced_mode_cache::EnhancedModeCache::with_default_ttl(),
         }
     }
 }
@@ -245,9 +249,17 @@ impl MacosTreeWalker {
         // and causes the renderer to materialize the full AX tree.
         // Ref: https://codereview.chromium.org/6909013
         // Ref: https://github.com/electron/electron/issues/7206
-        let eui_attr_name = cf::String::from_str("AXEnhancedUserInterface");
-        let eui_attr = ax::Attr::with_string(&eui_attr_name);
-        let _ = ax_app.set_attr(eui_attr, cf::Boolean::value_true());
+        //
+        // The toggle is expensive (the renderer rebuilds its AX tree each time
+        // we poke it), so we only re-assert it once per TTL per pid. Chromium
+        // latches the mode so one poke is plenty; if the renderer ever drops
+        // the mode we recover on the next TTL window.
+        if self.enhanced_mode_cache.should_enable(pid) {
+            let eui_attr_name = cf::String::from_str("AXEnhancedUserInterface");
+            let eui_attr = ax::Attr::with_string(&eui_attr_name);
+            let _ = ax_app.set_attr(eui_attr, cf::Boolean::value_true());
+            debug!("enhanced AX mode enabled for pid={} app={}", pid, app_name);
+        }
 
         let window_val = match ax_app.attr_value(ax::attr::focused_window()) {
             Ok(v) => v,
