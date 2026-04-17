@@ -353,8 +353,7 @@ impl RewindMigration {
                         checkpoint.mark_audio_processed(&audio_path_str);
 
                         self.update_progress(|p| {
-                            p.audio_snippets_processed =
-                                checkpoint.processed_audio_paths.len();
+                            p.audio_snippets_processed = checkpoint.processed_audio_paths.len();
                             p.audio_transcriptions_imported = checkpoint.total_audio_imported;
                         });
 
@@ -365,8 +364,7 @@ impl RewindMigration {
                         checkpoint.mark_audio_processed(&audio_path_str);
 
                         self.update_progress(|p| {
-                            p.audio_snippets_processed =
-                                checkpoint.processed_audio_paths.len();
+                            p.audio_snippets_processed = checkpoint.processed_audio_paths.len();
                             p.audio_snippets_skipped = checkpoint.total_audio_skipped;
                         });
                     }

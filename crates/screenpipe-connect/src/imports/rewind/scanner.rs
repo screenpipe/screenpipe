@@ -50,7 +50,9 @@ impl RewindMigration {
             let path = entry.path();
             if path.is_dir() {
                 let snippet_path = path.join("snippet.m4a");
-                if snippet_path.exists() && audio_path_matches_date_range(&path, self.date_from, self.date_to) {
+                if snippet_path.exists()
+                    && audio_path_matches_date_range(&path, self.date_from, self.date_to)
+                {
                     files.push(snippet_path);
                 }
             }

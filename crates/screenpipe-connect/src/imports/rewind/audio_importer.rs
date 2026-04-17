@@ -64,17 +64,17 @@ impl super::RewindMigration {
         }
 
         let result: serde_json::Value = response.json().await?;
-        let transcription = result["text"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let transcription = result["text"].as_str().unwrap_or("").trim().to_string();
 
         if transcription.is_empty() {
             return Ok(false);
         }
 
-        debug!("Transcribed audio {}: {} chars", audio_path.display(), transcription.len());
+        debug!(
+            "Transcribed audio {}: {} chars",
+            audio_path.display(),
+            transcription.len()
+        );
 
         // Insert audio chunk referencing the original file
         let audio_chunk_id = self

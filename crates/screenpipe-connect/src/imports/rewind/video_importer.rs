@@ -20,7 +20,10 @@ impl super::RewindMigration {
         let ocr_fn = match &self.ocr_fn {
             Some(f) => f.clone(),
             None => {
-                debug!("No OCR function provided, skipping video {}", video_path.display());
+                debug!(
+                    "No OCR function provided, skipping video {}",
+                    video_path.display()
+                );
                 return Ok((0, 0));
             }
         };
