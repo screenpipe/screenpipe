@@ -604,6 +604,22 @@ fn ensure_screenpipe_skill(project_dir: &str) -> Result<(), String> {
 /// Web search uses the screenpipe cloud backend (Gemini + Google Search),
 /// so we only enable it for screenpipe-cloud presets to avoid sending
 /// user data to our backend when they chose a local/custom provider.
+fn ensure_project_extension(
+    project_dir: &str,
+    file_name: &str,
+    content: &str,
+) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    let ext_path = ext_dir.join(file_name);
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+    std::fs::write(&ext_path, content)
+        .map_err(|e| format!("Failed to write {} extension: {}", file_name, e))?;
+    Ok(())
+}
+
 fn ensure_web_search_extension(
     project_dir: &str,
     provider_config: Option<&PiProviderConfig>,
@@ -640,12 +656,8 @@ fn ensure_web_search_extension(
         };
 
     if is_screenpipe_cloud {
-        std::fs::create_dir_all(&ext_dir)
-            .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
-
         let ext_content = include_str!("../assets/extensions/web-search.ts");
-        std::fs::write(&ext_path, ext_content)
-            .map_err(|e| format!("Failed to write web-search extension: {}", e))?;
+        ensure_project_extension(project_dir, "web-search.ts", ext_content)?;
 
         debug!("Web search extension installed at {:?}", ext_path);
     } else if ext_path.exists() {
@@ -658,6 +670,15 @@ fn ensure_web_search_extension(
         );
     }
 
+    Ok(())
+}
+
+/// Ensure the protected-paths extension exists in the project's .pi/extensions directory.
+/// This blocks write/edit tool calls to sensitive files and directories.
+fn ensure_protected_paths_extension(project_dir: &str) -> Result<(), String> {
+    let ext_content = include_str!("../assets/extensions/protected-paths.ts");
+    ensure_project_extension(project_dir, "protected-paths.ts", ext_content)?;
+    debug!("Protected-paths extension installed for {}", project_dir);
     Ok(())
 }
 
@@ -1037,6 +1058,9 @@ pub async fn pi_start_inner(
 
     // Install web-search extension only for screenpipe-cloud presets
     ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
+
+    // Always install protected-paths extension for local safety
+    ensure_protected_paths_extension(&project_dir)?;
 
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
@@ -2501,7 +2525,7 @@ mod tests {
 
     // -- build_models_json tests --
 
-    use super::{build_models_json, PiProviderConfig};
+    use super::{build_models_json, ensure_protected_paths_extension, PiProviderConfig};
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
@@ -2512,6 +2536,40 @@ mod tests {
             max_tokens: 4096,
             system_prompt: None,
         }
+    }
+
+    #[test]
+    fn test_ensure_protected_paths_extension_installs_file() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let project_dir = std::env::temp_dir().join(format!(
+            "screenpipe_pi_protected_paths_test_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let project_dir_str = project_dir.to_string_lossy().to_string();
+        ensure_protected_paths_extension(&project_dir_str).unwrap();
+
+        let extension_path = project_dir
+            .join(".pi")
+            .join("extensions")
+            .join("protected-paths.ts");
+        assert!(
+            extension_path.exists(),
+            "protected-paths extension file was not created"
+        );
+
+        let extension_content = std::fs::read_to_string(&extension_path).unwrap();
+        assert!(
+            extension_content.contains("protectedPaths"),
+            "protected-paths extension content missing expected marker"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_dir);
     }
 
     #[test]
