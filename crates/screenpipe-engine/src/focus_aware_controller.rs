@@ -48,6 +48,12 @@ pub enum CaptureState {
     Cold,
 }
 
+/// After this many seconds without any focus event, `state()` treats
+/// `current_focus` as if it were `Unknown` — this guards against a silent
+/// tracker stall (e.g. the CF run-loop thread blocked, the Windows hook
+/// failed to deliver, etc.) freezing all non-focused monitors on Cold.
+const STALE_FOCUS_CUTOFF: Duration = Duration::from_secs(30);
+
 pub struct FocusAwareController {
     tracker: Arc<dyn FocusTracker>,
     warm_cutoff: Duration,
@@ -57,6 +63,10 @@ pub struct FocusAwareController {
     last_focus_time: Mutex<HashMap<u32, Instant>>,
     /// Currently focused monitor id, or `None` if unknown.
     current_focus: Mutex<Option<u32>>,
+    /// Wall-clock time the most recent focus/unknown event was received. If
+    /// nothing arrives for `STALE_FOCUS_CUTOFF`, we treat the state as
+    /// Unknown so all monitors stay Active (safe default).
+    last_event_time: Mutex<Instant>,
     /// Per-monitor Notify used to wake Cold capture loops when focus returns.
     monitor_notifies: Mutex<HashMap<u32, Arc<Notify>>>,
     stop_flag: Arc<AtomicBool>,
@@ -74,6 +84,7 @@ impl FocusAwareController {
             cold_cutoff: Duration::from_millis(cold_delay_ms.max(warm_delay_ms)),
             last_focus_time: Mutex::new(HashMap::new()),
             current_focus: Mutex::new(None),
+            last_event_time: Mutex::new(Instant::now()),
             monitor_notifies: Mutex::new(HashMap::new()),
             stop_flag: Arc::new(AtomicBool::new(false)),
         });
@@ -146,6 +157,8 @@ impl FocusAwareController {
             }
         }
 
+        self.touch_last_event();
+
         // Wake the notify for the newly focused monitor so any Cold capture
         // loop sleeping on it reactivates immediately.
         let notify = self.notify_for(id);
@@ -153,17 +166,41 @@ impl FocusAwareController {
     }
 
     fn apply_unknown(&self) {
-        let mut current = self
-            .current_focus
-            .lock()
-            .expect("focus-aware current_focus mutex poisoned");
-        *current = None;
+        {
+            let mut current = self
+                .current_focus
+                .lock()
+                .expect("focus-aware current_focus mutex poisoned");
+            *current = None;
+        }
+        self.touch_last_event();
         // No notify wake — all monitors fall back to Active anyway.
+    }
+
+    fn touch_last_event(&self) {
+        if let Ok(mut t) = self.last_event_time.lock() {
+            *t = Instant::now();
+        }
     }
 
     /// Query state for a monitor. Must be cheap — called on every capture
     /// loop iteration.
     pub fn state(&self, monitor_id: u32) -> CaptureState {
+        // Stale-focus safety: if no focus event has landed in 30s, assume
+        // the tracker stalled (native thread blocked, notifications dropped
+        // during sleep/wake, etc.) and treat everything as Active. Matches
+        // the Null-tracker all-Active fallback so a broken focus source
+        // never silently freezes capture on non-focused monitors.
+        let last_event_elapsed = self
+            .last_event_time
+            .lock()
+            .ok()
+            .map(|t| t.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+        if last_event_elapsed >= STALE_FOCUS_CUTOFF {
+            return CaptureState::Active;
+        }
+
         // If focus is Unknown (no data yet), everything is Active — safest
         // fallback. Preserves existing behaviour when the tracker can't
         // resolve the cursor to a monitor.
@@ -256,6 +293,16 @@ impl FocusAwareController {
             .expect("focus-aware last_focus_time mutex poisoned");
         times.insert(monitor_id, lost_at);
     }
+
+    /// Force the last-event timestamp to simulate a stalled tracker.
+    #[cfg(test)]
+    pub(crate) fn backdate_last_event_for_test(&self, at: Instant) {
+        let mut t = self
+            .last_event_time
+            .lock()
+            .expect("focus-aware last_event_time mutex poisoned");
+        *t = at;
+    }
 }
 
 impl Drop for FocusAwareController {
@@ -342,6 +389,25 @@ mod tests {
         assert!(Arc::ptr_eq(&n1, &n2));
         let n3 = ctrl.notify_for(8);
         assert!(!Arc::ptr_eq(&n1, &n3));
+    }
+
+    #[tokio::test]
+    async fn stale_focus_falls_back_to_active() {
+        let ctrl = make_ctrl(2_000, 60_000);
+        ctrl.set_focus_for_test(1);
+        // Monitor 2 was Cold before staleness kicks in.
+        assert_eq!(ctrl.state(2), CaptureState::Cold);
+        // Backdate the last event past the stale cutoff — simulates a
+        // stalled tracker (CF thread blocked, hook never delivered).
+        ctrl.backdate_last_event_for_test(Instant::now() - Duration::from_secs(60));
+        // Both monitors should now report Active (safe fallback).
+        assert_eq!(ctrl.state(1), CaptureState::Active);
+        assert_eq!(ctrl.state(2), CaptureState::Active);
+        // A fresh focus event should clear the stale latch and restore
+        // normal state-machine behaviour.
+        ctrl.set_focus_for_test(1);
+        assert_eq!(ctrl.state(1), CaptureState::Active);
+        assert_eq!(ctrl.state(2), CaptureState::Cold);
     }
 
     #[tokio::test]

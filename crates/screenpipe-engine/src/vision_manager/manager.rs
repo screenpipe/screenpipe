@@ -103,6 +103,21 @@ impl VisionManager {
             // `Unknown` events by treating all monitors as Active.
             let _guard = vision_handle.enter();
             let tracker = crate::focus_tracker::new_tracker();
+            // Startup telemetry: emit once per engine start so we can measure
+            // the rollout of the flipped default. Event name is static so
+            // PostHog groups it correctly across versions.
+            tracing::info!(
+                "focus-aware capture enabled (warm={}ms, cold={}ms)",
+                config.focus_warm_delay_ms,
+                config.focus_cold_delay_ms
+            );
+            crate::analytics::capture_event_nonblocking(
+                "focus_aware_capture_enabled_by_default",
+                serde_json::json!({
+                    "warm_delay_ms": config.focus_warm_delay_ms,
+                    "cold_delay_ms": config.focus_cold_delay_ms,
+                }),
+            );
             Some(FocusAwareController::new(
                 tracker,
                 config.focus_warm_delay_ms,

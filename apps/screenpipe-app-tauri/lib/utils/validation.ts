@@ -79,6 +79,7 @@ export const settingsStoreSchema = z.object({
   ignoredUrls: z.array(z.string()),
   disableVision: z.boolean(),
   useAllMonitors: z.boolean(),
+  focusAwareCapture: z.boolean().optional(),
   fps: z.number().min(0.1, "FPS must be at least 0.1").max(60, "FPS cannot exceed 60"),
 
   // System Settings

@@ -121,11 +121,14 @@ pub struct RecordingSettings {
     #[serde(rename = "useAllMonitors")]
     pub use_all_monitors: bool,
 
-    /// Experimental: only run full capture on the monitor the user is focused
-    /// on. Other monitors get reduced-rate or paused capture. OFF by default.
+    /// Only run full capture on the monitor the user is focused on. Other
+    /// monitors get reduced-rate (Warm) or paused (Cold) capture. ON by
+    /// default — cuts CPU significantly on multi-monitor setups. Users who
+    /// want everything recorded at all times can toggle this off in
+    /// Settings → Recording.
     /// See `crates/screenpipe-engine/src/focus_aware_controller.rs` for state
     /// machine details.
-    #[serde(rename = "focusAwareCapture", default)]
+    #[serde(rename = "focusAwareCapture", default = "default_focus_aware_capture")]
     pub focus_aware_capture: bool,
 
     /// Grace period after losing focus before dropping from Active to Warm (ms).
@@ -337,7 +340,7 @@ impl Default for RecordingSettings {
             disable_vision: false,
             monitor_ids: vec![],
             use_all_monitors: true,
-            focus_aware_capture: false,
+            focus_aware_capture: default_focus_aware_capture(),
             focus_warm_delay_ms: default_focus_warm_delay_ms(),
             focus_cold_delay_ms: default_focus_cold_delay_ms(),
             video_quality: "balanced".to_string(),
@@ -391,6 +394,14 @@ fn default_focus_warm_delay_ms() -> u64 {
 
 fn default_focus_cold_delay_ms() -> u64 {
     60_000
+}
+
+/// Focus-aware capture is ON by default as of Apr 2026. Users who prefer
+/// all-monitors-always-on recording must opt out via Settings → Recording.
+/// Existing stored settings missing `focusAwareCapture` pick up this default
+/// on next load (serde's `default` attribute) — see PR #3025 for rationale.
+fn default_focus_aware_capture() -> bool {
+    true
 }
 
 #[cfg(test)]

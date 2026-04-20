@@ -1845,6 +1845,28 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
+        {/* Focus-aware capture: only record the monitor the user is looking at */}
+        {!settings.disableVision && settings.useAllMonitors && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">Only record the monitor I&apos;m using</h3>
+                    <p className="text-xs text-muted-foreground">Saves CPU on multi-monitor setups. Turn off if you want everything recorded at all times.</p>
+                  </div>
+                </div>
+                <Switch
+                  id="focusAwareCapture"
+                  checked={settings.focusAwareCapture ?? true}
+                  onCheckedChange={(checked) => handleSettingsChange({ focusAwareCapture: checked }, true)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Monitor Selection */}
         {!settings.disableVision && !settings.useAllMonitors && (
           <Card className="border-border bg-card overflow-hidden">

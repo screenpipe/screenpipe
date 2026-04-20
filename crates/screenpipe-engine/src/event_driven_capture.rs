@@ -262,6 +262,12 @@ pub async fn event_driven_capture_loop(
         None
     };
     let mut last_visual_check = Instant::now();
+    // Focus-aware Warm cadence: cheap visual-diff only every 5s. Tracked
+    // separately from `last_visual_check` to avoid colliding with the Active
+    // visual-change detector semantics below.
+    let mut last_warm_visual_check = Instant::now()
+        .checked_sub(Duration::from_secs(10))
+        .unwrap_or_else(Instant::now);
 
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
@@ -363,14 +369,68 @@ pub async fn event_driven_capture_loop(
         // non-focused monitors. When `focus_controller` is None (feature
         // disabled or construction failed), fall through to the current
         // all-monitors-always behaviour with zero overhead.
+        //
+        // Outcome for non-Active states is either a `continue` (skip this
+        // iteration) or setting `warm_trigger_override` — which falls through
+        // to the normal capture path further down, bypassing other trigger
+        // detection. This lets the Warm path capture only when pixels
+        // actually changed without duplicating the whole capture machinery.
+        let mut warm_trigger_override: Option<CaptureTrigger> = None;
         if let Some(ref ctrl) = focus_controller {
             use crate::focus_aware_controller::CaptureState;
             match ctrl.state(monitor_id) {
                 CaptureState::Active => { /* fall through to normal capture */ }
                 CaptureState::Warm => {
-                    // Cheap sleep — stream stays live, no OCR / diff / DB.
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                    continue;
+                    // Cheap visual-diff-only cadence: capture only if pixels
+                    // changed. ~5s between screenshots keeps CPU low while
+                    // still catching bursty events (notifications, popups).
+                    // The full-rate Active path costs far more (OCR + DB +
+                    // a11y tree walk) — Warm does a screenshot + 15×15 sample
+                    // diff and only progresses if the diff crosses threshold.
+                    if last_warm_visual_check.elapsed() < Duration::from_secs(5) {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue;
+                    }
+                    last_warm_visual_check = Instant::now();
+
+                    // Without a comparer (visual_check disabled globally),
+                    // we can't cheaply detect change — idle.
+                    let Some(ref mut comparer) = frame_comparer else {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue;
+                    };
+
+                    // Use cached excluded window ids if available to avoid
+                    // re-enumerating every Warm tick. If the list hasn't been
+                    // seeded yet (Active path fills it), this snapshot pass
+                    // is still correct — it just might include pixels from
+                    // soon-to-be-excluded transient windows.
+                    let snap = capture_monitor_image(&monitor, &cached_excluded_ids).await;
+                    match snap {
+                        Ok((image, _)) => {
+                            let diff = comparer.compare(&image);
+                            if diff > visual_change_threshold {
+                                debug!(
+                                    "warm visual change on monitor {} (diff={:.4})",
+                                    monitor_id, diff
+                                );
+                                warm_trigger_override = Some(CaptureTrigger::VisualChange);
+                                // Fall through to normal capture path with
+                                // warm_trigger_override set.
+                            } else {
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                continue;
+                            }
+                        }
+                        Err(e) => {
+                            debug!(
+                                "warm visual check failed on monitor {}: {}",
+                                monitor_id, e
+                            );
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            continue;
+                        }
+                    }
                 }
                 CaptureState::Cold => {
                     // Block until focus returns. 5s backstop guards against
@@ -442,7 +502,12 @@ pub async fn event_driven_capture_loop(
 
         // Check for external triggers (non-blocking).
         // Once the channel is closed, skip try_recv and rely on polling only.
-        let mut trigger = if trigger_channel_closed {
+        // If the Warm path above detected a visual change, short-circuit
+        // directly to VisualChange — the regular trigger sources (external
+        // broadcast, activity feed) don't apply to non-focused monitors.
+        let mut trigger = if let Some(warm) = warm_trigger_override.take() {
+            Some(warm)
+        } else if trigger_channel_closed {
             state.poll_activity(&activity_feed)
         } else {
             match trigger_rx.try_recv() {
