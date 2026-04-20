@@ -184,9 +184,6 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'auto',
       'claude-haiku-4-5',
       'claude-sonnet-4-5',
-      // Opus 4.7 is cheap enough (~3× less than 4.6) that logged-in users
-      // can afford ~10 calls/day within the 50-query tier budget at weight=5.
-      'claude-opus-4-7',
       'gemini-3-flash',
       'gemini-3.1-flash-lite',
       'gemini-3-pro',
