@@ -15,6 +15,8 @@ pub mod connections_api;
 pub mod core;
 pub mod drm_detector;
 pub mod event_driven_capture;
+pub mod focus_aware_controller;
+pub mod focus_tracker;
 pub mod hot_frame_cache;
 pub mod logging;
 pub mod meeting_detector;

@@ -235,6 +235,7 @@ pub async fn event_driven_capture_loop(
     pause_on_drm_content: bool,
     languages: Vec<screenpipe_core::Language>,
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
+    focus_controller: Option<Arc<crate::focus_aware_controller::FocusAwareController>>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -356,6 +357,32 @@ pub async fn event_driven_capture_loop(
         if stop_signal.load(Ordering::Relaxed) {
             info!("event-driven capture stopping for monitor {}", monitor_id);
             break;
+        }
+
+        // Focus-aware gating. When enabled, skip or pause capture on
+        // non-focused monitors. When `focus_controller` is None (feature
+        // disabled or construction failed), fall through to the current
+        // all-monitors-always behaviour with zero overhead.
+        if let Some(ref ctrl) = focus_controller {
+            use crate::focus_aware_controller::CaptureState;
+            match ctrl.state(monitor_id) {
+                CaptureState::Active => { /* fall through to normal capture */ }
+                CaptureState::Warm => {
+                    // Cheap sleep — stream stays live, no OCR / diff / DB.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                CaptureState::Cold => {
+                    // Block until focus returns. 5s backstop guards against
+                    // stuck waiters if a focus event is ever missed.
+                    let notify = ctrl.notify_for(monitor_id);
+                    tokio::select! {
+                        _ = notify.notified() => {}
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
+                    continue;
+                }
+            }
         }
 
         // Skip capture while the screen is locked / screensaver active

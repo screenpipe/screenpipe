@@ -45,6 +45,13 @@ pub struct RecordingConfig {
     pub monitor_ids: Vec<String>,
     pub use_all_monitors: bool,
 
+    /// Experimental opt-in: throttle capture on non-focused monitors.
+    pub focus_aware_capture: bool,
+    /// Grace period before a monitor drops from Active to Warm (ms).
+    pub focus_warm_delay_ms: u64,
+    /// Time in Warm before a monitor drops to Cold (ms).
+    pub focus_cold_delay_ms: u64,
+
     // Filters
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
@@ -173,6 +180,9 @@ impl RecordingConfig {
             experimental_coreaudio_system_audio: settings.experimental_coreaudio_system_audio,
             monitor_ids: settings.monitor_ids.clone(),
             use_all_monitors: settings.use_all_monitors,
+            focus_aware_capture: settings.focus_aware_capture,
+            focus_warm_delay_ms: settings.focus_warm_delay_ms,
+            focus_cold_delay_ms: settings.focus_cold_delay_ms,
             ignored_windows: settings.ignored_windows.clone(),
             included_windows: settings.included_windows.clone(),
             ignored_urls: settings.ignored_urls.clone(),
@@ -286,6 +296,9 @@ impl RecordingConfig {
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
             max_snapshot_width: self.max_snapshot_width,
+            focus_aware_capture: self.focus_aware_capture,
+            focus_warm_delay_ms: self.focus_warm_delay_ms,
+            focus_cold_delay_ms: self.focus_cold_delay_ms,
         }
     }
 }
