@@ -118,6 +118,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'glm-4.7': 0,
   'glm-5': 0,
   'kimi-k2.5': 0,
+  // Opus 4.7 is ~3× cheaper per token than 4.5/4.6 ($5/$25 vs $15/$75 per 1M),
+  // so it consumes proportionally less daily quota. Longest-prefix match in
+  // getModelWeight ensures this override beats the generic 'claude-opus' entry.
+  'claude-opus-4-7': 5,
   'claude-opus': 15,
   'claude-sonnet': 3,
   'claude-haiku': 1,
@@ -180,6 +184,9 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'auto',
       'claude-haiku-4-5',
       'claude-sonnet-4-5',
+      // Opus 4.7 is cheap enough (~3× less than 4.6) that logged-in users
+      // can afford ~10 calls/day within the 50-query tier budget at weight=5.
+      'claude-opus-4-7',
       'gemini-3-flash',
       'gemini-3.1-flash-lite',
       'gemini-3-pro',

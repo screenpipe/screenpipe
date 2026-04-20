@@ -261,9 +261,8 @@ const CURATED_MODELS: ModelEntry[] = [
     best_for: ['complex tasks', 'analysis', 'agentic coding'],
     speed: 'slow',
     intelligence: 'highest',
-    cost_tier: 'high',
-    recommended_for: ['chat', 'analysis'],
-    warning: 'expensive — will use your daily limit fast. use haiku or a free model for pipes',
+    cost_tier: 'medium',
+    recommended_for: ['chat', 'analysis', 'coding'],
   },
   {
     id: 'claude-opus-4-6',
