@@ -242,6 +242,106 @@ async fn get_screen_capture_host() -> Result<cpal::Host> {
     .await
 }
 
+#[cfg(all(
+    not(all(target_os = "linux", feature = "pulseaudio")),
+    target_os = "windows"
+))]
+fn log_stream_config_diagnostics(
+    device_name: &str,
+    direction: &str,
+    configs: &[cpal::SupportedStreamConfigRange],
+    default_config: Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError>,
+) {
+    tracing::info!(
+        "[AUDIO_CONFIG_DIAG] device='{}' direction={} supported_configs={}",
+        device_name,
+        direction,
+        configs.len()
+    );
+
+    for (idx, cfg) in configs.iter().enumerate() {
+        tracing::info!(
+            "[AUDIO_CONFIG_DIAG] device='{}' direction={} cfg#{} channels={} format={:?} min_rate={} max_rate={} buffer_size={:?}",
+            device_name,
+            direction,
+            idx,
+            cfg.channels(),
+            cfg.sample_format(),
+            cfg.min_sample_rate().0,
+            cfg.max_sample_rate().0,
+            cfg.buffer_size()
+        );
+    }
+
+    match default_config {
+        Ok(cfg) => {
+            tracing::info!(
+                "[AUDIO_CONFIG_DIAG] device='{}' direction={} default channels={} format={:?} rate={} buffer_size={:?}",
+                device_name,
+                direction,
+                cfg.channels(),
+                cfg.sample_format(),
+                cfg.sample_rate().0,
+                cfg.buffer_size()
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[AUDIO_CONFIG_DIAG] device='{}' direction={} default_config_error={}",
+                device_name,
+                direction,
+                e
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    not(all(target_os = "linux", feature = "pulseaudio")),
+    not(target_os = "windows")
+))]
+fn log_stream_config_diagnostics(
+    _device_name: &str,
+    _direction: &str,
+    _configs: &[cpal::SupportedStreamConfigRange],
+    _default_config: Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError>,
+) {
+}
+
+#[cfg(all(
+    not(all(target_os = "linux", feature = "pulseaudio")),
+    target_os = "windows"
+))]
+fn log_selected_stream_config(
+    device_name: &str,
+    direction: &str,
+    reason: &str,
+    config: &cpal::SupportedStreamConfig,
+) {
+    tracing::info!(
+        "[AUDIO_CONFIG_DIAG] device='{}' direction={} selected_reason={} selected channels={} format={:?} rate={} buffer_size={:?}",
+        device_name,
+        direction,
+        reason,
+        config.channels(),
+        config.sample_format(),
+        config.sample_rate().0,
+        config.buffer_size()
+    );
+}
+
+#[cfg(all(
+    not(all(target_os = "linux", feature = "pulseaudio")),
+    not(target_os = "windows")
+))]
+fn log_selected_stream_config(
+    _device_name: &str,
+    _direction: &str,
+    _reason: &str,
+    _config: &cpal::SupportedStreamConfig,
+) {
+}
+
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 pub async fn get_cpal_device_and_config(
     audio_device: &AudioDevice,
@@ -341,9 +441,19 @@ pub async fn get_cpal_device_and_config(
     }
     .ok_or_else(|| anyhow!("Audio device not found: {}", device_name))?;
 
+    let resolved_device_name = cpal_audio_device
+        .name()
+        .unwrap_or_else(|_| device_name.clone());
+
     // Get the highest quality configuration based on device type
     let config = if is_output_device && !is_display {
         let configs: Vec<_> = cpal_audio_device.supported_output_configs()?.collect();
+        log_stream_config_diagnostics(
+            &resolved_device_name,
+            "output",
+            &configs,
+            cpal_audio_device.default_output_config(),
+        );
         let best_config = configs
             .iter()
             .max_by(|a, b| {
@@ -354,9 +464,22 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
-        (*best_config).with_sample_rate(best_config.max_sample_rate())
+        let selected = (*best_config).with_sample_rate(best_config.max_sample_rate());
+        log_selected_stream_config(
+            &resolved_device_name,
+            "output",
+            "max_sample_rate_then_channels",
+            &selected,
+        );
+        selected
     } else {
         let configs: Vec<_> = cpal_audio_device.supported_input_configs()?.collect();
+        log_stream_config_diagnostics(
+            &resolved_device_name,
+            "input",
+            &configs,
+            cpal_audio_device.default_input_config(),
+        );
         let best_config = configs
             .iter()
             .max_by(|a, b| {
@@ -367,7 +490,14 @@ pub async fn get_cpal_device_and_config(
             })
             .ok_or_else(|| anyhow!("No supported input configurations found"))?;
 
-        (*best_config).with_sample_rate(best_config.max_sample_rate())
+        let selected = (*best_config).with_sample_rate(best_config.max_sample_rate());
+        log_selected_stream_config(
+            &resolved_device_name,
+            "input",
+            "max_sample_rate_then_channels",
+            &selected,
+        );
+        selected
     };
 
     Ok((cpal_audio_device, config))
