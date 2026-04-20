@@ -198,13 +198,6 @@ export type Settings = SettingsStore & {
 	apiAuth?: boolean;
 	apiKey?: string;
 	encryptStore?: boolean;
-	/** Only run full capture on the monitor the user is focused on. On by default.
-	 *  Other monitors get reduced-rate (Warm) or paused (Cold) capture. */
-	focusAwareCapture?: boolean;
-	/** Warm-to-active grace window (ms) when focus returns (default 2000) */
-	focusWarmDelayMs?: number;
-	/** Warm-to-cold cutoff (ms) — monitors idle longer become Cold (default 60000) */
-	focusColdDelayMs?: number;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -361,7 +354,6 @@ let DEFAULT_SETTINGS: Settings = {
 			disableVision: false,
 			disableOcr: false,
 			useAllMonitors: true,
-			focusAwareCapture: true,
 			showShortcutOverlay: true,
 			chatHistory: {
 				conversations: [],

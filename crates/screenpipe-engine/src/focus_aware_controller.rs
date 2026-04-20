@@ -4,7 +4,7 @@
 
 //! Focus-aware capture controller — maintains per-monitor state (Active /
 //! Warm / Cold) based on focus events. Capture loops consult this to decide
-//! how much work to do. Gated behind `RecordingSettings.focus_aware_capture`.
+//! how much work to do. Always on; cutoffs are module-scope consts.
 //!
 //! # State machine
 //! ```text
@@ -24,10 +24,11 @@
 //! churn) while cutting CPU. `Cold` monitors block on a Notify until focus
 //! returns (or a 5s backstop fires).
 //!
-//! The controller is OFF by default. `FocusAwareController::new` spawns a
-//! single subscriber task that listens for focus events and updates state +
-//! wakes per-monitor notifies. When `focus_aware_capture` is disabled the
-//! controller is never instantiated.
+//! `FocusAwareController::new` spawns a single subscriber task that listens
+//! for focus events and updates state + wakes per-monitor notifies. Focus
+//! resolution failures (Linux Wayland, permission denied, no tracker) fall
+//! back to "all Active" automatically via the Null tracker + Unknown event
+//! path — no opt-out needed.
 
 use crate::focus_tracker::{FocusEvent, FocusTracker};
 use std::collections::HashMap;
@@ -54,10 +55,15 @@ pub enum CaptureState {
 /// failed to deliver, etc.) freezing all non-focused monitors on Cold.
 const STALE_FOCUS_CUTOFF: Duration = Duration::from_secs(30);
 
+/// Grace period after losing focus before dropping from Active to Warm.
+/// Prevents stuttering during normal window switching.
+const WARM_CUTOFF: Duration = Duration::from_millis(2_000);
+
+/// Time in Warm before dropping to Cold.
+const COLD_CUTOFF: Duration = Duration::from_millis(60_000);
+
 pub struct FocusAwareController {
     tracker: Arc<dyn FocusTracker>,
-    warm_cutoff: Duration,
-    cold_cutoff: Duration,
     /// When each monitor last held focus. `Instant` = the moment it *lost*
     /// focus. A monitor that's never been focused is absent from the map.
     last_focus_time: Mutex<HashMap<u32, Instant>>,
@@ -73,15 +79,9 @@ pub struct FocusAwareController {
 }
 
 impl FocusAwareController {
-    pub fn new(
-        tracker: Arc<dyn FocusTracker>,
-        warm_delay_ms: u64,
-        cold_delay_ms: u64,
-    ) -> Arc<Self> {
+    pub fn new(tracker: Arc<dyn FocusTracker>) -> Arc<Self> {
         let ctrl = Arc::new(Self {
             tracker,
-            warm_cutoff: Duration::from_millis(warm_delay_ms),
-            cold_cutoff: Duration::from_millis(cold_delay_ms.max(warm_delay_ms)),
             last_focus_time: Mutex::new(HashMap::new()),
             current_focus: Mutex::new(None),
             last_event_time: Mutex::new(Instant::now()),
@@ -227,12 +227,12 @@ impl FocusAwareController {
             None => CaptureState::Cold,
             Some(t) => {
                 let elapsed = t.elapsed();
-                if elapsed < self.warm_cutoff {
+                if elapsed < WARM_CUTOFF {
                     // Hysteresis: still feels "active" for a beat after
                     // focus change to avoid stuttering during normal
                     // window switching.
                     CaptureState::Active
-                } else if elapsed < self.cold_cutoff {
+                } else if elapsed < COLD_CUTOFF {
                     CaptureState::Warm
                 } else {
                     CaptureState::Cold
@@ -313,21 +313,21 @@ mod tests {
     use super::*;
     use crate::focus_tracker::NullFocusTracker;
 
-    fn make_ctrl(warm_ms: u64, cold_ms: u64) -> Arc<FocusAwareController> {
+    fn make_ctrl() -> Arc<FocusAwareController> {
         let tracker: Arc<dyn FocusTracker> = Arc::new(NullFocusTracker::new());
-        FocusAwareController::new(tracker, warm_ms, cold_ms)
+        FocusAwareController::new(tracker)
     }
 
     #[tokio::test]
     async fn initial_state_is_active_for_all_monitors() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         assert_eq!(ctrl.state(1), CaptureState::Active);
         assert_eq!(ctrl.state(42), CaptureState::Active);
     }
 
     #[tokio::test]
     async fn focused_monitor_is_active_and_never_focused_is_cold() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         assert_eq!(ctrl.state(1), CaptureState::Active);
         // Monitor 2 has never been focused — should be Cold immediately.
@@ -336,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn warm_window_hysteresis() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         // Move focus to 2; monitor 1 just lost focus, so it sits in the
         // warm-cutoff hysteresis window → Active.
@@ -347,10 +347,10 @@ mod tests {
 
     #[tokio::test]
     async fn transitions_to_warm_after_warm_cutoff() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         ctrl.set_focus_for_test(2);
-        // Backdate monitor 1's loss-of-focus past the warm cutoff.
+        // Backdate monitor 1's loss-of-focus past WARM_CUTOFF (2s).
         ctrl.backdate_focus_for_test(1, Instant::now() - Duration::from_millis(5_000));
         assert_eq!(ctrl.state(1), CaptureState::Warm);
         assert_eq!(ctrl.state(2), CaptureState::Active);
@@ -358,10 +358,10 @@ mod tests {
 
     #[tokio::test]
     async fn transitions_to_cold_after_cold_cutoff() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         ctrl.set_focus_for_test(2);
-        // Backdate past cold_cutoff.
+        // Backdate past COLD_CUTOFF (60s).
         ctrl.backdate_focus_for_test(1, Instant::now() - Duration::from_secs(120));
         assert_eq!(ctrl.state(1), CaptureState::Cold);
         assert_eq!(ctrl.state(2), CaptureState::Active);
@@ -369,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_event_forces_all_active_fallback() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         // Monitor 2 was Cold before the Unknown event.
         assert_eq!(ctrl.state(2), CaptureState::Cold);
@@ -380,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn notify_for_returns_same_arc() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         let n1 = ctrl.notify_for(7);
         let n2 = ctrl.notify_for(7);
         assert!(Arc::ptr_eq(&n1, &n2));
@@ -390,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_focus_falls_back_to_active() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
         // Monitor 2 was Cold before staleness kicks in.
         assert_eq!(ctrl.state(2), CaptureState::Cold);
@@ -409,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_focus_wakes_cold_notify() {
-        let ctrl = make_ctrl(2_000, 60_000);
+        let ctrl = make_ctrl();
         let notify = ctrl.notify_for(5);
         // Schedule a focus event and make sure the Cold loop's notify fires.
         let ctrl_clone = Arc::clone(&ctrl);

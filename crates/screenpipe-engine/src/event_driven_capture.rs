@@ -235,7 +235,7 @@ pub async fn event_driven_capture_loop(
     pause_on_drm_content: bool,
     languages: Vec<screenpipe_core::Language>,
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
-    focus_controller: Option<Arc<crate::focus_aware_controller::FocusAwareController>>,
+    focus_controller: Arc<crate::focus_aware_controller::FocusAwareController>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -365,10 +365,11 @@ pub async fn event_driven_capture_loop(
             break;
         }
 
-        // Focus-aware gating. When enabled, skip or pause capture on
-        // non-focused monitors. When `focus_controller` is None (feature
-        // disabled or construction failed), fall through to the current
-        // all-monitors-always behaviour with zero overhead.
+        // Focus-aware gating — always on. Skips or pauses capture on
+        // non-focused monitors. If focus resolution fails on this platform
+        // (Linux Wayland, permission denied, etc.) the controller's
+        // NullFocusTracker + Unknown-event fallback makes `state()` return
+        // Active for every monitor, preserving the pre-feature behaviour.
         //
         // Outcome for non-Active states is either a `continue` (skip this
         // iteration) or setting `warm_trigger_override` — which falls through
@@ -376,9 +377,9 @@ pub async fn event_driven_capture_loop(
         // detection. This lets the Warm path capture only when pixels
         // actually changed without duplicating the whole capture machinery.
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
-        if let Some(ref ctrl) = focus_controller {
+        {
             use crate::focus_aware_controller::CaptureState;
-            match ctrl.state(monitor_id) {
+            match focus_controller.state(monitor_id) {
                 CaptureState::Active => { /* fall through to normal capture */ }
                 CaptureState::Warm => {
                     // Cheap visual-diff-only cadence: capture only if pixels
@@ -432,7 +433,7 @@ pub async fn event_driven_capture_loop(
                 CaptureState::Cold => {
                     // Block until focus returns. 5s backstop guards against
                     // stuck waiters if a focus event is ever missed.
-                    let notify = ctrl.notify_for(monitor_id);
+                    let notify = focus_controller.notify_for(monitor_id);
                     tokio::select! {
                         _ = notify.notified() => {}
                         _ = tokio::time::sleep(Duration::from_secs(5)) => {}

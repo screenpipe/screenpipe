@@ -42,16 +42,6 @@ pub struct VisionManagerConfig {
     pub languages: Vec<screenpipe_core::Language>,
     /// Maximum width for stored snapshots (0 = no limit, store at native res).
     pub max_snapshot_width: u32,
-    /// Experimental: throttle capture on non-focused monitors.
-    /// When true, `VisionManager` constructs a single `FocusAwareController`
-    /// at start-up and each per-monitor capture loop consults it to decide
-    /// whether to skip work. OFF by default — when false the controller is
-    /// never instantiated and behaviour is unchanged.
-    pub focus_aware_capture: bool,
-    /// Grace period before a monitor drops from Active to Warm (ms).
-    pub focus_warm_delay_ms: u64,
-    /// Time in Warm before a monitor drops to Cold (ms).
-    pub focus_cold_delay_ms: u64,
 }
 
 /// Status of the VisionManager
@@ -77,11 +67,12 @@ pub struct VisionManager {
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     /// Power profile receiver — each monitor gets a clone.
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
-    /// Optional focus-aware capture controller.
-    /// `Some` iff `config.focus_aware_capture` was true at construction time.
-    /// When `None`, per-monitor capture loops ignore focus and run normally —
-    /// zero overhead when the feature is disabled.
-    focus_controller: Option<Arc<FocusAwareController>>,
+    /// Focus-aware capture controller — always constructed.
+    /// If focus resolution fails on a given platform (Linux Wayland, permission
+    /// denied, etc.) the NullFocusTracker + Unknown event path makes the
+    /// controller report Active for all monitors, preserving the pre-feature
+    /// behaviour for those users.
+    focus_controller: Arc<FocusAwareController>,
 }
 
 impl VisionManager {
@@ -94,37 +85,15 @@ impl VisionManager {
         // Single broadcast channel shared across all monitors + UI recorder.
         let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTrigger>(64);
 
-        // Construct focus controller only when the feature is opted in. This
-        // ensures zero overhead (no background tasks, no tracker threads) when
-        // the user hasn't enabled focus-aware capture.
-        let focus_controller = if config.focus_aware_capture {
-            // `new_tracker()` always succeeds — returns a null tracker on
-            // platforms without a native impl. Controller fallback handles
-            // `Unknown` events by treating all monitors as Active.
+        // Focus-aware capture is always on. `new_tracker()` always succeeds —
+        // returns a null tracker on platforms without a native impl. Controller
+        // fallback handles `Unknown` events by treating all monitors as Active,
+        // so users whose systems can't report focus still get the pre-feature
+        // behaviour (every monitor captured at full rate).
+        let focus_controller = {
             let _guard = vision_handle.enter();
             let tracker = crate::focus_tracker::new_tracker();
-            // Startup telemetry: emit once per engine start so we can measure
-            // the rollout of the flipped default. Event name is static so
-            // PostHog groups it correctly across versions.
-            tracing::info!(
-                "focus-aware capture enabled (warm={}ms, cold={}ms)",
-                config.focus_warm_delay_ms,
-                config.focus_cold_delay_ms
-            );
-            crate::analytics::capture_event_nonblocking(
-                "focus_aware_capture_enabled_by_default",
-                serde_json::json!({
-                    "warm_delay_ms": config.focus_warm_delay_ms,
-                    "cold_delay_ms": config.focus_cold_delay_ms,
-                }),
-            );
-            Some(FocusAwareController::new(
-                tracker,
-                config.focus_warm_delay_ms,
-                config.focus_cold_delay_ms,
-            ))
-        } else {
-            None
+            FocusAwareController::new(tracker)
         };
 
         Self {
@@ -280,10 +249,8 @@ impl VisionManager {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
-        // Shut down the focus controller (no-op when disabled).
-        if let Some(ref ctrl) = self.focus_controller {
-            ctrl.shutdown();
-        }
+        // Shut down the focus controller.
+        self.focus_controller.shutdown();
 
         let mut status = self.status.write().await;
         *status = VisionManagerStatus::Stopped;
@@ -520,9 +487,6 @@ mod tests {
             pause_on_drm_content: false,
             languages: vec![Language::English],
             max_snapshot_width: 0,
-            focus_aware_capture: false,
-            focus_warm_delay_ms: 2_000,
-            focus_cold_delay_ms: 60_000,
         };
         VisionManager::new(config, db, Handle::current())
     }
