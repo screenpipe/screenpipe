@@ -12,7 +12,11 @@ use tokio::sync::broadcast;
 
 #[cfg(target_os = "macos")]
 mod darwin;
+#[cfg(target_os = "linux")]
+mod linux;
 mod null;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub use null::NullFocusTracker;
 
@@ -44,6 +48,24 @@ pub fn new_tracker() -> Arc<dyn FocusTracker> {
             Ok(t) => return Arc::new(t),
             Err(e) => {
                 tracing::warn!("darwin focus tracker failed to start: {e}; falling back to null");
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match windows::WindowsFocusTracker::start() {
+            Ok(t) => return Arc::new(t),
+            Err(e) => {
+                tracing::warn!("windows focus tracker failed to start: {e}; falling back to null");
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        match linux::LinuxFocusTracker::start() {
+            Ok(t) => return Arc::new(t),
+            Err(e) => {
+                tracing::warn!("linux focus tracker failed to start: {e}; falling back to null");
             }
         }
     }
