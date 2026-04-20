@@ -423,10 +423,7 @@ pub async fn event_driven_capture_loop(
                             }
                         }
                         Err(e) => {
-                            debug!(
-                                "warm visual check failed on monitor {}: {}",
-                                monitor_id, e
-                            );
+                            debug!("warm visual check failed on monitor {}: {}", monitor_id, e);
                             tokio::time::sleep(Duration::from_millis(250)).await;
                             continue;
                         }

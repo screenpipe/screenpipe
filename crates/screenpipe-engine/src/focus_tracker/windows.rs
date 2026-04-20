@@ -298,8 +298,7 @@ fn run_win_event_observer() {
         // Accepts some overhead for the rare case of very fast focus changes;
         // the hook is not called at high frequency in practice (a few per
         // second at most during window switching).
-        let monitors =
-            futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+        let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
         inner.resolve_and_emit(&monitors);
     }
 

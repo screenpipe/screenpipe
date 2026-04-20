@@ -274,9 +274,7 @@ fn run_workspace_observer(inner: Arc<Inner>) {
             // Fetch the current monitor list synchronously. This call can
             // block briefly (sck-rs query); the observer thread doesn't need
             // to be snappy — tokio workers aren't starved by it.
-            let monitors = futures::executor::block_on(
-                screenpipe_screen::monitor::list_monitors(),
-            );
+            let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
             inner_activate.resolve_and_emit(&monitors);
         };
         let _activate_guard = nc.add_observer_guard(
@@ -288,9 +286,7 @@ fn run_workspace_observer(inner: Arc<Inner>) {
 
         let inner_space = Arc::clone(&inner);
         let space_cb = move |_note: &ns::Notification| {
-            let monitors = futures::executor::block_on(
-                screenpipe_screen::monitor::list_monitors(),
-            );
+            let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
             inner_space.resolve_and_emit(&monitors);
         };
         let _space_guard = nc.add_observer_guard(

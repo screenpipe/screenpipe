@@ -121,10 +121,7 @@ impl FocusAwareController {
                         this.apply_unknown();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        debug!(
-                            "focus-aware subscriber lagged by {} events — continuing",
-                            n
-                        );
+                        debug!("focus-aware subscriber lagged by {} events — continuing", n);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         debug!("focus-aware subscriber channel closed");
