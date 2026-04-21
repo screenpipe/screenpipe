@@ -343,6 +343,27 @@ fn log_selected_stream_config(
 }
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn select_highest_quality_config_index<T, FRate, FChannels>(
+    configs: &[T],
+    max_rate_hz: FRate,
+    channels: FChannels,
+) -> Option<usize>
+where
+    FRate: Fn(&T) -> u32,
+    FChannels: Fn(&T) -> u16,
+{
+    configs
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            max_rate_hz(a)
+                .cmp(&max_rate_hz(b))
+                .then(channels(a).cmp(&channels(b)))
+        })
+        .map(|(idx, _)| idx)
+}
+
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 pub async fn get_cpal_device_and_config(
     audio_device: &AudioDevice,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
@@ -455,13 +476,14 @@ pub async fn get_cpal_device_and_config(
             cpal_audio_device.default_output_config(),
         );
         let best_config = configs
-            .iter()
-            .max_by(|a, b| {
-                a.max_sample_rate()
-                    .0
-                    .cmp(&b.max_sample_rate().0)
-                    .then(a.channels().cmp(&b.channels()))
-            })
+            .get(
+                select_highest_quality_config_index(
+                    &configs,
+                    |cfg| cfg.max_sample_rate().0,
+                    |cfg| cfg.channels(),
+                )
+                .ok_or_else(|| anyhow!("No supported output configurations found"))?,
+            )
             .ok_or_else(|| anyhow!("No supported output configurations found"))?;
 
         let selected = (*best_config).with_sample_rate(best_config.max_sample_rate());
@@ -481,13 +503,14 @@ pub async fn get_cpal_device_and_config(
             cpal_audio_device.default_input_config(),
         );
         let best_config = configs
-            .iter()
-            .max_by(|a, b| {
-                a.max_sample_rate()
-                    .0
-                    .cmp(&b.max_sample_rate().0)
-                    .then(a.channels().cmp(&b.channels()))
-            })
+            .get(
+                select_highest_quality_config_index(
+                    &configs,
+                    |cfg| cfg.max_sample_rate().0,
+                    |cfg| cfg.channels(),
+                )
+                .ok_or_else(|| anyhow!("No supported input configurations found"))?,
+            )
             .ok_or_else(|| anyhow!("No supported input configurations found"))?;
 
         let selected = (*best_config).with_sample_rate(best_config.max_sample_rate());
@@ -912,5 +935,80 @@ mod windows_com_audio {
         }
 
         Ok(Some(name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    use super::select_highest_quality_config_index;
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[derive(Clone, Copy)]
+    struct MockConfig {
+        max_rate_hz: u32,
+        channels: u16,
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[test]
+    fn select_highest_quality_config_prefers_sample_rate() {
+        let configs = [
+            MockConfig {
+                max_rate_hz: 44_100,
+                channels: 2,
+            },
+            MockConfig {
+                max_rate_hz: 48_000,
+                channels: 1,
+            },
+            MockConfig {
+                max_rate_hz: 16_000,
+                channels: 2,
+            },
+        ];
+
+        let idx = select_highest_quality_config_index(
+            &configs,
+            |cfg| cfg.max_rate_hz,
+            |cfg| cfg.channels,
+        )
+        .expect("expected one best config");
+        assert_eq!(idx, 1);
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[test]
+    fn select_highest_quality_config_uses_channels_as_tiebreaker() {
+        let configs = [
+            MockConfig {
+                max_rate_hz: 48_000,
+                channels: 1,
+            },
+            MockConfig {
+                max_rate_hz: 48_000,
+                channels: 2,
+            },
+        ];
+
+        let idx = select_highest_quality_config_index(
+            &configs,
+            |cfg| cfg.max_rate_hz,
+            |cfg| cfg.channels,
+        )
+        .expect("expected one best config");
+        assert_eq!(idx, 1);
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[test]
+    fn select_highest_quality_config_returns_none_for_empty() {
+        let configs: [MockConfig; 0] = [];
+        let idx = select_highest_quality_config_index(
+            &configs,
+            |cfg| cfg.max_rate_hz,
+            |cfg| cfg.channels,
+        );
+        assert!(idx.is_none());
     }
 }
