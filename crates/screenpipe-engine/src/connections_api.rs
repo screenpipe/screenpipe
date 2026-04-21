@@ -1086,6 +1086,7 @@ fn resolve_auth(
 async fn connection_proxy(
     State(state): State<ConnectionsState>,
     axum::extract::Path((id, api_path)): axum::extract::Path<(String, String)>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     method: axum::http::Method,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -1168,8 +1169,19 @@ async fn connection_proxy(
 
     drop(mgr); // release lock before making external request
 
-    // Build the target URL
-    let target_url = format!("{}/{}", base_url, api_path.trim_start_matches('/'));
+    // Build the target URL. Query params from the caller (e.g.
+    // `?valueInputOption=USER_ENTERED` for Google Sheets appends) must be
+    // forwarded verbatim — without this, callers silently hit defaults and
+    // bad requests like 400s on `values:append`.
+    let target_url = match raw_query.as_deref() {
+        Some(q) if !q.is_empty() => format!(
+            "{}/{}?{}",
+            base_url,
+            api_path.trim_start_matches('/'),
+            q
+        ),
+        _ => format!("{}/{}", base_url, api_path.trim_start_matches('/')),
+    };
 
     // Audit log
     tracing::info!(

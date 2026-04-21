@@ -29,7 +29,13 @@ static OAUTH: OAuthConfig = OAuthConfig {
     extra_auth_params: &[
         (
             "scope",
+            // drive.metadata.readonly is needed to list spreadsheets (e.g. the
+            // list-sheets pipe calling drive/v3/files?q=mimeType=spreadsheet).
+            // Without it, file listing fails with ACCESS_TOKEN_SCOPE_INSUFFICIENT
+            // and users have to re-authorize. Read/write of cells inside a
+            // *known* sheet still only needs the spreadsheets scope.
             "https://www.googleapis.com/auth/spreadsheets \
+             https://www.googleapis.com/auth/drive.metadata.readonly \
              https://www.googleapis.com/auth/userinfo.email",
         ),
         ("access_type", "offline"),
