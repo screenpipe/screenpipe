@@ -1,0 +1,10 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.env
+.env.*
+.DS_Store
+README.md
+tinfoil-config.yml

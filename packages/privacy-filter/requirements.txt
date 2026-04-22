@@ -1,0 +1,10 @@
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+# CPU-only torch wheels — picked up from the CPU index in the Dockerfile
+# (--extra-index-url). Pinning the minor version prevents unexpected
+# perf/ABI changes from sneaking into the image on rebuilds.
+torch==2.5.1
+transformers==4.46.3
+accelerate==1.1.1
+safetensors==0.4.5
