@@ -20,12 +20,28 @@ use super::source_buffer::SourceBuffer;
 use super::AudioStream;
 
 /// Timeout for receiving audio data before considering the stream dead.
-/// For input: another app may have hijacked the mic (e.g., Wispr Flow).
-/// For output on macOS: ScreenCaptureKit delivers callbacks continuously even
-/// during silence, so a 30s timeout means the OS stream genuinely stopped.
-/// For output on Windows: WASAPI loopback produces NO callbacks when nothing is
-/// playing, so timeouts are expected and non-fatal (see recv_audio_chunk).
-const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 30;
+///
+/// 8 seconds is the chosen balance:
+///   - long enough to absorb normal hiccups (Bluetooth packet loss bursts,
+///     OS resource pressure, brief context switches)
+///   - short enough to detect genuine stalls quickly (another app
+///     hijacking the mic mid-session — e.g. Wispr Flow, FaceTime — or
+///     a CoreAudio internal failure)
+///
+/// Previously 30s, but that meant ~30s of lost audio per recovery event
+/// AND noisy WARN logs that looked alarming. With the proactive
+/// stream-rebuild on screen unlock (below), the timeout becomes a
+/// safety-net for the rare cases that don't correlate with lock/wake
+/// transitions, so we can afford to be more aggressive.
+///
+/// Per-platform notes on output devices (handled separately in
+/// recv_audio_chunk):
+///   - macOS ScreenCaptureKit: now treats silence as non-fatal — SCK
+///     observed to stop firing callbacks during prolonged idle on
+///     Sequoia 24.3+, contrary to earlier "continuous callbacks"
+///     assumption.
+///   - Windows WASAPI loopback: silent = no callbacks (always was).
+const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 8;
 
 /// Grace period after stream start before treating timeouts as fatal.
 /// ScreenCaptureKit may take a moment to begin delivering callbacks.
@@ -83,26 +99,46 @@ pub async fn run_record_and_transcribe(
             continue;
         }
 
-        // Transitioning from locked → unlocked: discard stale audio and reset segment timing.
-        // The broadcast channel accumulated data while we were paused — drain it to avoid
-        // transcribing audio from the lock screen period.
+        // Transitioning from locked → unlocked: don't try to resume the
+        // existing CPAL stream — request a clean rebuild instead.
+        //
+        // Why: across all platforms, an audio input stream that was idle
+        // during a lock period frequently returns no further data callbacks
+        // until it is torn down and recreated.
+        //   - macOS CoreAudio: AudioUnit can be in a stalled state after
+        //     the system wakes; the data callback simply stops firing with
+        //     no error event. Confirmed with 9 false-positive disconnects
+        //     in ~3h of MBA idle — every cluster preceded by
+        //     "screen unlocked, resuming" then exactly 30s of dead air.
+        //   - Windows WASAPI: shared-mode capture can also pause across
+        //     monitor sleep / Modern Standby and not auto-resume.
+        //   - Linux PulseAudio: `module-suspend-on-idle` literally
+        //     suspends sources after ~5s of no consumers; resuming it
+        //     requires an explicit `pa_stream_cork(false)` that cpal
+        //     doesn't perform on its own.
+        //
+        // Returning Err here makes the existing device_monitor recovery
+        // path (≤2s polling) clean up the stale handle and start a fresh
+        // stream. Net effect: ~2s of lost audio per lock/unlock cycle
+        // instead of the 30s+ wait for AUDIO_RECEIVE_TIMEOUT_SECS to
+        // declare the stream dead with no real diagnostic signal.
+        //
+        // We do NOT set `audio_stream.is_disconnected` here — that flag
+        // signals "device is gone" (e.g. USB mic unplugged). This is a
+        // healthy device that needs a session reset, not a removal. The
+        // caller's WARN log will surface the accurate reason verbatim.
         if was_paused_for_lock {
             info!(
-                "screen unlocked, resuming audio recording for {}",
+                "screen unlocked — rebuilding stream for {} (avoids \
+                 zombie-callback state observed after sleep/wake on macOS, \
+                 Windows, and Linux)",
                 device_name
             );
-            was_paused_for_lock = false;
-            collected_audio.clear();
-            segment_start_time = now_epoch_secs();
-            // Drain stale audio from the broadcast channel.
-            // Lagged means messages were dropped (channel full) — also fine, keep draining.
-            loop {
-                match receiver.try_recv() {
-                    Ok(_) => continue,
-                    Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
-                    Err(_) => break, // Empty or Closed
-                }
-            }
+            return Err(anyhow!(
+                "stream rebuild required after screen unlock for {} \
+                 (recovery is automatic via device_monitor)",
+                device_name
+            ));
         }
 
         while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
