@@ -17,9 +17,10 @@ memory: 16384
 
 containers:
   - name: privacy-filter
-    # Replace <SHA256> with the digest of the image pushed to ghcr.io. See
-    # README.md for the one-liner that populates this during release.
-    image: "ghcr.io/screenpipe/privacy-filter:v0.1.0@sha256:REPLACE_WITH_DIGEST"
+    # Pinned via .github/workflows/privacy-filter-release.yml on tag push.
+    # Bump by tagging a new `privacy-filter-v<semver>` and copying the
+    # digest from the CI run's "Print digest" step.
+    image: "ghcr.io/screenpipe/privacy-filter:0.1.0@sha256:62e54ee2ca596ff647b882e553cf2397c28f70b0de9f3ec36e97b2fc8809ea62"
     env:
       - PORT: "8080"
     restart: "always"
