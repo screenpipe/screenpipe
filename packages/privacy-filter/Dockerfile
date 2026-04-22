@@ -11,8 +11,9 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/opt/hf-cache \
-    TRANSFORMERS_OFFLINE=1
+    HF_HOME=/opt/hf-cache
+# TRANSFORMERS_OFFLINE is flipped on AFTER the download layer — we need
+# online access while populating the cache, then lock it down for runtime.
 
 # Install CPU-only torch + ML deps from the CPU wheel index. The CPU index
 # is significantly smaller than the default (no CUDA runtime) — keeps the
@@ -37,7 +38,12 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer; \
 import os; \
 mid = os.environ['MODEL_ID']; \
 AutoTokenizer.from_pretrained(mid); \
-AutoModelForTokenClassification.from_pretrained(mid, torch_dtype='bfloat16')"
+AutoModelForTokenClassification.from_pretrained(mid)"
+
+# Now that the cache is populated, lock the runtime to offline mode so
+# an attacker who owns DNS can't swap weights out from under the enclave.
+ENV TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_OFFLINE=1
 
 COPY server.py .
 

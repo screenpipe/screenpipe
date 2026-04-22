@@ -108,12 +108,14 @@ def _load_model() -> None:
     log.info("loading model %s", MODEL_ID)
     t0 = time.time()
     tok = AutoTokenizer.from_pretrained(MODEL_ID)
+    # We intentionally load in fp32 on CPU. bf16 cuts memory but triggers
+    # SIGILL on some CPU kernels (seen on aarch64 docker VMs without
+    # AArch64-bf16 extensions), and the model is only 1.5B params so fp32
+    # still fits in ~6GB — well within Tinfoil's 16GB budget.
     model = AutoModelForTokenClassification.from_pretrained(
         MODEL_ID,
         device_map="cpu",
-        # bf16 cuts memory roughly in half vs fp32 and CPU ops support it
-        # on modern x86/arm64 — still deterministic, still safe.
-        torch_dtype="bfloat16",
+        dtype="float32",
     )
     _pipeline = pipeline(
         task="token-classification",
@@ -146,21 +148,29 @@ def filter_pii(req: FilterRequest) -> FilterResponse:
 
     t0 = time.time()
     try:
-        raw_spans = _pipeline(text, truncation=True, max_length=MAX_INPUT_TOKENS)
+        # Transformers 5 dropped the truncation/max_length kwargs from the
+        # token-classification pipeline; truncation is now controlled by
+        # the tokenizer's model_max_length. We guard at the character level
+        # (MAX_INPUT_CHARS) above, and the char → token ratio is roughly
+        # 4:1 so 100K chars ≈ 25K tokens which is well under the 128K cap.
+        raw_spans = _pipeline(text)
     except Exception as e:
         log.exception("inference failed")
         raise HTTPException(status_code=500, detail=f"inference error: {e}")
 
-    spans = [
-        PiiSpan(
-            label=s["entity_group"],
-            start=int(s["start"]),
-            end=int(s["end"]),
-            text=text[int(s["start"]) : int(s["end"])],
-            score=float(s["score"]),
-        )
-        for s in raw_spans
-    ]
+    spans = _merge_adjacent(
+        [
+            PiiSpan(
+                label=s["entity_group"],
+                start=int(s["start"]),
+                end=int(s["end"]),
+                text=text[int(s["start"]) : int(s["end"])],
+                score=float(s["score"]),
+            )
+            for s in raw_spans
+        ],
+        text,
+    )
 
     redacted = _redact(text, spans)
     return FilterResponse(
@@ -178,6 +188,39 @@ def _redact(text: str, spans: List[PiiSpan]) -> str:
         tag = LABEL_TAG.get(span.label.lower(), span.label.upper())
         out = out[: span.start] + f"[{tag}]" + out[span.end :]
     return out
+
+
+def _merge_adjacent(spans: List[PiiSpan], text: str) -> List[PiiSpan]:
+    """Merge touching / near-touching spans of the same label.
+
+    The HF token-classification pipeline emits one span per sub-word group,
+    so a single name or phone number often comes back as 2-4 adjacent spans
+    of the same label. Without merging, the redactor emits `[PERSON][PERSON]`
+    for every such run. We collapse any pair where the gap between them is
+    ≤ MERGE_GAP characters of whitespace/punctuation and the labels match.
+    """
+    if not spans:
+        return spans
+    MERGE_GAP = 2  # tolerate a single space or punctuation between sub-spans
+    ordered = sorted(spans, key=lambda s: s.start)
+    merged: List[PiiSpan] = [ordered[0]]
+    for cur in ordered[1:]:
+        prev = merged[-1]
+        gap_text = text[prev.end : cur.start]
+        close_enough = (cur.start - prev.end) <= MERGE_GAP and gap_text.strip() == ""
+        if cur.label == prev.label and close_enough:
+            merged[-1] = PiiSpan(
+                label=prev.label,
+                start=prev.start,
+                end=cur.end,
+                text=text[prev.start : cur.end],
+                # Conservative: the merged span's confidence is the min —
+                # a merged region is no more certain than its weakest member.
+                score=min(prev.score, cur.score),
+            )
+        else:
+            merged.append(cur)
+    return merged
 
 
 if __name__ == "__main__":

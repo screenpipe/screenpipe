@@ -5,6 +5,9 @@ pydantic==2.9.2
 # (--extra-index-url). Pinning the minor version prevents unexpected
 # perf/ABI changes from sneaking into the image on rebuilds.
 torch==2.5.1
-transformers==4.46.3
+# openai/privacy-filter ships a custom `OpenAIPrivacyFilterForTokenClassification`
+# arch + `TokenizersBackend` tokenizer class; both require transformers >= 5.x.
+transformers==5.6.0
+tokenizers==0.22.1
 accelerate==1.1.1
 safetensors==0.4.5
