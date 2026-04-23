@@ -8,7 +8,7 @@
 //! Recording (capture) can be toggled independently via [`CaptureSession`].
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +26,30 @@ use screenpipe_engine::{
     start_power_manager_with_pref, start_sleep_monitor, RecordingConfig, ResourceMonitor, SCServer,
 };
 use tracing::{error, info, warn};
+
+fn ensure_data_dir_writable(base_dir: &Path) -> Result<PathBuf, String> {
+    let data_path = base_dir.join("data");
+    std::fs::create_dir_all(&data_path).map_err(|e| {
+        format!(
+            "Failed to create data directory '{}': {}",
+            data_path.display(),
+            e
+        )
+    })?;
+
+    // Probe writability where db.sqlite is created.
+    let probe = base_dir.join(format!(".screenpipe_probe_{}", std::process::id()));
+    std::fs::write(&probe, b"ok").map_err(|e| {
+        format!(
+            "Data directory '{}' is not writable: {}",
+            base_dir.display(),
+            e
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
+
+    Ok(data_path)
+}
 
 /// Shared references that survive capture start/stop cycles.
 /// The HTTP server, pipes, and DB live here.
@@ -91,26 +115,98 @@ impl ServerCore {
         }
 
         // --- Database ---
-        let local_data_dir = config.data_dir.clone();
-        let data_path = local_data_dir.join("data");
-        std::fs::create_dir_all(&data_path)
-            .map_err(|e| format!("Failed to create data dir: {}", e))?;
+        let requested_data_dir = config.data_dir.clone();
+        let default_data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+        let temp_fallback_data_dir = std::env::temp_dir().join("screenpipe");
 
-        let db_path = format!("{}/db.sqlite", local_data_dir.to_string_lossy());
+        let mut candidates = vec![requested_data_dir.clone()];
+        if default_data_dir != requested_data_dir {
+            candidates.push(default_data_dir);
+        }
+        if candidates.iter().all(|p| p != &temp_fallback_data_dir) {
+            candidates.push(temp_fallback_data_dir);
+        }
+
+        let mut local_data_dir: Option<PathBuf> = None;
+        let mut data_path: Option<PathBuf> = None;
+        let mut db: Option<Arc<DatabaseManager>> = None;
+        let mut last_open_error: Option<String> = None;
         crate::health::set_boot_phase(
             "migrating_database",
             Some("updating database — this may take several minutes on large installs"),
         );
-        let db = Arc::new(
-            DatabaseManager::new(&db_path, config.db_config.clone())
-                .await
-                .map_err(|e| {
+        for candidate in candidates {
+            let candidate_data_path = match ensure_data_dir_writable(&candidate) {
+                Ok(path) => path,
+                Err(e) => {
+                    warn!(
+                        "Skipping data dir '{}' because it is not writable: {}",
+                        candidate.display(),
+                        e
+                    );
+                    last_open_error = Some(e);
+                    continue;
+                }
+            };
+
+            let db_path = candidate.join("db.sqlite");
+            let db_path_str = db_path.to_string_lossy().into_owned();
+            match DatabaseManager::new(&db_path_str, config.db_config.clone()).await {
+                Ok(manager) => {
+                    if candidate != requested_data_dir {
+                        warn!(
+                            "Falling back data dir from '{}' to '{}'",
+                            requested_data_dir.display(),
+                            candidate.display()
+                        );
+                    }
+                    info!("Database initialized at {}", db_path.display());
+                    local_data_dir = Some(candidate);
+                    data_path = Some(candidate_data_path);
+                    db = Some(Arc::new(manager));
+                    break;
+                }
+                Err(e) => {
+                    let err_text = e.to_string();
+                    let lower = err_text.to_lowercase();
+                    let is_open_file_error = lower.contains("unable to open database file")
+                        || lower.contains("code: 14");
+
+                    if is_open_file_error {
+                        warn!(
+                            "Failed to initialize database at '{}': {}. Trying next fallback dir...",
+                            db_path.display(),
+                            err_text
+                        );
+                        last_open_error = Some(err_text);
+                        continue;
+                    }
+
                     let msg = format!("Failed to initialize database: {}", e);
                     crate::health::set_boot_error(&msg);
-                    msg
-                })?,
-        );
-        info!("Database initialized at {}", db_path);
+                    return Err(msg);
+                }
+            }
+        }
+
+        let local_data_dir = local_data_dir.ok_or_else(|| {
+            let msg = format!(
+                "Failed to initialize database after trying fallback data directories: {}",
+                last_open_error.unwrap_or_else(|| "unknown error".to_string())
+            );
+            crate::health::set_boot_error(&msg);
+            msg
+        })?;
+        let data_path = data_path.ok_or_else(|| {
+            let msg = "Failed to resolve data directory".to_string();
+            crate::health::set_boot_error(&msg);
+            msg
+        })?;
+        let db = db.ok_or_else(|| {
+            let msg = "Failed to initialize database manager".to_string();
+            crate::health::set_boot_error(&msg);
+            msg
+        })?;
 
         // --- Audio devices + manager (built but NOT started) ---
         let mut audio_devices = Vec::new();
@@ -172,14 +268,11 @@ impl ServerCore {
         }
 
         crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
-        let mut audio_manager = audio_manager_builder
-            .build(db.clone())
-            .await
-            .map_err(|e| {
-                let msg = format!("Failed to build audio manager: {}", e);
-                crate::health::set_boot_error(&msg);
-                msg
-            })?;
+        let mut audio_manager = audio_manager_builder.build(db.clone()).await.map_err(|e| {
+            let msg = format!("Failed to build audio manager: {}", e);
+            crate::health::set_boot_error(&msg);
+            msg
+        })?;
 
         // Wire audio → hot cache
         {
@@ -265,11 +358,11 @@ impl ServerCore {
             };
             match screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await {
                 Ok(store) => {
-                    let fixed = screenpipe_secrets::fix_secret_file_permissions(&config.data_dir);
+                    let fixed = screenpipe_secrets::fix_secret_file_permissions(&local_data_dir);
                     if fixed > 0 {
                         info!("fixed permissions on {} credential files", fixed);
                     }
-                    match screenpipe_secrets::migrate_legacy_secrets(&store, &config.data_dir).await
+                    match screenpipe_secrets::migrate_legacy_secrets(&store, &local_data_dir).await
                     {
                         Ok(report) => {
                             if !report.migrated.is_empty() {
@@ -288,7 +381,7 @@ impl ServerCore {
 
         // --- Pipe manager ---
         crate::health::set_boot_phase("starting_pipes", Some("loading pipes"));
-        let pipes_dir = config.data_dir.join("pipes");
+        let pipes_dir = local_data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
         let user_token = config.user_id.clone();
