@@ -557,6 +557,58 @@ mod query_plan_tests {
         );
     }
 
+    /// Regression test: the refactored count_search_results OCR branch must
+    /// emit SQL with direct `frames.timestamp >= ?` predicates (not the old
+    /// `(?x IS NULL OR frames.timestamp >= ?x)` anti-pattern) so SQLite can
+    /// use idx_frames_timestamp for range bounds.
+    #[tokio::test]
+    async fn test_count_search_results_ocr_refactored_uses_range_bounds() {
+        let db = setup_test_db().await;
+        seed_data(&db, 200).await;
+
+        // Shape of the SQL produced by count_search_results when only
+        // start_time and end_time are bound (the common pipe call path).
+        let plan = explain(
+            &db,
+            r#"SELECT COUNT(DISTINCT frames.id)
+               FROM frames
+               WHERE 1=1
+                   AND frames.timestamp >= '2020-01-01'
+                   AND frames.timestamp <= '2030-01-01'"#,
+        )
+        .await;
+
+        assert_no_table_scan(&plan, "count_search_results_ocr_refactored");
+        let has_range_bounds = plan
+            .iter()
+            .any(|l| l.contains("timestamp>") || l.contains("timestamp<"));
+        assert!(
+            has_range_bounds,
+            "Refactored count query must use range bounds on timestamp.\nPlan:\n{}",
+            plan.join("\n")
+        );
+    }
+
+    /// Regression test: zero-filter variant (no optional predicates bound)
+    /// must not regress into a full table scan. With dynamic WHERE this
+    /// becomes essentially `SELECT COUNT(DISTINCT id) FROM frames` which
+    /// SQLite can resolve with a covering index scan rather than a heap walk.
+    #[tokio::test]
+    async fn test_count_search_results_ocr_no_filters_no_table_scan() {
+        let db = setup_test_db().await;
+        seed_data(&db, 200).await;
+
+        let plan = explain(
+            &db,
+            r#"SELECT COUNT(DISTINCT frames.id)
+               FROM frames
+               WHERE 1=1"#,
+        )
+        .await;
+
+        assert_no_table_scan(&plan, "count_search_results_ocr_no_filters");
+    }
+
     #[tokio::test]
     async fn test_count_audio_with_time_range_uses_index() {
         let db = setup_test_db().await;

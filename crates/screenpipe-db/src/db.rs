@@ -3444,36 +3444,92 @@ impl DatabaseManager {
         let fts_query = fts_parts.join(" ");
         let has_fts = !fts_query.trim().is_empty();
 
-        let sql = match content_type {
-            ContentType::OCR | ContentType::Accessibility => format!(
+        // OCR / Accessibility: build the WHERE clause dynamically so SQLite can
+        // use idx_frames_timestamp for range bounds. The previous
+        // `(?x IS NULL OR col OP ?x)` pattern forced a full table scan because
+        // statement-level planning in SQLite cannot see parameter values and
+        // therefore assumed every branch of the OR could be active.
+        // See tests/query_plan_test.rs::test_is_null_or_defeats_timestamp_index.
+        if matches!(content_type, ContentType::OCR | ContentType::Accessibility) {
+            let mut conditions: Vec<&'static str> = Vec::new();
+            if start_time.is_some() {
+                conditions.push("frames.timestamp >= ?");
+            }
+            if end_time.is_some() {
+                conditions.push("frames.timestamp <= ?");
+            }
+            if min_length.is_some() {
+                conditions.push("LENGTH(COALESCE(frames.full_text, '')) >= ?");
+            }
+            if max_length.is_some() {
+                conditions.push("LENGTH(COALESCE(frames.full_text, '')) <= ?");
+            }
+            if frame_name.is_some() {
+                conditions.push("frames.name LIKE '%' || ? || '%'");
+            }
+            if focused.is_some() {
+                conditions.push("frames.focused = ?");
+            }
+            if content_type == ContentType::Accessibility {
+                conditions.push(
+                    "frames.accessibility_text IS NOT NULL AND frames.accessibility_text != ''",
+                );
+            }
+
+            let extra_where = if conditions.is_empty() {
+                String::new()
+            } else {
+                format!(" AND {}", conditions.join(" AND "))
+            };
+
+            let sql = format!(
                 r#"SELECT COUNT(DISTINCT frames.id)
                    FROM frames
                    {fts_join}
                    WHERE 1=1
                        {fts_condition}
-                       AND (?2 IS NULL OR frames.timestamp >= ?2)
-                       AND (?3 IS NULL OR frames.timestamp <= ?3)
-                       AND (?4 IS NULL OR LENGTH(COALESCE(frames.full_text, '')) >= ?4)
-                       AND (?5 IS NULL OR LENGTH(COALESCE(frames.full_text, '')) <= ?5)
-                       AND (?6 IS NULL OR frames.name LIKE '%' || ?6 || '%')
-                       AND (?7 IS NULL OR frames.focused = ?7)
-                       {a11y_filter}"#,
+                       {extra_where}"#,
                 fts_join = if has_fts {
                     "JOIN frames_fts ON frames.id = frames_fts.rowid"
                 } else {
                     ""
                 },
                 fts_condition = if has_fts {
-                    "AND frames_fts MATCH ?1"
+                    "AND frames_fts MATCH ?"
                 } else {
                     ""
                 },
-                a11y_filter = if content_type == ContentType::Accessibility {
-                    "AND frames.accessibility_text IS NOT NULL AND frames.accessibility_text != ''"
-                } else {
-                    ""
-                }
-            ),
+                extra_where = extra_where,
+            );
+
+            let mut q = sqlx::query_scalar::<_, i64>(&sql);
+            if has_fts {
+                q = q.bind(fts_query);
+            }
+            if let Some(t) = start_time {
+                q = q.bind(t);
+            }
+            if let Some(t) = end_time {
+                q = q.bind(t);
+            }
+            if let Some(l) = min_length {
+                q = q.bind(l as i64);
+            }
+            if let Some(l) = max_length {
+                q = q.bind(l as i64);
+            }
+            if let Some(n) = frame_name {
+                q = q.bind(n.to_owned());
+            }
+            if let Some(f) = focused {
+                q = q.bind(f);
+            }
+
+            let count: i64 = q.fetch_one(&self.pool).await?;
+            return Ok(count as usize);
+        }
+
+        let sql = match content_type {
             ContentType::Audio => format!(
                 r#"SELECT COUNT(DISTINCT audio_transcriptions.id)
                    FROM {table}
@@ -3575,18 +3631,6 @@ impl DatabaseManager {
         };
 
         let count: i64 = match content_type {
-            ContentType::OCR | ContentType::Accessibility => {
-                sqlx::query_scalar(&sql)
-                    .bind(if has_fts { fts_query } else { "*".to_owned() })
-                    .bind(start_time)
-                    .bind(end_time)
-                    .bind(min_length.map(|l| l as i64))
-                    .bind(max_length.map(|l| l as i64))
-                    .bind(frame_name)
-                    .bind(focused)
-                    .fetch_one(&self.pool)
-                    .await?
-            }
             ContentType::Audio => {
                 let sanitized_audio = if query.is_empty() {
                     "*".to_owned()
