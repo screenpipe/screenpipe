@@ -41,4 +41,6 @@ jobs:
           path: ./
           # Exit non-zero on findings so the check fails loud, matching
           # the prior gitleaks behavior.
-          extra_args: --only-verified --fail
+          # NOTE: the action already adds `--fail`; passing it again in
+          # extra_args causes "flag 'fail' cannot be repeated".
+          extra_args: --only-verified
