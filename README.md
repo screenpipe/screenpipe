@@ -101,6 +101,112 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
     <a href="https://www.reddit.com/r/screen_pipe">reddit</a>
 </p>
 
+## operations
+
+self-hosted tips for keeping the local CLI daemon healthy and the on-disk API key locked down. all paths are under `~/.screenpipe`, so they work for any user.
+
+### daemon health monitoring
+
+screenpipe exposes `GET http://localhost:3030/health`. a healthy response is http 200 with `"status":"healthy"`. a scheduled probe against this endpoint catches silent daemon stops (e.g. after a crash or macOS sleep/wake cycle) that the menubar indicator may not surface.
+
+save the probe as `~/.screenpipe/bin/health-probe.sh` and `chmod +x` it:
+
+```bash
+#!/usr/bin/env bash
+set -u
+SP_HOME="${HOME}/.screenpipe"
+ENV_FILE="${SP_HOME}/.env"
+LOG_DIR="${SP_HOME}/logs"
+LOG_FILE="${LOG_DIR}/health-probe.log"
+ENDPOINT="http://localhost:3030/health"
+mkdir -p "${LOG_DIR}"
+
+# Pick up the API key defensively in case /health is gated in a future release.
+AUTH=""
+if [[ -r "${ENV_FILE}" ]]; then
+  KEY="$(grep -E '^SCREENPIPE_API_KEY=' "${ENV_FILE}" | cut -d= -f2- | tr -d '\r\n"'"'")"
+  [[ -n "${KEY}" ]] && AUTH="Authorization: Bearer ${KEY}"
+fi
+
+BODY="$(mktemp -t sp_health.XXXXXX)"; trap 'rm -f "${BODY}"' EXIT
+if [[ -n "${AUTH}" ]]; then
+  CODE="$(curl -sS --max-time 5 -H "${AUTH}" -o "${BODY}" -w '%{http_code}' "${ENDPOINT}" 2>/dev/null || echo 000)"
+else
+  CODE="$(curl -sS --max-time 5 -o "${BODY}" -w '%{http_code}' "${ENDPOINT}" 2>/dev/null || echo 000)"
+fi
+
+STATUS="$(grep -o '"status":"[^"]*"' "${BODY}" | head -n1 | cut -d'"' -f4)"
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+OUTCOME=ok
+[[ "${CODE}" != 200 ]] && OUTCOME="http_${CODE}"
+[[ "${STATUS}" != healthy && "${OUTCOME}" == ok ]] && OUTCOME=unhealthy
+printf '{"ts":"%s","outcome":"%s","http":"%s","status":"%s"}\n' \
+  "${TS}" "${OUTCOME}" "${CODE}" "${STATUS:-unknown}" >> "${LOG_FILE}"
+
+# Rotate at ~1 MB.
+if [[ "$(stat -f%z "${LOG_FILE}" 2>/dev/null || stat -c%s "${LOG_FILE}" 2>/dev/null || echo 0)" -gt 1048576 ]]; then
+  mv "${LOG_FILE}" "${LOG_FILE}.1"
+fi
+
+# Notify once per failure streak (don't spam while daemon stays down).
+if [[ "${OUTCOME}" != ok ]]; then
+  PREV="$(tail -n 2 "${LOG_FILE}" 2>/dev/null | head -n 1 | grep -o '"outcome":"[^"]*"' | cut -d'"' -f4)"
+  if [[ "${PREV}" == ok || -z "${PREV}" ]]; then
+    /usr/bin/osascript -e "display notification \"screenpipe /health: ${OUTCOME}\" with title \"screenpipe\" sound name \"Basso\"" 2>/dev/null || true
+  fi
+  exit 1
+fi
+```
+
+schedule it every 5 minutes on macOS with a LaunchAgent at `~/Library/LaunchAgents/com.screenpipe.healthprobe.plist` (replace `/Users/YOU` with your `$HOME` — `launchd` does not expand `~`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.screenpipe.healthprobe</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/YOU/.screenpipe/bin/health-probe.sh</string></array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/YOU/.screenpipe/logs/health-probe.stdout.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/.screenpipe/logs/health-probe.stderr.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
+```
+
+load, verify, tail, and force-run:
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.screenpipe.healthprobe.plist
+launchctl list | grep com.screenpipe.healthprobe         # PID | last_exit | label
+tail -n 5 ~/.screenpipe/logs/health-probe.log             # most recent JSON events
+launchctl kickstart -k gui/$(id -u)/com.screenpipe.healthprobe   # trigger on demand
+launchctl unload -w ~/Library/LaunchAgents/com.screenpipe.healthprobe.plist  # disable
+```
+
+on linux, swap the LaunchAgent for a systemd user timer or a `*/5 * * * *` cron entry that runs the same script.
+
+the log is json lines so it's easy to alert on:
+
+```bash
+# anything unhealthy in the last hour?
+grep -v '"outcome":"ok"' ~/.screenpipe/logs/health-probe.log | tail
+```
+
+### api key hygiene
+
+`~/.screenpipe/.env` holds `SCREENPIPE_API_KEY` (the bearer token the desktop app and MCP server use against the local REST API). keep it readable only by your user:
+
+```bash
+chmod 600 ~/.screenpipe/.env
+ls -la ~/.screenpipe/.env   # expect -rw-------
+```
+
+the probe above loads the key from this file, so tightening the perms doesn't break the scheduled job (it runs as you under `launchd`, so it can still read `0600` files).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs. AI/vibe-coded PRs welcome!
