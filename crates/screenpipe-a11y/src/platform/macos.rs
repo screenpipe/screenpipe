@@ -438,8 +438,10 @@ fn run_event_tap(
                 } else {
                     s
                 };
-                let event =
+                let mut event =
                     UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+                event.app_name = (**state.current_app.load()).clone();
+                event.window_title = (**state.current_window.load()).clone();
                 let _ = state.tx.try_send(event);
             }
         }
@@ -453,7 +455,9 @@ fn run_event_tap(
         } else {
             s
         };
-        let event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+        let mut event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+        event.app_name = (**state.current_app.load()).clone();
+        event.window_title = (**state.current_window.load()).clone();
         let _ = state.tx.try_send(event);
     }
 

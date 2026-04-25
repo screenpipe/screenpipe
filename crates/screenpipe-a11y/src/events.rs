@@ -906,4 +906,22 @@ mod tests {
         assert_eq!(EventType::from_str("text"), Some(EventType::Text));
         assert_eq!(EventType::from_str("invalid"), None);
     }
+
+    #[test]
+    fn test_text_event_accepts_app_context() {
+        let mut event = UiEvent::text(Utc::now(), 100, "hello world".to_string());
+        assert!(event.app_name.is_none());
+        assert!(event.window_title.is_none());
+
+        event.app_name = Some("Cursor".to_string());
+        event.window_title = Some("main.rs — my-project".to_string());
+
+        assert_eq!(event.app_name.as_deref(), Some("Cursor"));
+        assert_eq!(event.window_title.as_deref(), Some("main.rs — my-project"));
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"event_type\":\"text\""));
+        assert!(json.contains("\"app_name\":\"Cursor\""));
+        assert!(json.contains("main.rs"));
+    }
 }
