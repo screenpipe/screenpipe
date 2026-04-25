@@ -54,7 +54,18 @@ pub fn advertise(port: u16) -> Result<(), String> {
         None => return Ok(()), // mDNS unavailable, skip silently
     };
 
-    let hostname = get_hostname();
+    let mut hostname = get_hostname();
+    
+    // DNS labels must be < 64 bytes. mdns-sd will panic if we exceed this.
+    // "-sp" + pid adds around 10-15 chars.
+    // Truncate the base hostname to 40 bytes to safely stay under the 63-byte limit.
+    if hostname.len() > 40 {
+        let mut idx = 40;
+        while !hostname.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        hostname.truncate(idx);
+    }
 
     // Instance name must be unique on the network — append PID to avoid
     // collisions when the same user runs screenpipe on multiple machines
@@ -155,5 +166,67 @@ fn browse_blocking() -> Vec<(String, u16)> {
 pub fn shutdown() {
     if let Some(Some(daemon)) = DAEMON.get() {
         let _ = daemon.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mdns_long_hostname_no_panic() {
+        // A very long hostname that would normally cause a panic in mdns-sd (> 63 bytes)
+        let mut hostname = "long_hostname_that_exceeds_sixty_three_characters_in_length_which_panics".to_string();
+        
+        if hostname.len() > 40 {
+            let mut idx = 40;
+            while !hostname.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            hostname.truncate(idx);
+        }
+
+        let pid = 12345;
+        let instance_name = format!("{}-{}", hostname, pid);
+        let host_name = format!("{}-sp{}.local.", hostname, pid);
+
+        // This will panic internally in mdns-sd if the label is >= 64 chars
+        let service = ServiceInfo::new(
+            "_screenpipe._tcp.local.",
+            &instance_name,
+            &host_name,
+            "",
+            3030,
+            None,
+        );
+        assert!(service.is_ok());
+    }
+
+    #[test]
+    fn test_mdns_long_hostname_utf8() {
+        // A long string with multi-byte characters
+        let mut hostname = "こんにちは世界".repeat(10); // 210 bytes
+        
+        if hostname.len() > 40 {
+            let mut idx = 40;
+            while !hostname.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            hostname.truncate(idx);
+        }
+        
+        let pid = 12345;
+        let instance_name = format!("{}-{}", hostname, pid);
+        let host_name = format!("{}-sp{}.local.", hostname, pid);
+
+        let service = ServiceInfo::new(
+            "_screenpipe._tcp.local.",
+            &instance_name,
+            &host_name,
+            "",
+            3030,
+            None,
+        );
+        assert!(service.is_ok());
     }
 }
