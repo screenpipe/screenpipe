@@ -953,6 +953,13 @@ pub async fn start_device_monitor(
                                 {
                                     continue;
                                 }
+                                // SCK transiently fails during device switches ("callback never
+                                // fired") — downgrade to warn so it doesn't reach Sentry; the
+                                // monitor will retry on the next 2-second tick.
+                                if e_str.contains("callback never fired") {
+                                    warn!("device check transient error (will retry): {e}");
+                                    continue;
+                                }
                                 error!("device check error: {e}");
                             }
                         }
