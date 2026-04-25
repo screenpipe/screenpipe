@@ -588,7 +588,7 @@ Never fabricate IDs or timestamps — only use values from actual results.
 });
 
 // ---------------------------------------------------------------------------
-// Helper
+// Helpers
 // ---------------------------------------------------------------------------
 async function fetchAPI(
   endpoint: string,
@@ -603,6 +603,87 @@ async function fetchAPI(
       ...options.headers,
     },
   });
+}
+
+/** Render a named markdown section. Returns empty string when lines is empty. */
+function formatSection(title: string, lines: string[]): string {
+  if (!lines.length) return "";
+  return `### ${title}\n${lines.join("\n")}`;
+}
+
+/** Like formatSection but only renders when condition is truthy. */
+function formatOptionalSection(title: string, lines: string[], condition: boolean): string {
+  return condition ? formatSection(title, lines) : "";
+}
+
+/**
+ * Render a pagination hint. Shows a strong hint when total is known, soft hint
+ * when only a page limit was used.
+ */
+function formatPagination(
+  count: number,
+  total: number | null | undefined,
+  offset: number,
+  toolHint: string
+): string {
+  if (total != null && count < total) {
+    return `> ${count} of ${total} results — use \`${toolHint}\` with \`offset=${offset + count}\` for more`;
+  }
+  if (total == null && count > 0) {
+    return `> ${count} results shown — if you requested a limit, increase \`offset\` by ${count} for older results`;
+  }
+  return "";
+}
+
+/** Render a ### Query section echoing the effective search parameters. */
+function formatQuery(params: Record<string, string | number | boolean | null | undefined>): string {
+  const lines = Object.entries(params)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `- ${k}: ${v}`);
+  return formatOptionalSection("Query", lines, lines.length > 0);
+}
+
+/**
+ * Format a deep link for a search result.
+ * Prefers frame link when frame_id is available, falls back to timeline by timestamp.
+ */
+function formatDeepLink(frameId: number | undefined, timestamp: string | undefined): string {
+  if (frameId) return `  → [frame ${frameId}](screenpipe://frame/${frameId})`;
+  if (timestamp) return `  → [timeline](screenpipe://timeline?timestamp=${encodeURIComponent(timestamp)})`;
+  return "";
+}
+
+/**
+ * Categorize and format a tool error into a human-readable message.
+ * Distinguishes: validation, network/connect, HTTP status, and generic errors.
+ */
+function formatToolError(toolName: string, error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
+
+  // Network/connect errors
+  if (msg.includes("ECONNREFUSED") || msg.includes("fetch failed") || msg.includes("Failed to fetch")) {
+    return [
+      `### Error`,
+      `Could not reach screenpipe at ${SCREENPIPE_API}.`,
+      `Make sure screenpipe is running (check \`screenpipe run\` or the desktop app).`,
+    ].join("\n");
+  }
+
+  // HTTP status errors
+  const httpMatch = msg.match(/HTTP error: (\d+)/);
+  if (httpMatch) {
+    const status = httpMatch[1];
+    const detail =
+      status === "401" ? "Invalid or missing API key."
+      : status === "403" ? "Access denied."
+      : status === "404" ? "Resource not found."
+      : status === "503" ? "screenpipe service is unavailable."
+      : `Server returned ${status}.`;
+    return `### Error\n${detail} (${toolName})`;
+  }
+
+  // Validation or generic errors
+  return `### Error\n${msg}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,15 +714,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = data.data || [];
         const pagination = data.pagination || {};
 
+        // Echo the effective query params
+        const querySection = formatQuery({
+          q: args.q as string | undefined,
+          content_type: args.content_type as string | undefined,
+          start_time: args.start_time as string | undefined,
+          end_time: args.end_time as string | undefined,
+          app_name: args.app_name as string | undefined,
+          window_name: args.window_name as string | undefined,
+          speaker_name: args.speaker_name as string | undefined,
+          limit: args.limit as number | undefined,
+          offset: args.offset as number | undefined,
+        });
+
         if (results.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No results found. Try: broader terms, different content_type, or wider time range.",
-              },
-            ],
-          };
+          const emptyText = [
+            querySection,
+            "No results found. Try: broader terms, different content_type, or wider time range.",
+          ].filter(Boolean).join("\n\n");
+          return { content: [{ type: "text", text: emptyText }] };
         }
 
         const contentItems: Array<
@@ -656,12 +747,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const content = result.content;
           if (!content) continue;
 
+          const deepLink = formatDeepLink(content.frame_id, content.timestamp);
+
           if (result.type === "OCR") {
             const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";
             formattedResults.push(
               `[OCR] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${content.text || ""}` +
+                `${content.timestamp || ""}` +
+                (deepLink ? `\n${deepLink}` : "") +
+                `\n${content.text || ""}` +
                 tagsStr
             );
             if (includeFrames && content.frame) {
@@ -673,16 +767,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else if (result.type === "Audio") {
             const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";
             formattedResults.push(
-              `[Audio] ${content.device_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${content.transcription || ""}` +
+              `[Audio] ${content.device_name || "?"}` +
+                (content.speaker_name ? ` | ${content.speaker_name}` : "") +
+                `\n${content.timestamp || ""}` +
+                (deepLink ? `\n${deepLink}` : "") +
+                `\n${content.transcription || ""}` +
                 tagsStr
             );
           } else if (result.type === "UI" || result.type === "Accessibility") {
             formattedResults.push(
               `[Accessibility] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${content.text || ""}`
+                `${content.timestamp || ""}` +
+                (deepLink ? `\n${deepLink}` : "") +
+                `\n${content.text || ""}`
             );
           } else if (result.type === "Memory") {
             const tagsStr = content.tags?.length ? ` [${content.tags.join(", ")}]` : "";
@@ -696,16 +793,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        const header =
-          `Results: ${results.length}/${pagination.total || "?"}` +
-          (pagination.total > results.length
-            ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
-            : "");
+        const paginationHint = formatPagination(
+          results.length,
+          pagination.total,
+          pagination.offset || 0,
+          "search-content"
+        );
 
-        contentItems.push({
-          type: "text",
-          text: header + "\n\n" + formattedResults.join("\n---\n"),
-        });
+        const resultHeader = `### Results\n${paginationHint ? paginationHint + "\n\n" : ""}${formattedResults.join("\n---\n")}`;
+
+        const sections = [querySection, resultHeader].filter(Boolean);
+        contentItems.push({ type: "text", text: sections.join("\n\n") });
 
         for (const img of images) {
           contentItems.push({ type: "text", text: `\n📷 ${img.context}` });
@@ -740,14 +838,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const app = m.meeting_app as string;
           const title = m.title ? ` — ${m.title}` : "";
           const attendees = m.attendees ? `\nAttendees: ${m.attendees}` : "";
-          return `[${m.detection_source}] ${app}${title}\n  ${start} → ${end}${attendees}`;
+          const durationMin = (m.meeting_start && m.meeting_end)
+            ? Math.round((new Date(m.meeting_end as string).getTime() - new Date(m.meeting_start as string).getTime()) / 60000)
+            : null;
+          const dur = durationMin != null ? ` (${durationMin} min)` : "";
+          return `[Meeting #${m.id}] [${m.detection_source}] ${app}${title}\n  ${start} → ${end}${dur}${attendees}`;
         });
 
-        return {
-          content: [
-            { type: "text", text: `Meetings: ${meetings.length}\n\n${formatted.join("\n---\n")}` },
-          ],
-        };
+        const nextSteps = [
+          `Use \`get-meeting\` with \`id=<id>\` for full details of a specific meeting.`,
+          `Use \`search-content\` with \`content_type=audio\` and the meeting time range for the transcript.`,
+        ];
+
+        const sections = [
+          formatSection("Meetings", [`${meetings.length} found`, "", ...formatted.join("\n---\n").split("\n")]),
+          formatSection("Next steps", nextSteps),
+        ].filter(Boolean);
+
+        return { content: [{ type: "text", text: sections.join("\n\n") }] };
       }
 
       case "activity-summary": {
@@ -812,25 +920,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         );
 
-        const summary = [
-          `Activity Summary (${data.time_range?.start} → ${data.time_range?.end})`,
-          `Total frames: ${data.total_frames}`,
-          "",
-          "Apps:",
-          ...(appsLines.length ? appsLines : ["  (none)"]),
-          "",
-          "Windows & Tabs:",
-          ...(windowLines.length ? windowLines.slice(0, 20) : ["  (none)"]),
-          "",
-          `Audio: ${data.audio_summary?.segment_count || 0} segments`,
-          ...(speakerLines.length ? speakerLines : []),
-          ...(transcriptLines.length ? ["", "Audio transcriptions:", ...transcriptLines.slice(0, 15)] : []),
-          "",
-          "Key content (sampled across time range):",
-          ...(textLines.length ? textLines.slice(0, 20) : ["  (none)"]),
-        ].join("\n");
+        // Build next-steps suggestions based on what was found
+        const nextSteps: string[] = [];
+        if (appsLines.length > 0) {
+          const topApp = (data.apps as Array<{ name: string }>)[0]?.name;
+          if (topApp) nextSteps.push(`Use \`search-content\` with \`app_name='${topApp}'\` to search its content.`);
+        }
+        if ((data.audio_summary?.segment_count || 0) > 0) {
+          nextSteps.push(`Use \`search-content\` with \`content_type=audio\` and the same time range for full transcripts.`);
+        }
+        if (data.windows?.some((w: { browser_url: string }) => w.browser_url)) {
+          nextSteps.push(`Use \`search-content\` with \`app_name='<browser>'\` and \`window_name='<title>'\` to narrow to a specific page.`);
+        }
 
-        return { content: [{ type: "text", text: summary }] };
+        const audioSection = [
+          `${data.audio_summary?.segment_count || 0} segments`,
+          ...speakerLines,
+          ...(transcriptLines.length ? ["", "Sample transcriptions:", ...transcriptLines.slice(0, 15)] : []),
+        ];
+
+        const sections = [
+          formatSection(
+            `Activity Summary (${data.time_range?.start} → ${data.time_range?.end})`,
+            [`Total frames: ${data.total_frames}`]
+          ),
+          formatSection("Apps", appsLines.length ? appsLines : ["(none)"]),
+          formatSection("Windows & Tabs", windowLines.length ? windowLines.slice(0, 20) : ["(none)"]),
+          formatSection("Audio", audioSection),
+          formatSection("Key content (sampled)", textLines.length ? textLines.slice(0, 20) : ["(none)"]),
+          formatOptionalSection("Next steps", nextSteps, nextSteps.length > 0),
+        ].filter(Boolean);
+
+        return { content: [{ type: "text", text: sections.join("\n\n") }] };
       }
 
       case "search-elements": {
@@ -853,7 +974,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: "No elements found. Try: broader search, different role/source, or wider time range.",
+                text: "### Result\nNo elements found.\n\n### Next steps\n- Broaden search: try a different role, source, or wider time range\n- Use `frame-context` with a specific frame_id for full page structure",
               },
             ],
           };
@@ -872,18 +993,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const boundsStr = e.bounds
               ? ` [${e.bounds.left.toFixed(2)},${e.bounds.top.toFixed(2)} ${e.bounds.width.toFixed(2)}x${e.bounds.height.toFixed(2)}]`
               : "";
-            return `[${e.source}] ${e.role} (frame:${e.frame_id}, depth:${e.depth})${boundsStr}\n  ${e.text || "(no text)"}`;
+            const deepLink = `screenpipe://frame/${e.frame_id}`;
+            return `[${e.source}] ${e.role} (frame:${e.frame_id}, depth:${e.depth})${boundsStr}\n  ${e.text || "(no text)"}\n  ${deepLink}`;
           }
         );
 
-        const header =
-          `Elements: ${elements.length}/${pagination.total || "?"}` +
-          (pagination.total > elements.length
-            ? ` (use offset=${(pagination.offset || 0) + elements.length} for more)`
-            : "");
+        const paginationHint = formatPagination(
+          elements.length,
+          pagination.total ?? null,
+          pagination.offset ?? 0,
+          "search-elements"
+        );
+        const elementLines = [`${elements.length} of ${pagination.total ?? "?"} total`, "", ...formatted];
+        if (paginationHint) elementLines.push("", paginationHint);
+
+        const sections = [
+          formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+          formatSection("Elements", elementLines),
+          formatSection("Next steps", [
+            `Use \`frame-context\` with \`frame_id=<id>\` to see the full accessibility tree for any frame.`,
+          ]),
+        ].filter(Boolean);
 
         return {
-          content: [{ type: "text", text: header + "\n\n" + formatted.join("\n---\n") }],
+          content: [{ type: "text", text: sections.join("\n\n") }],
         };
       }
 
@@ -897,30 +1030,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
 
         const data = await response.json();
-        const lines = [`Frame ${data.frame_id} (source: ${data.text_source})`];
+        const metaLines = [
+          `frame_id: ${data.frame_id}`,
+          `source: ${data.text_source}`,
+          `deep_link: screenpipe://frame/${data.frame_id}`,
+        ];
 
-        if (data.urls?.length) {
-          lines.push("", "URLs:", ...data.urls.map((u: string) => `  ${u}`));
-        }
-
+        const nodeLines: string[] = [];
         if (data.nodes?.length) {
-          lines.push("", `Nodes: ${data.nodes.length}`);
           for (const node of data.nodes.slice(0, 50)) {
             const indent = "  ".repeat(Math.min(node.depth, 5));
-            lines.push(`${indent}[${node.role}] ${node.text}`);
+            nodeLines.push(`${indent}[${node.role}] ${node.text}`);
           }
           if (data.nodes.length > 50) {
-            lines.push(`  ... and ${data.nodes.length - 50} more nodes`);
+            nodeLines.push(`  ... and ${data.nodes.length - 50} more nodes`);
           }
         }
 
+        const urlLines: string[] = data.urls?.length ? data.urls.map((u: string) => `  ${u}`) : [];
+
+        const textLines: string[] = [];
         if (data.text) {
           const truncated =
             data.text.length > 2000 ? data.text.substring(0, 2000) + "..." : data.text;
-          lines.push("", "Full text:", truncated);
+          textLines.push(truncated);
         }
 
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        const sections = [
+          formatSection("Frame context", metaLines),
+          formatOptionalSection("URLs", urlLines, urlLines.length > 0),
+          formatOptionalSection(`Accessibility nodes (${data.nodes?.length ?? 0})`, nodeLines, nodeLines.length > 0),
+          formatOptionalSection("Full text", textLines, textLines.length > 0),
+          formatSection("Next steps", [
+            `Use \`search-elements\` with \`frame_id=${data.frame_id}\` to query specific UI elements in this frame.`,
+            `Use \`search-content\` with \`start_time\` and \`end_time\` around this frame's timestamp to find nearby activity.`,
+          ]),
+        ].filter(Boolean);
+
+        return { content: [{ type: "text", text: sections.join("\n\n") }] };
       }
 
       case "export-video": {
@@ -1133,10 +1280,73 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "health-check": {
         const response = await fetchAPI("/health");
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const data = await response.json();
-        return {
-          content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+        const data = await response.json() as {
+          status: string;
+          status_code?: number;
+          frame_status?: string;
+          audio_status?: string;
+          last_frame_timestamp?: string;
+          last_audio_timestamp?: string;
+          message?: string;
+          verbose_instructions?: string;
+          device_status_details?: string;
+          vision_db_write_stalled?: boolean;
+          audio_db_write_stalled?: boolean;
+          drm_content_paused?: boolean;
+          schedule_paused?: boolean;
+          hostname?: string;
+          version?: string;
+          monitors?: string[];
+          pipeline?: Record<string, unknown>;
+          audio_pipeline?: Record<string, unknown>;
+          pool_stats?: Record<string, unknown>;
         };
+
+        const now = Date.now();
+        const ageStr = (ts?: string) => {
+          if (!ts) return "never";
+          const diff = Math.round((now - new Date(ts).getTime()) / 1000);
+          return diff < 60 ? `${diff}s ago` : `${Math.round(diff / 60)}m ago`;
+        };
+
+        const statusIcon = (s?: string) => (s === "ok" || s === "healthy") ? "✓" : (s ? `✗ (${s})` : "–");
+
+        const statusLines = [
+          `Recording: ${statusIcon(data.status)} ${data.status ?? "unknown"}`,
+          `Screen:    ${statusIcon(data.frame_status)}`,
+          `Audio:     ${statusIcon(data.audio_status)}`,
+          ...(data.version ? [`Version:   ${data.version}`] : []),
+          ...(data.hostname ? [`Host:      ${data.hostname}`] : []),
+        ];
+
+        const captureLines = [
+          `Last frame: ${ageStr(data.last_frame_timestamp)}`,
+          `Last audio: ${ageStr(data.last_audio_timestamp)}`,
+          ...(data.monitors?.length ? [`Monitors: ${data.monitors.join(", ")}`] : []),
+        ];
+
+        const warnings: string[] = [];
+        if (data.vision_db_write_stalled) warnings.push("⚠ Vision DB write stalled — disk full or pool exhausted?");
+        if (data.audio_db_write_stalled) warnings.push("⚠ Audio DB write stalled — disk full or pool exhausted?");
+        if (data.drm_content_paused) warnings.push("⚠ DRM content detected — capture paused for this content.");
+        if (data.schedule_paused) warnings.push("⚠ Recording paused by work-hours schedule.");
+
+        const diagnosticLines: string[] = [];
+        if (data.message) diagnosticLines.push(`Message: ${data.message}`);
+        if (data.verbose_instructions) diagnosticLines.push(`Instructions: ${data.verbose_instructions}`);
+        if (data.device_status_details) diagnosticLines.push(`Devices: ${data.device_status_details}`);
+        if (data.pool_stats) diagnosticLines.push(`Pool stats: ${JSON.stringify(data.pool_stats)}`);
+        if (data.pipeline) diagnosticLines.push(`Vision pipeline: ${JSON.stringify(data.pipeline)}`);
+        if (data.audio_pipeline) diagnosticLines.push(`Audio pipeline: ${JSON.stringify(data.audio_pipeline)}`);
+
+        const sections = [
+          formatSection("Status", statusLines),
+          formatSection("Capture stats", captureLines),
+          formatOptionalSection("Warnings", warnings, warnings.length > 0),
+          formatOptionalSection("Diagnostics", diagnosticLines, diagnosticLines.length > 0),
+        ].filter(Boolean);
+
+        return { content: [{ type: "text", text: sections.join("\n\n") }] };
       }
 
       case "list-audio-devices": {
@@ -1290,10 +1500,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const response = await fetchAPI(`/meetings/${meetingId}`);
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-        const meeting = await response.json();
-        return {
-          content: [{ type: "text", text: JSON.stringify(meeting, null, 2) }],
+        const m = await response.json() as {
+          id?: number;
+          meeting_start?: string;
+          meeting_end?: string;
+          meeting_app?: string;
+          title?: string;
+          attendees?: string;
+          note?: string;
+          detection_source?: string;
+          created_at?: string;
         };
+
+        const durationMin = (m.meeting_start && m.meeting_end)
+          ? Math.round((new Date(m.meeting_end).getTime() - new Date(m.meeting_start).getTime()) / 60000)
+          : null;
+
+        const metaLines = [
+          `App: ${m.meeting_app || "unknown"} | Detection: ${m.detection_source || "auto"}`,
+          `Start: ${m.meeting_start || "?"} → End: ${m.meeting_end || "ongoing"}` +
+            (durationMin != null ? ` (${durationMin} min)` : ""),
+          ...(m.attendees ? [`Attendees: ${m.attendees}`] : []),
+          ...(m.note ? [`Note: ${m.note}`] : []),
+        ];
+
+        const nextSteps = [
+          `Use \`search-content\` with \`content_type=audio\`, \`start_time=${m.meeting_start}\`, \`end_time=${m.meeting_end || "now"}\` to get the audio transcript.`,
+        ];
+
+        const sections = [
+          formatSection(`Meeting #${m.id ?? meetingId}`, metaLines),
+          formatSection("Next steps", nextSteps),
+        ].filter(Boolean);
+
+        return { content: [{ type: "text", text: sections.join("\n\n") }] };
       }
 
       case "keyword-search": {
@@ -1308,14 +1548,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const data = await response.json();
         const results = data.data || [];
         if (results.length === 0) {
-          return { content: [{ type: "text", text: "No keyword search results found." }] };
+          return {
+            content: [
+              {
+                type: "text",
+                text: `### Query\n- query: ${args.query || "(none)"}\n\n### Result\nNo keyword search results found.\n\n### Next steps\n- Try \`search-content\` for semantic search across OCR and audio content`,
+              },
+            ],
+          };
         }
         const formatted = results.map((r: Record<string, unknown>) => {
           const content = r.content as Record<string, unknown> | undefined;
-          return `[${r.type}] ${content?.app_name || "?"} | ${content?.timestamp || ""}\n${content?.text || content?.transcription || ""}`;
+          const frameId = (content?.frame_id as number) ?? null;
+          const deepLink = frameId ? `\n  screenpipe://frame/${frameId}` : "";
+          return `[${r.type}] ${content?.app_name || "?"} | ${content?.timestamp || ""}\n${content?.text || content?.transcription || ""}${deepLink}`;
         });
+
+        const sections = [
+          formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+          formatSection("Results", [`${results.length} match${results.length === 1 ? "" : "es"}`, "", ...formatted]),
+          formatSection("Next steps", [
+            `Use \`search-content\` with semantic search for conceptually related content.`,
+            `Use \`frame-context\` with a frame_id from the results above for full page details.`,
+          ]),
+        ].filter(Boolean);
         return {
-          content: [{ type: "text", text: `Results: ${results.length}\n\n${formatted.join("\n---\n")}` }],
+          content: [{ type: "text", text: sections.join("\n\n") }],
         };
       }
 
@@ -1363,9 +1621,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return {
-      content: [{ type: "text", text: `Error executing ${name}: ${errorMessage}` }],
+      content: [{ type: "text", text: formatToolError(name, error) }],
     };
   }
 });
