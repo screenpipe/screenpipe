@@ -148,9 +148,11 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
         // Meeting controls are available as AXMenuBarItem ("Meeting" menu)
         // and AXMenuItem items with identifiers like "onMuteAudio:".
         //
-        // NOTE: min_signals_required=2 because individual signals can appear
-        // when Zoom is open but idle (e.g. "Meeting" menu bar item may exist
-        // without an active call). Requiring 2 signals reduces false positives.
+        // NOTE: "Meeting" menu bar item alone removed as a signal because it
+        // exists even when Zoom is idle (not in an active call). False positive:
+        // https://github.com/screenpipe/screenpipe/issues/2561
+        // Now only real call control signals (leave, end meeting, Zoom Meeting
+        // window title, etc.) trigger detection.
         // NOTE: "end" alone removed as signal — too broad, matches "Send",
         // "Append", "Calendar End", etc. Use "end meeting" instead.
         // NOTE: onMuteAudio:/onMuteVideo: removed — mute controls can appear
@@ -169,10 +171,6 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 browser_title_patterns: &[],
             },
             call_signals: vec![
-                // macOS menu bar signals (Zoom only exposes AXMenuBar, no AXWindow)
-                CallSignal::MenuBarItem {
-                    title_contains: "Meeting",
-                },
                 // Windows: Zoom meeting window has title "Zoom Meeting" but
                 // exposes NO named buttons — all toolbar controls are unnamed.
                 // The window title is the definitive signal.
@@ -185,9 +183,7 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 CallSignal::NameContains("In a Zoom Meeting"),
                 // Windows: "Zoom Video Container" pane exists only inside meeting window.
                 CallSignal::NameContains("Zoom Video Container"),
-                // Generic fallbacks for other Windows Zoom versions
-                CallSignal::AutomationIdContains("leave"),
-                CallSignal::KeyboardShortcut("Alt+Q"),
+                // macOS: actual call control buttons (not the idle "Meeting" menu)
                 CallSignal::RoleWithName {
                     role: "AXButton",
                     name_contains: "leave",
@@ -196,8 +192,11 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     role: "AXButton",
                     name_contains: "end meeting",
                 },
+                // Generic fallbacks for other Windows Zoom versions
+                CallSignal::AutomationIdContains("leave"),
+                CallSignal::KeyboardShortcut("Alt+Q"),
             ],
-            min_signals_required: 2,
+            min_signals_required: 1,
         },
         // Google Meet (browser)
         // NOTE: "google meet" removed from url_patterns — it's too broad and matches
@@ -3348,36 +3347,9 @@ mod tests {
 
     // ── Zoom menu bar signal tests ────────────────────────────────────
 
-    #[test]
-    fn test_zoom_menu_bar_item_meeting() {
-        // Zoom on macOS exposes "Meeting" as an AXMenuBarItem during active calls
-        let signal = CallSignal::MenuBarItem {
-            title_contains: "Meeting",
-        };
-        assert!(check_signal_match(
-            &signal,
-            "AXMenuBarItem",
-            Some("Meeting"),
-            None,
-            None
-        ));
-        // Should not match other menu bar items
-        assert!(!check_signal_match(
-            &signal,
-            "AXMenuBarItem",
-            Some("View"),
-            None,
-            None
-        ));
-        // Should not match non-menu-bar roles
-        assert!(!check_signal_match(
-            &signal,
-            "AXButton",
-            Some("Meeting"),
-            None,
-            None
-        ));
-    }
+    // NOTE: test_zoom_menu_bar_item_meeting removed because "Meeting" menu bar
+    // item exists even when Zoom is idle, causing false positives (#2561).
+    // Now we only use real call control signals.
 
     #[test]
     fn test_zoom_menu_item_id_mute_audio() {
@@ -3428,22 +3400,28 @@ mod tests {
     }
 
     #[test]
-    fn test_zoom_profile_has_menu_bar_signals() {
+    fn test_zoom_profile_has_leave_signals() {
+        // After #2561 fix, Zoom profile uses real call control signals
+        // (leave button, end meeting button) instead of idle "Meeting" menu bar item.
         let profiles = load_detection_profiles();
         let zoom = profiles
             .iter()
             .find(|p| p.app_identifiers.macos_app_names.contains(&"zoom.us"))
             .expect("Zoom profile not found");
 
-        let has_menu_bar = zoom.call_signals.iter().any(|s| {
+        let has_leave_signals = zoom.call_signals.iter().any(|s| {
             matches!(
                 s,
-                CallSignal::MenuBarItem { .. } | CallSignal::MenuItemId(_)
+                CallSignal::RoleWithName { name_contains, .. }
+                    if name_contains.contains("leave") || name_contains.contains("end meeting")
+            ) || matches!(
+                s,
+                CallSignal::AutomationIdContains(id) if id.contains("leave")
             )
         });
         assert!(
-            has_menu_bar,
-            "Zoom profile must have menu bar signals for macOS detection"
+            has_leave_signals,
+            "Zoom profile must have 'leave' or 'end meeting' signals for call detection"
         );
     }
 
@@ -3602,21 +3580,27 @@ mod tests {
     // ── Zoom false positive prevention tests ────────────────────────
 
     #[test]
-    fn test_zoom_requires_two_signals() {
-        // Zoom must require at least 2 signals to avoid false positives
-        // when Zoom is open but idle (e.g. "Meeting" menu bar item exists
-        // without an active call).
+    fn test_zoom_no_idle_menu_bar_item() {
+        // After fix for #2561, Zoom profile should NOT use the idle
+        // "Meeting" menu bar item as a signal. Only real call control signals
+        // (leave, end meeting, window title) should trigger detection.
         let profiles = load_detection_profiles();
         let zoom = profiles
             .iter()
             .find(|p| p.app_identifiers.macos_app_names.contains(&"zoom.us"))
             .expect("Zoom profile not found");
 
+        let has_menu_bar_meeting = zoom.call_signals.iter().any(|s| {
+            matches!(
+                s,
+                CallSignal::MenuBarItem { title_contains } if title_contains.contains("Meeting")
+            )
+        });
+
         assert!(
-            zoom.min_signals_required >= 2,
-            "Zoom must require >= 2 signals (got {}). A single signal like \
-             'Meeting' menu bar item can appear when Zoom is idle.",
-            zoom.min_signals_required
+            !has_menu_bar_meeting,
+            "Zoom profile must NOT use 'Meeting' menu bar item signal (#2561). \
+             It exists even when Zoom is idle."
         );
     }
 
