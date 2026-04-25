@@ -626,8 +626,8 @@ function formatPagination(
   offset: number,
   toolHint: string
 ): string {
-  if (total != null && count < total) {
-    return `> ${count} of ${total} results — use \`${toolHint}\` with \`offset=${offset + count}\` for more`;
+  if (total != null && offset + count < total) {
+    return `> Showing ${offset + 1}–${offset + count} of ${total} — use \`${toolHint}\` with \`offset=${offset + count}\` for more`;
   }
   if (total == null && count > 0) {
     return `> ${count} results shown — if you requested a limit, increase \`offset\` by ${count} for older results`;
@@ -669,8 +669,8 @@ function formatToolError(toolName: string, error: unknown): string {
     ].join("\n");
   }
 
-  // HTTP status errors
-  const httpMatch = msg.match(/HTTP error: (\d+)/);
+  // HTTP status errors — match both "HTTP error: 404" and "HTTP 404" patterns
+  const httpMatch = msg.match(/HTTP(?:\s+error)?:?\s+(\d+)/i);
   if (httpMatch) {
     const status = httpMatch[1];
     const detail =
@@ -714,18 +714,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = data.data || [];
         const pagination = data.pagination || {};
 
-        // Echo the effective query params
-        const querySection = formatQuery({
-          q: args.q as string | undefined,
-          content_type: args.content_type as string | undefined,
-          start_time: args.start_time as string | undefined,
-          end_time: args.end_time as string | undefined,
-          app_name: args.app_name as string | undefined,
-          window_name: args.window_name as string | undefined,
-          speaker_name: args.speaker_name as string | undefined,
-          limit: args.limit as number | undefined,
-          offset: args.offset as number | undefined,
-        });
+        // Echo all provided args — pass through every non-null param so agents
+        // can verify exactly what the server received
+        const querySection = formatQuery(
+          args as Record<string, string | number | boolean | null | undefined>
+        );
 
         if (results.length === 0) {
           const emptyText = [
@@ -970,13 +963,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pagination = data.pagination || {};
 
         if (elements.length === 0) {
+          const queryEcho = formatQuery(args as Record<string, string | number | boolean | null | undefined>);
+          const sections = [
+            queryEcho,
+            "### Result\nNo elements found.",
+            "### Next steps\n- Broaden search: try a different role, source, or wider time range\n- Use `frame-context` with a specific frame_id for full page structure",
+          ].filter(Boolean);
           return {
-            content: [
-              {
-                type: "text",
-                text: "### Result\nNo elements found.\n\n### Next steps\n- Broaden search: try a different role, source, or wider time range\n- Use `frame-context` with a specific frame_id for full page structure",
-              },
-            ],
+            content: [{ type: "text", text: sections.join("\n\n") }],
           };
         }
 
@@ -1305,7 +1299,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const now = Date.now();
         const ageStr = (ts?: string) => {
           if (!ts) return "never";
-          const diff = Math.round((now - new Date(ts).getTime()) / 1000);
+          const date = new Date(ts);
+          if (Number.isNaN(date.getTime())) return "invalid date";
+          const diff = Math.round((now - date.getTime()) / 1000);
+          if (diff < 0) return "in the future";
           return diff < 60 ? `${diff}s ago` : `${Math.round(diff / 60)}m ago`;
         };
 
@@ -1548,13 +1545,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const data = await response.json();
         const results = data.data || [];
         if (results.length === 0) {
+          const sections = [
+            formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+            formatSection("Result", ["No keyword search results found."]),
+            formatSection("Next steps", [
+              "Try `search-content` for semantic search across OCR and audio content.",
+            ]),
+          ].filter(Boolean);
           return {
-            content: [
-              {
-                type: "text",
-                text: `### Query\n- query: ${args.query || "(none)"}\n\n### Result\nNo keyword search results found.\n\n### Next steps\n- Try \`search-content\` for semantic search across OCR and audio content`,
-              },
-            ],
+            content: [{ type: "text", text: sections.join("\n\n") }],
           };
         }
         const formatted = results.map((r: Record<string, unknown>) => {
