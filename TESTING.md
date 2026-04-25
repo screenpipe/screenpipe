@@ -103,6 +103,9 @@ commits: `28e5c247`
 
 ### 4. audio device handling
 
+- [ ] **CoreAudio Process Tap** — On macOS 14.4+, verify that system audio defaults to CoreAudio Process Tap and rebuilds if silence is detected. (`75a52603b`, `5634664da`)
+
+
 - [ ] **default audio device** — with "follow system default", recording uses whatever macOS says is default.
 - [ ] **plug in USB headset** — if set to follow defaults and macOS switches to headset, recording follows.
 - [ ] **unplug USB headset** — recording falls back to built-in mic/speakers. no crash. no 30s timeout errors.
@@ -434,6 +437,9 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`
 
 ### 13. sync & cloud
 
+- [ ] **CLI remote sync** — Run `screenpipe sync remote`. Verify it correctly syncs data to a remote SSH/SFTP server. (`f46e85cb1`)
+
+
 commits: `2f6b2af5`, `ea7f1f61`, `5cb100ea`
 
 - [ ] **auto-remember sync password** — user doesn't have to re-enter password each time (`5cb100ea`).
@@ -742,6 +748,9 @@ commits: `274a968af`, `dc575e48e`, `81aabbf18`, `d5e071854`, `db08f8c06`, `f4225
 
 ### 21. Privacy & Incognito Detection
 
+- [ ] **PII Filter** — Toggle the PII filter in chat or search. Verify that sensitive information is filtered using Tinfoil. (`fec0f1023`)
+
+
 commits: `ad431b513`, `d9722bccc`, `4df21e83d`
 
 - [ ] **Incognito window detection** — Verify that private browsing/incognito windows are correctly detected for major browsers (Chrome, Safari, Firefox, etc.). (`ad431b513`)
@@ -862,6 +871,11 @@ commits: `f6c21a022`, `31e67ae1c`, `8d0a5348d`, `b1c30e99b`
 
 ### 27. Connections (Multi-instance & New Services)
 
+- [ ] **Microsoft 365 / Teams** — Verify that Microsoft Graph OAuth works for Microsoft 365 and Teams (excluding personal accounts). (`635c32347`, `f35e999b0`)
+- [ ] **New Integrations** — Verify Loops, Resend, and Supabase integrations. (`ea454f324`)
+- [ ] **Google Docs Read/Write** — Verify Google Docs integration supports both read and write scopes. (`8f3ca5283`)
+
+
 commits: `c8769545b`, `4f522325b`, `54000c295`
 
 - [ ] **Multi-instance connections** — Add two different accounts for the same service (e.g., two Slack workspaces). Verify both work independently. (`c8769545b`)
@@ -881,4 +895,20 @@ commits: `c6a73b17e`, `945b687ec`
 
 ### 29. Browser Extension
 
+- [ ] **Extension popup** — Open the browser extension popup. Verify connection status is displayed correctly. (`be7c9e8b5`)
+
+
 - [ ] **Browser extension token auth** — Open the browser extension options page. Verify that token-based authentication works and that it can successfully connect to the Screenpipe API. (`be14de544`)
+
+### 30. CLI
+
+- [ ] **CLI logout** — Run `screenpipe logout`. Verify it clears local auth tokens. (`793c3d6e9`)
+- [ ] **CLI sync remote** — Verify `screenpipe sync remote` command and its configuration. (`f46e85cb1`)
+
+### 31. Chat (Pi)
+
+- [ ] **Parallel chats** — Verify that multiple chat sessions can run in parallel and their background streams remain visible when switching. (`c9d64ce23`)
+- [ ] **Chat sidebar navigation** — Verify that the chat sidebar (pinned, recents, live status) works correctly and replaces the Home view for "New chat". (`ec5e80992`, `28c4b1ac5`)
+- [ ] **Persistent background chats** — Verify that chats continue to stream in the background even when navigating away from the chat view. (`0060ae9e5`, `ec5e80992`)
+- [ ] **Inline history in overlay** — Verify that inline history is restored in the overlay window. (`15b419ec7`)
+- [ ] **Notification URL actions** — Open a URL action from a native macOS notification when the overlay is not mounted. (`7fdcd2054`)
