@@ -648,7 +648,7 @@ function formatQuery(params: Record<string, string | number | boolean | null | u
  * Prefers frame link when frame_id is available, falls back to timeline by timestamp.
  */
 function formatDeepLink(frameId: number | undefined, timestamp: string | undefined): string {
-  if (frameId) return `  → [frame ${frameId}](screenpipe://frame/${frameId})`;
+  if (frameId != null) return `  → [frame ${frameId}](screenpipe://frame/${frameId})`;
   if (timestamp) return `  → [timeline](screenpipe://timeline?timestamp=${encodeURIComponent(timestamp)})`;
   return "";
 }
@@ -851,7 +851,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ];
 
         const sections = [
-          formatSection("Meetings", [`${meetings.length} found`, "", ...formatted.join("\n---\n").split("\n")]),
+          formatSection("Meetings", [`${meetings.length} found`, "", ...formatted]),
           formatSection("Next steps", nextSteps),
         ].filter(Boolean);
 
@@ -1022,8 +1022,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "frame-context": {
         const frameId = args.frame_id as number;
-        if (!frameId) {
-          return { content: [{ type: "text", text: "Error: frame_id is required" }] };
+        if (frameId == null) {
+          return { content: [{ type: "text", text: "### Error\nframe_id is required" }] };
         }
 
         const response = await fetchAPI(`/frames/${frameId}/context`);
@@ -1077,7 +1077,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!startTime || !endTime) {
           return {
-            content: [{ type: "text", text: "Error: start_time and end_time are required" }],
+            content: [{ type: "text", text: "### Error\nstart_time and end_time are required" }],
           };
         }
 
@@ -1579,8 +1579,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get-frame-elements": {
         const frameId = args.frame_id as number;
-        if (!frameId) {
-          return { content: [{ type: "text", text: "Error: frame_id is required" }] };
+        if (frameId == null) {
+          return { content: [{ type: "text", text: "### Error\nframe_id is required" }] };
         }
         const response = await fetchAPI(`/frames/${frameId}/elements`);
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
@@ -1602,13 +1602,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "control-recording": {
         const action = args.action as string;
         if (!action) {
-          return { content: [{ type: "text", text: "Error: action is required" }] };
+          return { content: [{ type: "text", text: "### Error\naction is required" }] };
         }
         let endpoint: string;
         if (action === "start-audio") endpoint = "/audio/start";
         else if (action === "stop-audio") endpoint = "/audio/stop";
         else {
-          return { content: [{ type: "text", text: `Error: unknown action '${action}'` }] };
+          return { content: [{ type: "text", text: `### Error\nUnknown action '${action}'. Valid actions: start-audio, stop-audio` }] };
         }
         const response = await fetchAPI(endpoint, { method: "POST" });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
