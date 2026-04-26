@@ -1658,9 +1658,15 @@ pub fn advance_state(
                     },
                     None,
                 )
-            } else if is_browser && has_output_audio {
+            } else if has_output_audio {
                 // Audio output is still active — the user likely just switched
-                // tabs/apps while the meeting continues. Keep alive.
+                // tabs/apps, minimized the window, or switched to another meeting app.
+                // Keep the meeting alive regardless of whether UI controls are visible.
+                // This prevents false positives when:
+                // - Browser tab is switched (controls not in focused window)
+                // - App is minimized (AX tree not exposed)
+                // - Sharing screen in Zoom (controls move to floating toolbar)
+                // - Multiple desktops/Spaces (AX scanner can't reach inactive space)
                 info!(
                     "meeting v2: Ending -> Active (output audio still active, app={}, id={})",
                     app, meeting_id
@@ -2353,14 +2359,11 @@ pub async fn run_meeting_detection_loop(
 
         // 2b. Check output audio when in Ending state for browser meetings.
         // If the audio output device still has data, the meeting is likely
-        // still going — the user just switched tabs/apps.
-        let has_output_audio = if matches!(
-            state,
-            MeetingState::Ending {
-                is_browser: true,
-                ..
-            }
-        ) {
+        // still going — the user just switched tabs/apps or minimized the window.
+        // This applies to both browser meetings (e.g., Google Meet via Arc) and
+        // native meeting apps (e.g., Zoom). Audio activity is a strong signal
+        // that the user is still in the meeting even if UI controls are hidden.
+        let has_output_audio = if matches!(state, MeetingState::Ending { .. }) {
             db.has_recent_output_audio(30).await.unwrap_or(false)
         } else {
             false
@@ -3129,8 +3132,30 @@ mod tests {
     }
 
     #[test]
-    fn test_native_ending_ignores_output_audio() {
-        // Native app: output audio should NOT prevent ending (controls are reliable)
+    fn test_native_ending_respects_output_audio() {
+        // Native app (e.g., Zoom): output audio SHOULD keep meeting alive
+        // This handles cases where:
+        // - User minimizes Zoom but is still in the meeting
+        // - Zoom controls move to floating toolbar (not detected by scanner)
+        // - User is sharing screen (controls move to secondary toolbar)
+        let state = MeetingState::Ending {
+            meeting_id: 42,
+            app: "Zoom".to_string(),
+            started_at: Utc::now(),
+            since: Instant::now().checked_sub(Duration::from_secs(5)).unwrap(),
+            is_browser: false,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+
+        // Even though timeout hasn't elapsed, audio presence keeps it Active
+        assert!(matches!(new_state, MeetingState::Active { .. }));
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_native_ending_no_audio_times_out() {
+        // Native app with no audio output: should still end after timeout
         let state = MeetingState::Ending {
             meeting_id: 42,
             app: "Zoom".to_string(),
@@ -3141,8 +3166,9 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results, true);
+        let (new_state, action) = advance_state(state, &results, false);
 
+        // No audio + timeout elapsed → should end
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(matches!(
             action,
