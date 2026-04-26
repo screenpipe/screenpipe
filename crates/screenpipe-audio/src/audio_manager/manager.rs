@@ -1295,23 +1295,27 @@ impl AudioManager {
 /// This allows returning voices to be recognized immediately instead of
 /// starting anonymous for the first 30+ seconds.
 async fn seed_speakers_from_db(db: &Arc<DatabaseManager>, seg_mgr: &Arc<SegmentationManager>) {
-    match db.get_named_speakers_with_centroids().await {
+    // Seed all speakers (named and unnamed) to prevent re-creation of existing voices.
+    // Limit to 500 most recent speakers to avoid memory bloat on long-running systems.
+    const MAX_SPEAKERS_TO_SEED: usize = 500;
+    
+    match db.get_all_speakers_with_centroids(MAX_SPEAKERS_TO_SEED).await {
         Ok(speakers) if !speakers.is_empty() => {
             for (_db_id, name, centroid) in &speakers {
                 let emb = ndarray::Array1::from_vec(centroid.clone());
                 seg_mgr.seed_speaker(emb);
-                debug!("seeded known speaker '{}' into embedding manager", name);
+                debug!("seeded speaker '{}' into embedding manager", name);
             }
             info!(
-                "seeded {} known speakers from DB into embedding manager",
+                "seeded {} speakers (named + unnamed) from DB into embedding manager",
                 speakers.len()
             );
         }
         Ok(_) => {
-            debug!("no named speakers with centroids found in DB to seed");
+            debug!("no speakers with centroids found in DB to seed");
         }
         Err(e) => {
-            warn!("failed to query named speakers for seeding: {}", e);
+            warn!("failed to query speakers for seeding: {}", e);
         }
     }
 }

@@ -1431,6 +1431,29 @@ impl DatabaseManager {
         .fetch_optional(&self.pool)
         .await?;
 
+        if speaker.is_none() {
+            // Log the closest distance for debugging speaker fragmentation issues
+            let closest: Option<(f32,)> = sqlx::query_as(
+                "SELECT vec_distance_cosine(centroid, vec_f32(?1))
+                 FROM speakers
+                 WHERE centroid IS NOT NULL
+                 ORDER BY vec_distance_cosine(centroid, vec_f32(?1))
+                 LIMIT 1",
+            )
+            .bind(bytes)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((distance,)) = closest {
+                debug!(
+                    "speaker embedding match failed: threshold={}, closest_distance={}",
+                    speaker_threshold, distance
+                );
+            }
+        }
+
         Ok(speaker)
     }
 
@@ -1582,6 +1605,40 @@ impl DatabaseManager {
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
                     Some((id, name, floats))
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
+    /// Get ALL speakers with non-null centroids (including unnamed ones) for seeding.
+    /// Limit to the N most recent speakers to avoid memory bloat on long-running systems.
+    /// Returns (speaker_id, name, centroid as Vec<f32>).
+    pub async fn get_all_speakers_with_centroids(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(i64, String, Vec<f32>)>, SqlxError> {
+        let rows: Vec<(i64, Option<String>, Vec<u8>)> = sqlx::query_as(
+            "SELECT id, name, centroid FROM speakers \
+             WHERE centroid IS NOT NULL \
+             AND (hallucination IS NULL OR hallucination = 0) \
+             ORDER BY id DESC LIMIT ?1",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, name, blob)| {
+                if blob.len() == 512 * 4 {
+                    let floats: Vec<f32> = blob
+                        .chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    let name_str = name.unwrap_or_else(|| format!("speaker_{}", id));
+                    Some((id, name_str, floats))
                 } else {
                     None
                 }
