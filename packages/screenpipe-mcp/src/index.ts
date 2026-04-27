@@ -605,85 +605,19 @@ async function fetchAPI(
   });
 }
 
-/** Render a named markdown section. Returns empty string when lines is empty. */
-function formatSection(title: string, lines: string[]): string {
-  if (!lines.length) return "";
-  return `### ${title}\n${lines.join("\n")}`;
-}
+import {
+  formatSection,
+  formatOptionalSection,
+  formatPagination,
+  formatQuery,
+  formatDeepLink,
+  flattenObject,
+  formatToolError as _formatToolError,
+} from "./helpers";
 
-/** Like formatSection but only renders when condition is truthy. */
-function formatOptionalSection(title: string, lines: string[], condition: boolean): string {
-  return condition ? formatSection(title, lines) : "";
-}
-
-/**
- * Render a pagination hint. Shows a strong hint when total is known, soft hint
- * when only a page limit was used.
- */
-function formatPagination(
-  count: number,
-  total: number | null | undefined,
-  offset: number,
-  toolHint: string
-): string {
-  if (total != null && offset + count < total) {
-    return `> Showing ${offset + 1}–${offset + count} of ${total} — use \`${toolHint}\` with \`offset=${offset + count}\` for more`;
-  }
-  if (total == null && count > 0) {
-    return `> ${count} results shown — if you requested a limit, increase \`offset\` by ${count} for older results`;
-  }
-  return "";
-}
-
-/** Render a ### Query section echoing the effective search parameters. */
-function formatQuery(params: Record<string, string | number | boolean | null | undefined>): string {
-  const lines = Object.entries(params)
-    .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `- ${k}: ${v}`);
-  return formatOptionalSection("Query", lines, lines.length > 0);
-}
-
-/**
- * Format a deep link for a search result.
- * Prefers frame link when frame_id is available, falls back to timeline by timestamp.
- */
-function formatDeepLink(frameId: number | undefined, timestamp: string | undefined): string {
-  if (frameId != null) return `  → [frame ${frameId}](screenpipe://frame/${frameId})`;
-  if (timestamp) return `  → [timeline](screenpipe://timeline?timestamp=${encodeURIComponent(timestamp)})`;
-  return "";
-}
-
-/**
- * Categorize and format a tool error into a human-readable message.
- * Distinguishes: validation, network/connect, HTTP status, and generic errors.
- */
+/** Wrap formatToolError with the current SCREENPIPE_API base URL. */
 function formatToolError(toolName: string, error: unknown): string {
-  const msg = error instanceof Error ? error.message : String(error);
-
-  // Network/connect errors
-  if (msg.includes("ECONNREFUSED") || msg.includes("fetch failed") || msg.includes("Failed to fetch")) {
-    return [
-      `### Error`,
-      `Could not reach screenpipe at ${SCREENPIPE_API}.`,
-      `Make sure screenpipe is running (check \`screenpipe run\` or the desktop app).`,
-    ].join("\n");
-  }
-
-  // HTTP status errors — match both "HTTP error: 404" and "HTTP 404" patterns
-  const httpMatch = msg.match(/HTTP(?:\s+error)?:?\s+(\d+)/i);
-  if (httpMatch) {
-    const status = httpMatch[1];
-    const detail =
-      status === "401" ? "Invalid or missing API key."
-      : status === "403" ? "Access denied."
-      : status === "404" ? "Resource not found."
-      : status === "503" ? "screenpipe service is unavailable."
-      : `Server returned ${status}.`;
-    return `### Error\n${detail} (${toolName})`;
-  }
-
-  // Validation or generic errors
-  return `### Error\n${msg}`;
+  return _formatToolError(toolName, error, SCREENPIPE_API);
 }
 
 // ---------------------------------------------------------------------------
@@ -716,9 +650,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Echo all provided args — pass through every non-null param so agents
         // can verify exactly what the server received
-        const querySection = formatQuery(
-          args as Record<string, string | number | boolean | null | undefined>
-        );
+        const querySection = formatQuery(args);
 
         if (results.length === 0) {
           const emptyText = [
@@ -885,7 +817,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           (w: {
             app_name: string;
             window_name: string;
-            browser_url: string;
+            browser_url?: string;
             minutes: number;
             frame_count: number;
           }) => {
@@ -922,7 +854,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if ((data.audio_summary?.segment_count || 0) > 0) {
           nextSteps.push(`Use \`search-content\` with \`content_type=audio\` and the same time range for full transcripts.`);
         }
-        if (data.windows?.some((w: { browser_url: string }) => w.browser_url)) {
+        if (data.windows?.some((w: { browser_url?: string }) => w.browser_url)) {
           nextSteps.push(`Use \`search-content\` with \`app_name='<browser>'\` and \`window_name='<title>'\` to narrow to a specific page.`);
         }
 
@@ -963,7 +895,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const pagination = data.pagination || {};
 
         if (elements.length === 0) {
-          const queryEcho = formatQuery(args as Record<string, string | number | boolean | null | undefined>);
+          const queryEcho = formatQuery(args);
           const sections = [
             queryEcho,
             "### Result\nNo elements found.",
@@ -987,8 +919,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const boundsStr = e.bounds
               ? ` [${e.bounds.left.toFixed(2)},${e.bounds.top.toFixed(2)} ${e.bounds.width.toFixed(2)}x${e.bounds.height.toFixed(2)}]`
               : "";
-            const deepLink = `screenpipe://frame/${e.frame_id}`;
-            return `[${e.source}] ${e.role} (frame:${e.frame_id}, depth:${e.depth})${boundsStr}\n  ${e.text || "(no text)"}\n  ${deepLink}`;
+            const deepLink = formatDeepLink(e.frame_id);
+            return `[${e.source}] ${e.role} (frame:${e.frame_id}, depth:${e.depth})${boundsStr}\n  ${e.text || "(no text)"}\n${deepLink}`;
           }
         );
 
@@ -1002,7 +934,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (paginationHint) elementLines.push("", paginationHint);
 
         const sections = [
-          formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+          formatQuery(args),
           formatSection("Elements", elementLines),
           formatSection("Next steps", [
             `Use \`frame-context\` with \`frame_id=<id>\` to see the full accessibility tree for any frame.`,
@@ -1027,7 +959,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const metaLines = [
           `frame_id: ${data.frame_id}`,
           `source: ${data.text_source}`,
-          `deep_link: screenpipe://frame/${data.frame_id}`,
+          formatDeepLink(data.frame_id),
         ];
 
         const nodeLines: string[] = [];
@@ -1332,9 +1264,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (data.message) diagnosticLines.push(`Message: ${data.message}`);
         if (data.verbose_instructions) diagnosticLines.push(`Instructions: ${data.verbose_instructions}`);
         if (data.device_status_details) diagnosticLines.push(`Devices: ${data.device_status_details}`);
-        if (data.pool_stats) diagnosticLines.push(`Pool stats: ${JSON.stringify(data.pool_stats)}`);
-        if (data.pipeline) diagnosticLines.push(`Vision pipeline: ${JSON.stringify(data.pipeline)}`);
-        if (data.audio_pipeline) diagnosticLines.push(`Audio pipeline: ${JSON.stringify(data.audio_pipeline)}`);
+        if (data.pool_stats) {
+          diagnosticLines.push("Pool stats:", ...flattenObject(data.pool_stats as Record<string, unknown>));
+        }
+        if (data.pipeline) {
+          diagnosticLines.push("Vision pipeline:", ...flattenObject(data.pipeline as Record<string, unknown>));
+        }
+        if (data.audio_pipeline) {
+          diagnosticLines.push("Audio pipeline:", ...flattenObject(data.audio_pipeline as Record<string, unknown>));
+        }
 
         const sections = [
           formatSection("Status", statusLines),
@@ -1514,7 +1452,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
 
         const metaLines = [
-          `App: ${m.meeting_app || "unknown"} | Detection: ${m.detection_source || "auto"}`,
+          `App: ${m.meeting_app || "unknown"} | Detection: ${m.detection_source || "unknown"}`,
           `Start: ${m.meeting_start || "?"} → End: ${m.meeting_end || "ongoing"}` +
             (durationMin != null ? ` (${durationMin} min)` : ""),
           ...(m.attendees ? [`Attendees: ${m.attendees}`] : []),
@@ -1546,7 +1484,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = data.data || [];
         if (results.length === 0) {
           const sections = [
-            formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+            formatQuery(args),
             formatSection("Result", ["No keyword search results found."]),
             formatSection("Next steps", [
               "Try `search-content` for semantic search across OCR and audio content.",
@@ -1559,12 +1497,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const formatted = results.map((r: Record<string, unknown>) => {
           const content = r.content as Record<string, unknown> | undefined;
           const frameId = (content?.frame_id as number) ?? null;
-          const deepLink = frameId ? `\n  screenpipe://frame/${frameId}` : "";
-          return `[${r.type}] ${content?.app_name || "?"} | ${content?.timestamp || ""}\n${content?.text || content?.transcription || ""}${deepLink}`;
+          const deepLink = formatDeepLink(frameId ?? null);
+          return `[${r.type}] ${content?.app_name || "?"} | ${content?.timestamp || ""}\n${content?.text || content?.transcription || ""}${deepLink ? "\n" + deepLink : ""}`;
         });
 
         const sections = [
-          formatQuery(args as Record<string, string | number | boolean | null | undefined>),
+          formatQuery(args),
           formatSection("Results", [`${results.length} match${results.length === 1 ? "" : "es"}`, "", ...formatted]),
           formatSection("Next steps", [
             `Use \`search-content\` with semantic search for conceptually related content.`,
