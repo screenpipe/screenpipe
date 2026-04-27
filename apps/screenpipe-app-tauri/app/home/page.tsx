@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
-import { useChatStore, getOrCreateEmptyChatId } from "@/lib/stores/chat-store";
+import { useChatStore } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
@@ -154,16 +154,19 @@ function HomeContent() {
   }, [setActiveSection]);
 
   // Clear the sidebar's "current" highlight when leaving the chat
-  // view; restore it from panelSessionId when coming back. The chat
-  // panel stays mounted (display:none) and keeps streaming, but
-  // visually the row shouldn't look "selected" while the user is
-  // looking at Pipes/Memories/etc.
+  // view. The chat panel stays mounted (display:none) and keeps streaming.
+  //
+  // Do NOT setCurrent(panelSessionId) when entering home — that ran
+  // after the same click as "New chat" / chat-load-conversation and
+  // overwrote the freshly chosen id with the stale foreground id,
+  // so the sidebar jumped to an old row (felt like cycling recents)
+  // instead of the blank session the user just asked for. Highlight
+  // sync on home is handled by: row clicks + emit, chat-current-session
+  // from StandaloneChat when conversationId updates, and the New chat
+  // handler below (setCurrent before emit).
   useEffect(() => {
     const { actions } = useChatStore.getState();
-    if (activeSection === "home") {
-      const panelId = useChatStore.getState().panelSessionId;
-      if (panelId) actions.setCurrent(panelId);
-    } else {
+    if (activeSection !== "home") {
       actions.setCurrent(null);
     }
   }, [activeSection]);
@@ -382,9 +385,8 @@ function HomeContent() {
   // Top-level nav items (filtered by enterprise policy)
   const mainSections = [
     // The first nav item doubles as "go to chat view + start a fresh
-    // conversation". Replaces the old "Home" + the "+" inside the chat
-    // sidebar (single, obvious entry point). The click handler below
-    // both switches the active section AND spins up a new chat session.
+    // conversation". Each click allocates a new session id (empty
+    // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "New chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
@@ -565,7 +567,7 @@ function HomeContent() {
                           <Phone className="h-3 w-3" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom" className="text-xs">
+                      <TooltipContent side="top" className="text-xs">
                         {meetingState.manualActive ? "stop meeting" : meetingState.active ? "meeting detected" : "start meeting"}
                       </TooltipContent>
                     </Tooltip>
@@ -653,30 +655,26 @@ function HomeContent() {
                       onClick={() => {
                         setActiveSection(section.id);
                         // The "home" slot is the New Chat affordance —
-                        // clicking it (from any view) spawns a fresh
-                        // chat session and switches to it. Mirrors the
-                        // sidebar's "+ new chat" behaviour exactly so
-                        // the two entry points stay in sync.
+                        // clicking it (from any view) always spawns a
+                        // new chat session and switches to it.
                         if (section.id === "home") {
-                          // Reuse an existing empty chat if there is one;
-                          // otherwise create. Mirrors the sidebar's
-                          // "+ new chat" handler so spamming the nav
-                          // doesn't pile up empty rows.
-                          const { id, isNew } = getOrCreateEmptyChatId();
+                          // Always start a brand-new session. Reusing an
+                          // empty row (getOrCreateEmptyChatId) felt like
+                          // "nothing happened" / jumping to an old blank
+                          // row in recents instead of a fresh compose view.
+                          const id = crypto.randomUUID();
                           const store = useChatStore.getState();
-                          if (isNew) {
-                            store.actions.upsert({
-                              id,
-                              title: "new chat",
-                              preview: "",
-                              status: "idle",
-                              messageCount: 0,
-                              createdAt: Date.now(),
-                              updatedAt: Date.now(),
-                              pinned: false,
-                              unread: false,
-                            });
-                          }
+                          store.actions.upsert({
+                            id,
+                            title: "new chat",
+                            preview: "",
+                            status: "idle",
+                            messageCount: 0,
+                            createdAt: Date.now(),
+                            updatedAt: Date.now(),
+                            pinned: false,
+                            unread: false,
+                          });
                           store.actions.setCurrent(id);
                           void emit("chat-load-conversation", {
                             conversationId: id,
