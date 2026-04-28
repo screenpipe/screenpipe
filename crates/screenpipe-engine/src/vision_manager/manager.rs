@@ -40,8 +40,10 @@ pub struct VisionManagerConfig {
     pub pause_on_drm_content: bool,
     /// Languages for OCR recognition.
     pub languages: Vec<screenpipe_core::Language>,
-    /// Maximum width for stored snapshots (0 = no limit, store at native res).
-    pub max_snapshot_width: u32,
+    /// Single user-facing quality preset that drives both JPEG quality and
+    /// snapshot max width via `screenpipe_core::video::*`. Values: "low",
+    /// "balanced" (default), "high", "max".
+    pub video_quality: String,
 }
 
 /// Status of the VisionManager
@@ -301,16 +303,25 @@ impl VisionManager {
         let device_name = format!("monitor_{}", monitor_id);
 
         // Create snapshot writer for this monitor's data directory.
-        // Use current power profile's JPEG quality instead of hardcoded 80.
+        //
+        // Both knobs (JPEG quality + max width) are derived from the user's
+        // single `videoQuality` setting via `screenpipe_core::video` — that
+        // way "high"/"max" actually means high/max on disk too, instead of
+        // the old behavior where the resolution cap was a separate hidden
+        // field defaulting to 1920px (which crushed text on ultrawides).
+        // The power profile can still drop quality further at runtime when
+        // we're on battery / thermally throttled.
+        use crate::video::{video_quality_to_jpeg_quality, video_quality_to_max_snapshot_width};
+        let baseline_q = video_quality_to_jpeg_quality(&self.config.video_quality);
         let initial_jpeg_quality = self
             .power_profile_rx
             .as_ref()
-            .map(|rx| rx.borrow().jpeg_quality)
-            .unwrap_or(80);
+            .map(|rx| rx.borrow().jpeg_quality.min(baseline_q))
+            .unwrap_or(baseline_q);
         let snapshot_writer = Arc::new(SnapshotWriter::new(
             format!("{}/data", output_path),
             initial_jpeg_quality,
-            self.config.max_snapshot_width,
+            video_quality_to_max_snapshot_width(&self.config.video_quality),
         ));
 
         // Create activity feed for this monitor
@@ -330,8 +341,13 @@ impl VisionManager {
             ..TreeWalkerConfig::default()
         };
 
-        // Event-driven capture config
-        let capture_config = EventDrivenCaptureConfig::default();
+        // Event-driven capture config — seed jpeg_quality from the user's
+        // chosen videoQuality so power-profile updates can use it as the
+        // baseline ceiling (`min(profile, baseline)`) at runtime.
+        let capture_config = EventDrivenCaptureConfig {
+            jpeg_quality: baseline_q,
+            ..EventDrivenCaptureConfig::default()
+        };
 
         // Subscribe to the shared broadcast channel so UI events reach this monitor
         let trigger_rx = self.trigger_tx.subscribe();
@@ -486,7 +502,7 @@ mod tests {
             ignore_incognito_windows: false,
             pause_on_drm_content: false,
             languages: vec![Language::English],
-            max_snapshot_width: 0,
+            video_quality: "balanced".to_string(),
         };
         VisionManager::new(config, db, Handle::current())
     }

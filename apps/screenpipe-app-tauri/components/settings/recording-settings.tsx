@@ -1845,6 +1845,39 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
+        {/* Recording quality — single knob for crispness + disk cost */}
+        {!settings.disableVision && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-foreground">Recording quality</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Pick "high" or "max" if your text looks blurry on a 4K / ultrawide. Higher = crisper + larger files.
+                    </p>
+                  </div>
+                </div>
+                <Select
+                  value={settings.videoQuality || "balanced"}
+                  onValueChange={(value) => handleSettingsChange({ videoQuality: value }, true)}
+                >
+                  <SelectTrigger className="w-[180px] h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">low — 1280px, smallest</SelectItem>
+                    <SelectItem value="balanced">balanced — 1920px (default)</SelectItem>
+                    <SelectItem value="high">high — 3840px, ultrawide-safe</SelectItem>
+                    <SelectItem value="max">max — native, no downscale</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Monitor Selection */}
         {!settings.disableVision && !settings.useAllMonitors && (
           <Card className="border-border bg-card overflow-hidden">

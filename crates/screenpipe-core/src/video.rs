@@ -54,6 +54,38 @@ pub fn video_quality_to_jpeg_q(quality: &str) -> &'static str {
     }
 }
 
+/// Max width (in px) for stored snapshot JPEGs at the given quality preset.
+/// 0 = no downscale (store at native resolution).
+///
+/// The previous fixed 1920px cap silently crushed text on ultrawides
+/// (49" 5120×1440 → 37% scale) — the cap now scales with the user's
+/// quality setting so they have a single knob that decides legibility
+/// AND disk cost together.
+pub fn video_quality_to_max_snapshot_width(quality: &str) -> u32 {
+    match quality {
+        "low" => 1280,
+        "high" => 3840,
+        "max" => 0,        // native, no downscale
+        _ => 1920,         // "balanced" or any unknown
+    }
+}
+
+/// JPEG encoder quality (1–100) for the on-disk snapshot at the given
+/// quality preset. Pairs with `video_quality_to_max_snapshot_width` so a
+/// single user-facing setting controls both axes of "how large + how
+/// crisp is each frame on disk".
+///
+/// Power profiles can still drop this further on battery/thermal — these
+/// are the *intent* baselines, not absolute floors.
+pub fn video_quality_to_jpeg_quality(quality: &str) -> u8 {
+    match quality {
+        "low" => 60,
+        "high" => 85,
+        "max" => 92,
+        _ => 80, // "balanced" or any unknown
+    }
+}
+
 pub async fn start_ffmpeg_process(
     output_file: &str,
     fps: f64,

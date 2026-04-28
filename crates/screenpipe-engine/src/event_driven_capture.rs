@@ -509,8 +509,13 @@ pub async fn event_driven_capture_loop(
                 );
                 state.config.min_capture_interval_ms = profile.min_capture_interval_ms;
                 state.config.idle_capture_interval_ms = profile.idle_capture_interval_ms;
-                state.config.jpeg_quality = profile.jpeg_quality;
-                snapshot_writer.set_quality(profile.jpeg_quality);
+                // Power profile can only LOWER quality from the user's baseline,
+                // never raise it — picking "max" in settings shouldn't be silently
+                // bumped above the profile's value, but a user on saver mode also
+                // shouldn't see "max" honored when battery is critical.
+                let effective_q = profile.jpeg_quality.min(state.config.jpeg_quality);
+                state.config.jpeg_quality = effective_q;
+                snapshot_writer.set_quality(effective_q);
                 visual_check_interval = Duration::from_millis(profile.visual_check_interval_ms);
                 visual_change_threshold = profile.visual_change_threshold;
                 visual_check_enabled = profile.visual_check_interval_ms > 0;

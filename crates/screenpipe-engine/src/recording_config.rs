@@ -295,7 +295,7 @@ impl RecordingConfig {
             ignore_incognito_windows: self.ignore_incognito_windows,
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
-            max_snapshot_width: self.max_snapshot_width,
+            video_quality: self.video_quality.clone(),
         }
     }
 }
