@@ -237,6 +237,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       const allPipe = messages.every((m) => m.id?.startsWith("pipe-"));
       if (!allPipe) {
         saveConversation(messages);
+        // Reveal this session in the sidebar — the assistant has replied,
+        // so it's no longer an empty draft.
+        void (async () => {
+          const { useChatStore } = await import("@/lib/stores/chat-store");
+          const sid = piSessionIdRef.current;
+          if (sid && useChatStore.getState().sessions[sid]?.draft) {
+            useChatStore.getState().actions.patch(sid, { draft: false });
+          }
+        })();
       }
     }
     prevIsLoadingRef.current = isLoading;

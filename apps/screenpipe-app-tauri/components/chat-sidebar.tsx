@@ -106,6 +106,8 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
+      // Hide draft sessions — they haven't received an assistant reply yet.
+      if (s.draft) continue;
       (s.pinned ? p : r).push(s);
     }
     return { pinned: p, recents: r };
@@ -142,6 +144,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         updatedAt: Date.now(),
         pinned: false,
         unread: false,
+        draft: true,
       });
       actions.setCurrent(fresh);
       emit("chat-load-conversation", { conversationId: fresh });

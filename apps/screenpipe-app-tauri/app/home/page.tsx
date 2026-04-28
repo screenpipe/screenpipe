@@ -664,6 +664,11 @@ function HomeContent() {
                           // row in recents instead of a fresh compose view.
                           const id = crypto.randomUUID();
                           const store = useChatStore.getState();
+                          // Drop stale drafts before creating a new one so
+                          // repeated "New chat" clicks don't accumulate empty rows.
+                          Object.values(store.sessions).forEach((s) => {
+                            if (s.draft) store.actions.drop(s.id);
+                          });
                           store.actions.upsert({
                             id,
                             title: "new chat",
@@ -674,6 +679,7 @@ function HomeContent() {
                             updatedAt: Date.now(),
                             pinned: false,
                             unread: false,
+                            draft: true,
                           });
                           store.actions.setCurrent(id);
                           void emit("chat-load-conversation", {

@@ -76,6 +76,11 @@ export interface SessionRecord {
    *  instant the user makes that session current. Sidebar renders unread
    *  rows in bold, like an email inbox. */
   unread: boolean;
+  /** True until the assistant has replied at least once. Draft sessions
+   *  are hidden in the sidebar so the user can't accumulate empty chats
+   *  by clicking "New chat" repeatedly. Cleared on the first successful
+   *  save (after the assistant replies). */
+  draft?: boolean;
 
   // ── Live session content (Phase 3) ─────────────────────────────────
   // The chat panel reads these instead of holding its own per-render
