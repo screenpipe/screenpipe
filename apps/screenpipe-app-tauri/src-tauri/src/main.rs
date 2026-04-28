@@ -365,6 +365,38 @@ async fn main() {
     // subprocesses are touched.
     windows_ca_bundle::install();
 
+    // CPU feature check: screenpipe requires AVX2 support.
+    // On Windows, if AVX2 is missing (e.g., old CPUs or QEMU qemu64), show a friendly error
+    // and exit cleanly instead of crashing with STATUS_ILLEGAL_INSTRUCTION.
+    // This check must run before any crate that uses AVX2 instructions is initialized.
+    #[cfg(target_os = "windows")]
+    {
+        if !is_x86_feature_detected!("avx2") {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                MessageBoxA, MB_OK, MB_ICONERROR, MESSAGEBOX_RESULT,
+            };
+            use std::ffi::CString;
+
+            let title = CString::new("CPU Not Supported").unwrap_or_else(|_| CString::new("Error").unwrap());
+            let message = CString::new(
+                "Your CPU does not support AVX2 instructions, which screenpipe requires.\n\n\
+                 Please use a CPU made after ~2013 (Intel Haswell / AMD Excavator or newer), \
+                 or switch to a larger VM with a modern CPU.\n\n\
+                 For QEMU virtual machines, change the CPU model from 'qemu64' to 'Haswell-v4' or later."
+            ).unwrap_or_else(|_| CString::new("CPU not supported").unwrap());
+
+            unsafe {
+                let _ = MessageBoxA(
+                    None,
+                    message.as_c_str(),
+                    title.as_c_str(),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+            std::process::exit(1);
+        }
+    }
+
     // Handle --check-arc-automation / --trigger-arc-automation flags early,
     // before any Tauri initialization. Used by the permission system to run
     // this binary via launchctl (detached from Terminal) so that macOS TCC
