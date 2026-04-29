@@ -153,6 +153,10 @@ parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
 name = "screenpipe-audio"
 path = "examples/screenpipe-audio.rs"
 
+[[bin]]
+name = "eval-diarization"
+path = "src/bin/eval_diarization.rs"
+
 [[test]]
 name = "audio_pipeline_benchmark"
 path = "tests/audio_pipeline_benchmark/main.rs"
