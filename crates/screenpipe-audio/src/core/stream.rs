@@ -555,9 +555,7 @@ mod from_wav_tests {
             writer.finalize().expect("finalize wav");
         }
 
-        let stream = AudioStream::from_wav(&path, false)
-            .await
-            .expect("from_wav");
+        let stream = AudioStream::from_wav(&path, false).await.expect("from_wav");
         let mut rx = stream.subscribe().await;
 
         let mut received = 0usize;
