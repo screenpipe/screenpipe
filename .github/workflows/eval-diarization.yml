@@ -6,7 +6,15 @@
 # VoxConverse fixtures whenever a PR touches speaker/audio/clustering code.
 # Posts DER + per-speaker error rates as a sticky PR comment so reviewers
 # see the empirical impact of tuning changes (PR #3107 motivated this — a
-# 0.55 → 0.70 threshold change shipped without numbers).
+# 0.55 → 0.65 cosine-distance threshold change shipped without numbers).
+#
+# v1 caveat: the binary scores `prepare_segments` + `EmbeddingManager`
+# directly on whole-file embeddings, so it does NOT exercise the chunked
+# path in `source_buffer.rs` where the merge threshold actually fires.
+# Threshold-tuning PRs will show zero delta here until v2 lands (drives
+# AudioManager end-to-end via AudioStream::from_wav). Until then, treat
+# this signal as "did we regress the segmentation/embedding pipeline"
+# rather than "did this threshold change help".
 #
 # Cost: VoxConverse dev split is ~1.9 GB; cached on first run, ~30s after.
 # Total wall time per PR: ~5–8 min once the cache is warm.
