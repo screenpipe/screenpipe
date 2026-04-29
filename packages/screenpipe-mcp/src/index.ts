@@ -389,10 +389,10 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        speaker_to_keep: { type: "integer", description: "Speaker ID to keep" },
-        speaker_to_merge: { type: "integer", description: "Speaker ID to merge into the kept one" },
+        speaker_to_keep_id: { type: "integer", description: "Speaker ID to keep" },
+        speaker_to_merge_id: { type: "integer", description: "Speaker ID to merge into the kept one" },
       },
-      required: ["speaker_to_keep", "speaker_to_merge"],
+      required: ["speaker_to_keep_id", "speaker_to_merge_id"],
     },
   },
   {
@@ -1244,14 +1244,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "merge-speakers": {
-        const keepId = args.speaker_to_keep as number;
-        const mergeId = args.speaker_to_merge as number;
+        const keepId = args.speaker_to_keep_id as number;
+        const mergeId = args.speaker_to_merge_id as number;
         if (!keepId || !mergeId) {
-          return { content: [{ type: "text", text: "Error: speaker_to_keep and speaker_to_merge are required" }] };
+          return { content: [{ type: "text", text: "Error: speaker_to_keep_id and speaker_to_merge_id are required" }] };
         }
         const response = await fetchAPI("/speakers/merge", {
           method: "POST",
-          body: JSON.stringify({ speaker_to_keep: keepId, speaker_to_merge: mergeId }),
+          body: JSON.stringify({ speaker_to_keep_id: keepId, speaker_to_merge_id: mergeId }),
         });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         return {
