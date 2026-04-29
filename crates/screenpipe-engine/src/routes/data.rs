@@ -259,9 +259,7 @@ pub(crate) async fn storage_preview_handler(
             _ => {
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    JsonResponse(
-                        json!({"error": "provide older_than_days or both start and end"}),
-                    ),
+                    JsonResponse(json!({"error": "provide older_than_days or both start and end"})),
                 ))
             }
         }
@@ -274,17 +272,16 @@ pub(crate) async fn storage_preview_handler(
         ));
     }
 
-    let (file_count, bytes) =
-        state
-            .db
-            .estimate_evictable_bytes(start, end)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    JsonResponse(json!({"error": format!("failed to estimate: {}", e)})),
-                )
-            })?;
+    let (file_count, bytes) = state
+        .db
+        .estimate_evictable_bytes(start, end)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": format!("failed to estimate: {}", e)})),
+            )
+        })?;
 
     Ok(JsonResponse(StoragePreviewResponse { file_count, bytes }))
 }

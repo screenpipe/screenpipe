@@ -13,7 +13,7 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_db::MeetingRecord;
 
 use crate::server::AppState;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -53,8 +53,16 @@ pub struct StopMeetingRequest {
 
 #[derive(OaSchema, Deserialize, Debug)]
 pub struct ListMeetingsRequest {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::time::deserialize_flexible_datetime_option"
+    )]
+    pub start_time: Option<DateTime<Utc>>,
+    #[serde(
+        default,
+        deserialize_with = "super::time::deserialize_flexible_datetime_option"
+    )]
+    pub end_time: Option<DateTime<Utc>>,
     #[serde(default = "default_limit")]
     pub limit: u32,
     #[serde(default)]
@@ -170,11 +178,14 @@ pub(crate) async fn list_meetings_handler(
     State(state): State<Arc<AppState>>,
     Query(request): Query<ListMeetingsRequest>,
 ) -> Result<JsonResponse<Vec<MeetingRecord>>, (StatusCode, JsonResponse<Value>)> {
+    let start_time_str = request.start_time.map(|dt| dt.to_rfc3339());
+    let end_time_str = request.end_time.map(|dt| dt.to_rfc3339());
+
     let meetings = state
         .db
         .list_meetings(
-            request.start_time.as_deref(),
-            request.end_time.as_deref(),
+            start_time_str.as_deref(),
+            end_time_str.as_deref(),
             request.limit,
             request.offset,
         )
@@ -439,4 +450,81 @@ pub(crate) async fn stop_meeting_handler(
     }
 
     Ok(JsonResponse(meeting))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_list_meetings_request_relative_dates() {
+        // Test that the ListMeetingsRequest can parse relative date formats
+        // like "7 days ago" via the deserialize_flexible_datetime_option deserializer
+
+        // Test "7 days ago" format
+        let json_input = json!({
+            "start_time": "7 days ago",
+            "end_time": "now",
+            "limit": 10,
+            "offset": 0
+        });
+
+        let request: Result<ListMeetingsRequest, _> = serde_json::from_value(json_input.clone());
+        assert!(
+            request.is_ok(),
+            "Failed to parse relative dates: {}",
+            request.err().unwrap()
+        );
+
+        let req = request.unwrap();
+        assert!(req.start_time.is_some(), "start_time should be parsed");
+        assert!(req.end_time.is_some(), "end_time should be parsed");
+        assert_eq!(req.limit, 10);
+        assert_eq!(req.offset, 0);
+    }
+
+    #[test]
+    fn test_list_meetings_request_iso_dates() {
+        // Test that ISO 8601 format dates still work (backward compatibility)
+        let json_input = json!({
+            "start_time": "2024-01-01T00:00:00Z",
+            "end_time": "2024-01-31T23:59:59Z",
+            "limit": 20,
+            "offset": 0
+        });
+
+        let request: Result<ListMeetingsRequest, _> = serde_json::from_value(json_input);
+        assert!(
+            request.is_ok(),
+            "Failed to parse ISO 8601 dates: {}",
+            request.err().unwrap()
+        );
+
+        let req = request.unwrap();
+        assert!(req.start_time.is_some(), "start_time should be parsed");
+        assert!(req.end_time.is_some(), "end_time should be parsed");
+    }
+
+    #[test]
+    fn test_list_meetings_request_optional_dates() {
+        // Test that dates can be omitted
+        let json_input = json!({
+            "limit": 15,
+            "offset": 5
+        });
+
+        let request: Result<ListMeetingsRequest, _> = serde_json::from_value(json_input);
+        assert!(
+            request.is_ok(),
+            "Failed to parse request without dates: {}",
+            request.err().unwrap()
+        );
+
+        let req = request.unwrap();
+        assert!(req.start_time.is_none(), "start_time should be None");
+        assert!(req.end_time.is_none(), "end_time should be None");
+        assert_eq!(req.limit, 15);
+        assert_eq!(req.offset, 5);
+    }
 }
