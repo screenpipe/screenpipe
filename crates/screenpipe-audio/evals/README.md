@@ -35,6 +35,31 @@ The binary needs the pyannote ONNX models at
 `crates/screenpipe-audio/models/pyannote/`. Run screenpipe once before
 running the eval so the models are downloaded.
 
+## Composing workday fixtures
+
+Generic VoxConverse clips skew clean. To exercise screenpipe's actual
+workload (long silences punctuated by meetings, cross-session speaker
+re-identification), compose fixtures from a TOML template:
+
+```bash
+# 1. fetch VoxConverse if you haven't (templates compose from these)
+bash crates/screenpipe-audio/evals/download_voxconverse.sh
+
+# 2. compose the template
+cargo run --release --bin compose-fixture -- \
+  --template crates/screenpipe-audio/evals/templates/interrupted_meeting.toml \
+  --fixtures crates/screenpipe-audio/evals/fixtures \
+  --out-dir  crates/screenpipe-audio/evals/fixtures/composed/
+
+# 3. run eval on the composed fixture
+cargo run --release --bin eval-diarization -- \
+  --audio crates/screenpipe-audio/evals/fixtures/composed/interrupted_meeting.wav \
+  --rttm  crates/screenpipe-audio/evals/fixtures/composed/interrupted_meeting.rttm
+```
+
+Templates live in `crates/screenpipe-audio/evals/templates/`. Add new ones
+as TOML files following the existing examples.
+
 ## Output
 
 Single JSON line on stdout, progress on stderr:
@@ -66,9 +91,6 @@ to the repo — see `.gitignore`.
 
 Not in v1; tracked for follow-up:
 
-- **Workday templates**: synthetic conversations approximating screenpipe's
-  real workload (long meetings, low SNR, output-device system audio) — VoxConverse
-  is short clips and skews to clean broadcast audio.
 - **AMI corpus integration**: ground truth for far-field meeting audio,
   the closest open dataset to screenpipe's primary use case.
 - **CI baseline tracking**: nightly run on a fixed fixture set, post results

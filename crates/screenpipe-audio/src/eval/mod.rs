@@ -6,8 +6,10 @@
 //! against it with Diarization Error Rate. Lets tuning PRs (e.g. clustering
 //! threshold changes like #3107) ship with empirical numbers instead of vibes.
 
+pub mod compose;
 pub mod der;
 pub mod rttm;
 
+pub use compose::{compose, load_template, Segment, Template};
 pub use der::{score_der, DerScore};
 pub use rttm::{load_rttm, parse_rttm, RttmSegment};
