@@ -54,6 +54,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pyannote ONNX models live in Git LFS at
+          # crates/screenpipe-audio/models/pyannote/. Without lfs:true the
+          # checkout leaves pointer files, the eval binary's exists() check
+          # passes, and ORT fails loading a non-ONNX file. Override the
+          # repo-level GIT_LFS_SKIP_SMUDGE for this step only.
+          lfs: true
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
