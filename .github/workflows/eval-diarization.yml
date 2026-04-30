@@ -38,7 +38,7 @@ on:
     inputs:
       fixtures:
         description: 'Comma-separated VoxConverse fixture stems to score'
-        default: 'abjxc,afpgz,aggyz'
+        default: 'abjxc,bxpwa,dhorc'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,6 +52,9 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,7 +128,7 @@ jobs:
 
       - name: Run eval on fixtures
         env:
-          FIXTURES: ${{ inputs.fixtures || 'abjxc,afpgz,aggyz' }}
+          FIXTURES: ${{ inputs.fixtures || 'abjxc,bxpwa,dhorc' }}
         run: |
           mkdir -p /tmp/eval-results
           IFS=',' read -ra STEMS <<< "$FIXTURES"
