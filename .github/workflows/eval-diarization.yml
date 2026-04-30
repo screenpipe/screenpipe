@@ -234,7 +234,7 @@ jobs:
               exit 1
             }
           # Echo the headline numbers so they show up in the run log.
-          jq '{mean_wer, mean_cer, utterance_count, throughput_samples_per_sec, model: .whisper_model}' /tmp/eval-results/transcription.json
+          jq '{model, mean_wer, mean_cer, utterance_count, throughput_samples_per_sec}' /tmp/eval-results/transcription.json
 
       # Compose a sticky PR comment with one row per fixture. We post via
       # `gh pr comment` rather than a third-party action to keep the deps
@@ -294,7 +294,7 @@ jobs:
               echo "|---|---:|---:|---:|---:|"
               jq -r '
                 def fmt3: . * 1000 | round / 1000 | tostring;
-                "| " + (.whisper_model | tostring) +
+                "| " + (.model // "tiny") +
                 " | " + (.utterance_count | tostring) +
                 " | " + (.mean_wer | fmt3) +
                 " | " + (.mean_cer | fmt3) +
