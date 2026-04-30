@@ -68,7 +68,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libasound2-dev pkg-config jq
+            pkg-config \
+            jq \
+            libasound2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            cmake \
+            build-essential
 
       # Hash the download script so a script change busts the cache. The
       # archive itself is 1.9 GB and the Oxford VGG mirror is slow, so
