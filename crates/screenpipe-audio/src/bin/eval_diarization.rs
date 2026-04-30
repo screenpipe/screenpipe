@@ -107,6 +107,10 @@ async fn main() -> Result<()> {
     }
 
     eprintln!("loading silero vad...");
+    // SileroVad::new() returns "not available yet" while the HF download is
+    // still in flight (cold caches in CI / fresh dev boxes). Block until
+    // the model is on disk first.
+    SileroVad::ensure_model_available().await?;
     let vad: Arc<Mutex<Box<dyn VadEngine + Send>>> =
         Arc::new(Mutex::new(Box::new(SileroVad::new().await?)));
 
