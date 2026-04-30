@@ -58,6 +58,11 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          # The eval is a runtime metric collector, not a lint gate. Don't
+          # promote pre-existing warnings (e.g. cfg-gated dead_code in
+          # stream.rs StreamControl::Stop) to fatal errors here — clippy
+          # workflows already enforce that elsewhere.
+          rustflags: ""
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
