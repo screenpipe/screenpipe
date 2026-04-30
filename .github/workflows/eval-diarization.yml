@@ -260,7 +260,7 @@ jobs:
             for f in $(ls /tmp/eval-results/*.json | sort); do
               stem=$(basename "$f" .json)
               case "$stem" in
-                interrupted_meeting|long_silence_day) ;;
+                interrupted_meeting|long_silence_day|transcription) ;;
                 *) order+=("$stem") ;;
               esac
             done
