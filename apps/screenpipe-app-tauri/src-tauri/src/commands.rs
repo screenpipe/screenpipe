@@ -1414,6 +1414,11 @@ pub async fn show_shortcut_reminder(
 
     info!("show_shortcut_reminder called");
 
+    let shortcut_overlay_size = crate::store::SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .shortcut_overlay_size;
+
     // On macOS, try the native SwiftUI shortcut reminder first
     #[cfg(target_os = "macos")]
     {
@@ -1469,6 +1474,10 @@ pub async fn show_shortcut_reminder(
                     );
                 }
             }
+            map.insert(
+                "shortcutOverlaySize".to_string(),
+                serde_json::Value::String(shortcut_overlay_size.clone()),
+            );
             if let Some(state) = app_handle.try_state::<RecordingState>() {
                 let guard = state.server.lock().await;
                 if let Some(ref core) = *guard {
@@ -1499,12 +1508,7 @@ pub async fn show_shortcut_reminder(
 
     // Window dimensions: 2-row grid (3 shortcuts + activity viz)
     // Scale based on overlay size setting
-    let scale = match crate::store::SettingsStore::get(&app_handle)
-        .unwrap_or_default()
-        .unwrap_or_default()
-        .shortcut_overlay_size
-        .as_str()
-    {
+    let scale = match shortcut_overlay_size.as_str() {
         "large" => 2.0_f64,
         "medium" => 1.5,
         _ => 1.0,

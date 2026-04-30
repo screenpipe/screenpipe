@@ -343,17 +343,11 @@ struct HoverIconButton: View {
     }
 }
 
-// MARK: - Overlay scale (read from ~/.screenpipe/store.bin)
+// MARK: - Overlay scale
 
 private var gOverlayScale: CGFloat = 1.0
 
-private func loadOverlayScale() {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    let storePath = home.appendingPathComponent(".screenpipe/store.bin").path
-    guard let data = FileManager.default.contents(atPath: storePath),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let settings = json["settings"] as? [String: Any],
-          let size = settings["shortcutOverlaySize"] as? String else { return }
+private func setOverlayScale(_ size: String?) {
     switch size {
     case "large": gOverlayScale = 2.0
     case "medium": gOverlayScale = 1.5
@@ -388,11 +382,10 @@ class ShortcutReminderController: NSObject {
 
     func show(shortcuts: String?) {
         DispatchQueue.main.async { [self] in
+            let prevScale = gOverlayScale
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
             }
-            let prevScale = gOverlayScale
-            loadOverlayScale()
             if panel == nil || prevScale != gOverlayScale {
                 panel?.orderOut(nil)
                 panel = nil
@@ -540,12 +533,13 @@ class ShortcutReminderController: NSObject {
     }
 
     private func parseShortcuts(_ json: String) {
-        // Expects {"overlay":"…","chat":"…","search":"…"} plus optional URLs from Rust when API auth is on.
+        // Expects shortcut labels, size, and optional authenticated API URLs from Rust.
         guard let data = json.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
         if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
+        if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
         if let s = dict["metrics_ws_url"] { metricsWsUrl = s }
         if let s = dict["events_ws_url"] { eventsWsUrl = s }
     }
