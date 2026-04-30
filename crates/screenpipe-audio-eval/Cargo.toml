@@ -41,3 +41,7 @@ path = "src/bin/eval_diarization.rs"
 [[bin]]
 name = "screenpipe-eval-compose"
 path = "src/bin/compose_fixture.rs"
+
+[[bin]]
+name = "screenpipe-eval-transcription"
+path = "src/bin/eval_transcription.rs"

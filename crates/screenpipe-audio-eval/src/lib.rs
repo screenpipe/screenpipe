@@ -14,8 +14,12 @@
 
 pub mod compose;
 pub mod der;
+pub mod librispeech;
 pub mod rttm;
+pub mod wer;
 
 pub use compose::{compose, load_template, Segment, Template};
 pub use der::{score_pipeline, DerScore, PipelineScore};
+pub use librispeech::{load_utterances, LibriUtterance};
 pub use rttm::{load_rttm, parse_rttm, RttmSegment};
+pub use wer::{char_error_rate, score_transcription, word_error_rate, TranscriptionScore};
