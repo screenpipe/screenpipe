@@ -25,6 +25,9 @@ cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
 # Wav encoding
 hound = "3.5"
 
+# TOML parsing for the workday template composer (eval).
+toml = "0.8"
+
 # MP3 encoding for compressed cloud uploads
 mp3lame-encoder = "0.2.2"
 
@@ -156,6 +159,10 @@ path = "examples/screenpipe-audio.rs"
 [[bin]]
 name = "eval-diarization"
 path = "src/bin/eval_diarization.rs"
+
+[[bin]]
+name = "compose-fixture"
+path = "src/bin/compose_fixture.rs"
 
 [[test]]
 name = "audio_pipeline_benchmark"
