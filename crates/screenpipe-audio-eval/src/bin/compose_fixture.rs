@@ -11,7 +11,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use screenpipe_audio::eval::{compose, load_template};
+use screenpipe_audio_eval::{compose, load_template};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

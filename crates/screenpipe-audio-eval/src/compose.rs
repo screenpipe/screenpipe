@@ -18,7 +18,7 @@
 //! Templates live under `evals/templates/*.toml`; fixtures resolve relative
 //! to a caller-provided `fixtures_dir` (typically `evals/fixtures/`).
 
-use crate::eval::rttm::{load_rttm, RttmSegment};
+use crate::rttm::{load_rttm, RttmSegment};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -95,7 +95,7 @@ pub fn compose(
                     return Err(anyhow!("segment {}: silence duration must be >= 0", idx));
                 }
                 let n = (*duration * COMPOSE_SAMPLE_RATE as f64).round() as usize;
-                samples.extend(std::iter::repeat(SILENCE_DC_OFFSET).take(n));
+                samples.extend(std::iter::repeat_n(SILENCE_DC_OFFSET, n));
             }
             Segment::Audio {
                 source,
@@ -106,17 +106,18 @@ pub fn compose(
                 let source_path = fixtures_dir.join(source);
                 let rttm_path = fixtures_dir.join(rttm);
 
-                let (raw, source_rate) = crate::pcm_decode(&source_path)
+                let (raw, source_rate) = screenpipe_audio::pcm_decode(&source_path)
                     .with_context(|| format!("decode audio: {}", source_path.display()))?;
                 let resampled = if source_rate != COMPOSE_SAMPLE_RATE {
-                    crate::resample(&raw, source_rate, COMPOSE_SAMPLE_RATE).with_context(|| {
-                        format!(
-                            "resample {} {}->{}",
-                            source_path.display(),
-                            source_rate,
-                            COMPOSE_SAMPLE_RATE
-                        )
-                    })?
+                    screenpipe_audio::resample(&raw, source_rate, COMPOSE_SAMPLE_RATE)
+                        .with_context(|| {
+                            format!(
+                                "resample {} {}->{}",
+                                source_path.display(),
+                                source_rate,
+                                COMPOSE_SAMPLE_RATE
+                            )
+                        })?
                 } else {
                     raw
                 };
@@ -281,7 +282,7 @@ mod tests {
 
     fn read_rttm(path: &Path) -> Vec<RttmSegment> {
         let content = std::fs::read_to_string(path).expect("read rttm");
-        crate::eval::parse_rttm(&content).expect("parse rttm")
+        crate::parse_rttm(&content).expect("parse rttm")
     }
 
     #[test]

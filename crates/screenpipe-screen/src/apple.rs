@@ -210,47 +210,44 @@ pub fn perform_ocr_apple(
                         return;
                     }
 
-                    let emit_record =
-                        |ocr_results_vec: &mut Vec<serde_json::Value>,
-                         word_text: &str,
-                         word_num: usize,
-                         utf16_start: usize,
-                         utf16_len: usize| {
-                            let Ok(bbox_result) = observation_result
-                                .bounding_box_for_range(ns::Range::new(utf16_start, utf16_len))
-                            else {
-                                return;
-                            };
-                            let bbox = bbox_result.bounding_box();
-                            let x = bbox.origin.x;
-                            let y_vision = bbox.origin.y; // Vision: bottom-left origin, Y up
-                            let height = bbox.size.height;
-                            let width = bbox.size.width;
-                            // Convert to top-left origin (same as other OCR engines)
-                            let top = 1.0 - y_vision - height;
-
-                            // Stay on level "0" (Apple Native, flat) so frames hit the
-                            // bulk fast-path in insert_ocr_elements; level 5 would route
-                            // every word through the per-row Tesseract hierarchical path.
-                            ocr_results_vec.push(serde_json::json!({
-                                "level": "0",
-                                "page_num": "0",
-                                "block_num": "0",
-                                "par_num": "0",
-                                "line_num": "0",
-                                "word_num": word_num.to_string(),
-                                "left": x.to_string(),
-                                "top": top.to_string(),
-                                "width": width.to_string(),
-                                "height": height.to_string(),
-                                "conf": confidence.to_string(),
-                                "text": word_text.to_string(),
-                            }));
+                    let emit_record = |ocr_results_vec: &mut Vec<serde_json::Value>,
+                                       word_text: &str,
+                                       word_num: usize,
+                                       utf16_start: usize,
+                                       utf16_len: usize| {
+                        let Ok(bbox_result) = observation_result
+                            .bounding_box_for_range(ns::Range::new(utf16_start, utf16_len))
+                        else {
+                            return;
                         };
+                        let bbox = bbox_result.bounding_box();
+                        let x = bbox.origin.x;
+                        let y_vision = bbox.origin.y; // Vision: bottom-left origin, Y up
+                        let height = bbox.size.height;
+                        let width = bbox.size.width;
+                        // Convert to top-left origin (same as other OCR engines)
+                        let top = 1.0 - y_vision - height;
 
-                    for (i, (utf16_start, utf16_len, word_text)) in
-                        word_ranges.iter().enumerate()
-                    {
+                        // Stay on level "0" (Apple Native, flat) so frames hit the
+                        // bulk fast-path in insert_ocr_elements; level 5 would route
+                        // every word through the per-row Tesseract hierarchical path.
+                        ocr_results_vec.push(serde_json::json!({
+                            "level": "0",
+                            "page_num": "0",
+                            "block_num": "0",
+                            "par_num": "0",
+                            "line_num": "0",
+                            "word_num": word_num.to_string(),
+                            "left": x.to_string(),
+                            "top": top.to_string(),
+                            "width": width.to_string(),
+                            "height": height.to_string(),
+                            "conf": confidence.to_string(),
+                            "text": word_text.to_string(),
+                        }));
+                    };
+
+                    for (i, (utf16_start, utf16_len, word_text)) in word_ranges.iter().enumerate() {
                         emit_record(
                             &mut ocr_results_vec,
                             word_text,

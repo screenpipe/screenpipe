@@ -6,20 +6,19 @@
 //!
 //! Runs the screenpipe diarization chain (VAD → segmentation → embedding →
 //! `EmbeddingManager` clustering) on a wav fixture and scores predictions
-//! against an RTTM ground truth.
+//! against an RTTM ground truth using DER + VAD FA/FN + boundary error +
+//! cross-gap speaker continuity + throughput.
 //!
 //! ## Implementation choice
 //!
-//! V1 wires the lower-level chain (`prepare_segments` + `EmbeddingManager`)
-//! directly rather than spinning up `AudioManager`. `AudioManager` pulls in
-//! the SQLite write queue, transcription engine, device monitor, and tray
-//! glue — none of which are needed to measure clustering quality, and all
-//! of which would double the runtime per fixture. The downside: this skips
-//! source_buffer.rs's chunk-aggregation behavior, so the eval scores the
-//! clustering on whole-file embeddings instead of per-broadcast-chunk ones.
-//! That's fine for tuning the clustering threshold, which is the load-
-//! bearing knob in PR #3107. Future work: drive `AudioManager` with the
-//! `from_wav` AudioStream so the source_buffer path is in-scope too.
+//! Drives `prepare_segments` + `EmbeddingManager` directly via `screenpipe-audio`'s
+//! existing public API. We deliberately do NOT spin up `AudioManager` to drive
+//! the full chunked path — doing so would either require eval-only callbacks
+//! on the prod struct (the trade we're rejecting in this rebuild) or wiring
+//! up the SQLite write queue + transcription engine + tray glue, none of
+//! which moves the diarization-quality numbers we care about. Tradeoff: this
+//! skips `source_buffer.rs`'s chunk aggregation, so threshold tweaks that
+//! only affect the per-chunk merge fallback won't show up here. Documented.
 //!
 //! ## Output
 //!
@@ -29,13 +28,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use screenpipe_audio::core::stream::AudioStream;
-use screenpipe_audio::eval::{load_rttm, score_der, RttmSegment};
 use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
 use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
 use screenpipe_audio::speaker::prepare_segments;
 use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
+use screenpipe_audio_eval::{load_rttm, score_pipeline, RttmSegment};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 #[derive(Parser, Debug)]
@@ -54,45 +54,54 @@ struct Args {
     /// production VAD timing, much slower).
     #[arg(long, default_value_t = false)]
     realtime: bool,
+
+    /// Optional fixture name to embed in the JSON output. Defaults to the
+    /// audio file stem so downstream report-builders don't have to compute it.
+    #[arg(long)]
+    fixture: Option<String>,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let fixture = args.fixture.clone().unwrap_or_else(|| {
+        args.audio
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
     eprintln!("loading rttm: {}", args.rttm.display());
     let reference = load_rttm(&args.rttm).context("load rttm")?;
-    let true_speakers = reference
-        .iter()
-        .map(|s| s.speaker.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
 
     eprintln!("loading audio: {}", args.audio.display());
     // The wav-backed AudioStream subscribes the broadcast channel. We don't
     // actually consume it here — `prepare_segments` operates directly on the
     // decoded samples. Owning the stream is enough to verify the constructor
-    // path (and a future iteration that drives AudioManager will subscribe).
+    // path (a future iteration that drives AudioManager will subscribe).
     let _stream = AudioStream::from_wav(&args.audio, args.realtime)
         .await
         .context("from_wav")?;
 
     // We still need raw f32 samples for prepare_segments. Decode once more
-    // (cheap relative to embedding extraction) — keeping the AudioStream
-    // creation in the loop documents the production path even if v1 doesn't
-    // use the subscribed receiver.
+    // (cheap relative to embedding extraction).
     let (samples, source_rate) = screenpipe_audio::pcm_decode(&args.audio)?;
     let samples = if source_rate != 16_000 {
         screenpipe_audio::resample(&samples, source_rate, 16_000)?
     } else {
         samples
     };
+    let total_samples = samples.len();
 
+    // Models live in screenpipe-audio's models dir (kept there so the prod
+    // app and eval crate can share the same on-disk artifacts).
     let project_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let segmentation_model_path = project_dir
+    let audio_crate_dir = project_dir.parent().unwrap().join("screenpipe-audio");
+    let segmentation_model_path = audio_crate_dir
         .join("models")
         .join("pyannote")
         .join("segmentation-3.0.onnx");
-    let embedding_model_path = project_dir
+    let embedding_model_path = audio_crate_dir
         .join("models")
         .join("pyannote")
         .join("wespeaker_en_voxceleb_CAM++.onnx");
@@ -107,9 +116,6 @@ async fn main() -> Result<()> {
     }
 
     eprintln!("loading silero vad...");
-    // SileroVad::new() returns "not available yet" while the HF download is
-    // still in flight (cold caches in CI / fresh dev boxes). Block until
-    // the model is on disk first.
     SileroVad::ensure_model_available().await?;
     let vad: Arc<Mutex<Box<dyn VadEngine + Send>>> =
         Arc::new(Mutex::new(Box::new(SileroVad::new().await?)));
@@ -119,7 +125,8 @@ async fn main() -> Result<()> {
     )?));
     let embedding_manager = Arc::new(std::sync::Mutex::new(EmbeddingManager::new(usize::MAX)));
 
-    eprintln!("running diarization on {} samples...", samples.len());
+    eprintln!("running diarization on {} samples...", total_samples);
+    let started = Instant::now();
     let (mut rx, threshold_met, speech_ratio) = prepare_segments(
         &samples,
         vad,
@@ -138,40 +145,31 @@ async fn main() -> Result<()> {
 
     let mut hypothesis: Vec<RttmSegment> = Vec::new();
     while let Some(seg) = rx.recv().await {
-        // SpeechSegment uses the WeSpeaker cluster id (e.g. "1", "2") as
-        // speaker, "?" if the embedding manager hit force-merge fallback.
-        // Both are fine: greedy mapping handles arbitrary labels.
         hypothesis.push(RttmSegment {
             start: seg.start,
             duration: (seg.end - seg.start).max(0.0),
             speaker: seg.speaker,
         });
     }
-    let predicted_speakers = hypothesis
-        .iter()
-        .map(|s| s.speaker.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
+    let wall_clock = started.elapsed().as_secs_f64();
 
     eprintln!(
-        "scored {} predicted segments against {} reference segments",
+        "scored {} predicted segments against {} reference segments in {:.2}s",
         hypothesis.len(),
-        reference.len()
+        reference.len(),
+        wall_clock
     );
 
-    let score = score_der(&reference, &hypothesis);
+    let score = score_pipeline(&reference, &hypothesis, total_samples, 16_000, wall_clock);
 
-    let out = serde_json::json!({
-        "der": score.der,
-        "false_alarm_rate": score.false_alarm_rate,
-        "missed_detection_rate": score.missed_detection_rate,
-        "speaker_error_rate": score.speaker_error_rate,
-        "total_speech_seconds": score.total_speech_seconds,
-        "predicted_speakers": predicted_speakers,
-        "true_speakers": true_speakers,
-        "predicted_segments": hypothesis.len(),
-        "reference_segments": reference.len(),
-    });
-    println!("{}", serde_json::to_string(&out)?);
+    let mut json = serde_json::to_value(&score)?;
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert("fixture".into(), serde_json::Value::String(fixture));
+        obj.insert(
+            "wall_clock_seconds".into(),
+            serde_json::Value::from(wall_clock),
+        );
+    }
+    println!("{}", serde_json::to_string(&json)?);
     Ok(())
 }

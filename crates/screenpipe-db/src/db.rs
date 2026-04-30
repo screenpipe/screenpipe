@@ -7833,7 +7833,8 @@ pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPos
                 return None;
             }
 
-            let (n_left, n_width) = narrow_bbox_to_needle(text, &text_lower, needle, left, width, height);
+            let (n_left, n_width) =
+                narrow_bbox_to_needle(text, &text_lower, needle, left, width, height);
 
             Some(TextPosition {
                 text: text.to_string(),
@@ -8123,9 +8124,16 @@ mod tests {
     fn test_narrow_bbox_multiline_paragraph_keeps_full() {
         // text is much longer than aspect ratio capacity → multi-line, leave alone
         let long = "Canonicalization. For each neutral-transformed sentence pair, compute a rotor R(n_i) that maps n_i to the reference direction e_1.";
-        let (l, w) = narrow_bbox_to_needle(long, &long.to_lowercase(), "rotor", 50.0, 1400.0, 200.0);
-        assert!((l - 50.0).abs() < 0.01, "multi-line should not narrow left: got {l}");
-        assert!((w - 1400.0).abs() < 0.01, "multi-line should not narrow width: got {w}");
+        let (l, w) =
+            narrow_bbox_to_needle(long, &long.to_lowercase(), "rotor", 50.0, 1400.0, 200.0);
+        assert!(
+            (l - 50.0).abs() < 0.01,
+            "multi-line should not narrow left: got {l}"
+        );
+        assert!(
+            (w - 1400.0).abs() < 0.01,
+            "multi-line should not narrow width: got {w}"
+        );
     }
 
     #[test]
@@ -8139,7 +8147,10 @@ mod tests {
     fn test_narrow_bbox_short_query_floors_width() {
         // single-char query; min_w = height*0.5 = 10, so 1/10*100=10 also lands at floor
         let (_, w) = narrow_bbox_to_needle("abcdefghij", "abcdefghij", "a", 0.0, 100.0, 20.0);
-        assert!(w >= 10.0, "narrow width must be at least height*0.5: got {w}");
+        assert!(
+            w >= 10.0,
+            "narrow width must be at least height*0.5: got {w}"
+        );
     }
 
     #[test]
@@ -8156,8 +8167,16 @@ mod tests {
         assert_eq!(positions.len(), 1);
         // bbox should have narrowed off the leading "the " (4 of 14 chars)
         let pos = &positions[0];
-        assert!(pos.bounds.left > 100.0 + 30.0, "left should shift right: {}", pos.bounds.left);
-        assert!(pos.bounds.width < 140.0, "width should narrow: {}", pos.bounds.width);
+        assert!(
+            pos.bounds.left > 100.0 + 30.0,
+            "left should shift right: {}",
+            pos.bounds.left
+        );
+        assert!(
+            pos.bounds.width < 140.0,
+            "width should narrow: {}",
+            pos.bounds.width
+        );
     }
 
     fn make_search_match(

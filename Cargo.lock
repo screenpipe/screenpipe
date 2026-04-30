@@ -6920,7 +6920,6 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "tokio",
- "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "vad-rs",
@@ -6928,6 +6927,22 @@ dependencies = [
  "which 7.0.3",
  "whisper-rs",
  "windows 0.58.0",
+]
+
+[[package]]
+name = "screenpipe-audio-eval"
+version = "0.3.304"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hound",
+ "screenpipe-audio",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
