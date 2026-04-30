@@ -76,6 +76,7 @@ jobs:
             pkg-config \
             jq \
             libasound2-dev \
+            libpulse-dev \
             libdbus-1-dev \
             libssl-dev \
             cmake \
