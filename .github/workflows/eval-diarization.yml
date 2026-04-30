@@ -216,6 +216,26 @@ jobs:
             cat "/tmp/eval-results/${tpl}.json"
           done
 
+      # Score whisper-tiny against LibriSpeech test-clean. 50 utterances
+      # is enough for a stable mean on most CI runs (~6 min wall) without
+      # blowing the timeout. The model itself is ~75 MB; download is
+      # cached by SileroVad's HF helper alongside other screenpipe
+      # models.
+      - name: Run transcription eval
+        run: |
+          /usr/bin/time -v ./target/release/screenpipe-eval-transcription \
+            --librispeech-dir crates/screenpipe-audio-eval/evals/fixtures/librispeech/LibriSpeech/test-clean \
+            --max-utterances 50 \
+            --whisper-model tiny \
+            > /tmp/eval-results/transcription.json \
+            2>/tmp/eval-results/transcription.stderr || {
+              echo "::error::transcription eval failed"
+              cat /tmp/eval-results/transcription.stderr
+              exit 1
+            }
+          # Echo the headline numbers so they show up in the run log.
+          jq '{mean_wer, mean_cer, utterance_count, throughput_samples_per_sec, model: .whisper_model}' /tmp/eval-results/transcription.json
+
       # Compose a sticky PR comment with one row per fixture. We post via
       # `gh pr comment` rather than a third-party action to keep the deps
       # surface small. Headline columns: DER, VAD FA, VAD FN, boundary err,
@@ -264,6 +284,26 @@ jobs:
             done
             echo
             echo "<sub>DER, VAD FA, VAD FN, boundary err: lower is better. Continuity: higher is better, 1.0 = same hyp cluster across all silence gaps. Composed workday rows (\`interrupted_meeting\`, \`long_silence_day\`) are the headline — they exercise screenpipe-shaped data. Raw VoxConverse rows score broadcast-quality stems for comparison. See \`crates/screenpipe-audio-eval/evals/README.md\` for methodology.</sub>"
+            echo
+            if [ -f /tmp/eval-results/transcription.json ]; then
+              echo "## Transcription quality"
+              echo
+              echo "Source: LibriSpeech test-clean (CC-BY-4.0) · whisper-tiny · normalized lowercased word-level Levenshtein"
+              echo
+              echo "| model | utterances | WER | CER | throughput (samples/s) |"
+              echo "|---|---:|---:|---:|---:|"
+              jq -r '
+                def fmt3: . * 1000 | round / 1000 | tostring;
+                "| " + (.whisper_model | tostring) +
+                " | " + (.utterance_count | tostring) +
+                " | " + (.mean_wer | fmt3) +
+                " | " + (.mean_cer | fmt3) +
+                " | " + (.throughput_samples_per_sec | round | tostring) +
+                " |"
+              ' /tmp/eval-results/transcription.json
+              echo
+              echo "<sub>WER + CER on read-aloud speech. whisper-tiny is the smallest model and gives a useful regression watch even though larger models score better. See README for normalization rules.</sub>"
+            fi
           } > /tmp/eval-report.md
           cat /tmp/eval-report.md
 
