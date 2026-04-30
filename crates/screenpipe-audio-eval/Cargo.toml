@@ -19,7 +19,6 @@ toml = "0.8"
 clap = { version = "4.3", features = ["derive"] }
 hound = "3.5"
 tokio = { workspace = true }
-tracing = { workspace = true }
 
 # The whole point of this crate: drive the screenpipe-audio diarization
 # pipeline using only public API. We pull in screenpipe-audio for

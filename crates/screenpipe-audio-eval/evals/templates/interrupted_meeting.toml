@@ -4,31 +4,32 @@
 
 # Tests cross-session speaker continuity: the same conversation split by a
 # 30-minute silence gap. Diarization must group speakers identically across
-# the gap to score well — that's the bug PR #3107 claims to fix.
+# the gap to score speaker_continuity well — that's the bug PR #3107 claims
+# to fix.
 
 name = "interrupted_meeting"
 description = "Half a meeting, long silence, second half — same speakers must match across the gap"
 
-# Global stable speaker IDs. Maps a per-source label to a stable global label
-# in the output RTTM. Same speaker label in two sources = same global ID.
 [speakers]
-# (empty for this template — auto-mapping via {basename}_{label} already
-# yields stable IDs because both segments come from the same source file)
+# auto-map via {basename}_{label} — both halves come from bxpwa so labels
+# match naturally without manual override
 
+# bxpwa is ~405s in VoxConverse dev (5 speakers). First half:
 [[segments]]
 kind = "audio"
-source = "voxconverse/audio/abjxc.wav"
-rttm = "voxconverse/rttm/abjxc.rttm"
+source = "voxconverse/audio/bxpwa.wav"
+rttm = "voxconverse/rttm/bxpwa.rttm"
 crop_start = 0.0
-crop_end = 360.0          # first 6 minutes of the clip
+crop_end = 180.0
 
 [[segments]]
 kind = "silence"
-duration = 1800.0          # 30 min — represents user typing/working between meetings
+duration = 1800.0          # 30 min "user typing/working between meetings"
 
+# Second half — SAME source, so SAME speakers must keep their cluster ids:
 [[segments]]
 kind = "audio"
-source = "voxconverse/audio/abjxc.wav"
-rttm = "voxconverse/rttm/abjxc.rttm"
-crop_start = 360.0         # second half — SAME source, so SAME speakers
-crop_end = 720.0
+source = "voxconverse/audio/bxpwa.wav"
+rttm = "voxconverse/rttm/bxpwa.rttm"
+crop_start = 180.0
+crop_end = 360.0
