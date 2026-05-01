@@ -165,6 +165,44 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(thinkingBlock.text).toBe("Let me think about this.");
   });
 
+  it("promotes trailing assistant text into a text contentBlock when only thinking was captured (72fffdaf3)", () => {
+    // Real bug: pipe runs that produced a text response WITHOUT ever firing
+    // a tool call left `currentText` sitting in flushAssistant. The renderer
+    // iterates contentBlocks exclusively when blocks exist, so a message
+    // with content="<long response>" + blocks=[thinking] rendered as just
+    // the thinking pill — prose was on disk but invisible. flushAssistant
+    // must promote the trailing currentText into a final text block.
+    //
+    // No `agent_end` here, so the streaming fallback runs and exits via
+    // end-of-input flushAssistant (no turn_end either). On HEAD this yields
+    // contentBlocks=[thinking, text]; on the pre-fix code it yielded
+    // contentBlocks=[thinking] only.
+    const stdout = [
+      '{"type":"message_start","message":{"role":"assistant","content":[]}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"reasoning...","partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Final answer prose.","partial":{}}}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(1);
+    const assistant = msgs[0];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("Final answer prose.");
+    expect(assistant.contentBlocks).toBeDefined();
+    // The renderer iterates contentBlocks exclusively when blocks exist —
+    // the prose MUST exist as a text block, not just live in `content`.
+    const textBlock = assistant.contentBlocks!.find(
+      (b: any) => b.type === "text"
+    );
+    expect(textBlock).toBeDefined();
+    expect(textBlock!.text).toBe("Final answer prose.");
+    // Both blocks should be present, in the order they were produced.
+    expect(assistant.contentBlocks!.map((b: any) => b.type)).toEqual([
+      "thinking",
+      "text",
+    ]);
+  });
+
   // ─── multi-turn conversations ─────────────────────────────────────
 
   it("handles multi-turn: user → assistant → tool → assistant", () => {

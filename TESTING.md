@@ -65,6 +65,7 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **Notification panel order_out** — verify no ghost clicks after hiding notification/shortcut panels. (`32fed7c8c`)
 - [ ] **Excluded windows from screenshots** — Verify that windows specified in the ignore list are correctly excluded from full-monitor screenshots taken via ScreenCaptureKit (SCK). (`61212c429`)
 - [ ] **Swift overlay meeting toggle** — Verify that the meeting toggle in the Swift-based overlay works correctly and reflects the recording state. (`e5e955aa6`)
+- [ ] **shortcut recorder esc/click-outside cancels** — open the shortcut recorder and start recording a new key, then press Esc or click outside. recording cancels and the existing binding is preserved. UX label clearly indicates record state. (commits: `210f1a882`)
 
 
 ### 2. dock icon & tray icon (macOS)
@@ -312,6 +313,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **low disk space** — with <1GB free, app should warn user. no crash from failed writes.
 - [ ] **large database (>10GB)** — search still returns results within 2 seconds. app doesn't freeze on startup.
 - [ ] **Audio chunk timestamps** — `start_time` and `end_time` are correctly set for reconciled and retranscribed audio chunks in the database.
+- [ ] **delete-last-N-min unlinks media + drops cached frames** — Use the "delete last N minutes" retention action. Verify the corresponding `.mp4`/`.wav` files are unlinked from disk AND the in-memory hot-frame cache for the affected window is cleared (subsequent `/data` requests don't return the deleted frames). (commits: `328a3b48f`)
 
 ### 10. AI presets & settings
 
@@ -693,6 +695,7 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Mermaid diagram XSS sanitization** — Verify that mermaid diagrams in the UI are correctly sanitized to prevent XSS attacks. (`3405e9793`)
 - [ ] **Per-machine pipe favorites (stars)** — Toggle the star icon for a pipe. Verify that favorites are persisted per-machine and that the filter chip correctly shows starred pipes first. (`e1a18adb9`, `0a2c1abb7`)
 - [ ] **Connected integrations @mentions in chat** — Open the filter popover in chat. Verify that connected integrations (like Notion, Slack, Google Docs) appear as @mentions for easy filtering. (`1c0c95b20`)
+- [ ] **Pipe trailing assistant prose renders** — Run a pipe whose run produces a text response without ever firing a tool call (thinking + text only). Verify the chat panel shows the response prose, not just a "thought for 0s" pill. The trailing `currentText` must be promoted into a final text content-block. (commits: `72fffdaf3`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -751,6 +754,7 @@ commits: `274a968af`, `dc575e48e`, `81aabbf18`, `d5e071854`, `db08f8c06`, `f4225
 ### 21. Privacy & Incognito Detection
 
 - [ ] **PII Filter** — Toggle the PII filter in chat or search. Verify that sensitive information is filtered using Tinfoil. (`fec0f1023`)
+- [ ] **Disable clipboard capture toggle** — In Privacy settings, toggle "disable clipboard capture". Verify clipboard contents stop being recorded immediately and that the CLI exposes the equivalent `--disable-clipboard` flag (recording.rs). (commits: `48fef33f1`)
 
 
 commits: `ad431b513`, `d9722bccc`, `4df21e83d`
@@ -918,6 +922,9 @@ commits: `5902dd63f`, `627418f7e`, `948689f48`, `1da3ff4f1`, `dad0267f1`, `08a6b
 - [ ] **Meeting notes in focused mode** — Switch to focused mode in meeting notes. Verify sidebar collapses and new meeting is auto-selected. (`a74a928b0`)
 - [ ] **Google Calendar integration in meeting notes** — With Google Calendar connected, verify meetings from both native and Google Calendar appear in the meeting notes list. (`08a6bc5b2`)
 - [ ] **Card-style meeting layout** — View "coming up" and past meetings. Verify card-style layout for upcoming and dense layout for past meetings. (`dad0267f1`)
+- [ ] **Sidebar can be expanded during focused meeting** — During an auto-detected meeting in focused/zen view, click the sidebar expand affordance. Verify the sidebar opens (not silently blocked by focused mode). (commits: `205bf128f`)
+- [ ] **Frame images render + scrubber spans full meeting** — Open a past meeting note. Verify all replay-strip frame images render (no broken-image placeholders) and the scrubber covers the full meeting duration (does not end early). (commits: `08898d016`)
+- [ ] **Open-in-timeline does not pop NSPanel overlay** — From a meeting note, click "open in timeline". Verify ONLY the embedded timeline section navigates; the NSPanel overlay timeline does NOT also pop open (regression: dual-surface). (commits: `bf0fe0e68`)
 
 ### 33. Browser Panel Persistence
 
@@ -925,6 +932,10 @@ commits: `e972146e7`
 
 - [ ] **Browser panel width persistence** — Open the chat panel with browser panel visible. Resize the browser panel. Close and reopen the app. Verify the width is restored to the previous size. (`e972146e7`)
 - [ ] **Browser panel collapsed state persistence** — Toggle the browser panel collapsed state in a conversation. Navigate to a different conversation. Verify the state persists per conversation. (`e972146e7`)
+- [ ] **Browser sidebar width clamped + chat shrinks** — Drag the browser panel to extreme widths. Verify width is clamped and the chat column shrinks rather than the panel overflowing the window. (commits: `35b89d072`)
+- [ ] **Browser /navigate + /snapshot endpoints** — POST to `/api/browser/navigate` with a target URL. Verify the owned-browser webview navigates via Tauri's native `navigate()` (not `eval("location.href = ...")`), the frontend receives `NAVIGATE_EVENT`, and on Windows/WebView2 navigation succeeds even when the window was hidden. POST to `/api/browser/snapshot` returns the page snapshot. (commits: `27e7a28c9`, `700258bd7`)
+- [ ] **Hidden owned-browser shown for code-only eval, then re-hidden** — With the owned-browser window hidden, issue a code-only eval (no URL). Verify the window is briefly shown so the script actually runs, then hidden again on completion or timeout (no permanent reveal). (commits: `700258bd7`)
+- [ ] **Browser-API auth resolver consolidated** — Verify `/browser/*` endpoints honor the consolidated auth-key resolver matching other authenticated endpoints. (commits: `27e7a28c9`, `d7767a5d8`)
 
 ### 34. Connections Updates (Hermes, Bee, Jira)
 
@@ -975,6 +986,10 @@ commits: `e1f55023d`, `20a0e69e4`, `d539be353`, `3def66466`
 - [ ] **Live sidebar status dot** — While current chat session streams, verify the sidebar dot pulses to indicate active streaming. (`20a0e69e4`)
 - [ ] **Chat rename broadcast** — Rename a chat. Verify the rename broadcasts across all open windows and the sidebar stays in sync. (`3def66466`)
 - [ ] **Self-heal stuck writing indicator** — If the "writing…" indicator gets stuck after session return, verify it self-heals automatically. (`d539be353`)
+- [ ] **Assistant message persists during streaming** — Start a long Pi response. Mid-stream, force-quit the app. Relaunch. Verify the partial assistant message is on disk (not silently lost); persistence happens during streaming, not only on stream-end. (commits: `35a8cfc09`)
+- [ ] **Queued messages de-emphasised + first thought collapsed** — Send several queued chat messages. Verify queued messages render with a muted/de-emphasised style and the first thinking block is collapsed by default. (commits: `2fff98866`)
+- [ ] **Auto-expand thinking + tool blocks when no prose** — In a chat message that has only thinking/tool content-blocks (no text), verify those blocks auto-expand so the user sees something. (commits: `c092166e0`)
+- [ ] **Backgrounded panel session not marked unread** — Open a chat in the panel, navigate away (currentId clears, panelSessionId still set). Verify late deltas for the panel session do NOT mark it unread. (commits: `245cbd3e6`, `11207a894` covers this in chat-store.test.ts)
 
 ### 40. PI Queue & Agent Start Gating
 
@@ -1060,6 +1075,13 @@ commits: `532f66318`
 
 - [ ] **User browser URL open toast** — Verify user browser shows toast feedback when opening URLs. (`532f66318`)
 - [ ] **Clipboard fallback for URL open** — Verify clipboard is used as fallback if `openUrl` fails. (`532f66318`)
+
+### 51. File viewer
+
+commits: `bf0fe0e68`
+
+- [ ] **Viewer cold-start latency** — Click "View Log" on a notification while in dev mode. Verify `/viewer` first-load JS dropped from ~394 kB to ~192 kB (PrismAsyncLight lazy-loads language packs) and the page becomes interactive within ~1s. (commits: `bf0fe0e68`)
+- [ ] **Viewer Copy button (⇧⌘C)** — Open the file viewer on a JSON file. Click the Copy button (or ⇧⌘C). Verify the clipboard receives prettified JSON. For non-JSON it copies content as-is. The button is hidden for images/binaries/errors/empty files. Plain ⌘C still works for OS text-selection copy. (commits: `bf0fe0e68`)
 
 ### 31. Chat (Pi)
 
