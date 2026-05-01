@@ -907,6 +907,160 @@ commits: `c6a73b17e`, `945b687ec`
 - [ ] **CLI logout** — Run `screenpipe logout`. Verify it clears local auth tokens. (`793c3d6e9`)
 - [ ] **CLI sync remote** — Verify `screenpipe sync remote` command and its configuration. (`f46e85cb1`)
 
+
+### 32. Meeting Notes & Calendar
+
+commits: `5902dd63f`, `627418f7e`, `948689f48`, `1da3ff4f1`, `dad0267f1`, `08a6bc5b2`, `a74a928b0`
+
+- [ ] **Timeline scrubber in meeting notes** — Open meeting notes for an active/past meeting. Verify the new timeline scrubber UI allows scrubbing through meeting duration to replay specific moments. (`5902dd63f`)
+- [ ] **Meeting notes date label** — View older past meetings in the meeting notes list. Verify date labels appear for meetings older than today (not just clock time). (`1da3ff4f1`)
+- [ ] **Coming up calendar section** — Verify "coming up" section appears at top of meeting notes with auto-enriched active meeting info. (`627418f7e`)
+- [ ] **Meeting notes in focused mode** — Switch to focused mode in meeting notes. Verify sidebar collapses and new meeting is auto-selected. (`a74a928b0`)
+- [ ] **Google Calendar integration in meeting notes** — With Google Calendar connected, verify meetings from both native and Google Calendar appear in the meeting notes list. (`08a6bc5b2`)
+- [ ] **Card-style meeting layout** — View "coming up" and past meetings. Verify card-style layout for upcoming and dense layout for past meetings. (`dad0267f1`)
+
+### 33. Browser Panel Persistence
+
+commits: `e972146e7`
+
+- [ ] **Browser panel width persistence** — Open the chat panel with browser panel visible. Resize the browser panel. Close and reopen the app. Verify the width is restored to the previous size. (`e972146e7`)
+- [ ] **Browser panel collapsed state persistence** — Toggle the browser panel collapsed state in a conversation. Navigate to a different conversation. Verify the state persists per conversation. (`e972146e7`)
+
+### 34. Connections Updates (Hermes, Bee, Jira)
+
+commits: `4927a4a88`, `2d710f358`, `cff243d6e`, `d3793c918`, `9e89a6d4d`
+
+- [ ] **Hermes Agent connection** — In connections, verify the Hermes Agent card appears with instructions to paste screenpipe MCP into `~/.hermes/config.yaml`. (`4927a4a88`)
+- [ ] **Bee wearable integration** — Verify the Bee wearable connection appears in the connections panel and syncs data correctly. (`2d710f358`, `cff243d6e`)
+- [ ] **Jira OAuth 2.0 migration** — Verify Jira connection uses real OAuth 2.0 (3LO) client ID and no longer uses the maintainer-todo banner. (`d3793c918`, `e9db0dace`)
+- [ ] **Unified Hermes + OpenClaw card** — Verify that Hermes Agent and OpenClaw appear under the same AgentCard with MCP/Skill/Sync tabs. (`6802c7d5b`)
+
+### 35. AI Presets & Model Catalog
+
+commits: `8e7edcea0`, `87fe0832c`, `e599e204b`
+
+- [ ] **Live OpenAI model catalog** — In AI presets, verify OpenAI models are fetched live from the API (not hardcoded). New models appear without app update. (`8e7edcea0`)
+- [ ] **Pro vs non-pro preset defaults** — On first launch after identifying pro/non-pro status, verify pro users get pro defaults and non-pro users get standard defaults. (`87fe0832c`)
+- [ ] **Default AIPreset auto-selection** — Verify the default AI preset model is set to "auto" and stale qwen presets are migrated correctly. (`e599e204b`)
+
+### 36. Notifications & File Link Rewriting
+
+commits: `8db351cd3`, `bb232fb28`
+
+- [ ] **File links in notifications** — Send a notification with a file link via the API. Verify the notification rewrites file links to open in the in-app viewer instead of external handlers. (`8db351cd3`)
+- [ ] **Markdown link encoding in notifications** — Verify that already-encoded markdown links in notifications are not double-encoded when displayed. (`bb232fb28`)
+
+### 37. Retention Modes & Data Management
+
+commits: `1f17cb6d5`, `ec610658a`, `b2c30627b`
+
+- [ ] **Retention mode CLI flag** — Run screenpipe with `--retention-mode media-only`. Verify media files are kept while search index is deleted, reclaiming disk space. (`1f17cb6d5`)
+- [ ] **Media-only mode search** — With media-only retention enabled, verify search still works for media metadata. (`ec610658a`)
+- [ ] **Quick delete UI** — Verify one-click delete UI allows removing last 15/30/60 min of recordings. (`b2c30627b`)
+
+### 38. Onboarding & Streaming UX
+
+commits: `d9ad0b8d1`, `689f87298`, `dec32b804`, `8331f21fc`
+
+- [ ] **Streaming prose + thumbnails in onboarding** — On first launch, verify "here's what i picked up" prose streams with activity thumbnails. (`d9ad0b8d1`)
+- [ ] **Onboarding never stuck on quiet engines** — Start screenpipe with minimal activity. Verify onboarding live-feed doesn't freeze or get stuck. (`689f87298`)
+- [ ] **Prose fallback when stream fails** — If LLM stream fails during onboarding, verify friendly fallback renders locally-generated prose. (`8331f21fc`)
+- [ ] **Default prose vs technical toggle** — Verify onboarding defaults to plain prose, switches to technical only on user signals. (`460c62dc4`)
+
+### 39. Chat UX & Queueing
+
+commits: `e1f55023d`, `20a0e69e4`, `d539be353`, `3def66466`
+
+- [ ] **Queued follow-up prompts** — While Pi is streaming, queue a follow-up prompt. Verify it executes immediately after the first stream completes. (`e1f55023d`)
+- [ ] **Live sidebar status dot** — While current chat session streams, verify the sidebar dot pulses to indicate active streaming. (`20a0e69e4`)
+- [ ] **Chat rename broadcast** — Rename a chat. Verify the rename broadcasts across all open windows and the sidebar stays in sync. (`3def66466`)
+- [ ] **Self-heal stuck writing indicator** — If the "writing…" indicator gets stuck after session return, verify it self-heals automatically. (`d539be353`)
+
+### 40. PI Queue & Agent Start Gating
+
+commits: `2949c8126`
+
+- [ ] **PI queue advance gating** — Verify queue advance is gated on `agent_start`, not response ACK. Queue processing should not stall waiting for responses. (`2949c8126`)
+
+### 41. Chat Storage & Reliability
+
+commits: `e2ff708cb`, `71dcbd1ca`, `71559c011`, `6c038aeb8`, `8a13b0e4a`
+
+- [ ] **Unique tmp filename in chat saves** — With concurrent chat saves, verify unique tmp filenames prevent ENOENT errors. (`e2ff708cb`)
+- [ ] **Silent history loss prevention** — Verify chat history is no longer silently lost during concurrent saves. (`71dcbd1ca`)
+- [ ] **fs:allow-rename permission for chat** — Verify atomic chat saves have the fs:allow-rename permission granted. (`71559c011`)
+- [ ] **Windows filename sanitization** — On Windows, verify pipe-run session filenames are sanitized to prevent silent history loss. (`6c038aeb8`)
+- [ ] **Mirror messages before disk write** — Verify messages are mirrored into the store before writing to disk. (`8a13b0e4a`)
+
+### 42. Accessibility & Browser Controls
+
+commits: `43c7c249e`, `0db2466d7`, `1510f260e`, `8489471a4`, `c4051d521`
+
+- [ ] **Owned browser with Rust screen-coord math** — Verify owned browser screen coordinate math is handled on the Rust side correctly. (`43c7c249e`)
+- [ ] **Owned browser top-level WebviewWindow** — Verify owned browser uses top-level WebviewWindow instead of nested windows. (`0db2466d7`)
+- [ ] **Owned browser cross-origin eval** — Verify cross-origin eval works correctly in owned browser. (`0db2466d7`)
+- [ ] **Owned browser window parent fallback** — Verify owned browser picks any available window as parent (not just "main"). (`1510f260e`)
+- [ ] **Owned browser home in parent candidate list** — Verify "home" window appears in owned browser parent window candidate list. (`8489471a4`)
+
+### 43. AI Gateway & E2EE Proxy
+
+commits: `bbbd4c3b6`, `65f7928a2`
+
+- [ ] **E2EE proxy routes in AI gateway** — Verify tinfoil E2EE proxy routes are available in AI gateway. (`bbbd4c3b6`)
+- [ ] **AI gateway reasoning content promotion** — Verify `reasoning_content` is promoted to `content` when `content` is empty in AI gateway responses. (`65f7928a2`)
+
+### 44. Audio Pipeline Improvements
+
+commits: `da8c5b89d`, `a2e89b2ae`, `357e4dfcc`, `02c27c0b1`
+
+- [ ] **Audio diarization evaluation** — Verify audio diarization evaluation harness produces correct speaker identification metrics. (`da8c5b89d`)
+- [ ] **Zero-fill device hijack detection** — Verify audio stream detects zero-fill device hijack and alerts user. (`a2e89b2ae`)
+- [ ] **Zero-fill watchdog after stream health** — Verify zero-fill watchdog only triggers after stream has been healthy. (`357e4dfcc`)
+
+### 45. Tray & Auto-Resume
+
+commits: `bf42a9128`, `532f66318`
+
+- [ ] **Tray pause/auto-resume toggle** — Click pause in tray menu. Verify a live tooltip appears and `/notify` sends auto-resume indicator. (`532f66318`)
+- [ ] **Tray upgrade button** — Verify clicking the tray's upgrade button opens in-app checkout. (`bf42a9128`)
+- [ ] **Modernized tray menu** — Verify tray menu has the modernized design layout. (`bf42a9128`)
+- [ ] **Recording toggle in tray** — Verify tray menu has single toggle to start/stop recording. (`bf42a9128`)
+
+### 46. OCR & Vision Pipeline
+
+commits: `6f3f80dd3`, `3def66466`, `43c7c249e`
+
+- [ ] **Apple OCR word-level records** — Verify OCR keeps apple per-word records on fast path without duplication. (`6f3f80dd3`)
+- [ ] **Search highlight tightness** — Verify per-word search highlights are tight and accurate. (`790624e1e`)
+
+### 47. Timeline & Search Navigation
+
+commits: `a83afa951`, `68b936e0e`, `068151344`
+
+- [ ] **Timeline search navigation polish** — Verify search nav responds to ⌘G, strips dots from query, and pulses gently. (`a83afa951`)
+- [ ] **Timeline search chevron direction** — Verify ▶ advances forward in time and ◀ goes backward. (`68b936e0e`)
+
+### 48. Windows-specific Improvements
+
+commits: `3e5f6c63f`, `dd8f3e0a9`
+
+- [ ] **Overlay escape key in Windows** — Verify Escape key closes overlay when opened from search on Windows. (`3e5f6c63f`)
+- [ ] **Meeting recording stop button** — Verify meeting recording stop button works and push-driven status stream updates. (`dd8f3e0a9`)
+
+### 49. Skill Installation & Downloads
+
+commits: `29ca22a81`
+
+- [ ] **Skill download fs scope** — Verify skill installation grants proper `$DOWNLOAD` fs scope for downloads. (`29ca22a81`)
+- [ ] **Skill install loading UX** — Verify skill installation shows loading/saved/error UX states. (`29ca22a81`)
+
+### 50. User Browser & Clipboard
+
+commits: `532f66318`
+
+- [ ] **User browser URL open toast** — Verify user browser shows toast feedback when opening URLs. (`532f66318`)
+- [ ] **Clipboard fallback for URL open** — Verify clipboard is used as fallback if `openUrl` fails. (`532f66318`)
+
 ### 31. Chat (Pi)
 
 - [ ] **Parallel chats** — Verify that multiple chat sessions can run in parallel and their background streams remain visible when switching. (`c9d64ce23`)
