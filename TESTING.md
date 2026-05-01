@@ -760,6 +760,7 @@ commits: `ad431b513`, `d9722bccc`, `4df21e83d`
 - [ ] **Incognito detection UI feedback** — Verify that the UI correctly reflects when an incognito window is being ignored.
 - [ ] **DRM pause behavior** — Play DRM-protected content (e.g., Netflix in Safari). Verify that Screenpipe pauses recording gracefully and resumes automatically once the DRM content is closed, without crashing the server. (`3d9f0e8bb`)
 - [ ] **LAN-access toggle** — Toggle "Enable LAN access" in API settings. Verify that the API binds to `0.0.0.0` and that `api_auth` is forcibly enabled for security. (`c8d9c83f0`)
+- [ ] **disable clipboard capture toggle** — In Privacy settings, turn off "capture clipboard". Verify clipboard copy/paste events and contents are not recorded. CLI mirrors via `--disable-clipboard-capture` and the Copy CLI Command dialog emits the flag. Default stays ON for existing users. (commits: `48fef33f1`)
 
 commits: `fc830b43`
 
@@ -914,3 +915,45 @@ commits: `c6a73b17e`, `945b687ec`
 - [ ] **Persistent background chats** — Verify that chats continue to stream in the background even when navigating away from the chat view. (`0060ae9e5`, `ec5e80992`)
 - [ ] **Inline history in overlay** — Verify that inline history is restored in the overlay window. (`15b419ec7`)
 - [ ] **Notification URL actions** — Open a URL action from a native macOS notification when the overlay is not mounted. (`7fdcd2054`)
+- [ ] **chat history doesn't drop messages on stream-end race** — Send a chat, mid-stream tab away to another conversation and back. Assistant message must be persisted (not lost when only saved on stream-end). (commits: `35a8cfc09`)
+- [ ] **chat-storage concurrent-save ENOENT** — Trigger two saves to the same chat near-simultaneously (e.g., rapid streaming chunks). Both succeed, no `ENOENT` from a shared tmp filename collision. (commits: `e2ff708cb`)
+- [ ] **chat-storage no silent history loss** — Run `pipe-run` flows on Windows; sanitize filename keeps file path valid; verify history is not silently dropped on disk. (commits: `71dcbd1ca`, `6c038aeb8`)
+- [ ] **chat sidebar dot pulses while streaming** — While a chat streams, switch to another conversation in the sidebar. The originating chat's sidebar entry shows a live pulsing dot. (commits: `20a0e69e4`)
+- [ ] **chat self-heals stuck "writing…" indicator** — Background a streaming chat, return to it. The "writing…" indicator must reset / heal if the stream already finished. (commits: `d539be353`)
+- [ ] **chat auto-expands thinking + tool blocks when no prose** — When an assistant message has only thinking/tool blocks (no visible prose), those blocks must auto-expand on render. (commits: `c092166e0`)
+- [ ] **queued chat messages de-emphasised + first-thought collapsed by default** — Send several messages while one is streaming. Queued messages render de-emphasised; the first "thinking" block of a new response is collapsed by default. (commits: `2fff98866`)
+- [ ] **don't mark backgrounded panel chat session as unread** — Open chat in panel, background the panel. Returning to panel must not flag the active session as unread. (commits: `245cbd3e6`)
+- [ ] **pipe-ndjson trailing assistant text → content block** — Stream a pipe whose ndjson ends with bare assistant text (no closing block marker). Final text must be promoted to a real content block, not lost. (commits: `72fffdaf3`)
+- [ ] **pi-queue gates advance on agent_start** — Queue advance triggers on `agent_start` event, not on response ACK. Manually delay agent_start; queue must wait. (commits: `2949c8126`)
+- [ ] **skill install grants $DOWNLOAD fs scope + UX states** — Install a skill from settings. Verify loading / saved / error states render and that the install can write into the $DOWNLOAD scope. (commits: `29ca22a81`)
+
+### 32. Meeting Notes
+
+- [ ] **timeline scrubber replaces per-row drawer** — Open meeting notes for a past meeting. Verify the timeline scrubber renders along the bottom (no per-row drawer regression) and seeks playback. (commits: `5902dd63f`)
+- [ ] **frame images render + scrubber covers full meeting** — Open a meeting with frames. Frame images must load (not broken) and the scrubber must extend to the meeting end (not stop early). (commits: `08898d016`)
+- [ ] **sidebar can be expanded during a focused meeting** — Open a focused meeting view. The sidebar expand control must work (regression: was disabled while focused). (commits: `205bf128f`)
+- [ ] **older past meetings show date, not just clock** — Open the past-meetings list. Yesterday's and older meetings must show a date label; today's still show clock-only. (commits: `1da3ff4f1`)
+
+### 33. Browser panel & viewer
+
+- [ ] **browser panel persists width + collapsed state per conversation** — Resize / collapse the browser panel inside one chat conversation, switch conversations, return. State must be restored per-conversation. (commits: `e972146e7`)
+- [ ] **browser sidebar width clamped, chat shrinks** — Resize the browser panel to extreme widths. Chat area must shrink to fit; panel must not overflow viewport. (commits: `35b89d072`)
+- [ ] **viewer faster + copy** — Open the viewer page; verify perceived load is fast and the copy button copies the displayed text. (commits: `bf0fe0e68`)
+- [ ] **browser-api `/navigate` + `/snapshot` + clean auth resolver** — Hit `POST /navigate` and `GET /snapshot` against the local browser API; both succeed with the unified auth resolver (single API-key lookup path). (commits: `27e7a28c9`)
+
+### 34. Retention
+
+- [ ] **"delete last N min" actually unlinks mp4/wav + drops cached frames** — Use the "delete last N minutes" action. Verify: (a) mp4/wav files are removed from disk, (b) hot frame cache no longer returns those frames, (c) DB rows are gone. (commits: `328a3b48f`)
+
+### 35. Shortcuts
+
+- [ ] **cancel recording on esc / click-outside** — Open the recording shortcut row, start capturing a new shortcut, press Esc or click outside. Capture cancels and label reflects unchanged state. (commits: `210f1a882`)
+
+### 36. AI presets (live model catalog)
+
+- [ ] **fetch live OpenAI model catalog** — In AI presets, choose OpenAI as provider. Model dropdown must be populated from the live OpenAI model catalog (not the previous hardcoded `gpt-4` only). Selection persists. (commits: `8e7edcea0`)
+
+### 37. Connections (new agents)
+
+- [ ] **Hermes Agent connection** — Settings → Connections → Hermes Agent. Configure to write screenpipe MCP into `~/.hermes/config.yaml` and verify the file is updated. (commits: `4927a4a88`)
+- [ ] **Bee wearable connection** — Settings → Connections → Bee. Authorize and verify the Bee card appears with status. (commits: `2d710f358`)
