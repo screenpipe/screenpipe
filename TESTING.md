@@ -303,6 +303,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **Data directory setting location** — Verify that the data directory setting is now located in the "Storage" tab of the settings menu. (`0d3ffe30a`)
 - [ ] **store.bin encryption** — Enable "Encrypt store.bin" in settings (Privacy > Security). Verify that `store.bin` is encrypted and correctly decrypted on startup using the OS keychain. (`143875207`, `aee1cd2b5`, `85ecd7935`)
 - [ ] **graceful keychain denial** — On macOS, deny keychain access for store encryption. Verify the app handles it gracefully and falls back to unencrypted store if necessary or warns the user. (`b9c01b916`)
+- [ ] **delete last N min — files actually unlinked** — Use the "delete last N minutes" retention action. Verify that the underlying `mp4` and `wav` files are actually removed from disk and that cached frames are dropped (not just the DB rows). (commits: `328a3b48f`)
 
 - [ ] **slow DB insert warning** — check logs. "Slow DB batch insert" warnings should be <1s in normal operation. >3s indicates contention.
 - [ ] **concurrent DB access** — UI queries + recording inserts happening simultaneously. no "database is locked" errors.
@@ -337,6 +338,7 @@ commits: `8a5f51dd`, `0b0d8090`, `7e58564e`, `2522a7e2`, `f3e55dbc`, `79f2913f`
 - [ ] **privacy settings reordering** — Verify that the Security section appears first in the Privacy settings tab. (`4718785b6`)
 - [ ] **password field filtering** — Verify that password fields are skipped in the accessibility tree and not stored as OCR/text. (`8159641f5`, `d39e42e5b`)
 - [ ] **browser extension popup filtering** — Verify that browser extension popups (like Bitwarden) are filtered and not captured in the accessibility tree or as black frames. (`52d20987a`, `449ae7a68`, `931db40b6`)
+- [ ] **OpenAI live model catalog** — Configure an OpenAI preset. Verify the model dropdown lists the live model catalog (not a hardcoded `gpt-4` only) and that newly available models appear without an app update. (commits: `8e7edcea0`)
 
 commits: `8a5f51dd`, `0b0d8090`
 
@@ -693,6 +695,9 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Mermaid diagram XSS sanitization** — Verify that mermaid diagrams in the UI are correctly sanitized to prevent XSS attacks. (`3405e9793`)
 - [ ] **Per-machine pipe favorites (stars)** — Toggle the star icon for a pipe. Verify that favorites are persisted per-machine and that the filter chip correctly shows starred pipes first. (`e1a18adb9`, `0a2c1abb7`)
 - [ ] **Connected integrations @mentions in chat** — Open the filter popover in chat. Verify that connected integrations (like Notion, Slack, Google Docs) appear as @mentions for easy filtering. (`1c0c95b20`)
+- [ ] **pipe ndjson trailing prose visible** — Run a pipe whose final assistant message is plain text and never invokes a tool. Verify the chat panel renders the prose, not just a "thought for 0s" pill. Trailing text must be promoted into a content block alongside any thinking block. (commits: `72fffdaf3`)
+- [ ] **pi-queue advance on agent_start** — Queue several pipe/Pi commands rapidly. Verify the queue advances when the agent actually starts (`agent_start`), not on the response ACK — no stuck queues, no double-fires. (commits: `2949c8126`)
+- [ ] **skill install — fs scope + UX** — Install a Screenpipe skill from the UI. Verify the `$DOWNLOAD` filesystem scope is granted (no Tauri "not allowed" error) and the agent card shows loading → saved (or error) states clearly. (commits: `29ca22a81`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -760,6 +765,7 @@ commits: `ad431b513`, `d9722bccc`, `4df21e83d`
 - [ ] **Incognito detection UI feedback** — Verify that the UI correctly reflects when an incognito window is being ignored.
 - [ ] **DRM pause behavior** — Play DRM-protected content (e.g., Netflix in Safari). Verify that Screenpipe pauses recording gracefully and resumes automatically once the DRM content is closed, without crashing the server. (`3d9f0e8bb`)
 - [ ] **LAN-access toggle** — Toggle "Enable LAN access" in API settings. Verify that the API binds to `0.0.0.0` and that `api_auth` is forcibly enabled for security. (`c8d9c83f0`)
+- [ ] **disable clipboard capture toggle** — Toggle "disable clipboard capture" in privacy settings (and via the corresponding CLI flag). Verify that copy events are not recorded after the toggle is on, and that the setting round-trips through the CLI flag. (commits: `48fef33f1`)
 
 commits: `fc830b43`
 
@@ -888,6 +894,10 @@ commits: `c8769545b`, `4f522325b`, `54000c295`
 - [ ] **Google Docs connection & Pro gate** — Verify that Google Docs connection works and that the "Pro required" gate correctly appears for non-pro users on the connect button. (`9835b09d8`, `dbf451f34`, `dda16447c`, `e3a2be5cb`)
 - [ ] **Bitrix24 CRM integration** — Verify that Bitrix24 CRM connection can be authorized and syncs data correctly. (`55026df56`)
 - [ ] **OAuth auto-refresh** — Verify that expired OAuth tokens for generic proxy connections (like Google, Bitrix24) are automatically refreshed. (`d7835eabb`)
+- [ ] **Hermes Agent connection** — In Settings → Connections, set up the Hermes agent. Verify the Hermes config at `~/.hermes/config.yaml` is updated with the screenpipe MCP block and that the Hermes card reflects connected state. (commits: `4927a4a88`)
+- [ ] **Bee wearable connection** — Add the Bee wearable connection from the connections list. Verify auth completes and data syncs through the Rust connection backend (post-move from JS). (commits: `2d710f358`, `cff243d6e`)
+- [ ] **Hermes / OpenClaw card label** — Verify OpenClaw is labeled as "Hermes / OpenClaw" in the connections grid and that both still launch via their shared agent card (MCP / Skill / Sync tabs). (commits: `2d710f358`)
+- [ ] **browser API: /navigate + /snapshot** — Hit `POST /browser/navigate` (with a URL) and `POST /browser/snapshot` against the engine's owned browser. Verify the page navigates, the snapshot returns a structured response, and the new shared auth resolver does not regress existing key resolution. (commits: `27e7a28c9`)
 
 ### 28. Deployment & Remote Management
 
@@ -914,3 +924,22 @@ commits: `c6a73b17e`, `945b687ec`
 - [ ] **Persistent background chats** — Verify that chats continue to stream in the background even when navigating away from the chat view. (`0060ae9e5`, `ec5e80992`)
 - [ ] **Inline history in overlay** — Verify that inline history is restored in the overlay window. (`15b419ec7`)
 - [ ] **Notification URL actions** — Open a URL action from a native macOS notification when the overlay is not mounted. (`7fdcd2054`)
+- [ ] **chat-storage: persist during streaming** — Send a chat prompt. Force-quit the app mid-stream (before stream-end). Relaunch. Verify the partial assistant message is still on disk — saves now happen during streaming, not only on stream-end. (commits: `35a8cfc09`)
+- [ ] **chat-storage: unique tmp filename** — Trigger two concurrent saves on the same conversation (e.g., rapid edits or parallel streams). Verify neither save fails with `ENOENT` because of a tmp filename collision. (commits: `e2ff708cb`)
+- [ ] **chat-storage: no silent history loss** — Open a chat, send messages, navigate away and back. Verify no messages disappear from the on-disk history (no silent drops between saves). (commits: `71dcbd1ca`)
+- [ ] **chat-storage: filename sanitized for Windows** — On Windows, run a pipe whose session id is `pipe:<name>:<execId>` (contains colons). Verify the conversation file is saved (no os error 123). The filename must replace `<>:"/\|?*` with `_`. (commits: `6c038aeb8`)
+- [ ] **chat: queued messages dimmed + first thought collapsed** — Queue several chat messages. Verify queued messages are visually de-emphasised. Verify the first thinking block in a brand-new chat starts collapsed. (commits: `2fff98866`)
+- [ ] **chat: auto-expand thinking + tool blocks when no prose** — Send a chat that produces a thinking block + tool calls but no prose. Verify thinking and tool blocks auto-expand so the message is not just an empty pill. (commits: `c092166e0`)
+- [ ] **chat: live sidebar dot pulses while streaming** — Start a chat that streams a long response. Switch sidebar focus to that chat. Verify the live indicator dot pulses while the current chat streams. (commits: `20a0e69e4`)
+- [ ] **chat: self-heal stuck "writing…" indicator** — Background a chat session that is mid-stream, then return to it. Verify the "writing…" indicator clears itself if the stream is no longer active. (commits: `d539be353`)
+- [ ] **chat: backgrounded panel session not unread** — Open a chat in the panel session, then switch to another window. New activity in the backgrounded panel session must NOT be marked unread (panelSessionId guard). (commits: `245cbd3e6`, test fixture `11207a894`)
+- [ ] **browser-panel: width + collapsed state per conversation** — Resize the browser panel and collapse it on one conversation. Switch conversations. Verify each conversation remembers its own panel width and collapsed state. (commits: `e972146e7`)
+- [ ] **browser-sidebar: width clamped, chat shrinks** — Drag the browser sidebar wider than the viewport. Verify width clamps and the chat area shrinks rather than the panel overflowing. (commits: `35b89d072`)
+- [ ] **shortcuts: cancel recording on esc/click-outside** — Open the shortcut-recording dialog, then press Esc or click outside. Verify the recording cancels and the existing binding is preserved. UX labels reflect the cancel path. (commits: `210f1a882`)
+
+### 32. Meeting Notes
+
+- [ ] **meeting-notes sidebar expandable during focused meeting** — Open a focused meeting. Verify the sidebar can still be expanded (it was getting locked closed). (commits: `205bf128f`)
+- [ ] **meeting-notes timeline scrubber replaces drawer** — Open a past meeting. Verify the timeline scrubber is used to navigate within the meeting (instead of the legacy per-row drawer) and works smoothly across the full duration. (commits: `5902dd63f`)
+- [ ] **meeting-notes frame images + scrubber end** — Scrub a past meeting toward the end. Verify frame images render correctly and the scrubber does not stop short of the meeting end time. (commits: `08898d016`)
+- [ ] **past meetings: date shown for older entries** — Open the past meetings list. Verify entries older than today show the date (not just a clock time). (commits: `1da3ff4f1`)

@@ -165,6 +165,42 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(thinkingBlock.text).toBe("Let me think about this.");
   });
 
+  it("promotes trailing text to a text block when no toolcall fires (regression: pipe-runs rendered as 'thought for 0s' only — 72fffdaf3)", () => {
+    // Real-world repro: a pipe run that produced thinking + a final prose
+    // response without ever invoking a tool. The chat renderer iterates
+    // contentBlocks exclusively when blocks exist, so a message with
+    // content="<long answer>" and contentBlocks=[thinking] would render
+    // as just the thinking pill — the prose was on disk but invisible.
+    const stdout = [
+      '{"type":"message_start","message":{"role":"assistant","content":[]}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Considering the request.","partial":{}}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Here is my full response with no tools.","partial":{}}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Here is my full response with no tools."}],"stopReason":"stop"}}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+    expect(msgs).toHaveLength(1);
+    const assistant = msgs[0];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.contentBlocks).toBeDefined();
+
+    // The renderer iterates contentBlocks exclusively when blocks exist,
+    // so the prose MUST live in a text block — having it only in
+    // message.content makes it invisible.
+    const textBlock = assistant.contentBlocks!.find(
+      (b: any) => b.type === "text",
+    );
+    expect(textBlock).toBeDefined();
+    expect(textBlock.text).toBe("Here is my full response with no tools.");
+
+    // And the thinking block should still be there alongside it.
+    const thinkingBlock = assistant.contentBlocks!.find(
+      (b: any) => b.type === "thinking",
+    );
+    expect(thinkingBlock).toBeDefined();
+    expect(thinkingBlock.text).toBe("Considering the request.");
+  });
+
   // ─── multi-turn conversations ─────────────────────────────────────
 
   it("handles multi-turn: user → assistant → tool → assistant", () => {
