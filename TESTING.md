@@ -376,9 +376,10 @@ commits: `87abb00d`, `9464fdc9`, `0f9e43aa`, `7ea15f32`
 
 ### 12. timeline & search
 
-commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`, `50ff4f4c`, `91cc4371`, `bcce42796`, `a98fa2991`, `0ff93b167`, `adbbb8f84`
+commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`, `50ff4f4c`, `91cc4371`, `bcce42796`, `a98fa2991`, `0ff93b167`, `adbbb8f84`, `b628048a2`
 
 - [ ] **arrow key navigation** — left/right arrow keys navigate timeline frames (`f1255eac`).
+- [ ] **empty-state navigation buttons** — In empty timeline state (no frames yet), left/right navigation buttons navigate in the correct direction (`b628048a2`).
 - [ ] **search results sorted by time** — search results appear in chronological order (`25cbdc6b`).
 - [ ] **no frame clearing during navigation** — navigating timeline doesn't cause frames to disappear and reload (`2529367d`).
 - [ ] **URL detection in frames** — URLs visible in screenshots are extracted and shown as clickable pills (`50ef52d1`, `aa992146`).
