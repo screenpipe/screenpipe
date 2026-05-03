@@ -204,12 +204,12 @@ export function PrivacySection() {
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const [pushingFilter, setPushingFilter] = useState<string | null>(null);
 
-  // Live API auth key — fetched from the running server, not user-editable.
-  // Letting users set their own opens the door to weak/known keys; the server
-  // auto-generates a strong `sp-<uuid8>` and persists it to the secret store.
   const [liveApiKey, setLiveApiKey] = useState<string | null>(null);
   const [revealApiKey, setRevealApiKey] = useState(false);
   const [regeneratingKey, setRegeneratingKey] = useState(false);
+  // Tracks a manually-typed key that hasn't been persisted yet. Set on input
+  // change, cleared after handleUpdate saves it to the secret store.
+  const [pendingApiKey, setPendingApiKey] = useState<string | null>(null);
 
   const loadLiveApiKey = useCallback(async () => {
     try {
@@ -263,6 +263,12 @@ export function PrivacySection() {
     });
 
     try {
+      if (pendingApiKey) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("set_api_auth_key", { key: pendingApiKey });
+        setPendingApiKey(null);
+      }
+
       // Offline mode force-disables PostHog but keeps Sentry for crash reports
       const analyticsEffective = settings.offlineMode ? false : settings.analyticsEnabled;
       if (!analyticsEffective) {
@@ -536,8 +542,8 @@ export function PrivacySection() {
               <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
                 <Input
                   type="text"
-                  readOnly
-                  placeholder={liveApiKey ? "" : "(loading…)"}
+                  readOnly={!revealApiKey}
+                  placeholder="e.g. sp-abc12345"
                   value={
                     liveApiKey
                       ? revealApiKey
@@ -545,6 +551,23 @@ export function PrivacySection() {
                         : "•".repeat(Math.min(liveApiKey.length, 32))
                       : ""
                   }
+                  onChange={(e) => {
+                    if (!revealApiKey) return;
+                    const val = e.target.value;
+                    setLiveApiKey(val);
+                    setPendingApiKey(val);
+                    if (!val.trim()) {
+                      setValidationErrors((prev) => ({ ...prev, apiKey: "API key cannot be empty" }));
+                    } else {
+                      setValidationErrors(({ apiKey: _, ...rest }) => rest);
+                    }
+                    setHasUnsavedChanges(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && pendingApiKey && pendingApiKey.trim()) {
+                      handleUpdate();
+                    }
+                  }}
                   onClick={(e) => (e.target as HTMLInputElement).select()}
                   className="h-8 text-xs font-mono cursor-text select-all"
                 />
@@ -590,19 +613,19 @@ export function PrivacySection() {
                   title="Regenerate key"
                   disabled={regeneratingKey}
                   onClick={async () => {
-                    if (
-                      !window.confirm(
-                        "Regenerate API key? The browser extension and any other clients will need the new key. The new key takes effect after you Apply & Restart.",
-                      )
-                    ) {
-                      return;
-                    }
+                    const { confirm } = await import("@tauri-apps/plugin-dialog");
+                    const confirmed = await confirm(
+                      "Regenerate API key? The browser extension and any other clients will need the new key. The new key takes effect after you Apply & Restart.",
+                      { title: "screenpipe", kind: "info" },
+                    );
+                    if (!confirmed) return;
                     setRegeneratingKey(true);
                     try {
                       const { invoke } = await import("@tauri-apps/api/core");
                       const newKey = await invoke<string>("regenerate_api_auth_key");
                       setLiveApiKey(newKey);
                       setRevealApiKey(true);
+                      setHasUnsavedChanges(true);
                       toast({
                         title: "API key regenerated",
                         description: "Click Apply & Restart for the new key to take effect.",

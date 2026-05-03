@@ -962,6 +962,7 @@ async fn main() {
             commands::is_enterprise_build_cmd,
             commands::get_local_api_config,
             commands::regenerate_api_auth_key,
+            commands::set_api_auth_key,
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
             commands::save_enterprise_license_key,

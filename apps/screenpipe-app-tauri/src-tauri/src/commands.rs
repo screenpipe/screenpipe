@@ -305,6 +305,17 @@ pub async fn regenerate_api_auth_key() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Persist a user-supplied API auth key to the secret store.
+/// The running server keeps its in-memory key until restart.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_api_auth_key(key: String) -> Result<(), String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    screenpipe_engine::auth_key::set_api_auth_key(&data_dir, &key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Read the enterprise license key from `enterprise.json`.
 /// Checks in order:
 /// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)

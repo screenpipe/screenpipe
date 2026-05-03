@@ -79,6 +79,24 @@ fn resolve_without_env(
     (k, "auto-generated")
 }
 
+/// Persist a user-supplied key to the secret store, replacing whatever was
+/// there before. The running server keeps its in-memory key until restart.
+pub async fn set_api_auth_key(data_dir: &Path, key: &str) -> Result<()> {
+    anyhow::ensure!(!key.is_empty(), "api auth key must not be empty");
+    let store = open_secret_store(data_dir)
+        .await
+        .map_err(|e| anyhow::anyhow!("could not open secret store: {e}"))?;
+    store
+        .set("api_auth_key", key.as_bytes())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to persist api auth key: {e}"))?;
+    if let Some(home) = dirs::home_dir() {
+        let _ = std::fs::remove_file(home.join(".screenpipe/auth.json"));
+    }
+    tracing::info!("api auth: key updated by user");
+    Ok(())
+}
+
 /// Wipe the persisted key and write a fresh `sp-<uuid8>` to the secret store.
 /// The running server will keep using its in-memory key until restart — caller
 /// is responsible for prompting the user to apply & restart for the new key
