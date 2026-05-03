@@ -71,6 +71,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
 RUN curl -fsSL https://bun.sh/install | bash
 
 # Install Tauri Driver
+ENV PATH="${HOME}/.cargo/bin:${PATH}"
 RUN cargo install tauri-driver
 
 EXPOSE 3000 3030
