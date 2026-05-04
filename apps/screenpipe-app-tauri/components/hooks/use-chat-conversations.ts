@@ -237,6 +237,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         useChatStore.getState().actions.patch(convId, {
           title: conversation.title,
           messageCount: conversation.messages.length,
+          // Clear the draft flag on every save (including the 1.5s auto-save
+          // during streaming). Without this, the sidebar hides the chat for
+          // the entire streaming duration because the auto-save writes the
+          // file to disk but never clears draft:true in the store — so the
+          // chat appears on refresh (file exists) but not in the live sidebar.
+          draft: false,
           ...(conversation.lastUserMessageAt
             ? { lastUserMessageAt: conversation.lastUserMessageAt }
             : {}),

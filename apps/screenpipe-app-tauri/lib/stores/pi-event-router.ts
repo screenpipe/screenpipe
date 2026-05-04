@@ -731,6 +731,17 @@ async function persistBackgroundSession(sid: string): Promise<void> {
 
       try {
         await saveConversationFile(conv);
+        // Mirror what use-chat-conversations.ts does on the foreground
+        // isLoading edge: clear the draft flag so the sidebar shows this
+        // chat immediately, without requiring a manual refresh. Without
+        // this, navigating away from a new chat before the assistant
+        // finishes leaves the session hidden (draft:true) in the sidebar
+        // even though the file is already on disk.
+        useChatStore.getState().actions.patch(sid, {
+          draft: false,
+          title: conv.title,
+          messageCount: conv.messages.length,
+        });
       } catch (e) {
         console.warn("[router] background save failed for", sid, e);
       }
