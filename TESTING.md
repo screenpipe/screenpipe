@@ -54,6 +54,7 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **space monitor doesn't race with show** — show overlay via shortcut. the `activateIgnoringOtherApps` call must not trigger space monitor's hide callback.
 - [ ] **Chat streaming UX** — Verify that chat streaming uses a state-aware grid dissolve loader for a smooth user experience.
 - [ ] **chat always-on-top toggle** — Toggle the "chat always-on-top" setting and verify that the chat window behaves as expected (e.g., stays on top of other applications when enabled). (`b6c363e5`)
+- [ ] **Chat works without login** — Open the chat panel without logging in. Verify that chat UI loads and functions correctly, allowing users to interact with local models without requiring authentication. (`673e372d9`)
 - [ ] **overlay hidden in OBS when screen recording toggle is off** — Verify that the overlay is NOT visible in OBS (or other screen capture tools) when the "show in screen recording" toggle is off. (`87d107a29`)
 - [ ] **resizable shortcut overlay** — Change shortcut overlay size (small/medium/large) in settings and verify it updates correctly on all spaces. (`1e1e17171`)
 - [ ] **overlay resize support for webview fallback** — Verify that the overlay can be resized even when using the webview fallback. (`d095f5994`)
@@ -206,6 +207,7 @@ commits: `6dd5d98e`, `831ad258`
 - [ ] **OCR bounding boxes normalized on Windows/Linux** — On Windows and Linux, verify that OCR bounding boxes are correctly normalized to the 0-1 range, ensuring consistent text overlay and interaction. (`aba74513`)
 - [ ] **Debounced monitor capture errors** — Simulate transient monitor capture errors. Verify that these errors are debounced and do not lead to excessive error logging or app crashes.
 - [ ] **Focus-aware capture** — Enable "Only record focused monitor" in settings. Verify that Screenpipe only captures frames and runs OCR for the monitor that currently has the focused window. (`886b5c05d`)
+- [ ] **Segmentation model circuit breaker** — Verify that corrupted segmentation model outputs trigger a circuit breaker that prevents infinite retry loops. When corruption is detected, the system should gracefully handle failures and log appropriate warnings instead of crashing or hanging. (`74b281234`)
 
 ### 6. Battery Saver Mode
 
@@ -337,6 +339,7 @@ commits: `8a5f51dd`, `0b0d8090`, `7e58564e`, `2522a7e2`, `f3e55dbc`, `79f2913f`
 - [ ] **Unknown AI provider type sanitization** — Configure a malformed or unknown AI provider type (e.g., by manual config edit). Verify the app doesn't crash on startup or when navigating to settings, and gracefully handles the unknown type.
 - [ ] **standalone settings page** — Verify that clicking settings in the tray menu opens a standalone `/settings` page instead of a modal overlay. (`ec2a5789e`)
 - [ ] **optional API auth** — Enable API auth in settings (or via `--api-auth`). Verify that remote access to the API requires the configured token. (`09f18141a`, `cfc1a74e1`)
+- [ ] **API key regenerate UI** — In settings, regenerate the API key. Verify that the cancel button, apply button, and UI state transitions work correctly during key regeneration. (`ff7bdffb8`)
 - [ ] **privacy settings reordering** — Verify that the Security section appears first in the Privacy settings tab. (`4718785b6`)
 - [ ] **password field filtering** — Verify that password fields are skipped in the accessibility tree and not stored as OCR/text. (`8159641f5`, `d39e42e5b`)
 - [ ] **browser extension popup filtering** — Verify that browser extension popups (like Bitwarden) are filtered and not captured in the accessibility tree or as black frames. (`52d20987a`, `449ae7a68`, `931db40b6`)
@@ -486,6 +489,7 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **populate accessibility tree bounds for text overlay on Windows** — On Windows, verify that accessibility tree bounds are correctly populated for text overlay, ensuring accurate positioning and interaction. (`4d20803a`)
 - [ ] **capture full accessibility tree for Chromium/Electron apps on Windows** — On Windows, verify that the full accessibility tree is captured for Chromium/Electron applications. (`2e50c772`)
 - [ ] **Accessibility tree bounds for text overlay** — On Windows, verify that text overlays accurately reflect the accessibility tree bounds, making selection and interaction precise.
+- [ ] **Outlook autocomplete without side effects** — On Windows, open Outlook and use the address/recipient autocomplete feature. Verify that autocomplete suggestions appear correctly and do not cause unexpected UI side effects like removed accessibility properties. (`1fccc76b6`)
 - [ ] **No console flash during GPU detection** — On Windows startup, verify that no temporary console window flashes during the GPU detection process. (`a0aba1643`)
 - [ ] **Filter noisy system apps** — On Windows, verify that noisy system apps are filtered out from screen capture and do not appear in the timeline or search results.
 - [ ] **Settings window instead of overlay** — On Windows, verify that the Settings window is used instead of the overlay for settings, and the shortcut toggle works correctly. (`c13e21b55`)
