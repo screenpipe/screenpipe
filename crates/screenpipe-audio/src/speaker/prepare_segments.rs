@@ -122,6 +122,35 @@ pub async fn prepare_segments(
         }
 
         let segmentation_model_path = segmentation_model_path.unwrap();
+        
+        // Validate the cached model file still exists on disk.
+        // macOS periodically clears ~/Library/Caches, Docker containers get wiped, and
+        // fresh installs have nothing. If the file is missing, fall back to basic segmentation.
+        if !segmentation_model_path.exists() {
+            debug!(
+                "segmentation model file missing at {:?}, falling back to basic segmentation",
+                segmentation_model_path
+            );
+            let mut fallback_segment = Vec::new();
+            fallback_segment.extend_from_slice(&audio_data);
+
+            if tx
+                .send(SpeechSegment {
+                    start: 0.0,
+                    end: fallback_segment.len() as f64 / 16000.0,
+                    samples: fallback_segment,
+                    speaker: "unknown".to_string(),
+                    embedding: Vec::new(),
+                    sample_rate: 16000,
+                })
+                .await
+                .is_ok()
+            {
+                debug!("fallback speech segment sent for {}", device);
+            }
+            return Ok((rx, threshold_met, speech_ratio));
+        }
+        
         let embedding_extractor = embedding_extractor
             .as_ref()
             .expect("embedding extractor checked above")
