@@ -40,6 +40,11 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 - This ensures macOS TCC recognizes the app across rebuilds (permissions persist)
 - Other devs without the cert will see permission issues - onboarding has "continue anyway" button after 5s
 
+### CLI binary (no Apple Developer membership required)
+- `cargo build --release --bin screenpipe` produces a linker-signed Mach-O whose cdhash changes every rebuild, so macOS TCC drops Screen Recording / Accessibility approval each time
+- Run `scripts/setup-dev-signing.sh` once to create a self-signed code-signing cert in your login keychain (no Apple Developer membership)
+- Then build with `scripts/dev-build-cli.sh` instead of `cargo build` — TCC anchors against identity instead of cdhash, so grants persist across rebuilds
+
 ## git usage
 - make sure to understand there is always bunch of other agents working on the same codebase in parallel, never delete local code or use git reset or such
 
