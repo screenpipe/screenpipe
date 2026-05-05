@@ -253,7 +253,7 @@ commits: `d4abc619`, `4f4a8282`, `31f37407`, `2223af9a`, `b34a4abd`, `303958f9`
 
 ### 8. app lifecycle & updates
 
-commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`, `1b36f62d`
+commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`, `1b36f62d`, `42795677d`
 
 - [ ] **clean quit via tray** — right-click tray → Quit. all processes terminate. no orphaned ffmpeg/bun processes.
 - [ ] **clean quit via dock** — right-click dock → Quit. same as above.
@@ -268,6 +268,7 @@ commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`,
 - [ ] **update without tray** — user can update via dock menu "Check for updates" or Apple menu "Check for Updates..." (`d794176a`, `94531265`).
 - [ ] **update banner in main window** — when update available, banner appears at top of main window.
 - [ ] **source build update dialog** — source builds show "source build detected" dialog with link to pre-built version.
+- [ ] **source build update check graceful failure** — On source builds (where endpoints are not set), "Check for Updates" shows no error dialog; the check fails silently and logs a debug message instead of polluting Sentry. (`42795677d`)
 - [ ] **port conflict on restart** — if old process is holding port 3030, new process kills it and starts cleanly (`0378cab1`, `4a3313d3`, `8c435a10`).
 - [ ] **no orphaned processes** — after quit, `ps aux | grep screenpipe` shows nothing. `lsof -i :3030` shows nothing.
 - [ ] **rollback** — user can rollback to previous version via tray menu (`c7fbc3ea`).
