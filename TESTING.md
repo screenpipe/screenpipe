@@ -105,7 +105,7 @@ commits: `28e5c247`
 ### 4. audio device handling
 
 - [ ] **CoreAudio Process Tap** — On macOS 14.4+, verify that system audio defaults to CoreAudio Process Tap and rebuilds if silence is detected. (`75a52603b`, `5634664da`)
-
+- [ ] **audio orphan chunk cleanup** — Verify that corrupt or undecodable audio chunks are orphaned and deleted rather than retried forever. Check logs: should NOT see repeated ffmpeg failures for the same chunk_id. (`32e5dfc44`)
 
 - [ ] **default audio device** — with "follow system default", recording uses whatever macOS says is default.
 - [ ] **plug in USB headset** — if set to follow defaults and macOS switches to headset, recording follows.
@@ -183,10 +183,10 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 
 ### 5. frame comparison & OCR pipeline
 
-commits: `6dd5d98e`, `831ad258`
+commits: `6dd5d98e`, `831ad258`, `b86341d7a`, `a8540a6bc`
 
-commits: `6dd5d98e`, `831ad258`
-
+- [ ] **per-line bbox capture** — In multi-line text paragraphs (e.g., essays, long articles), search highlights should paint only the matching line yellow, not the entire paragraph. Verify on Arc/Safari with Paul Graham essays. (`b86341d7a`)
+- [ ] **chromium line capture via binary search** — On Chromium browsers (Chrome, Edge, Arc), verify line capture works. Browsers implement AXLineForIndex/AXBoundsForRange but not AXRangeForLine; binary search fallback now handles this. (`a8540a6bc`)
 - [ ] **static screen = low CPU** — leave a static image on screen for 60s. CPU should drop below 5% (release build). hash early exit should kick in.
 - [ ] **active screen = OCR runs** — actively browse/type. OCR results appear in search within 5 seconds of screen change.
 - [ ] **identical frames skipped** — check logs for hash match frequency on idle monitors. should be >80% skip rate.
@@ -696,6 +696,8 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **Mermaid diagram XSS sanitization** — Verify that mermaid diagrams in the UI are correctly sanitized to prevent XSS attacks. (`3405e9793`)
 - [ ] **Per-machine pipe favorites (stars)** — Toggle the star icon for a pipe. Verify that favorites are persisted per-machine and that the filter chip correctly shows starred pipes first. (`e1a18adb9`, `0a2c1abb7`)
 - [ ] **Connected integrations @mentions in chat** — Open the filter popover in chat. Verify that connected integrations (like Notion, Slack, Google Docs) appear as @mentions for easy filtering. (`1c0c95b20`)
+- [ ] **@input removal support** — In the chat, verify that @input mentions can be added and removed without errors. (`eb587ba1f`)
+- [ ] **new chat visible in sidebar immediately** — Create a new chat conversation. Verify it appears in the chat sidebar immediately without requiring an app refresh. (`d247af9fe`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -753,6 +755,7 @@ commits: `274a968af`, `dc575e48e`, `81aabbf18`, `d5e071854`, `db08f8c06`, `f4225
 
 ### 21. Privacy & Incognito Detection
 
+- [ ] **Offline mode removed** — Verify that the "Offline Mode" setting no longer appears in Privacy settings (removed in v2.4.133). Analytics and cloud features are always enabled; sandboxing pipes is an OS-level concern. (`3539dd961`)
 - [ ] **PII Filter** — Toggle the PII filter in chat or search. Verify that sensitive information is filtered using Tinfoil. (`fec0f1023`)
 
 
@@ -873,6 +876,14 @@ commits: `f6c21a022`, `31e67ae1c`, `8d0a5348d`, `b1c30e99b`
 - [ ] **Redesigned Onboarding** — Complete the redesigned onboarding. Verify live feed appears and opinionated pipe setup works. (`f6c21a022`)
 - [ ] **Pipes & Fleet merged UI** — Open Pipes tab. Verify fleet devices appear in the dropdown. Verify local machine is filtered/distinct. (`31e67ae1c`, `8d0a5348d`)
 - [ ] **Scheduled vs Manual pipes** — In My Pipes, verify sub-tabs for scheduled and manual pipes. (`b1c30e99b`)
+
+### 16. Pipe Store Performance & Stability
+
+commits: `7f9fd873d`, `8a32e6520`, `5d0b07db1`
+
+- [ ] **pipes list UI responsive** — Open Pipes view with many pipes (>100). Verify UI is responsive and updates instantly. Previously was 1.3–4.7s per call due to ROW_NUMBER window function. (`7f9fd873d`)
+- [ ] **pipes list loads without lag** — In the pipes list, verify no ~1–5s lag when opening. Stdout/stderr is now excluded from list queries and only loaded on expand. (`8a32e6520`)
+- [ ] **remote sync no longer corrupts destination DB** — Test OpenClaw sync to a remote device. Verify destination db.sqlite is not corrupted ("database disk image is malformed"). Uses VACUUM INTO snapshot now instead of live DB during SFTP copy. (`5d0b07db1`)
 
 ### 27. Connections (Multi-instance & New Services)
 
