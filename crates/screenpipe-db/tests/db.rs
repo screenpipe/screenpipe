@@ -82,7 +82,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -135,7 +135,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -160,7 +160,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -220,7 +220,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -245,7 +245,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -345,7 +345,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -370,7 +370,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -562,7 +562,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -590,7 +590,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -617,7 +617,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -648,7 +648,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -674,7 +674,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -804,7 +804,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -832,7 +832,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1292,7 +1292,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1354,7 +1354,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1381,7 +1381,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1459,7 +1459,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1484,7 +1484,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1509,7 +1509,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1602,7 +1602,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1614,6 +1614,42 @@ mod tests {
         } else {
             panic!("Expected UI result from accessibility search");
         }
+    }
+
+    #[tokio::test]
+    async fn test_accessibility_text_only_frame_has_no_image_metadata() {
+        let db = setup_test_db().await;
+
+        let frame_id = db
+            .insert_accessibility_text(
+                "Safari",
+                "Wikipedia",
+                "Hello from accessibility tree",
+                Some("https://en.wikipedia.org"),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            db.get_frame(frame_id).await.unwrap().is_none(),
+            "text-only accessibility frames should not resolve to image or video media"
+        );
+
+        let meta = db
+            .get_no_image_frame_metadata(frame_id)
+            .await
+            .unwrap()
+            .expect("text-only frame metadata should be available");
+        assert_eq!(meta.frame_id, frame_id);
+        assert_eq!(meta.app_name.as_deref(), Some("Safari"));
+        assert_eq!(meta.window_name.as_deref(), Some("Wikipedia"));
+        assert_eq!(
+            meta.browser_url.as_deref(),
+            Some("https://en.wikipedia.org")
+        );
+        assert_eq!(meta.text.as_deref(), Some("Hello from accessibility tree"));
+        assert_eq!(meta.text_source.as_deref(), Some("accessibility"));
+        assert_eq!(meta.device_name.as_deref(), Some("accessibility"));
     }
 
     #[tokio::test]
@@ -1701,7 +1737,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1727,7 +1763,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1776,7 +1812,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1818,7 +1854,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1854,7 +1890,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1890,7 +1926,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1931,7 +1967,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -1977,7 +2013,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -2019,7 +2055,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();
@@ -2043,7 +2079,7 @@ mod tests {
                 None,
                 None,
                 None,
-            None,
+                None,
             )
             .await
             .unwrap();

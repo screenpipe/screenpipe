@@ -310,7 +310,7 @@ pub async fn paired_capture(
         .insert_snapshot_frame_with_ocr(
             ctx.device_name,
             ctx.captured_at,
-            &snapshot_path_str,
+            Some(&snapshot_path_str),
             ctx.app_name,
             ctx.window_name,
             ctx.browser_url,

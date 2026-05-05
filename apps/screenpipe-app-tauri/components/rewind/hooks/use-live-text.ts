@@ -25,7 +25,7 @@ export function useLiveText(opts: {
 	 *  Live Text overlay, keyed by name (e.g. "filters", "scrubber"). */
 	guardRefs?: Record<string, React.RefObject<HTMLDivElement | null>>;
 	/** Adjacent frames for prefetching VisionKit analysis */
-	adjacentFrames?: Array<{ devices?: Array<{ frame_id?: string; metadata?: { file_path?: string } }> } | null>;
+	adjacentFrames?: Array<{ devices?: Array<{ frame_id?: string; metadata?: { file_path?: string | null } }> } | null>;
 }) {
 	const {
 		debouncedFrame,

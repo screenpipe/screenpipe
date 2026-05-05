@@ -133,6 +133,27 @@ impl From<CliTranscriptionMode> for TranscriptionMode {
 }
 
 #[derive(Clone, Debug, ValueEnum, PartialEq)]
+pub enum CliScreenCaptureMode {
+    /// Normal screenshot-backed capture.
+    #[clap(name = "screenshots")]
+    Screenshots,
+    /// Text-only capture through OS accessibility APIs.
+    #[clap(name = "accessibility")]
+    Accessibility,
+}
+
+impl From<CliScreenCaptureMode> for screenpipe_config::ScreenCaptureMode {
+    fn from(mode: CliScreenCaptureMode) -> Self {
+        match mode {
+            CliScreenCaptureMode::Screenshots => screenpipe_config::ScreenCaptureMode::Screenshots,
+            CliScreenCaptureMode::Accessibility => {
+                screenpipe_config::ScreenCaptureMode::Accessibility
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq)]
 pub enum OutputFormat {
     Text,
     Json,
@@ -334,6 +355,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
 
+    /// Screen capture mode: screenshots (default) or accessibility-only text capture
+    #[arg(long, value_enum, default_value_t = CliScreenCaptureMode::Screenshots)]
+    pub screen_capture_mode: CliScreenCaptureMode,
+
     /// Windows to ignore (by title, uses contains matching)
     #[arg(long)]
     pub ignored_windows: Vec<String>,
@@ -473,6 +498,7 @@ impl RecordArgs {
             port: self.port,
             disable_audio: self.disable_audio,
             disable_vision: self.disable_vision,
+            screen_capture_mode: self.screen_capture_mode.clone().into(),
             use_pii_removal: self.use_pii_removal,
             filter_music: self.filter_music,
             #[allow(deprecated)]
@@ -964,6 +990,71 @@ mod tests {
         match cli.command {
             Command::Record(args) => {
                 assert!(!args.pause_on_drm_content, "default should be false");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_screen_capture_mode_default_screenshots() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert_eq!(args.screen_capture_mode, CliScreenCaptureMode::Screenshots);
+                let settings = args.to_recording_settings();
+                assert_eq!(
+                    settings.screen_capture_mode,
+                    screenpipe_config::ScreenCaptureMode::Screenshots
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_screen_capture_mode_accessibility_flag() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--screen-capture-mode",
+            "accessibility",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert_eq!(
+                    args.screen_capture_mode,
+                    CliScreenCaptureMode::Accessibility
+                );
+                let settings = args.to_recording_settings();
+                assert_eq!(
+                    settings.screen_capture_mode,
+                    screenpipe_config::ScreenCaptureMode::Accessibility
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_screen_capture_mode_propagates_to_recording_config() {
+        let cli = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--screen-capture-mode",
+            "accessibility",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                let config = crate::recording_config::RecordingConfig::from_settings(
+                    &settings,
+                    std::path::PathBuf::from("/tmp/sp_test"),
+                    None,
+                );
+                assert!(config.captures_accessibility_only());
+                assert!(!config.captures_screenshots());
             }
             _ => panic!("expected Record command"),
         }

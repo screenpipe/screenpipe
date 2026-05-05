@@ -57,7 +57,7 @@ export interface DeviceFrameResponse {
 }
 
 export interface DeviceMetadata {
-	file_path: string;
+	file_path: string | null;
 	app_name: string;
 	window_name: string;
 	ocr_text: string;

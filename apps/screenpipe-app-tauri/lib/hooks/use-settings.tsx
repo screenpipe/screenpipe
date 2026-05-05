@@ -13,6 +13,7 @@ import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
 export type VadSensitivity = "low" | "medium" | "high";
+export type ScreenCaptureMode = "screenshots" | "accessibility";
 
 export type AIProviderType =
 	| "native-ollama"
@@ -223,6 +224,8 @@ export type Settings = SettingsStore & {
 	offlineMode?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
+	/** Screen capture mode: screenshot-backed frames or accessibility-only text rows */
+	screenCaptureMode?: ScreenCaptureMode;
 	/** Skip clipboard capture in the UI recorder (events + content). Recommended when piping ~/.screenpipe to a remote LLM since passwords / API keys often pass through the clipboard. */
 	disableClipboardCapture?: boolean;
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
@@ -447,6 +450,7 @@ let DEFAULT_SETTINGS: Settings = {
 			searchShortcut: "Control+Super+K",
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
+			screenCaptureMode: "screenshots",
 			disableOcr: false,
 			useAllMonitors: true,
 			showShortcutOverlay: true,
@@ -539,6 +543,14 @@ function createSettingsStore() {
 		let needsUpdate = false;
 		if (!settings.deviceId) {
 			settings.deviceId = crypto.randomUUID();
+			needsUpdate = true;
+		}
+
+		if (
+			settings.screenCaptureMode !== "screenshots" &&
+			settings.screenCaptureMode !== "accessibility"
+		) {
+			settings.screenCaptureMode = "screenshots";
 			needsUpdate = true;
 		}
 

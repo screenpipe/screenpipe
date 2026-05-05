@@ -7,7 +7,7 @@ use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::VocabularyEntry;
 use screenpipe_audio::vad::VadEngineEnum;
-use screenpipe_config::{ChannelConfig, DbConfig};
+use screenpipe_config::{ChannelConfig, DbConfig, ScreenCaptureMode};
 use screenpipe_core::Language;
 use screenpipe_screen::PipelineMetrics;
 use std::path::PathBuf;
@@ -28,6 +28,7 @@ pub struct RecordingConfig {
     // Feature toggles
     pub disable_audio: bool,
     pub disable_vision: bool,
+    pub screen_capture_mode: ScreenCaptureMode,
     pub use_pii_removal: bool,
     /// Filter music-dominant audio before transcription using spectral analysis
     pub filter_music: bool,
@@ -162,6 +163,7 @@ impl RecordingConfig {
             data_dir,
             disable_audio: settings.disable_audio,
             disable_vision: settings.disable_vision,
+            screen_capture_mode: settings.screen_capture_mode.clone(),
             use_pii_removal: settings.use_pii_removal,
             filter_music: settings.filter_music,
             // enable_input_capture / enable_accessibility removed — always true
@@ -242,6 +244,16 @@ impl RecordingConfig {
             },
             encrypt_secrets: false, // desktop app handles keychain via Tauri commands
         }
+    }
+
+    /// True when this run should use screenshot-backed screen capture.
+    pub fn captures_screenshots(&self) -> bool {
+        !self.disable_vision && self.screen_capture_mode == ScreenCaptureMode::Screenshots
+    }
+
+    /// True when this run should write accessibility-only text frames.
+    pub fn captures_accessibility_only(&self) -> bool {
+        !self.disable_vision && self.screen_capture_mode == ScreenCaptureMode::Accessibility
     }
 
     /// Build a `UiRecorderConfig` from this recording config.
@@ -329,6 +341,19 @@ mod tests {
         let c = build(&screenpipe_config::RecordingSettings::default());
         assert_eq!(c.listen_address, Ipv4Addr::LOCALHOST);
         assert!(c.api_auth, "api_auth defaults to true for safety");
+        assert_eq!(c.screen_capture_mode, ScreenCaptureMode::Screenshots);
+        assert!(c.captures_screenshots());
+        assert!(!c.captures_accessibility_only());
+    }
+
+    #[test]
+    fn accessibility_mode_disables_screenshot_capture() {
+        let mut settings = screenpipe_config::RecordingSettings::default();
+        settings.screen_capture_mode = ScreenCaptureMode::Accessibility;
+        let c = build(&settings);
+
+        assert!(c.captures_accessibility_only());
+        assert!(!c.captures_screenshots());
     }
 
     #[test]

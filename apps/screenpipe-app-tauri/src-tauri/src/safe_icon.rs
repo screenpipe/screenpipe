@@ -40,6 +40,16 @@ pub fn safe_set_icon(tray: &TrayIcon, image: Image<'_>) -> anyhow::Result<()> {
 /// Safely set the tray icon and mark it as a template (macOS).
 /// Skips images with zero dimensions to avoid muda panics.
 pub fn safe_set_icon_as_template(tray: &TrayIcon, image: Image<'_>) -> anyhow::Result<()> {
+    safe_set_icon_with_template(tray, image, true)
+}
+
+/// Safely set the tray icon and explicitly choose template rendering.
+/// Warning icons must use non-template rendering so macOS preserves color.
+pub fn safe_set_icon_with_template(
+    tray: &TrayIcon,
+    image: Image<'_>,
+    template: bool,
+) -> anyhow::Result<()> {
     if !is_valid_icon(&image) {
         warn!(
             "skipping tray icon (template): invalid dimensions {}x{} (would crash muda)",
@@ -49,6 +59,6 @@ pub fn safe_set_icon_as_template(tray: &TrayIcon, image: Image<'_>) -> anyhow::R
         return Ok(());
     }
     tray.set_icon(Some(image))?;
-    tray.set_icon_as_template(true)?;
+    tray.set_icon_as_template(template)?;
     Ok(())
 }

@@ -1500,6 +1500,10 @@ vocabularyWords?: VocabEntry[];
  */
 disableVision: boolean; 
 /**
+ * Screen capture mode: screenshot-backed frames or accessibility-only text rows.
+ */
+screenCaptureMode?: "screenshots" | "accessibility"; 
+/**
  * Specific monitor IDs to capture.
  */
 monitorIds: string[]; 

@@ -70,6 +70,20 @@ pub struct EvictMediaResult {
     pub snapshot_files: Vec<String>,
 }
 
+/// Metadata returned when a frame is text-only and has no image media to serve.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NoImageFrameMetadata {
+    pub frame_id: i64,
+    pub timestamp: DateTime<Utc>,
+    pub app_name: Option<String>,
+    pub window_name: Option<String>,
+    pub browser_url: Option<String>,
+    pub text: Option<String>,
+    pub text_source: Option<String>,
+    pub device_name: Option<String>,
+    pub capture_trigger: Option<String>,
+}
+
 /// A transaction wrapper that uses `BEGIN IMMEDIATE` to acquire the write lock upfront,
 /// preventing WAL deadlocks. Automatically rolls back on drop if not committed.
 ///
@@ -1883,7 +1897,7 @@ impl DatabaseManager {
         self.insert_snapshot_frame_with_ocr(
             device_name,
             timestamp,
-            snapshot_path,
+            Some(snapshot_path),
             app_name,
             window_name,
             browser_url,
@@ -2320,7 +2334,7 @@ impl DatabaseManager {
         &self,
         device_name: &str,
         timestamp: DateTime<Utc>,
-        snapshot_path: &str,
+        snapshot_path: Option<&str>,
         app_name: Option<&str>,
         window_name: Option<&str>,
         browser_url: Option<&str>,
@@ -2375,7 +2389,7 @@ impl DatabaseManager {
             .submit(WriteOp::InsertSnapshotFrameWithOcr {
                 device_name: device_name.to_string(),
                 timestamp,
-                snapshot_path: snapshot_path.to_string(),
+                snapshot_path: snapshot_path.map(String::from),
                 app_name: app_name.map(String::from),
                 window_name: window_name.map(String::from),
                 browser_url: browser_url.map(String::from),
@@ -3097,7 +3111,7 @@ impl DatabaseManager {
             ocr_text.text_json,
             frames.timestamp,
             frames.name as frame_name,
-            COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
+            COALESCE(frames.snapshot_path, video_chunks.file_path, '') as file_path,
             frames.offset_index,
             frames.app_name,
             COALESCE(ocr_text.ocr_engine, '') as ocr_engine,
@@ -3379,6 +3393,34 @@ impl DatabaseManager {
         }
     }
 
+    /// Return metadata for a text-only frame that intentionally has no image.
+    pub async fn get_no_image_frame_metadata(
+        &self,
+        frame_id: i64,
+    ) -> Result<Option<NoImageFrameMetadata>, sqlx::Error> {
+        sqlx::query_as::<_, NoImageFrameMetadata>(
+            r#"
+            SELECT
+                id AS frame_id,
+                timestamp,
+                app_name,
+                window_name,
+                browser_url,
+                COALESCE(full_text, accessibility_text, '') AS text,
+                text_source,
+                device_name,
+                capture_trigger
+            FROM frames
+            WHERE id = ?1
+              AND snapshot_path IS NULL
+              AND video_chunk_id IS NULL
+            "#,
+        )
+        .bind(frame_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     /// Get timestamp for a frame. Used for deep link navigation (screenpipe://frame/123).
     pub async fn get_frame_timestamp(
         &self,
@@ -3423,7 +3465,7 @@ impl DatabaseManager {
             r#"
             SELECT
                 frames.id,
-                COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
+                COALESCE(frames.snapshot_path, video_chunks.file_path, '') as file_path,
                 frames.offset_index,
                 frames.timestamp,
                 CASE WHEN frames.snapshot_path IS NOT NULL THEN 1 ELSE 0 END as is_snapshot
@@ -3437,7 +3479,7 @@ impl DatabaseManager {
             r#"
             SELECT
                 frames.id,
-                COALESCE(frames.snapshot_path, video_chunks.file_path) as file_path,
+                COALESCE(frames.snapshot_path, video_chunks.file_path, '') as file_path,
                 frames.offset_index,
                 frames.timestamp,
                 CASE WHEN frames.snapshot_path IS NOT NULL THEN 1 ELSE 0 END as is_snapshot
@@ -4154,7 +4196,7 @@ impl DatabaseManager {
                 (SELECT ot.window_name FROM ocr_text ot WHERE ot.frame_id = f.id LIMIT 1)
             ) as window_name,
             COALESCE(vc.device_name, f.device_name) as screen_device,
-            COALESCE(vc.file_path, f.snapshot_path) as video_path,
+            COALESCE(vc.file_path, f.snapshot_path, '') as video_path,
             COALESCE(vc.fps, 0.033) as chunk_fps,
             f.browser_url,
             f.machine_id
@@ -7256,16 +7298,16 @@ LIMIT ? OFFSET ?
         browser_url: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
         self.insert_snapshot_frame_with_ocr(
-            "test",
+            "accessibility",
             Utc::now(),
-            "",
+            None,
             Some(app_name),
             Some(window_name),
             browser_url,
             false,
             None,
             Some(text_content),
-            None,
+            Some("accessibility"),
             None,
             None,
             None,

@@ -41,6 +41,42 @@ pub struct GetFrameQuery {
     pub redact_pii: bool,
 }
 
+fn no_image_metadata_json(frame_id: i64, meta: screenpipe_db::NoImageFrameMetadata) -> Value {
+    json!({
+        "error": "Frame has no image",
+        "error_type": "no_image",
+        "frame_id": frame_id,
+        "timestamp": meta.timestamp,
+        "app_name": meta.app_name,
+        "window_name": meta.window_name,
+        "browser_url": meta.browser_url,
+        "text": meta.text,
+        "text_source": meta.text_source,
+        "device_name": meta.device_name,
+        "capture_trigger": meta.capture_trigger,
+    })
+}
+
+async fn no_image_response(
+    state: &Arc<AppState>,
+    frame_id: i64,
+) -> Option<(StatusCode, JsonResponse<Value>)> {
+    match state.db.get_no_image_frame_metadata(frame_id).await {
+        Ok(Some(meta)) => Some((
+            StatusCode::NOT_FOUND,
+            JsonResponse(no_image_metadata_json(frame_id, meta)),
+        )),
+        Ok(None) => None,
+        Err(e) => {
+            debug!(
+                "Failed to check no-image metadata for frame {}: {}",
+                frame_id, e
+            );
+            None
+        }
+    }
+}
+
 #[oasgen]
 pub async fn get_frame_data(
     State(state): State<Arc<AppState>>,
@@ -239,13 +275,18 @@ pub async fn get_frame_data(
                     }
                 }
             }
-            Ok(None) => Err((
-                StatusCode::NOT_FOUND,
-                JsonResponse(json!({
-                    "error": "Frame not found",
-                    "frame_id": frame_id
-                })),
-            )),
+            Ok(None) => {
+                if let Some(response) = no_image_response(&state, frame_id).await {
+                    return Err(response);
+                }
+                Err((
+                    StatusCode::NOT_FOUND,
+                    JsonResponse(json!({
+                        "error": "Frame not found",
+                        "frame_id": frame_id
+                    })),
+                ))
+            }
             Err(e) => Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 JsonResponse(json!({
@@ -335,6 +376,10 @@ async fn try_nearest_frame(
         };
 
         for (candidate_id, file_path, offset_index, _timestamp, is_snapshot) in candidates {
+            if file_path.is_empty() {
+                continue;
+            }
+
             if is_snapshot {
                 // Snapshot frame — just check file exists
                 if tokio::fs::metadata(&file_path).await.is_ok() {
@@ -452,6 +497,14 @@ pub async fn get_next_valid_frame(
     // Check each frame's file exists on disk
     let mut skipped = 0;
     for (frame_id, file_path, _offset_index, timestamp, _is_snapshot) in candidates {
+        if file_path.is_empty() {
+            return Ok(JsonResponse(NextValidFrameResponse {
+                frame_id,
+                timestamp,
+                skipped_count: skipped,
+            }));
+        }
+
         if std::path::Path::new(&file_path).exists() {
             return Ok(JsonResponse(NextValidFrameResponse {
                 frame_id,
@@ -887,6 +940,9 @@ pub async fn run_frame_ocr(
     let (file_path, offset_index, is_snapshot) = match state.db.get_frame(frame_id).await {
         Ok(Some(frame)) => frame,
         Ok(None) => {
+            if let Some(response) = no_image_response(&state, frame_id).await {
+                return Err(response);
+            }
             return Err((
                 StatusCode::NOT_FOUND,
                 JsonResponse(json!({ "error": "Frame not found", "frame_id": frame_id })),

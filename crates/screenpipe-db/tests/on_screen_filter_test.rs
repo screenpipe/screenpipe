@@ -67,7 +67,7 @@ mod tests {
         db.insert_snapshot_frame_with_ocr(
             "test_device",
             Utc::now(),
-            "/tmp/test.jpg",
+            Some("/tmp/test.jpg"),
             Some(app_name),
             Some("test window"),
             None,
@@ -251,7 +251,7 @@ mod tests {
         db.insert_snapshot_frame_with_ocr(
             "test_device",
             Utc::now(),
-            "/tmp/test.jpg",
+            Some("/tmp/test.jpg"),
             Some("TestApp"),
             Some("test window"),
             None,

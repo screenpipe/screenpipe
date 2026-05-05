@@ -110,6 +110,9 @@ export function CliCommandDialog({ settings }: CliCommandDialogProps) {
     if (settings.disableAudio) {
       args.push("--disable-audio");
     }
+    if (settings.screenCaptureMode === "accessibility") {
+      args.push("--screen-capture-mode accessibility");
+    }
     if (settings.disableClipboardCapture) {
       args.push("--disable-clipboard-capture");
     }

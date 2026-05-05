@@ -308,6 +308,9 @@ pub async fn start_ui_recording(
                             screenpipe_db::UiEventType::Clipboard => {
                                 Some(CaptureTrigger::Clipboard)
                             }
+                            screenpipe_db::UiEventType::Key | screenpipe_db::UiEventType::Text => {
+                                Some(CaptureTrigger::TypingPause)
+                            }
                             _ => None,
                         };
                         if let Some(trigger) = trigger {

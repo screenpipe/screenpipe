@@ -454,6 +454,10 @@ async fn main() -> anyhow::Result<()> {
                     );
                     map.insert("use_pii_removal".into(), json!(record_args.use_pii_removal));
                     map.insert("disable_vision".into(), json!(record_args.disable_vision));
+                    map.insert(
+                        "screen_capture_mode".into(),
+                        json!(format!("{:?}", record_args.screen_capture_mode)),
+                    );
                     map.insert("vad_engine".into(), json!("Silero"));
                     // enable_input_capture / enable_accessibility always true (removed as settings)
                     map.insert("enable_sync".into(), json!(record_args.enable_sync));
@@ -524,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
     {
         use screenpipe_core::permissions;
 
-        let need_screen = !config.disable_vision;
+        let need_screen = config.captures_screenshots();
         let need_audio = !config.disable_audio;
 
         eprintln!("checking permissions...");
@@ -630,10 +634,10 @@ async fn main() -> anyhow::Result<()> {
     // Only enumerate monitors when vision is enabled — on macOS, calling
     // SCK's ShareableContent::current() triggers the "Currently Sharing"
     // indicator in Control Center even if we never capture a frame (#2897).
-    let all_monitors = if config.disable_vision {
-        Vec::new()
-    } else {
+    let all_monitors = if config.captures_screenshots() {
         list_monitors().await
+    } else {
+        Vec::new()
     };
 
     let mut audio_devices = Vec::new();
@@ -828,16 +832,18 @@ async fn main() -> anyhow::Result<()> {
     let power_manager = start_power_manager();
 
     // Start background snapshot compaction (JPEG → MP4)
-    screenpipe_engine::start_snapshot_compaction(
-        db.clone(),
-        config.video_quality.clone(),
-        shutdown_tx.subscribe(),
-        power_manager.clone(),
-        Some(hot_frame_cache.clone()),
-    );
+    if config.captures_screenshots() {
+        screenpipe_engine::start_snapshot_compaction(
+            db.clone(),
+            config.video_quality.clone(),
+            shutdown_tx.subscribe(),
+            power_manager.clone(),
+            Some(hot_frame_cache.clone()),
+        );
+    }
 
     // Create VisionManager for event-driven capture on all monitors
-    let (handle, capture_trigger_tx) = if !config.disable_vision {
+    let (handle, capture_trigger_tx) = if config.captures_screenshots() {
         let vision_config =
             config.to_vision_manager_config(output_path_clone.to_string(), vision_metrics.clone());
         let vision_manager = Arc::new(
@@ -883,6 +889,24 @@ async fn main() -> anyhow::Result<()> {
                 error!("Error shutting down VisionManager: {:?}", e);
             }
         });
+        (h, Some(trigger_tx))
+    } else if config.captures_accessibility_only() {
+        let accessibility_handle =
+            screenpipe_engine::accessibility_capture::start_accessibility_capture(
+                db_clone.clone(),
+                Some(hot_frame_cache.clone()),
+                vision_metrics.clone(),
+                config.ignored_windows.clone(),
+                config.included_windows.clone(),
+                config.ignore_incognito_windows,
+                config.use_pii_removal,
+                shutdown_tx_clone.subscribe(),
+            );
+        let trigger_tx = accessibility_handle.trigger_sender();
+        let h = tokio::spawn(async move {
+            accessibility_handle.join().await;
+        });
+        info!("accessibility-only capture started");
         (h, Some(trigger_tx))
     } else {
         // Vision disabled — spawn a pending task so `handle` never completes
@@ -1152,6 +1176,10 @@ async fn main() -> anyhow::Result<()> {
         record_args.disable_vision
     );
     println!(
+        "│ screen capture mode    │ {:<34} │",
+        format!("{:?}", record_args.screen_capture_mode)
+    );
+    println!(
         "│ pause on DRM content   │ {:<34} │",
         record_args.pause_on_drm_content
     );
@@ -1298,6 +1326,8 @@ async fn main() -> anyhow::Result<()> {
 
     if record_args.disable_vision {
         println!("│ {:<22} │ {:<34} │", "", "vision disabled");
+    } else if config.captures_accessibility_only() {
+        println!("│ {:<22} │ {:<34} │", "", "accessibility-only");
     } else if monitor_ids.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "no monitors available");
     } else {

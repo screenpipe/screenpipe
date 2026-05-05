@@ -13,6 +13,7 @@ use crate::updates::{is_enterprise_build, is_source_build};
 use crate::window::ShowRewindWindow;
 use anyhow::Result;
 use once_cell::sync::Lazy;
+use screenpipe_config::ScreenCaptureMode;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -45,6 +46,7 @@ struct TrayMenuData {
     search_shortcut: String,
     chat_shortcut: String,
     cloud_subscribed: bool,
+    screen_capture_mode: ScreenCaptureMode,
     has_permission_issue: bool,
 }
 
@@ -86,18 +88,20 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         )
     };
 
-    let cloud_subscribed = SettingsStore::get(app)
+    let settings = SettingsStore::get(app)
         .unwrap_or_default()
-        .unwrap_or_default()
-        .user
-        .cloud_subscribed
-        == Some(true);
+        .unwrap_or_default();
+    let cloud_subscribed = settings.user.cloud_subscribed == Some(true);
 
     let has_permission_issue = if onboarding_completed {
         #[cfg(target_os = "macos")]
         {
             let perms = crate::permissions::do_permissions_check(false);
-            !perms.screen_recording.permitted() || !perms.microphone.permitted()
+            let screen_required = !settings.recording.disable_vision
+                && settings.recording.screen_capture_mode == ScreenCaptureMode::Screenshots;
+            let mic_required = !settings.recording.disable_audio;
+            (screen_required && !perms.screen_recording.permitted())
+                || (mic_required && !perms.microphone.permitted())
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -113,6 +117,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         search_shortcut,
         chat_shortcut,
         cloud_subscribed,
+        screen_capture_mode: settings.recording.screen_capture_mode,
         has_permission_issue,
     }
 }
@@ -222,6 +227,7 @@ fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
     new_state.recording_status = Some(effective);
 
     let data = prefetch_tray_menu_data(app);
+    new_state.screen_capture_mode = data.screen_capture_mode.clone();
     let menu = create_dynamic_menu(app, &new_state, update_item.as_ref(), &data)?;
     if let Some(tray) = app.tray_by_id("screenpipe_main") {
         if let Ok(mut guard) = PREVIOUS_TRAY_MENU.lock() {
@@ -281,6 +287,7 @@ struct MenuState {
     recording_status: Option<RecordingStatus>,
     onboarding_completed: bool,
     has_permission_issue: bool,
+    screen_capture_mode: ScreenCaptureMode,
     /// Device names + active status for change detection
     devices: Vec<(String, bool)>,
     /// Whether user has a pro subscription (triggers menu rebuild on login)
@@ -553,6 +560,13 @@ fn create_dynamic_menu(
             .build(app)?,
     );
 
+    let accessibility_only = data.screen_capture_mode == ScreenCaptureMode::Accessibility;
+    let capture_mode_toggle =
+        CheckMenuItemBuilder::with_id("toggle_accessibility_capture", "Accessibility-only capture")
+            .checked(accessibility_only)
+            .build(app)?;
+    menu_builder = menu_builder.item(&capture_mode_toggle);
+
     {
         let info = get_recording_info();
 
@@ -810,6 +824,55 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 if let Err(e) = force_tray_rebuild(&app2) {
                     error!("tray rebuild failed: {}", e);
                 }
+            });
+        }
+        "toggle_accessibility_capture" => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut store = SettingsStore::get(&app)
+                    .unwrap_or_default()
+                    .unwrap_or_default();
+                let next_mode = if store.recording.screen_capture_mode
+                    == ScreenCaptureMode::Accessibility
+                {
+                    ScreenCaptureMode::Screenshots
+                } else {
+                    ScreenCaptureMode::Accessibility
+                };
+                store.recording.screen_capture_mode = next_mode.clone();
+                if let Err(e) = store.save(&app) {
+                    error!("failed to save capture mode from tray: {}", e);
+                    return;
+                }
+
+                let was_recording = matches!(
+                    get_recording_status(),
+                    RecordingStatus::Recording | RecordingStatus::Starting
+                );
+                if was_recording {
+                    set_optimistic_status(RecordingStatus::Starting);
+                    let _ = app.emit("shortcut-stop-recording", ());
+                    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                    let _ = app.emit("shortcut-start-recording", ());
+                }
+
+                match next_mode {
+                    ScreenCaptureMode::Accessibility => send_notify(
+                        "Capture mode changed",
+                        "screenpipe will capture accessibility text without screenshots.",
+                    ),
+                    ScreenCaptureMode::Screenshots => send_notify(
+                        "Capture mode changed",
+                        "screenpipe will capture screenshots again.",
+                    ),
+                }
+
+                let app_for_rebuild = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Err(e) = force_tray_rebuild(&app_for_rebuild) {
+                        error!("tray rebuild failed: {}", e);
+                    }
+                });
             });
         }
         id if id.starts_with("pause_") => {
@@ -1084,6 +1147,7 @@ async fn update_menu_if_needed(
         recording_status: Some(effective_status),
         onboarding_completed: data.onboarding_completed,
         has_permission_issue: data.has_permission_issue,
+        screen_capture_mode: data.screen_capture_mode.clone(),
         devices: recording_info
             .devices
             .iter()

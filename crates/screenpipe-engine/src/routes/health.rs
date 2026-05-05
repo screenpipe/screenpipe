@@ -16,6 +16,7 @@ use std::sync::{
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
+use crate::accessibility_capture::{accessibility_capture_status, AccessibilityCaptureStatus};
 use crate::server::AppState;
 use crate::ui_recorder::{tree_walker_snapshot, TreeWalkerSnapshot};
 
@@ -78,6 +79,7 @@ pub struct HealthCheckResponse {
     pub audio_pipeline: Option<AudioPipelineHealthInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility: Option<TreeWalkerSnapshot>,
+    pub accessibility_capture_status: AccessibilityCaptureStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_stats: Option<PoolHealthInfo>,
     /// True when vision capture loop is alive but DB writes have stopped (pool exhaustion).
@@ -605,6 +607,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 None
             }
         },
+        accessibility_capture_status: accessibility_capture_status(),
         audio_pipeline: if !state.audio_disabled {
             let is_paused = state
                 .audio_manager
@@ -815,6 +818,7 @@ mod tests {
             pipeline: None,
             audio_pipeline: None,
             accessibility: None,
+            accessibility_capture_status: AccessibilityCaptureStatus::default(),
             pool_stats: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,

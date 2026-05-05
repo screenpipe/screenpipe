@@ -6,6 +6,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Screen capture strategy for text/image recording.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenCaptureMode {
+    /// Normal screenshot-backed capture with accessibility/OCR text.
+    #[default]
+    Screenshots,
+    /// Text-only capture through the OS accessibility tree. Never writes images.
+    Accessibility,
+}
+
 /// Custom vocabulary entry for transcription biasing and word replacement.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -122,6 +134,10 @@ pub struct RecordingSettings {
     /// Disable all screen capture.
     #[serde(rename = "disableVision")]
     pub disable_vision: bool,
+
+    /// Screen capture mode. Defaults to normal screenshot capture.
+    #[serde(rename = "screenCaptureMode", default)]
+    pub screen_capture_mode: ScreenCaptureMode,
 
     /// Specific monitor IDs to capture.
     #[serde(rename = "monitorIds")]
@@ -345,6 +361,7 @@ impl Default for RecordingSettings {
             batch_max_duration_secs: None,
             vocabulary: vec![],
             disable_vision: false,
+            screen_capture_mode: ScreenCaptureMode::Screenshots,
             monitor_ids: vec![],
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
@@ -425,6 +442,20 @@ mod tests {
         assert_eq!(settings.video_quality, "balanced");
         assert!(settings.use_system_default_audio);
         assert!(settings.ignore_incognito_windows);
+        assert_eq!(settings.screen_capture_mode, ScreenCaptureMode::Screenshots);
+    }
+
+    #[test]
+    fn screen_capture_mode_round_trips() {
+        let json = r#"{"screenCaptureMode":"accessibility"}"#;
+        let settings: RecordingSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            settings.screen_capture_mode,
+            ScreenCaptureMode::Accessibility
+        );
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        assert!(serialized.contains(r#""screenCaptureMode":"accessibility""#));
     }
 
     #[test]

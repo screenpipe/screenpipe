@@ -11,7 +11,7 @@ pub mod write_queue;
 
 pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, DatabaseManager, DeleteTimeRangeResult,
-    ImmediateTx,
+    ImmediateTx, NoImageFrameMetadata,
 };
 pub use migration_worker::{
     create_migration_worker, MigrationCommand, MigrationConfig, MigrationResponse, MigrationStatus,

@@ -31,6 +31,7 @@ use crate::server_core::ServerCore;
 pub struct CaptureSession {
     shutdown_tx: broadcast::Sender<()>,
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
+    accessibility_handle: Option<screenpipe_engine::accessibility_capture::AccessibilityCaptureHandle>,
     audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
     audio_disabled: bool,
 }
@@ -54,9 +55,10 @@ impl CaptureSession {
         // --- Capture trigger sender (set by VisionManager, consumed by UI recorder) ---
         let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
             None;
+        let mut accessibility_handle = None;
 
         // --- Vision ---
-        if !config.disable_vision {
+        if config.captures_screenshots() {
             let db_clone = server.db.clone();
             let output_path = server.data_path.to_string_lossy().into_owned();
             let vision_config =
@@ -110,6 +112,20 @@ impl CaptureSession {
                     error!("Error shutting down VisionManager: {:?}", e);
                 }
             });
+        } else if config.captures_accessibility_only() {
+            let handle = screenpipe_engine::accessibility_capture::start_accessibility_capture(
+                server.db.clone(),
+                Some(server.hot_frame_cache.clone()),
+                server.vision_metrics.clone(),
+                config.ignored_windows.clone(),
+                config.included_windows.clone(),
+                config.ignore_incognito_windows,
+                config.use_pii_removal,
+                shutdown_tx.subscribe(),
+            );
+            capture_trigger_tx = Some(handle.trigger_sender());
+            accessibility_handle = Some(handle);
+            info!("Accessibility-only capture started successfully");
         }
 
         // --- Audio recording ---
@@ -182,19 +198,22 @@ impl CaptureSession {
         }
 
         // --- Snapshot compaction ---
-        screenpipe_engine::start_snapshot_compaction(
-            server.db.clone(),
-            config.video_quality.clone(),
-            shutdown_tx.subscribe(),
-            server.power_manager.clone(),
-            Some(server.hot_frame_cache.clone()),
-        );
+        if config.captures_screenshots() {
+            screenpipe_engine::start_snapshot_compaction(
+                server.db.clone(),
+                config.video_quality.clone(),
+                shutdown_tx.subscribe(),
+                server.power_manager.clone(),
+                Some(server.hot_frame_cache.clone()),
+            );
+        }
 
         info!("Capture session started successfully");
 
         Ok(Self {
             shutdown_tx,
             ui_recorder_handle,
+            accessibility_handle,
             audio_manager: server.audio_manager.clone(),
             audio_disabled: config.disable_audio,
         })
@@ -215,6 +234,14 @@ impl CaptureSession {
 
         // Broadcast shutdown to VisionManager, meeting watcher, schedule monitor, compaction
         let _ = self.shutdown_tx.send(());
+
+        if let Some(accessibility_handle) = self.accessibility_handle.take() {
+            info!("Waiting for accessibility-only capture task to finish...");
+            match tokio::time::timeout(Duration::from_secs(5), accessibility_handle.join()).await {
+                Ok(()) => info!("Accessibility-only capture task finished cleanly"),
+                Err(_) => warn!("Accessibility-only capture task did not finish within 5s"),
+            }
+        }
 
         // Stop audio recording (but don't shutdown — keep the Arc valid for queries)
         if !self.audio_disabled {

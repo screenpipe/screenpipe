@@ -220,6 +220,23 @@ struct AudioPipelineInfo {
     meeting_detected: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default, Clone)]
+#[allow(dead_code)]
+struct AccessibilityCaptureStatus {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    app_name: Option<String>,
+    #[serde(default)]
+    window_name: Option<String>,
+    #[serde(default)]
+    browser_url: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct HealthCheckResponse {
@@ -256,6 +273,8 @@ struct HealthCheckResponse {
     /// Audio devices active but DB writes stopped (pool exhaustion)
     #[serde(default)]
     audio_db_write_stalled: bool,
+    #[serde(default)]
+    accessibility_capture_status: AccessibilityCaptureStatus,
     /// DRM streaming content detected — capture should be fully stopped
     #[serde(default)]
     drm_content_paused: bool,
@@ -588,7 +607,15 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
 
             set_recording_info(status, devices);
 
-            let current_status = status_to_icon_key(status);
+            let accessibility_empty = matches!(
+                &health_result,
+                Ok(health) if health.accessibility_capture_status.status == "empty"
+            );
+            let mut current_icon_key = status_to_icon_key(status).to_string();
+            if !is_unhealthy_icon(&current_icon_key) && accessibility_empty {
+                current_icon_key = "warning".to_string();
+            }
+            let current_status = current_icon_key.as_str();
 
             // Update icon if either health status OR theme changes
             if current_status != last_status || theme != last_theme {
@@ -602,6 +629,8 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                     } else {
                         "assets/screenpipe-logo-tray-white-failed.png"
                     }
+                } else if current_status == "warning" {
+                    "assets/screenpipe-logo-tray-warning.png"
                 } else {
                     if theme == Mode::Light {
                         "assets/screenpipe-logo-tray-black.png"
@@ -629,12 +658,15 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 // TrayIcon must be accessed and dropped on the main thread
                 // (NSStatusBar operations crash if called from a tokio thread)
                 let app_clone = app.clone();
+                let template = current_status != "warning";
                 let _ = app.run_on_main_thread(move || {
                     crate::window::with_autorelease_pool(|| {
                         if let Some(main_tray) = app_clone.tray_by_id("screenpipe_main") {
-                            if let Err(e) =
-                                crate::safe_icon::safe_set_icon_as_template(&main_tray, image)
-                            {
+                            if let Err(e) = crate::safe_icon::safe_set_icon_with_template(
+                                &main_tray,
+                                image,
+                                template,
+                            ) {
                                 error!("failed to set tray icon: {}", e);
                             }
                         }
@@ -893,6 +925,7 @@ mod tests {
             audio_pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            accessibility_capture_status: AccessibilityCaptureStatus::default(),
             drm_content_paused: false,
         })
     }
@@ -914,6 +947,7 @@ mod tests {
             audio_pipeline: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
+            accessibility_capture_status: AccessibilityCaptureStatus::default(),
             drm_content_paused: false,
         })
     }

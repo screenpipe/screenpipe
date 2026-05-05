@@ -24,10 +24,18 @@ export function useFrameActions(opts: {
 	} = opts;
 
 	const device = currentFrame?.devices?.[0];
+	const hasImage = Boolean(debouncedFrame?.filePath);
 
 	// Quick actions: copy image, OCR text, deep link, ask about frame
 	const copyImage = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
+		if (!hasImage) {
+			toast({
+				title: "text-only frame",
+				description: "this accessibility capture has no image to copy",
+			});
+			return;
+		}
 		try {
 			await invoke("copy_frame_to_clipboard", {
 				frameId: parseInt(debouncedFrame.frameId, 10),
@@ -41,7 +49,7 @@ export function useFrameActions(opts: {
 				variant: "destructive",
 			});
 		}
-	}, [debouncedFrame?.frameId]);
+	}, [debouncedFrame?.frameId, hasImage]);
 
 	const copyFrameText = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;

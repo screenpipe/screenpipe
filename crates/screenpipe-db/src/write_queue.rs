@@ -100,7 +100,7 @@ pub(crate) enum WriteOp {
     InsertSnapshotFrameWithOcr {
         device_name: String,
         timestamp: DateTime<Utc>,
-        snapshot_path: String,
+        snapshot_path: Option<String>,
         app_name: Option<String>,
         window_name: Option<String>,
         browser_url: Option<String>,
@@ -758,13 +758,13 @@ async fn execute_single_write(
                 )"#,
             )
             .bind(timestamp)
-            .bind(snapshot_path.as_str())
+            .bind(snapshot_path.as_deref())
             .bind(browser_url.as_deref())
             .bind(app_name.as_deref())
             .bind(window_name.as_deref())
             .bind(focused)
             .bind(device_name.as_str())
-            .bind(snapshot_path.as_str())
+            .bind(snapshot_path.as_deref())
             .bind(capture_trigger.as_deref())
             .bind(accessibility_text.as_deref())
             .bind(text_source.as_deref())
@@ -1728,7 +1728,7 @@ mod tests {
             .submit(WriteOp::InsertSnapshotFrameWithOcr {
                 device_name: "monitor1".to_string(),
                 timestamp: Utc::now(),
-                snapshot_path: "/tmp/frame.jpg".to_string(),
+                snapshot_path: Some("/tmp/frame.jpg".to_string()),
                 app_name: Some("Firefox".to_string()),
                 window_name: Some("GitHub".to_string()),
                 browser_url: Some("https://github.com".to_string()),

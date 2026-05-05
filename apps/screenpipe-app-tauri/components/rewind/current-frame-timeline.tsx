@@ -12,7 +12,7 @@ import { SelectableTextLayer, getSelectableLayerText, clearSelectableLayerSelect
 import { RegionOcrOverlay } from "@/components/rewind/region-ocr-overlay";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { ImageOff, ChevronLeft, ChevronRight, Copy, ImageIcon, Link2, MessageCircle, Type } from "lucide-react";
+import { ImageOff, ChevronLeft, ChevronRight, Copy, ImageIcon, Link2, MessageCircle, Type, FileText } from "lucide-react";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { toast } from "@/components/ui/use-toast";
 import { useFrameLoading } from "@/components/rewind/hooks/use-frame-loading";
@@ -110,6 +110,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		snapshotAssetUrl,
 		isSnapshotFrame,
 		snapshotFailed,
+		isTextOnlyFrame,
 		naturalDimensions,
 		renderedImageInfo,
 		containerRef,
@@ -203,6 +204,11 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 	useEffect(() => { onUrlsDetected?.(detectedUrls); }, [detectedUrls, onUrlsDetected]);
 
+	const textOnlyExcerpt = useMemo(() => {
+		const raw = frameContext?.text || device?.metadata?.ocr_text || "";
+		return raw.trim().replace(/\s+/g, " ").slice(0, 900);
+	}, [frameContext?.text, device?.metadata?.ocr_text]);
+
 	// --- Frame actions hook (copy image, text, deeplink, ask, run pipe) ---
 	const { copyImage, copyFrameText, copyDeeplinkAction, askAboutFrame, runPipeWithContext } = useFrameActions({
 		debouncedFrame,
@@ -264,7 +270,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		: settings?.overlayMode === "window" ? "main-window" : "main";
 
 	const { nativeLiveTextActive } = useLiveText({
-		debouncedFrame,
+		debouncedFrame: isTextOnlyFrame ? null : debouncedFrame,
 		renderedImageInfo,
 		isSnapshotFrame,
 		isSearchModalOpen,
@@ -369,21 +375,23 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 							</button>
 						);
 					})()}
-					<button
-						type="button"
-						className="block group w-full text-left px-3 py-2 -my-px first:mt-0 last:mb-0 border-0 outline-none ring-0 bg-transparent hover:bg-foreground hover:text-background text-foreground flex items-center gap-2 cursor-pointer transition-colors duration-150"
-						onClick={() => {
-							copyImage();
-							setContextMenuOpen(false);
-						}}
-						title="Copy frame image to clipboard"
-					>
-						<ImageIcon className="w-4 h-4 shrink-0" />
-						<span className="flex-1 min-w-0 truncate">copy image</span>
-						<span className="text-xs text-muted-foreground group-hover:text-background shrink-0 ml-auto">
-							{formatShortcutDisplay(isMac ? "Super+Shift+C" : "Control+Shift+C", isMac)}
-						</span>
-					</button>
+					{!isTextOnlyFrame && (
+						<button
+							type="button"
+							className="block group w-full text-left px-3 py-2 -my-px first:mt-0 last:mb-0 border-0 outline-none ring-0 bg-transparent hover:bg-foreground hover:text-background text-foreground flex items-center gap-2 cursor-pointer transition-colors duration-150"
+							onClick={() => {
+								copyImage();
+								setContextMenuOpen(false);
+							}}
+							title="Copy frame image to clipboard"
+						>
+							<ImageIcon className="w-4 h-4 shrink-0" />
+							<span className="flex-1 min-w-0 truncate">copy image</span>
+							<span className="text-xs text-muted-foreground group-hover:text-background shrink-0 ml-auto">
+								{formatShortcutDisplay(isMac ? "Super+Shift+C" : "Control+Shift+C", isMac)}
+							</span>
+						</button>
+					)}
 					<button
 						type="button"
 						className="block w-full text-left px-3 py-2 -my-px first:mt-0 last:mb-0 border-0 outline-none ring-0 bg-transparent hover:bg-foreground hover:text-background text-foreground flex items-center gap-2 cursor-pointer transition-colors duration-150"
@@ -450,7 +458,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				playsInline
 				preload="auto"
 				className="absolute inset-0 w-full h-full object-contain"
-				style={{ zIndex: 1 }}
+				style={{ zIndex: 1, display: isTextOnlyFrame ? "none" : undefined }}
 				onError={() => {
 					const err = videoRef.current?.error;
 					console.warn("Video error:", err?.code, err?.message);
@@ -461,7 +469,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 			/>
 
 			{/* Snapshot frame: direct local file via asset protocol — no HTTP/DB needed */}
-			{snapshotAssetUrl && isSnapshotFrame && !snapshotFailed && (
+			{!isTextOnlyFrame && snapshotAssetUrl && isSnapshotFrame && !snapshotFailed && (
 				// eslint-disable-next-line @next/next/no-img-element
 				<img
 					src={snapshotAssetUrl}
@@ -473,7 +481,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 			)}
 
 			{/* Fallback mode: preloaded <img> via HTTP server (also used for search nav) */}
-			{displayedFallbackUrl && (!useVideoMode || searchNavFrame || snapshotFailed) && !(snapshotAssetUrl && isSnapshotFrame && !snapshotFailed) && (
+			{!isTextOnlyFrame && displayedFallbackUrl && (!useVideoMode || searchNavFrame || snapshotFailed) && !(snapshotAssetUrl && isSnapshotFrame && !snapshotFailed) && (
 				// eslint-disable-next-line @next/next/no-img-element
 				<img
 					src={displayedFallbackUrl}
@@ -484,12 +492,39 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				/>
 			)}
 
+			{isTextOnlyFrame && (
+				<div className="absolute inset-0 bg-background text-foreground flex items-center justify-center px-6 py-8" style={{ zIndex: 2 }}>
+					<div className="w-full max-w-3xl border border-border bg-card/80 px-5 py-4 space-y-3">
+						<div className="flex items-start gap-3">
+							<div className="h-9 w-9 border border-border flex items-center justify-center shrink-0">
+								<FileText className="h-4 w-4 text-muted-foreground" />
+							</div>
+							<div className="min-w-0 flex-1">
+								<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+									<span>{currentFrame?.timestamp ? new Date(currentFrame.timestamp).toLocaleString() : "unknown time"}</span>
+									{device?.metadata?.browser_url && <span className="truncate max-w-[420px]">{device.metadata.browser_url}</span>}
+								</div>
+								<h3 className="text-base font-medium text-foreground truncate">
+									{device?.metadata?.app_name || "Accessibility capture"}
+								</h3>
+								{device?.metadata?.window_name && (
+									<p className="text-sm text-muted-foreground truncate">{device.metadata.window_name}</p>
+								)}
+							</div>
+						</div>
+						<div className="text-sm leading-6 text-foreground/90 whitespace-pre-wrap max-h-[52vh] overflow-auto">
+							{textOnlyExcerpt || "No accessibility text was captured for this frame."}
+						</div>
+					</div>
+				</div>
+			)}
+
 			{/* Browser URL bar moved to parent timeline.tsx at z-[45] so it's clickable above controls */}
 
 			{/* Search highlights + URL links (pointer-events: none wrapper, links have auto)
 			    When native Live Text is active, skip search highlight terms (native overlay handles them)
 			    but still show URL detection overlays. */}
-			{!isLoading && !hasError && !ocrLoading && naturalDimensions && renderedImageInfo && textPositions.length > 0 && (
+			{!isTextOnlyFrame && !isLoading && !hasError && !ocrLoading && naturalDimensions && renderedImageInfo && textPositions.length > 0 && (
 				<div className="absolute overflow-hidden" style={{ zIndex: 6, top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
 					<div style={{
 						position: "absolute",
@@ -514,7 +549,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 			{/* Selectable text layer for web-based text selection (copy, highlight).
 			    Hidden when native Live Text overlay is active (macOS 13+). */}
-			{!isLoading && !hasError && !nativeLiveTextActive && renderedImageInfo && textPositions.length > 0 && (
+			{!isTextOnlyFrame && !isLoading && !hasError && !nativeLiveTextActive && renderedImageInfo && textPositions.length > 0 && (
 				<div className="absolute" style={{ zIndex: 7, top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
 					<div style={{
 						position: "absolute",
@@ -532,13 +567,14 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				</div>
 			)}
 
-			{/* Shift+drag region OCR — always mount so shift key listener is active */}
-			<RegionOcrOverlay
-				frameId={debouncedFrame?.frameId ?? null}
-				renderedImageInfo={renderedImageInfo}
-				naturalDimensions={naturalDimensions}
-				userToken={settings.user?.token ?? null}
-			/>
+			{!isTextOnlyFrame && (
+				<RegionOcrOverlay
+					frameId={debouncedFrame?.frameId ?? null}
+					renderedImageInfo={renderedImageInfo}
+					naturalDimensions={naturalDimensions}
+					userToken={settings.user?.token ?? null}
+				/>
+			)}
 
 		</div>
 	);

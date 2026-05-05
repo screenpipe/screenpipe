@@ -1531,10 +1531,14 @@ async fn main() {
             if onboarding_store.is_completed {
                 let mut screen_ok = false;
                 let mut mic_ok = false;
+                let screen_required = !store.recording.disable_vision
+                    && store.recording.screen_capture_mode
+                        == screenpipe_config::ScreenCaptureMode::Screenshots;
+                let mic_required = !store.recording.disable_audio;
                 for attempt in 0..3 {
                     let startup_perms = permissions::do_permissions_check(false);
-                    screen_ok = startup_perms.screen_recording.permitted();
-                    mic_ok = startup_perms.microphone.permitted();
+                    screen_ok = !screen_required || startup_perms.screen_recording.permitted();
+                    mic_ok = !mic_required || startup_perms.microphone.permitted();
                     if screen_ok && mic_ok {
                         break;
                     }
@@ -1664,8 +1668,11 @@ async fn main() {
                             // Permissions check
                             let permissions_check = permissions::do_permissions_check(false);
                             let disable_audio = store_clone.recording.disable_audio;
+                            let screen_required = !store_clone.recording.disable_vision
+                                && store_clone.recording.screen_capture_mode
+                                    == screenpipe_config::ScreenCaptureMode::Screenshots;
 
-                            if !permissions_check.screen_recording.permitted() {
+                            if screen_required && !permissions_check.screen_recording.permitted() {
                                 warn!("Screen recording permission not granted: {:?}. Server will not start.", permissions_check.screen_recording);
                                 is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                                 return;

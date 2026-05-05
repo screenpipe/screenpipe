@@ -528,6 +528,8 @@ export function RecordingSettings() {
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const overlayData = useOverlayData();
   const [hwCapability, setHwCapability] = useState<HardwareCapability | null>(null);
+  const captureMode = settings.screenCaptureMode ?? "screenshots";
+  const screenshotCaptureEnabled = !settings.disableVision && captureMode === "screenshots";
 
   // OpenAI Compatible model fetching
   const {
@@ -1819,7 +1821,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Screen recording</h3>
-                  <p className="text-xs text-muted-foreground">Capture screenshots from your monitors</p>
+                  <p className="text-xs text-muted-foreground">Capture screen text and visual context</p>
                 </div>
               </div>
               <ManagedSwitch settingKey="disableVision" id="disableVision" checked={!settings.disableVision} onCheckedChange={(checked) => handleSettingsChange({ disableVision: !checked }, true)} />
@@ -1827,8 +1829,48 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </CardContent>
         </Card>
 
-        {/* Use All Monitors - right below disable screen recording */}
         {!settings.disableVision && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-foreground">Capture mode</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Choose screenshot frames or text-only accessibility capture
+                    </p>
+                  </div>
+                </div>
+                <div className="flex rounded-md border border-border overflow-hidden shrink-0">
+                  <Button
+                    type="button"
+                    variant={captureMode === "screenshots" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-8 rounded-none gap-1.5"
+                    onClick={() => handleSettingsChange({ screenCaptureMode: "screenshots" }, true)}
+                  >
+                    <Monitor className="h-3.5 w-3.5" />
+                    Screenshots
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={captureMode === "accessibility" ? "default" : "ghost"}
+                    size="sm"
+                    className="h-8 rounded-none gap-1.5"
+                    onClick={() => handleSettingsChange({ screenCaptureMode: "accessibility" }, true)}
+                  >
+                    <Key className="h-3.5 w-3.5" />
+                    Accessibility
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Use All Monitors - right below disable screen recording */}
+        {screenshotCaptureEnabled && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between">
@@ -1846,7 +1888,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
         {/* Recording quality — single knob for crispness + disk cost */}
-        {!settings.disableVision && (
+        {screenshotCaptureEnabled && (
           <Card className="border-border bg-card">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
@@ -1879,7 +1921,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         )}
 
         {/* Monitor Selection */}
-        {!settings.disableVision && !settings.useAllMonitors && (
+        {screenshotCaptureEnabled && !settings.useAllMonitors && (
           <Card className="border-border bg-card overflow-hidden">
             <CardContent className="px-3 py-2.5">
               <div className="flex items-center space-x-2.5 mb-3">

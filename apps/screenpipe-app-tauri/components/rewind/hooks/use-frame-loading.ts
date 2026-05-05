@@ -94,7 +94,7 @@ export function useFrameLoading(opts: {
 
 	const device = currentFrame?.devices?.[0];
 	const frameId = device?.frame_id;
-	const filePath = device?.metadata?.file_path;
+	const filePath = device?.metadata?.file_path ?? "";
 	const offsetIndex = device?.offset_index ?? 0;
 	const fpsFromServer = device?.fps ?? 0.5;
 
@@ -111,8 +111,22 @@ export function useFrameLoading(opts: {
 	// Debounce frame changes — skip debounce for arrow key navigation
 	useEffect(() => {
 		if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-		if (!frameId || !filePath) {
+		if (!frameId) {
 			setDebouncedFrame(null);
+			setIsLoading(false);
+			setHasError(false);
+			return;
+		}
+		if (!filePath) {
+			setDebouncedFrame({ filePath: "", offsetIndex, fps: fpsFromServer, frameId });
+			setIsLoading(false);
+			setHasError(false);
+			setNaturalDimensions(null);
+			setRenderedImageInfo(null);
+			setSnapshotAssetUrl(null);
+			setDisplayedFallbackUrl(null);
+			setUseVideoMode(false);
+			loadedChunkRef.current = null;
 			return;
 		}
 		setIsLoading(true);
@@ -197,7 +211,7 @@ export function useFrameLoading(opts: {
 
 	// Main video seeking effect
 	useEffect(() => {
-		if (!debouncedFrame || !useVideoMode || isSnapshotFrame || searchNavFrame) return;
+		if (!debouncedFrame || !debouncedFrame.filePath || !useVideoMode || isSnapshotFrame || searchNavFrame) return;
 		const { filePath: path, offsetIndex: idx, fps: serverFps, frameId: fid } = debouncedFrame;
 
 		// If this chunk previously failed, go straight to fallback
@@ -356,6 +370,7 @@ export function useFrameLoading(opts: {
 	// Also used when searchNavFrame is true (instant JPEG for first frame after search nav)
 	const fallbackImageUrl = useMemo(() => {
 		if (!debouncedFrame) return null;
+		if (!debouncedFrame.filePath) return null;
 		// Force HTTP JPEG for search navigation (skip slow video seek)
 		if (searchNavFrame) {
 			return `${getApiBaseUrl()}/frames/${debouncedFrame.frameId}`;
@@ -506,6 +521,7 @@ export function useFrameLoading(opts: {
 		debouncedFrame,
 		isLoading,
 		hasError,
+		isTextOnlyFrame: Boolean(debouncedFrame?.frameId && !debouncedFrame.filePath),
 		useVideoMode,
 		setUseVideoMode,
 		displayedFallbackUrl,
