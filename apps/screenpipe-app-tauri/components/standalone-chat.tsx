@@ -2243,17 +2243,21 @@ export function StandaloneChat({
   // Remove a specific @mention from input
   const removeFilter = (filterType: "time" | "content" | "app" | "speaker", label?: string) => {
     let newInput = input;
-    if (filterType === "time" && label) {
+    if (filterType === "time") {
       // Remove time mentions like @today, @yesterday, @last-hour, etc.
-      const timePatterns: Record<string, RegExp> = {
-        "today": /@today\b/gi,
-        "yesterday": /@yesterday\b/gi,
-        "last week": /@last[- ]?week\b/gi,
-        "last hour": /@last[- ]?hour\b/gi,
-        "this morning": /@this[- ]?morning\b/gi,
-      };
-      const pattern = timePatterns[label];
-      if (pattern) newInput = newInput.replace(pattern, "").trim();
+      if(label){
+        const timePatterns: Record<string, RegExp> = {
+          "today": /@today\b/gi,
+          "yesterday": /@yesterday\b/gi,
+          "last week": /@last[- ]?week\b/gi,
+          "last hour": /@last[- ]?hour\b/gi,
+          "this morning": /@this[- ]?morning\b/gi,
+        };
+        const pattern = timePatterns[label];
+        if (pattern) newInput = newInput.replace(pattern, "").trim();
+      }else{
+        newInput = newInput.replace(/@(today|yesterday|last[- ]?week|last[- ]?hour|this[- ]?morning)\b/gi, "").trim();
+      }
     } else if (filterType === "content") {
       newInput = newInput.replace(/@(audio|screen|input)\b/gi, "").trim();
     } else if (filterType === "app" && activeFilters.appName) {
@@ -5240,16 +5244,26 @@ export function StandaloneChat({
                 time
               </div>
               {STATIC_MENTION_SUGGESTIONS.filter((s) => s.category === "time").map((s) => {
-                const isActive = activeFilters.timeRanges.some((r) => r.label === s.description);
+                const timeLabels: Record<string, string> = {
+                  "today's activity": "today",
+                  "yesterday": "yesterday",
+                  "past 7 days": "last week",
+                  "past hour": "last hour",
+                  "this morning": "this morning",
+                };
+                const isActive = activeFilters.timeRanges.some((r) => r.label === timeLabels[s.description]);
                 return (
                   <button
                     key={s.tag}
                     type="button"
                     onClick={() => {
                       if (isActive) {
-                        removeFilter("time", s.description);
+                        removeFilter("time", timeLabels[s.description]);
                       } else {
-                        setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                        removeFilter("time");
+                        setTimeout(() => {
+                          setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                        }, 0);
                       }
                       setAppFilterOpen(false);
                     }}
@@ -5280,8 +5294,10 @@ export function StandaloneChat({
                       if (isActive) {
                         removeFilter("content");
                       } else {
-                        if (activeFilters.contentType) removeFilter("content");
-                        setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                        removeFilter("content");
+                        setTimeout(() => {
+                          setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                        }, 0);
                       }
                       setAppFilterOpen(false);
                     }}
