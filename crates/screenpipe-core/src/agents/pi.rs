@@ -498,21 +498,24 @@ impl PiExecutor {
                             obj.insert("api".to_string(), json!(wire_api));
                             // apiKey: respect user's existing if any.
                             if !obj.contains_key("apiKey")
-                                || obj.get("apiKey").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true)
+                                || obj
+                                    .get("apiKey")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.is_empty())
+                                    .unwrap_or(true)
                             {
                                 obj.insert("apiKey".to_string(), json!(api_key));
                             }
                             // models[]: append if our id isn't already there.
-                            let models_arr = obj
-                                .entry("models".to_string())
-                                .or_insert_with(|| json!([]));
+                            let models_arr =
+                                obj.entry("models".to_string()).or_insert_with(|| json!([]));
                             if !models_arr.is_array() {
                                 *models_arr = json!([]);
                             }
                             if let Some(arr) = models_arr.as_array_mut() {
-                                let already = arr.iter().any(|m| {
-                                    m.get("id").and_then(|v| v.as_str()) == Some(mdl)
-                                });
+                                let already = arr
+                                    .iter()
+                                    .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(mdl));
                                 if !already {
                                     arr.push(new_model);
                                 }
