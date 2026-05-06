@@ -136,6 +136,7 @@ commits: `28e5c247`
 - [ ] **Filter music toggle UI** — Verify that a "filter music" toggle exists in recording settings and correctly enables/disables music filtering.
 - [ ] **Music detection thresholds** — With "filter music" enabled, play various types of music. Verify that music is correctly detected and filtered, and that non-music speech is still captured.
 - [ ] **Audio reconciliation FK constraint loop** — Verify that audio reconciliation does not enter an infinite retry loop on foreign key constraints. (`e9e2dc252`)
+- [ ] **Audio reconciliation orphan undecodable chunks** — Verify that audio chunks that fail decode (corrupt/partial files) are correctly orphaned instead of retrying forever. Monitor logs for reconciliation sweeps; should complete quickly even with undecodable audio present. Regression: `32e5dfc44` (orphan undecodable audio chunks).
 - [ ] **Skip reconciliation when transcription disabled** — Disable audio transcription in settings. Verify that audio reconciliation is skipped. (`ceb77559d`)
 - [ ] **dead System Audio auto-reconnect** — Simulate a dead system audio stream. Verify it auto-reconnects and resumes capture. (`0f287761d`)
 - [ ] **per-device audio toggle** — In the tray menu, verify you can toggle recording for individual audio devices. (`3ee3defcb`)
