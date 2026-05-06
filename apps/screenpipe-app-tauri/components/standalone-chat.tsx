@@ -1091,7 +1091,11 @@ function CollapsibleUserMessage({ label, fullContent }: { label: string; fullCon
       <div className="flex items-center gap-1.5">
         <span className="flex-1 text-sm font-medium">{label}</span>
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(!expanded);
+          }}
+          onMouseUp={(e) => e.stopPropagation()}
           className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/60 hover:text-background/90 transition-colors"
           title={expanded ? "Collapse prompt" : "Show full prompt"}
         >
