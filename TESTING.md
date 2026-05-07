@@ -180,6 +180,7 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **Browser meetings splitting fix** — Verify that meetings in the browser are correctly split into separate events. (`d8ba1dad3`)
 - [ ] **Meeting with hidden UI controls** — Start a Zoom/Teams meeting. Minimize the meeting window or switch apps (Zoom controls move out of accessibility tree). Verify meeting stays active and does NOT auto-terminate after 30 seconds. Audio output detection prevents false "meeting ended" events. (`4e784f620`)
 - [ ] **OpenAI-compatible transcription endpoint** — Verify that the `/v1/audio/transcriptions` endpoint works as expected, following the OpenAI specification. (`5a14e9a92`)
+- [ ] **Discord meeting detection on Windows** — On Windows, join a Discord voice call. Verify that the call is detected as an active meeting and recording starts automatically. (`7c29bc100`) — regression: 2026-04-15 to 2026-05-07 on Windows only due to platform-specific UIA signal filtering.
 
 ### 5. frame comparison & OCR pipeline
 
