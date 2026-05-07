@@ -1,0 +1,11 @@
+{
+  "name": "Productivity Starter",
+  "description": "Track your time, capture your ideas, and remember every conversation",
+  "pipes": [
+    "todo-list-assistant",
+    "obsidian-daily-summary",
+    "personal-crm",
+    "meeting-intel",
+    "toggl-time-tracker"
+  ]
+}
