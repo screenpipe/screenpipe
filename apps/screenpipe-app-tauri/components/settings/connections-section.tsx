@@ -10,14 +10,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { message } from "@tauri-apps/plugin-dialog";
+import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { localFetch } from "@/lib/api";
 import { writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -1315,6 +1315,183 @@ export function ConnectionCredentialForm({
 }
 
 // ---------------------------------------------------------------------------
+// Obsidian panel — vault auto-discovery + manual fallback
+// ---------------------------------------------------------------------------
+
+async function getObsidianConfigPath(): Promise<string | null> {
+  try {
+    const os = typeof window !== "undefined" ? platform() : "";
+    const home = await homeDir();
+    if (os === "macos") return join(home, "Library", "Application Support", "obsidian", "obsidian.json");
+    if (os === "windows") return join(home, "AppData", "Roaming", "Obsidian", "obsidian.json");
+    if (os === "linux") return join(home, ".config", "obsidian", "obsidian.json");
+    return null;
+  } catch { return null; }
+}
+
+async function discoverObsidianVaults(): Promise<Array<{ id: string; name: string; path: string }>> {
+  try {
+    const configPath = await getObsidianConfigPath();
+    if (!configPath) return [];
+    const raw = await readTextFile(configPath);
+    const config = JSON.parse(raw);
+    return Object.entries(config.vaults || {})
+      .map(([id, v]: [string, any]) => ({
+        id,
+        path: v.path as string,
+        name: (v.path as string).split(/[\\/]/).filter(Boolean).pop() ?? v.path,
+      }))
+      .filter(v => v.path)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch { return []; }
+}
+
+function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
+  const sessionKey = "disconnected:obsidian";
+  const [vaults, setVaults] = useState<Array<{ id: string; name: string; path: string }>>([]);
+  const [connectedPath, setConnectedPath] = useState<string | null>(null);
+  const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [manualPath, setManualPath] = useState("");
+
+  useEffect(() => {
+    const wasDisconnected = typeof window !== "undefined" && !!sessionStorage.getItem(sessionKey);
+    if (!wasDisconnected) {
+      localFetch("/connections/obsidian")
+        .then(r => r.json())
+        .then(data => { if (data.credentials?.vault_path) setConnectedPath(data.credentials.vault_path); })
+        .catch(() => {});
+    }
+    discoverObsidianVaults().then(setVaults).catch(() => {});
+  }, []);
+
+  const handleConnect = async (vaultPath: string) => {
+    if (!vaultPath.trim()) return;
+    setStatus("connecting");
+    setError(null);
+    try {
+      const testRes = await localFetch("/connections/obsidian/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: { vault_path: vaultPath } }),
+      });
+      const testData = await testRes.json();
+      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
+      const saveRes = await localFetch("/connections/obsidian", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials: { vault_path: vaultPath } }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+      sessionStorage.removeItem(sessionKey);
+      setConnectedPath(vaultPath);
+      setManualPath("");
+      setStatus("idle");
+      apiCache.invalidate("connections/list");
+      posthog.capture("connection_saved", { integration: "obsidian" });
+      onConnected?.();
+    } catch (e: any) {
+      setError(e?.message || "connection failed");
+      setStatus("idle");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      const res = await localFetch("/connections/obsidian", { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
+      sessionStorage.setItem(sessionKey, "1");
+      setConnectedPath(null);
+      setManualPath("");
+      setStatus("idle");
+      setError(null);
+      apiCache.invalidate("connections/list");
+      onDisconnected?.();
+    } catch (e: any) {
+      setError(e?.message || "disconnect failed");
+    }
+  };
+
+  if (connectedPath) {
+    return (
+      <div className="space-y-3">
+        <div className="p-3 bg-muted border border-border rounded-lg space-y-0.5">
+          <p className="text-xs font-medium text-foreground">connected vault</p>
+          <p className="text-xs text-muted-foreground font-mono break-all">{connectedPath}</p>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
+          <X className="h-3 w-3" />disconnect
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {vaults.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground">detected vaults</p>
+          <div className="space-y-1">
+            {vaults.map(v => (
+              <button
+                key={v.id}
+                onClick={() => handleConnect(v.path)}
+                disabled={status === "connecting"}
+                className="w-full text-left p-2.5 rounded-lg border border-border bg-card hover:bg-muted transition-colors flex items-center gap-2.5 disabled:opacity-50"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{v.name}</p>
+                  <p className="text-xs text-muted-foreground truncate font-mono">{v.path}</p>
+                </div>
+                {status === "connecting" ? <Loader2 className="h-3 w-3 animate-spin shrink-0 text-muted-foreground" /> : <Check className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {vaults.length > 0 && <p className="text-xs text-muted-foreground">or enter path manually</p>}
+        {vaults.length === 0 && <p className="text-xs text-muted-foreground">select your vault folder</p>}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Input
+              value={manualPath}
+              onChange={e => setManualPath(e.target.value)}
+              placeholder={typeof window !== "undefined" && platform() === "windows" ? "C:\\Users\\you\\Documents\\MyVault" : "/Users/you/Documents/MyVault"}
+              className="h-8 text-xs font-mono pr-8"
+              onKeyDown={e => { if (e.key === "Enter") handleConnect(manualPath); }}
+            />
+            <button
+              type="button"
+              title="browse for vault folder"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={async () => {
+                const selected = await openDialog({ directory: true, multiple: false, title: "Select Obsidian Vault Folder" });
+                if (typeof selected === "string") setManualPath(selected);
+              }}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Button
+            onClick={() => handleConnect(manualPath)}
+            disabled={!manualPath.trim() || status === "connecting"}
+            size="sm"
+            className="gap-1.5 h-8 text-xs normal-case font-sans tracking-normal shrink-0"
+          >
+            {status === "connecting" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+            connect
+          </Button>
+        </div>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Multi-instance API integration panel
 // ---------------------------------------------------------------------------
 
@@ -1650,6 +1827,14 @@ export function ConnectionsSection() {
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
       case "warp": return <WarpPanel />;
+      case "obsidian": return <ObsidianPanel
+        onConnected={() => { apiCache.invalidate("connections/list"); fetchIntegrations(); }}
+        onDisconnected={() => {
+          setIntegrations(prev => prev.map(i => i.id === "obsidian" ? { ...i, connected: false } : i));
+          apiCache.invalidate("connections/list");
+          fetchIntegrations();
+        }}
+      />;
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
