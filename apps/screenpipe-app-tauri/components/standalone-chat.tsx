@@ -1562,7 +1562,7 @@ export function StandaloneChat({
   const lastUserMessageRef = useRef<string>("");
 
   // Ref to sendMessage so useEffect callbacks can call it without stale closures
-  const sendMessageRef = useRef<(msg: string) => Promise<void>>();
+  const sendMessageRef = useRef<(msg: string, displayLabel?: string) => Promise<void>>();
   // Bypass guard for auto-send from chat-prefill (Pi confirmed running but React state stale)
   const autoSendBypassRef = useRef(false);
 
@@ -4854,7 +4854,7 @@ export function StandaloneChat({
                       const idx = messages.findIndex((m) => m.id === message.id);
                       if (idx === -1) return;
                       setMessages((prev) => prev.slice(0, idx));
-                      sendMessage(trimmed);
+                      sendMessage(trimmed, message.displayContent);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") { e.preventDefault(); setEditingMessageId(null); }
