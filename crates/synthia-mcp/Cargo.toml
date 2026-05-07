@@ -1,0 +1,15 @@
+[package]
+name = "synthia-mcp"
+version = "0.3.319"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+
+[lib]
+name = "synthia_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "synthia-mcp"
+path = "src/main.rs"

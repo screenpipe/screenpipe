@@ -1,0 +1,11 @@
+[package]
+name = "synthia-llm"
+version = "0.3.319"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+
+[lib]
+name = "synthia_llm"
+path = "src/lib.rs"

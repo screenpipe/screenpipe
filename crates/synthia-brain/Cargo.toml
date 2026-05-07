@@ -1,0 +1,15 @@
+[package]
+name = "synthia-brain"
+version = "0.3.319"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+
+[lib]
+name = "synthia_brain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "synthia-brain"
+path = "src/main.rs"

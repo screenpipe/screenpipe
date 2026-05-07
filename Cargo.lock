@@ -8660,6 +8660,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "synthia-brain"
+version = "0.3.319"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "synthia-llm"
+version = "0.3.319"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "synthia-mcp"
+version = "0.3.319"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "sysinfo"
 version = "0.29.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
