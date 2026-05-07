@@ -136,6 +136,7 @@ commits: `28e5c247`
 - [ ] **Filter music toggle UI** — Verify that a "filter music" toggle exists in recording settings and correctly enables/disables music filtering.
 - [ ] **Music detection thresholds** — With "filter music" enabled, play various types of music. Verify that music is correctly detected and filtered, and that non-music speech is still captured.
 - [ ] **Audio reconciliation FK constraint loop** — Verify that audio reconciliation does not enter an infinite retry loop on foreign key constraints. (`e9e2dc252`)
+- [ ] **undecodable audio chunk orphaning** — Inject a corrupt/truncated audio file in the database (either via ffmpeg write failure or manual file corruption). Verify that the next reconciliation sweep marks it as orphan for deletion instead of retrying forever. Without this fix: chunk_id retries every ~2 minutes indefinitely, eating ffmpeg subprocess budget and causing lag/high energy use. (`32e5dfc44`)
 - [ ] **Skip reconciliation when transcription disabled** — Disable audio transcription in settings. Verify that audio reconciliation is skipped. (`ceb77559d`)
 - [ ] **dead System Audio auto-reconnect** — Simulate a dead system audio stream. Verify it auto-reconnects and resumes capture. (`0f287761d`)
 - [ ] **per-device audio toggle** — In the tray menu, verify you can toggle recording for individual audio devices. (`3ee3defcb`)
