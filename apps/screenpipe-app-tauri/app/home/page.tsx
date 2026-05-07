@@ -22,7 +22,6 @@ import {
   Phone,
   Plug,
   NotebookPen,
-  X,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -37,7 +36,10 @@ import { MemoriesSection } from "@/components/settings/memories-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
-import { ChatSidebar } from "@/components/chat-sidebar";
+import {
+  ChatSidebar,
+  CollapsedChatSidebarButton,
+} from "@/components/chat-sidebar";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
@@ -99,6 +101,11 @@ function HomeContent() {
   const { isTranslucent } = useSidebarContext();
   const teamState = useTeam();
   const { isSectionHidden, isSettingLocked, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
+  const selectChatConversation = useCallback((id: string) => {
+    setActiveSection("home");
+    useChatStore.getState().actions.setCurrent(id);
+    void emit("chat-load-conversation", { conversationId: id });
+  }, [setActiveSection]);
 
   // Redirect settings sections to the standalone settings page
   useEffect(() => {
@@ -871,6 +878,12 @@ function HomeContent() {
                   }
                   return btn;
                 })}
+                {sidebarCollapsed && (
+                  <CollapsedChatSidebarButton
+                    onSelect={selectChatConversation}
+                    isTranslucent={isTranslucent}
+                  />
+                )}
               </div>
 
 

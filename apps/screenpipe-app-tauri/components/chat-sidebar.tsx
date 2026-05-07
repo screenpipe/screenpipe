@@ -32,7 +32,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity } from "lucide-react";
+import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity, MessageSquare } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
 import { localFetch } from "@/lib/api";
@@ -47,9 +47,40 @@ import {
 import { updateConversationFlags } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface ChatSidebarProps {
   className?: string;
+}
+
+function useVisibleChatSections(): {
+  pinned: SessionRecord[];
+  recents: SessionRecord[];
+} {
+  const sessions = useOrderedSessions();
+  const runningPipes = useRunningPipes();
+
+  const liveScheduledSids = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of runningPipes) {
+      if (p.executionId !== undefined) set.add(pipeSessionId(p.pipeName, p.executionId));
+    }
+    return set;
+  }, [runningPipes]);
+
+  return useMemo(() => {
+    const pinned: SessionRecord[] = [];
+    const recents: SessionRecord[] = [];
+    for (const s of sessions) {
+      const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
+      if (isPipeKind && liveScheduledSids.has(s.id)) continue;
+      if (s.draft) continue;
+      (s.pinned ? pinned : recents).push(s);
+    }
+    return { pinned, recents };
+  }, [sessions, liveScheduledSids]);
 }
 
 /**
@@ -98,11 +129,6 @@ function useQueueDepths(): Map<string, number> {
  * background — those belong to the parent.
  */
 export function ChatSidebar({ className }: ChatSidebarProps) {
-  // useOrderedSessions subscribes to the raw sessions map (stable identity
-  // across no-op updates) and memoizes the sort. Avoids the
-  // useSyncExternalStore infinite-loop trap of returning a fresh array
-  // from the selector — see comment on selectOrderedSessions.
-  const sessions = useOrderedSessions();
   const currentId = useChatStore((s) => s.currentId);
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
@@ -153,30 +179,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     void refetchUpcoming();
   };
 
-  // Pipe-watch / pipe-run sessions also rendered in Scheduled get filtered
-  // out here — otherwise the same pipe shows up twice (live row in
-  // Scheduled + duplicate row in Recents). Once the pipe stops running it
-  // drops out of this set and reappears in Recents naturally.
-  const liveScheduledSids = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of runningPipes) {
-      if (p.executionId !== undefined) set.add(pipeSessionId(p.pipeName, p.executionId));
-    }
-    return set;
-  }, [runningPipes]);
-
-  const { pinned, recents } = useMemo(() => {
-    const p: SessionRecord[] = [];
-    const r: SessionRecord[] = [];
-    for (const s of sessions) {
-      const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
-      if (isPipeKind && liveScheduledSids.has(s.id)) continue;
-      // Hide draft sessions — they haven't received an assistant reply yet.
-      if (s.draft) continue;
-      (s.pinned ? p : r).push(s);
-    }
-    return { pinned: p, recents: r };
-  }, [sessions, liveScheduledSids]);
+  const { pinned, recents } = useVisibleChatSections();
 
   const handleSelect = (id: string) => {
     // No early return for id === currentId. Two reasons:
@@ -275,9 +278,9 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       )}
 
       {pinned.length > 0 && (
-        <Section title="pinned">
+        <ChatSection title="pinned">
           {pinned.map((s) => (
-            <ChatRow
+            <SidebarChatRow
               key={s.id}
               session={s}
               isCurrent={s.id === currentId}
@@ -287,7 +290,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
               onTogglePin={handleTogglePin}
             />
           ))}
-        </Section>
+        </ChatSection>
       )}
 
       <CollapsibleRecents
@@ -299,7 +302,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         }
       >
         {recents.map((s) => (
-          <ChatRow
+          <SidebarChatRow
             key={s.id}
             session={s}
             isCurrent={s.id === currentId}
@@ -311,6 +314,172 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         ))}
       </CollapsibleRecents>
     </div>
+  );
+}
+
+export function CollapsedChatSidebarButton({
+  onSelect,
+  isTranslucent,
+}: {
+  onSelect: (id: string) => void;
+  isTranslucent: boolean;
+}) {
+  const currentId = useChatStore((s) => s.currentId);
+  const { pinned, recents } = useVisibleChatSections();
+  const [open, setOpen] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [suppressTooltip, setSuppressTooltip] = useState(false);
+  const [activeTab, setActiveTab] = useState<"recents" | "pinned">("recents");
+  const visiblePinned = pinned;
+  const visibleRecents = recents;
+  const emptyText = visiblePinned.length === 0
+    ? "no chats yet — click + to start"
+    : "no recent chats";
+
+  useEffect(() => {
+    if (visiblePinned.length === 0 && activeTab === "pinned") {
+      setActiveTab("recents");
+    }
+  }, [visiblePinned.length, activeTab]);
+
+  const handleSelect = (id: string) => {
+    setOpen(false);
+    setTooltipOpen(false);
+    setSuppressTooltip(true);
+    onSelect(id);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        setTooltipOpen(false);
+        if (nextOpen) setSuppressTooltip(true);
+      }}
+    >
+      <Tooltip
+        open={!open && !suppressTooltip ? tooltipOpen : false}
+        onOpenChange={(nextOpen) => {
+          if (open || suppressTooltip) {
+            setTooltipOpen(false);
+            return;
+          }
+          setTooltipOpen(nextOpen);
+        }}
+      >
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              aria-label="recent chats"
+              onClick={() => {
+                setTooltipOpen(false);
+                setSuppressTooltip(true);
+              }}
+              onPointerLeave={() => setSuppressTooltip(false)}
+              className={cn(
+                "w-full flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
+                isTranslucent
+                  ? "vibrant-nav-item vibrant-nav-hover"
+                  : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <MessageSquare
+                className={cn(
+                  "h-3.5 w-3.5 transition-colors flex-shrink-0",
+                  isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
+                )}
+              />
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="text-xs">Recent chats</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        className="w-64 p-0 rounded-none shadow-none"
+      >
+        {visiblePinned.length === 0 && visibleRecents.length === 0 ? (
+          <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
+            {emptyText}
+          </div>
+        ) : (
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as "recents" | "pinned")}
+            className="w-full"
+          >
+            <TabsList
+              className={cn(
+                "grid w-full h-8 rounded-none bg-transparent border-b border-border p-0",
+                visiblePinned.length > 0 ? "grid-cols-2" : "grid-cols-1"
+              )}
+            >
+              <TabsTrigger
+                value="recents"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
+              >
+                recents
+              </TabsTrigger>
+              {visiblePinned.length > 0 && (
+                <TabsTrigger
+                  value="pinned"
+                  className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
+                >
+                  pinned
+                </TabsTrigger>
+              )}
+            </TabsList>
+            <TabsContent value="recents" className="mt-0">
+              {visibleRecents.length === 0 ? (
+                <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
+                  {visiblePinned.length === 0 ? emptyText : "no recent chats"}
+                </div>
+              ) : (
+                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
+                  <div className="flex flex-col py-1">
+                    {visibleRecents.map((session) => (
+                      <SidebarChatRow
+                        key={session.id}
+                        session={session}
+                        isCurrent={session.id === currentId}
+                        queuedCount={0}
+                        onSelect={handleSelect}
+                        onClose={() => {}}
+                        onTogglePin={() => {}}
+                        showActions={false}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+            {visiblePinned.length > 0 && (
+              <TabsContent value="pinned" className="mt-0">
+                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
+                  <div className="flex flex-col py-1">
+                    {visiblePinned.map((session) => (
+                      <SidebarChatRow
+                        key={session.id}
+                        session={session}
+                        isCurrent={session.id === currentId}
+                        queuedCount={0}
+                        onSelect={handleSelect}
+                        onClose={() => {}}
+                        onTogglePin={() => {}}
+                        showActions={false}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </TabsContent>
+            )}
+          </Tabs>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -679,7 +848,7 @@ function UpcomingRow({
   );
 }
 
-function Section({
+export function ChatSection({
   title,
   action,
   children,
@@ -711,6 +880,7 @@ interface ChatRowProps {
   onSelect: (id: string) => void;
   onClose: (e: React.MouseEvent, id: string) => Promise<void> | void;
   onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  showActions?: boolean;
 }
 
 /**
@@ -735,13 +905,14 @@ interface ChatRowProps {
  * No preview line below the title. The title alone is what the user
  * picks chats by; partial Pi tokens leaking into the row read as noise.
  */
-function ChatRow({
+export function SidebarChatRow({
   session,
   isCurrent,
   queuedCount,
   onSelect,
   onClose,
   onTogglePin,
+  showActions = true,
 }: ChatRowProps) {
   const isLive =
     session.status === "streaming" ||
@@ -794,7 +965,7 @@ function ChatRow({
         {/* Queued-prompts badge — only visible when this session has rust-side
             queued items waiting. Hidden on hover so it doesn't fight the
             pin/close buttons for the same slot. */}
-        {queuedCount > 0 && (
+        {queuedCount > 0 && showActions && (
           <span
             className="group-hover:hidden inline-flex items-center gap-0.5 px-1 text-[10px] font-mono text-muted-foreground/80 shrink-0"
             title={`${queuedCount} queued`}
@@ -805,7 +976,12 @@ function ChatRow({
         {/* hover-only actions — REAL <button>s now (was <span role=button>
             inside the outer <button>, which is invalid nested-button HTML
             and made the X click silently no-op on close). */}
-        <span className="hidden group-hover:inline-flex items-center gap-0.5 shrink-0">
+        <span
+          className={cn(
+            "shrink-0",
+            showActions ? "hidden group-hover:inline-flex items-center gap-0.5" : "hidden"
+          )}
+        >
           <button
             type="button"
             onClick={(e) => {
