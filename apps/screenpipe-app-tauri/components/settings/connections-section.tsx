@@ -15,7 +15,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
-import { showChatWithPrefill } from "@/lib/chat-utils";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -87,36 +86,12 @@ async function findClaudeExeOnWindows(): Promise<string | null> {
   return null;
 }
 
-async function getClaudeConfigPath(): Promise<string | null> {
-  try {
-    const os = platform();
-    const home = await homeDir();
-    if (os === "macos") return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
-    if (os === "windows") return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
-    return null;
-  } catch { return null; }
-}
-
-async function getInstalledMcpVersion(): Promise<string | null> {
-  try {
-    const configPath = await getClaudeConfigPath();
-    if (!configPath) return null;
-    const config = JSON.parse(await readTextFile(configPath));
-    return config?.mcpServers?.screenpipe ? "installed" : null;
-  } catch { return null; }
-}
-
-async function getCursorMcpConfigPath(): Promise<string> {
-  const home = await homeDir();
-  return join(home, ".cursor", "mcp.json");
-}
-
-async function isCursorMcpInstalled(): Promise<boolean> {
-  try {
-    const content = await readTextFile(await getCursorMcpConfigPath());
-    return !!JSON.parse(content)?.mcpServers?.screenpipe;
-  } catch { return false; }
-}
+import {
+  getClaudeConfigPath,
+  getCursorMcpConfigPath,
+  getInstalledMcpVersion,
+  isCursorMcpInstalled,
+} from "@/lib/hooks/use-hardcoded-tiles";
 
 type McpCommand = { command: string; args: string[] };
 
@@ -1187,9 +1162,6 @@ export function ConnectionCredentialForm({
   onSaved,
   instanceName,
   onDisconnect,
-  showTryInChat,
-  integrationName,
-  integrationDescription,
 }: {
   integrationId: string;
   fields: IntegrationField[];
@@ -1197,35 +1169,48 @@ export function ConnectionCredentialForm({
   onSaved?: () => void;
   instanceName?: string;
   onDisconnect?: () => void;
-  showTryInChat?: boolean;
-  integrationName?: string;
-  integrationDescription?: string;
 }) {
+  const sessionKey = `disconnected:${integrationId}${instanceName ? `:${instanceName}` : ""}`;
   const [creds, setCreds] = useState<Record<string, string>>(initialCredentials || {});
   const [visible, setVisible] = useState<Record<string, boolean>>({});
-  const [status, setStatus] = useState<"idle" | "testing" | "saving" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  // whether credentials are currently saved on the backend
+  // suppressed if the user explicitly disconnected this session (persists across remounts)
+  const [isSaved, setIsSaved] = useState(() => {
+    if (typeof window !== "undefined" && sessionStorage.getItem(sessionKey)) return false;
+    return Object.values(initialCredentials || {}).some(v => !!v);
+  });
+  // set when user explicitly clicks disconnect — blocks all future initialCredentials syncs
+  const userDisconnectedRef = useRef(
+    typeof window !== "undefined" && !!sessionStorage.getItem(sessionKey)
+  );
 
   useEffect(() => {
-    if (initialCredentials) setCreds(initialCredentials);
+    if (userDisconnectedRef.current) return; // never auto-refill after explicit disconnect
+    if (!initialCredentials) return;
+    const hasValues = Object.values(initialCredentials).some(v => !!v);
+    if (hasValues) {
+      setCreds(initialCredentials);
+      setIsSaved(true);
+    }
   }, [initialCredentials]);
 
   const endpoint = instanceName
     ? `/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
     : `/connections/${integrationId}`;
 
-  const handleTest = async () => {
-    setStatus("testing");
+  const handleConnect = async () => {
+    setStatus("connecting");
     setError(null);
     try {
-      const res = await localFetch(`/connections/${integrationId}/test`, {
+      const testRes = await localFetch(`/connections/${integrationId}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: creds }),
       });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "test failed");
-      setStatus("saving");
+      const testData = await testRes.json();
+      if (!testRes.ok || testData.error) throw new Error(testData.error || "connection test failed");
       const saveRes = await localFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1233,7 +1218,10 @@ export function ConnectionCredentialForm({
       });
       const saveData = await saveRes.json();
       if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+      sessionStorage.removeItem(sessionKey);
+      userDisconnectedRef.current = false; // allow future syncs after reconnect
       setStatus("idle");
+      setIsSaved(true);
       apiCache.invalidate("connections/list");
       posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
@@ -1245,11 +1233,19 @@ export function ConnectionCredentialForm({
 
   const handleDisconnect = async () => {
     try {
-      await fetch(endpoint, { method: "DELETE" });
+      const res = await localFetch(endpoint, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
+      sessionStorage.setItem(sessionKey, "1");
+      userDisconnectedRef.current = true; // block any async re-sync of saved creds
       setCreds({});
+      setIsSaved(false);
+      setStatus("idle");
+      setError(null);
       apiCache.invalidate("connections/list");
       onDisconnect?.();
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      setError(e?.message || "disconnect failed");
+    }
   };
 
   const hasCredentials = Object.values(creds).some(v => !!v);
@@ -1283,8 +1279,9 @@ export function ConnectionCredentialForm({
               type={field.secret && !visible[field.key] ? "password" : "text"}
               placeholder={field.placeholder}
               value={creds[field.key] || ""}
-              onChange={(e) => setCreds(prev => ({ ...prev, [field.key]: e.target.value }))}
+              onChange={(e) => { setCreds(prev => ({ ...prev, [field.key]: e.target.value })); }}
               className="h-8 text-xs pr-8"
+              readOnly={isSaved}
             />
             {field.secret && (
               <button
@@ -1300,33 +1297,14 @@ export function ConnectionCredentialForm({
       ))}
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex gap-2">
-        <Button onClick={handleTest} disabled={status === "testing" || status === "saving"} variant={status === "error" ? "outline" : "default"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          {status === "testing" ? (<><Loader2 className="h-3 w-3 animate-spin" />testing...</>)
-           : status === "saving" ? (<><Loader2 className="h-3 w-3 animate-spin" />saving...</>)
-           : status === "error" ? (<>retry</>)
-           : (<><Check className="h-3 w-3" />test &amp; save</>)}
-        </Button>
-        {showTryInChat && hasCredentials && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
-            onClick={() => {
-              const credSummary = Object.entries(creds)
-                .filter(([, v]) => v)
-                .map(([k, v]) => `${k}: ${v}`)
-                .join("\n  ");
-              showChatWithPrefill({
-                context: `the user has the "${integrationName}" connection set up in screenpipe with these credentials:\n  ${credSummary}\n\nthe connection API is available at GET http://localhost:3030/connections/${integrationId}\n\n${integrationDescription || ""}`,
-                prompt: `try using my ${integrationName} connection — query it and do a small test interaction to verify it works end to end. after that, suggest creating a pipe that uses this connection.`,
-                autoSend: true,
-              });
-            }}
-          >
-            <ExternalLink className="h-3 w-3" />try in chat
+        {!isSaved && (
+          <Button onClick={handleConnect} disabled={!hasCredentials || status === "connecting"} variant={status === "error" ? "outline" : "default"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
+             : status === "error" ? (<>retry</>)
+             : (<><Check className="h-3 w-3" />connect</>)}
           </Button>
         )}
-        {(onDisconnect || hasCredentials) && (
+        {isSaved && (
           <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
             <X className="h-3 w-3" />disconnect
           </Button>
@@ -1345,9 +1323,10 @@ interface InstanceData {
   credentials: Record<string, string>;
 }
 
-function ApiIntegrationPanel({ integration, onRefresh }: {
+function ApiIntegrationPanel({ integration, onRefresh, onDisconnected }: {
   integration: IntegrationInfo;
   onRefresh: () => void;
+  onDisconnected?: () => void;
 }) {
   const [instances, setInstances] = useState<InstanceData[]>([]);
   const [instancesLoaded, setInstancesLoaded] = useState(false);
@@ -1395,7 +1374,11 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
       });
   }, [integration.id]);
 
-  const refreshAll = () => {
+  const refreshAll = (disconnected = false) => {
+    if (disconnected) {
+      setDefaultCreds({});
+      onDisconnected?.();
+    }
     onRefresh();
     // Re-fetch instances
     localFetch(`/connections/${integration.id}/instances`)
@@ -1430,10 +1413,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
           fields={integration.fields}
           initialCredentials={defaultCreds}
           onSaved={refreshAll}
-          onDisconnect={refreshAll}
-          showTryInChat={integration.connected}
-          integrationName={integration.name}
-          integrationDescription={integration.description}
+          onDisconnect={() => refreshAll(true)}
         />
       </div>
 
@@ -1451,9 +1431,6 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
               setInstances(prev => prev.filter(i => i.name !== inst.name));
               refreshAll();
             }}
-            showTryInChat={Object.values(inst.credentials).some(v => !!v)}
-            integrationName={`${integration.name} (${inst.name})`}
-            integrationDescription={integration.description}
           />
         </div>
       ))}
@@ -1506,7 +1483,7 @@ export function ConnectionsSection() {
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
 
-  const os = platform();
+  const os = typeof window !== "undefined" ? platform() : "";
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -1678,7 +1655,11 @@ export function ConnectionsSection() {
           if (selectedIntegration.is_oauth) {
             return <OAuthPanel integrationId={selectedIntegration.id} integrationName={selectedIntegration.name} />;
           }
-          return <ApiIntegrationPanel integration={selectedIntegration} onRefresh={fetchIntegrations} />;
+          return <ApiIntegrationPanel
+            integration={selectedIntegration}
+            onRefresh={fetchIntegrations}
+            onDisconnected={() => setIntegrations(prev => prev.map(i => i.id === selectedIntegration.id ? { ...i, connected: false } : i))}
+          />;
         }
         // Fall-through: hardcoded tile but the API hasn't returned (or returned without
         // this id). Without this branch the panel renders a blank card with just the

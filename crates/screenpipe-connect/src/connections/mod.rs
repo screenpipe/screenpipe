@@ -308,8 +308,9 @@ async fn save_connection(
     save_store(screenpipe_dir, &file_store)
 }
 
-/// Remove a connection from SecretStore. Falls back to the legacy file
-/// only when no SecretStore is available.
+/// Remove a connection from SecretStore and the legacy file.
+/// Always clears both stores so that credentials migrated from the legacy
+/// connections.json (saved before SecretStore was available) are fully removed.
 async fn remove_connection(
     secret_store: Option<&SecretStore>,
     screenpipe_dir: &Path,
@@ -318,13 +319,15 @@ async fn remove_connection(
     if let Some(ss) = secret_store {
         let store_key = format!("cred:{}", key);
         ss.delete(&store_key).await?;
-        return Ok(());
     }
 
-    // No SecretStore — fall back to file
+    // Always also clear from the legacy file — handles the migration case where
+    // credentials were written to connections.json before SecretStore existed.
     let mut file_store = load_store(screenpipe_dir);
-    file_store.remove(key);
-    save_store(screenpipe_dir, &file_store)
+    if file_store.remove(key).is_some() {
+        save_store(screenpipe_dir, &file_store)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

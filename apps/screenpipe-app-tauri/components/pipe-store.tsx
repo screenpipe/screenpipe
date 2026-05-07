@@ -68,6 +68,7 @@ import {
   IntegrationIcon,
   IntegrationInfo,
 } from "@/components/settings/connections-section";
+import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import {
   Tooltip,
   TooltipContent,
@@ -240,29 +241,47 @@ function normalizePipe(raw: any): any {
 
 function ConnectionsStrip() {
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
+  const hardcodedTiles = useHardcodedTiles();
 
   useEffect(() => {
-    const cached = apiCache.get<IntegrationInfo[]>("connections/strip");
+    const cacheKey = "connections/list";
+    const cached = apiCache.get<IntegrationInfo[]>(cacheKey);
     if (cached) {
-      setIntegrations(cached);
+      setIntegrations(cached.filter((i) => i.id !== "owned-default"));
       return;
     }
     localFetch("/connections")
       .then((r) => r.json())
       .then((data) => {
         const list: IntegrationInfo[] = data.data || [];
-        // only show integrations that have fields (API keys) or OAuth — skip empty ones
-        const relevant = list.filter((i) => i.fields.length > 0 || i.is_oauth);
-        apiCache.set("connections/strip", relevant, 30_000);
-        setIntegrations(relevant);
+        apiCache.set(cacheKey, list, 30_000);
+        setIntegrations(list.filter((i) => i.id !== "owned-default"));
       })
       .catch(() => {});
   }, []);
 
-  if (integrations.length === 0) return null;
+  // Merge: for tiles in both backend and hardcoded, use backend's connected state
+  // but hardcoded's name/icon (which are OS-specific, e.g. windows-calendar vs apple-calendar).
+  // For tiles only in hardcoded (cursor, claude, etc.), append them directly.
+  const hardcodedMap = new Map(hardcodedTiles.map((h) => [h.id, h]));
+  const mergedBackend: IntegrationInfo[] = integrations.map((i) => {
+    const h = hardcodedMap.get(i.id);
+    if (!h) return i;
+    // Use OS-correct name/icon from hardcoded; AND the connected states so an
+    // explicit user disconnect (e.g. calendarUserDisconnected in store) overrides
+    // the backend's "OS calendar is accessible" true.
+    return { ...i, name: h.name, icon: h.icon, connected: i.connected && h.connected };
+  });
+  const backendIds = new Set(integrations.map((i) => i.id));
+  const extraTiles: IntegrationInfo[] = hardcodedTiles
+    .filter((h) => !backendIds.has(h.id))
+    .map((h) => ({ ...h, fields: [], is_oauth: false, category: "", description: "" }));
+  const allIntegrations = [...mergedBackend, ...extraTiles];
 
-  const connected = integrations.filter((i) => i.connected);
-  const disconnected = integrations.filter((i) => !i.connected);
+  if (allIntegrations.length === 0) return null;
+
+  const connected = allIntegrations.filter((i) => i.connected);
+  const disconnected = allIntegrations.filter((i) => !i.connected);
   const sorted = [...connected, ...disconnected];
 
   const openConnections = () => {
