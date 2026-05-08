@@ -910,7 +910,7 @@ async fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
+            MacosLauncher::AppleScript,
             None,
         ))
         // single-instance plugin uses zbus::blocking on Linux which panics
@@ -1775,6 +1775,21 @@ async fn main() {
                 let _ = autostart_manager.enable();
             } else {
                 let _ = autostart_manager.disable();
+            }
+
+            // Migration: clean up legacy LaunchAgent plist file
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(home_dir) = std::env::var("HOME") {
+                    let legacy_plist_path = format!(
+                        "{}/.local/share/screenpipe/com.screenpipe.autostart.plist",
+                        home_dir
+                    );
+                    if std::path::Path::new(&legacy_plist_path).exists() {
+                        let _ = std::fs::remove_file(&legacy_plist_path);
+                        debug!("cleaned up legacy LaunchAgent plist: {}", legacy_plist_path);
+                    }
+                }
             }
 
             debug!(
