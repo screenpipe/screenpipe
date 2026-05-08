@@ -7,7 +7,6 @@
 
 # Test binary, built with `cargo test`
 *.test
-
 # Rust/Cargo specific files
 *target
 # IDE specific files
