@@ -318,6 +318,7 @@ pub enum SyncTable {
 
 /// Result returned to callers. Each variant matches the return type
 /// of the original public method.
+#[derive(Debug)]
 pub(crate) enum WriteResult {
     /// An inserted row ID (i64). Used by most insert operations.
     Id(i64),
@@ -1342,8 +1343,9 @@ async fn execute_single_write(
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn send_error_to_all(batch: &mut Vec<PendingWrite>, error: sqlx::Error) {
+    let err_str = error.to_string();
     for pw in batch.drain(..) {
-        let _ = pw.respond.send(Err(sqlx::Error::PoolTimedOut));
+        let _ = pw.respond.send(Err(sqlx::Error::Protocol(err_str.clone().into())));
     }
     // Log the original error that caused the batch failure
     error!("write_queue: batch failed: {}", error);
@@ -1943,5 +1945,46 @@ mod tests {
             .unwrap_err();
         assert!(matches!(per_row, sqlx::Error::Database(_)));
         assert!(!is_connection_error(&per_row));
+    }
+
+    /// Regression test for issue #7331781144:
+    /// send_error_to_all() must preserve the original error instead of
+    /// masking it with PoolTimedOut. This allows clients to diagnose
+    /// the real failure (e.g., disk full, locked, corrupt) rather than
+    /// a spurious pool exhaustion.
+    #[test]
+    fn test_send_error_to_all_propagates_actual_error() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let pw = PendingWrite {
+            op: WriteOp::InsertAudioChunk {
+                file_path: "/tmp/test".into(),
+                timestamp: None,
+            },
+            respond: tx,
+        };
+
+        let mut batch = vec![pw];
+        let disk_error = sqlx::Error::Protocol("disk i/o error".into());
+
+        send_error_to_all(&mut batch, disk_error);
+
+        // The error sent to the handler must contain the original message,
+        // NOT be PoolTimedOut. We decode the Protocol error to verify.
+        match rx.blocking_recv() {
+            Ok(Err(err)) => {
+                let err_msg = err.to_string();
+                assert!(
+                    err_msg.contains("disk i/o error"),
+                    "Error message should contain original error, got: {}",
+                    err_msg
+                );
+                assert!(
+                    !err_msg.contains("PoolTimedOut"),
+                    "Error message should not be PoolTimedOut, got: {}",
+                    err_msg
+                );
+            }
+            other => panic!("Expected error, got: {:?}", other),
+        }
     }
 }
