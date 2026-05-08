@@ -167,6 +167,7 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **auto-name input speaker** — with userName set, after ~2 minutes of speaking into mic, dominant input speaker named. verify: `grep "auto speaker identification: named" ~/.screenpipe/screenpipe-app.*.log`.
 - [ ] **speaker names survive restart** — speaker named pre-restart stays named post-restart. verify: `sqlite3 ~/.screenpipe/db.sqlite "SELECT id, name FROM speakers WHERE name != ''"` shows same speakers before and after restart.
 - [ ] **no duplicate speaker naming on restart** — restart during meeting, speakers already named aren't overwritten or duplicated. verify: no duplicate names in speakers table.
+- [ ] **speaker device seeding on startup** — Start a recording session. Verify that all input and output devices are pre-seeded with speaker records before any audio is recorded. This prevents speaker fragmentation when devices are swapped mid-session. Verify: `sqlite3 ~/.screenpipe/db.sqlite "SELECT device_id, COUNT(*) FROM speakers GROUP BY device_id"` shows expected device count. (`755733f15`)
 - [ ] **meeting detection stability** — Verify that meeting detection does not drop when alt-tabbing during long calls. (`7684f1d47`)
 - [ ] **speaker search deduplication** — Search for speakers in the UI. Verify that results are deduplicated and reassignment targets are stable. (`34a62c053`)
 - [ ] **meeting detection regardless of transcription mode** — Verify that meeting detection works even when transcription is disabled. (`ef39e728d`)
