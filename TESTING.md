@@ -54,6 +54,10 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **space monitor doesn't race with show** — show overlay via shortcut. the `activateIgnoringOtherApps` call must not trigger space monitor's hide callback.
 - [ ] **Chat streaming UX** — Verify that chat streaming uses a state-aware grid dissolve loader for a smooth user experience.
 - [ ] **chat always-on-top toggle** — Toggle the "chat always-on-top" setting and verify that the chat window behaves as expected (e.g., stays on top of other applications when enabled). (`b6c363e5`)
+
+commits: `3a1e41f89`
+
+- [ ] **Chat tiering** — Verify that chats are properly tiered in the chat list, with recent chats appearing first and older chats deprioritized. (`3a1e41f89`)
 - [ ] **overlay hidden in OBS when screen recording toggle is off** — Verify that the overlay is NOT visible in OBS (or other screen capture tools) when the "show in screen recording" toggle is off. (`87d107a29`)
 - [ ] **resizable shortcut overlay** — Change shortcut overlay size (small/medium/large) in settings and verify it updates correctly on all spaces. (`1e1e17171`)
 - [ ] **overlay resize support for webview fallback** — Verify that the overlay can be resized even when using the webview fallback. (`d095f5994`)
@@ -124,6 +128,10 @@ commits: `28e5c247`
 - [ ] **OpenAI-compatible STT editable model input** — When using OpenAI-compatible STT, verify that the model input fields are editable.
 - [ ] **OpenAI-compatible STT with custom vocabulary** — Configure OpenAI-compatible STT with a custom vocabulary. Verify that transcription accuracy improves when this vocabulary is present in the audio. Verify that vocabulary is sent as both prompt and context. (`d3a4b6bcc`)
 - [ ] **OpenAI-compatible transcription engine support** — Enable and configure the OpenAI-compatible transcription engine. Verify that audio is correctly captured and transcribed using this engine.
+
+commits: `0a41938f3`
+
+- [ ] **Audio settings field names fixed** — In settings, verify that audio device field labels correctly display "Output Devices" (not "System Audio" or other incorrect labels) and input device labels show correctly. (`0a41938f3`)
 - [ ] **"transcribing..." only for recent chunks** — Verify that the "transcribing..." caption/indicator only appears for audio chunks that are less than 2 minutes old. (`b70116b`)
 - [ ] **no transcribing caption on old silent chunks** — Verify that old silent audio chunks do not trigger or display a "transcribing..." caption. (`54a550f4`)
 - [ ] **silent chunks deleted, not stored** — After periods of silence, verify that no empty transcription rows are stored in the database for silent audio chunks, and they are instead correctly deleted. (`cb2cc205`)
@@ -180,6 +188,13 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **Browser meetings splitting fix** — Verify that meetings in the browser are correctly split into separate events. (`d8ba1dad3`)
 - [ ] **Meeting with hidden UI controls** — Start a Zoom/Teams meeting. Minimize the meeting window or switch apps (Zoom controls move out of accessibility tree). Verify meeting stays active and does NOT auto-terminate after 30 seconds. Audio output detection prevents false "meeting ended" events. (`4e784f620`)
 - [ ] **OpenAI-compatible transcription endpoint** — Verify that the `/v1/audio/transcriptions` endpoint works as expected, following the OpenAI specification. (`5a14e9a92`)
+- [ ] **Discord call detection on Windows** — On Windows, join a Discord voice channel. Verify the meeting is detected and recorded. Previous regression (since 2026-04-15) broke Windows Discord detection due to UIA scanner limitations with MenuBarItem signals. (`7c29bc100`)
+
+commits: `5ce88a201`, `d1c08e4e5`
+
+- [ ] **Meeting transcript side panel** — During an active meeting, open the meeting details panel. Verify a full transcript of the meeting appears in a side panel with proper formatting and timestamps. (`5ce88a201`)
+- [ ] **Copy meeting transcript** — In the meeting transcript view, verify there is a copy button to copy the full transcript to clipboard. (`d1c08e4e5`)
+- [ ] **Meeting notes persistence** — After a meeting ends, navigate back to it in the timeline. Verify the transcript and notes are persisted and viewable. (`5ce88a201`)
 
 ### 5. frame comparison & OCR pipeline
 
@@ -454,6 +469,12 @@ commits: `2f6b2af5`, `ea7f1f61`, `5cb100ea`
 - [ ] **simplified Arc URL extraction** — Verify that simplified Arc URL extraction works correctly, capturing URLs from Arc browser content. (`08d5c53a`)
 - [ ] **Randomly generated cloud sync password** — On new sync setup, verify that a randomly generated cloud sync password is used.
 - [ ] **Trialing subscriptions for pipe sync** — With a trialing subscription, verify that pipe sync functions as if the subscription is active, and pipes sync correctly.
+
+commits: `4a47e8b85`, `c8f8c45c`
+
+- [ ] **Enterprise telemetry sync (for Cloud plan)** — For users on the Cloud plan, verify that telemetry data (screenshots, UI events, audio) is correctly synced to the enterprise backend. (`4a47e8b85`)
+- [ ] **Obsidian auto-discovery** — With Obsidian vault directory configured, verify that relevant links from screen activity are auto-discovered and suggested for insertion into notes. (`c8f8c45c`)
+- [ ] **Obsidian UX overhaul** — Verify that the Obsidian integration UX has been improved with better visual presentation and clearer action buttons. (`c8f8c45c`)
 - [ ] **Encrypted pipe sync (Pro) and locked toggle (non-Pro)** — As a Pro user, enable encrypted pipe sync and verify pipes sync encrypted. As a non-Pro user, verify the encrypted pipe sync toggle is locked and inaccessible.
 - [ ] **Arc URL extraction and pipe_config blobs** — If Arc Browser is supported, verify accurate URL extraction. Verify that `pipe_config` blobs are correctly skipped during sync (requires inspection of sync data or logs).
 - [ ] **Per-device record counts in sync** — In sync settings, verify that record counts are displayed for each synchronized device and that sync configuration persists across restarts. (`0e7baaedb`)
@@ -769,6 +790,12 @@ commits: `fc830b43`
 - [ ] **Reduced log noise** — Verify a significant reduction in log noise (~54%).
 - [ ] **PII scrubbing** — Ensure that PII (Personally Identifiable Information) is scrubbed from logs.
 
+commits: `0d55e6c4b`, `aed06df83`
+
+- [ ] **Image redaction policy default (v2.4.160)** — Toggle "AI PII Removal" in Privacy settings. Verify it correctly redacts Secrets only (not other classes like URLs, emails, phone numbers that had high false-positive rates). Previous over-aggressive defaults destroyed timelines — Secret-only at score=0.9 is the safe default. (`0d55e6c4b`)
+- [ ] **Destructive redaction (no sibling column)** — When "AI PII Removal" is enabled, verify redacted frames overwrite originals (not duplicated). Previous version was creating sibling columns and destroying the product. (`aed06df83`)
+- [ ] **Timeline recovery after redaction** — After toggling "AI PII Removal" on/off, verify the timeline display is not destroyed by false-positive over-redaction of normal screen content (file paths, code, version strings, sidebar navigation). (`0d55e6c4b`)
+
 ### 23. GPU & Performance Telemetry
 
 - [ ] **GPU error handling & telemetry** — Verify that GPU errors are handled gracefully and CPU/GPU telemetry is correctly reported in logs. (`0d42ea221`)
@@ -891,6 +918,15 @@ commits: `c8769545b`, `4f522325b`, `54000c295`
 - [ ] **Google Docs connection & Pro gate** — Verify that Google Docs connection works and that the "Pro required" gate correctly appears for non-pro users on the connect button. (`9835b09d8`, `dbf451f34`, `dda16447c`, `e3a2be5cb`)
 - [ ] **Bitrix24 CRM integration** — Verify that Bitrix24 CRM connection can be authorized and syncs data correctly. (`55026df56`)
 - [ ] **OAuth auto-refresh** — Verify that expired OAuth tokens for generic proxy connections (like Google, Bitrix24) are automatically refreshed. (`d7835eabb`)
+
+commits: `cec0dc5c5`
+
+- [ ] **QuickBooks OAuth production app** — Verify that the QuickBooks OAuth integration uses the production OAuth app (updated from sandbox). Authorization flow and data syncing should work correctly in production. (`cec0dc5c5`)
+
+commits: `3e5c89f06`
+
+- [ ] **Reliable connection disconnect** — In connections page, disconnect a service (e.g., Slack, Google Calendar). Verify that the disconnect completes reliably without race conditions or stale tokens remaining. (`3e5c89f06`)
+- [ ] **Missing connection icons restored** — In connections grid, verify that all service icons (especially those in the "New" services row) are correctly displayed and not missing. (`3e5c89f06`)
 
 ### 28. Deployment & Remote Management
 
