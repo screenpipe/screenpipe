@@ -447,7 +447,7 @@ impl VisionManager {
                 // Await to clean up the JoinHandle and capture exit reason
                 match handle.await {
                     Ok(()) => {
-                        warn!(
+                        debug!(
                             "monitor {} capture task exited (see prior error log for cause), will be restarted by monitor watcher",
                             id
                         );
