@@ -340,6 +340,7 @@ commits: `8a5f51dd`, `0b0d8090`, `7e58564e`, `2522a7e2`, `f3e55dbc`, `79f2913f`
 - [ ] **privacy settings reordering** — Verify that the Security section appears first in the Privacy settings tab. (`4718785b6`)
 - [ ] **password field filtering** — Verify that password fields are skipped in the accessibility tree and not stored as OCR/text. (`8159641f5`, `d39e42e5b`)
 - [ ] **browser extension popup filtering** — Verify that browser extension popups (like Bitwarden) are filtered and not captured in the accessibility tree or as black frames. (`52d20987a`, `449ae7a68`, `931db40b6`)
+- [ ] **AI image PII redaction default threshold** — Open Settings → Privacy → AI PII removal and enable the toggle. Browse a complex technical page (IDE, GitHub repo, terminal output) with code, file paths, version numbers, URLs. Verify that normal content (code identifiers, paths, timestamps) is NOT over-redacted. The default policy should only redact [Secret] labels at score ≥0.9 confidence, preventing false positives. Check timeline frames are preserved. Regression: `0d55e6c4b` (rfdetr_v8 with loose policy was flagging code as Url/Date/Handle, blacking out 30%+ of normal content; now uses [Secret] only at 0.9).
 
 commits: `8a5f51dd`, `0b0d8090`
 
