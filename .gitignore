@@ -10,7 +10,6 @@
 
 # Rust/Cargo specific files
 *target
-
 # IDE specific files
 .idea/
 .vscode/
