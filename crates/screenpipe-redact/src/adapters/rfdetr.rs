@@ -230,6 +230,31 @@ mod imp {
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::TensorRef;
 
+    /// Wrap ORT Session::builder() in panic handling. ONNX Runtime can panic
+    /// on initialization if the API fails (e.g. missing drivers, corrupted binary,
+    /// ABI mismatch). This converts such panics into proper Err values.
+    fn create_session_safe(model_path: &std::path::Path) -> Result<Session, RedactError> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Session::builder()
+                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
+                .and_then(|b| b.with_intra_threads(num_cpus_physical()))
+                .and_then(|b| b.commit_from_file(model_path))
+        })) {
+            Ok(Ok(session)) => Ok(session),
+            Ok(Err(e)) => Err(RedactError::Runtime(format!("ort session creation: {e}"))),
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&'static str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".to_string());
+                Err(RedactError::Runtime(format!(
+                    "ort session init panicked: {msg}"
+                )))
+            }
+        }
+    }
+
     pub struct RfdetrRedactor {
         cfg: RfdetrConfig,
         // Mutex because ort::Session::run takes &mut self.
@@ -256,14 +281,7 @@ mod imp {
                 )));
             }
 
-            let session = Session::builder()
-                .map_err(rt_err("ort builder"))?
-                .with_optimization_level(GraphOptimizationLevel::Level3)
-                .map_err(rt_err("ort opt level"))?
-                .with_intra_threads(num_cpus_physical())
-                .map_err(rt_err("ort threads"))?
-                .commit_from_file(&cfg.model_path)
-                .map_err(rt_err("ort commit_from_file"))?;
+            let session = create_session_safe(&cfg.model_path)?;
 
             let input_size = if cfg.input_size > 0 {
                 cfg.input_size
@@ -494,6 +512,35 @@ mod tests {
             got,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn corrupt_model_file_returns_runtime_error() {
+        // Loading a corrupt/invalid model file (not a real ONNX) must
+        // return a RedactError::Runtime, not panic. This test ensures
+        // that ORT panics (e.g. "Failed to initialize ORT API") are
+        // properly caught and converted to Result::Err.
+        use tempfile::tempdir;
+
+        #[cfg(feature = "onnx-cpu")]
+        {
+            use crate::adapters::rfdetr::imp::RfdetrRedactor;
+            let d = tempdir().unwrap();
+            let p = d.path().join("corrupt.onnx");
+            // Write a file that is NOT a valid ONNX model.
+            std::fs::write(&p, b"this is not a valid onnx model").unwrap();
+            let cfg = RfdetrConfig {
+                model_path: p,
+                input_size: 0,
+                conf_threshold: 0.3,
+            };
+            // This must return Err, not panic.
+            let res = RfdetrRedactor::load(cfg);
+            assert!(
+                matches!(res, Err(crate::RedactError::Runtime(_))),
+                "corrupt model must return RedactError::Runtime"
+            );
+        }
     }
 
     #[tokio::test]
