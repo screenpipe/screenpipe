@@ -141,6 +141,7 @@ commits: `28e5c247`
 - [ ] **per-device audio toggle** — In the tray menu, verify you can toggle recording for individual audio devices. (`3ee3defcb`)
 - [ ] **stable audio device order** — Verify that audio devices listed in the tray menu maintain a stable order across refreshes. (`4577ac8a6`)
 - [ ] **Mic disconnect false-positives on sleep/wake** — Put the computer to sleep and wake it up. Verify that no false-positive mic disconnect notifications or logs are generated. (`796baa619`)
+- [ ] **macOS audio ORT panic recovery** — On macOS, trigger an ORT/audio processing panic. Verify that the app gracefully recovers without crashing (fallback to CPU if Metal fails). (`14a441f2b`)
 
 
 #### Audio device recovery (monitor unplug / device switch)
@@ -179,6 +180,7 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **Meeting detection support for Signal, WhatsApp, Telegram, and Teams 2** — Verify that meetings from these apps are correctly detected and recorded. (`8d2f1a542`, `a74e393e1`)
 - [ ] **Browser meetings splitting fix** — Verify that meetings in the browser are correctly split into separate events. (`d8ba1dad3`)
 - [ ] **Meeting with hidden UI controls** — Start a Zoom/Teams meeting. Minimize the meeting window or switch apps (Zoom controls move out of accessibility tree). Verify meeting stays active and does NOT auto-terminate after 30 seconds. Audio output detection prevents false "meeting ended" events. (`4e784f620`)
+- [ ] **Discord call detection on Windows** — On Windows, start a Discord call. Verify the meeting is correctly detected and recorded. Check that the call is no longer missed due to incomplete UI Automation detection. (`7c29bc100`)
 - [ ] **OpenAI-compatible transcription endpoint** — Verify that the `/v1/audio/transcriptions` endpoint works as expected, following the OpenAI specification. (`5a14e9a92`)
 
 ### 5. frame comparison & OCR pipeline
@@ -630,9 +632,10 @@ commits: `8f334c0a`, `fda40d2c`
 
 ### 16. MCP / Claude integration
 
-commits: `8c8c445c`
+commits: `8c8c445c`, `59b5fb45d`, `9b7c20323`
 
 - [ ] **Claude connect button works** — Settings → Connections → "Connect Claude" downloads `.mcpb` file and opens it in Claude Desktop. was broken because GitHub releases API pagination didn't reach `mcp-v*` releases buried behind 30+ app releases (`8c8c445c`).
+- [ ] **Agent webview inherits user cookies (Arc/Chrome/Brave/Edge)** — On macOS, verify that the agent webview inherits cookies from Arc, Chrome, Brave, or Edge (whichever is installed). When the agent browses a site that requires login, it should already be logged in without prompting. (`59b5fb45d`, `9b7c20323`)
 - [ ] **MCP release discovery with many app releases** — `getLatestMcpRelease()` paginates up to 5 pages (250 releases) to find `mcp-v*` tagged releases. verify it works even when >30 app releases exist since last MCP release.
 - [ ] **Claude Desktop not installed** — clicking connect shows a useful error, not a silent failure.
 - [ ] **MCP version display** — Settings shows the available MCP version and whether it's already installed.
@@ -754,7 +757,7 @@ commits: `274a968af`, `dc575e48e`, `81aabbf18`, `d5e071854`, `db08f8c06`, `f4225
 ### 21. Privacy & Incognito Detection
 
 - [ ] **PII Filter** — Toggle the PII filter in chat or search. Verify that sensitive information is filtered using Tinfoil. (`fec0f1023`)
-
+- [ ] **Local OPF v3 text redactor** — Enable "Local" PII removal mode in settings (Settings → Privacy → AI PII removal). If the OPF v3 checkpoint is staged at `~/.screenpipe/models/opf-v3/`, verify that text redaction runs on-device (Metal on Apple Silicon, CPU elsewhere) without calling Tinfoil cloud. Verify regex fallback still works when checkpoint is absent. (`ca2167caa`, `b21051648`)
 
 commits: `ad431b513`, `d9722bccc`, `4df21e83d`
 
@@ -889,6 +892,7 @@ commits: `c8769545b`, `4f522325b`, `54000c295`
 - [ ] **Multi-instance OAuth for GitHub and Notion** — Verify that multi-instance OAuth works for GitHub and Notion, including fetching identity after token exchange. (`5d6ee5da3`)
 - [ ] **Glean icon in connections grid** — Verify that the Glean icon is displayed in the connections grid. (`ec6374e1d`)
 - [ ] **Google Docs connection & Pro gate** — Verify that Google Docs connection works and that the "Pro required" gate correctly appears for non-pro users on the connect button. (`9835b09d8`, `dbf451f34`, `dda16447c`, `e3a2be5cb`)
+- [ ] **Obsidian vault auto-discovery** — On macOS/Windows/Linux, open Settings → Connections → Obsidian. Verify that the app automatically discovers local Obsidian vaults without manual path entry. Vaults in standard locations (~/.obsidian/ or via Obsidian config) should appear in a dropdown. (`33848a12e`)
 - [ ] **Bitrix24 CRM integration** — Verify that Bitrix24 CRM connection can be authorized and syncs data correctly. (`55026df56`)
 - [ ] **OAuth auto-refresh** — Verify that expired OAuth tokens for generic proxy connections (like Google, Bitrix24) are automatically refreshed. (`d7835eabb`)
 
@@ -917,3 +921,4 @@ commits: `c6a73b17e`, `945b687ec`
 - [ ] **Persistent background chats** — Verify that chats continue to stream in the background even when navigating away from the chat view. (`0060ae9e5`, `ec5e80992`)
 - [ ] **Inline history in overlay** — Verify that inline history is restored in the overlay window. (`15b419ec7`)
 - [ ] **Notification URL actions** — Open a URL action from a native macOS notification when the overlay is not mounted. (`7fdcd2054`)
+- [ ] **Full transcript side panel for meetings** — During or after a meeting, open the meeting in the chat sidebar or detail view. Verify that a full transcript side panel appears showing the entire meeting conversation with speaker names, timestamps, and easy export/copy options. (`5d7643abb`)
