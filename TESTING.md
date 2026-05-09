@@ -82,6 +82,7 @@ commits that broke this area: `0752ea59`, `7562ec62`, `2a2bd9b5`, `f2f7f770`, `5
 - [ ] **tray on notched MacBook** — on 14"/16" MacBook Pro, tray icon is visible (not hidden behind notch). if hidden, user can Cmd+drag to reposition.
 - [ ] **activation policy never changes** — after ANY user interaction, dock icon should remain visible. no Accessory mode switches. verify with: `ps aux | grep screenpipe`.
 - [ ] **no autosave_name crash** — removed in `2a2bd9b5`. objc2→objc pointer cast was causing `panic_cannot_unwind`.
+- [ ] **ObjC->Rust callback panic safety** — Post notifications, click tray menu items (Show/Settings/Check Updates), trigger dock menu, perform pinch/scroll gestures on overlay, click notification actions. App must not SIGABRT on any transient Rust panic in ObjC callbacks. All callbacks wrapped in catch_unwind: native_notif_action_callback, native_shortcut_action_callback, on_content_process_terminate, handle_magnify, swizzled_scroll_wheel, dock menu handlers. (`a6849e3fc`)
 - [ ] **no recreate_tray** — recreating tray pushes icon LEFT (behind notch). must only create once (`f2f7f770`).
 - [ ] **tray upgrade button opens in-app checkout** — Verify that clicking the tray's upgrade button correctly opens the in-app checkout experience. (`078fcfb2`)
 - [ ] **modernized tray menu** — Verify the tray menu's updated layout and functionality match the modernized design. (`b6c363e5`)
