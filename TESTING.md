@@ -105,6 +105,7 @@ commits: `28e5c247`
 ### 4. audio device handling
 
 - [ ] **CoreAudio Process Tap** — On macOS 14.4+, verify that system audio defaults to CoreAudio Process Tap and rebuilds if silence is detected. (`75a52603b`, `5634664da`)
+- [ ] **ORT panic on speaker init** — With speaker audio capture enabled, restart the app 10+ times. Verify no "Failed to initialize ORT API" panic in logs. App should catch ORT init failures gracefully and log warning instead of crashing. (`14a441f2b`)
 
 
 - [ ] **default audio device** — with "follow system default", recording uses whatever macOS says is default.
