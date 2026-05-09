@@ -777,6 +777,7 @@ commits: `fc830b43`
 ### 24. Data Management
 
 - [ ] **Delete local data confirmation** — Use the "Delete device local data" feature. Verify an `AlertDialog` appears instead of a standard `window.confirm`. (`b5db080d6`)
+- [ ] **Settings not lost on update** — Create multiple AI presets, force an app update/restart, verify all presets survive. If 4-layer recovery triggers, `store.bin.pre-restore-*` should exist in `~/.screenpipe/`. (`5f7408bd6`)
 
 ### 25. Feedback & Support
 
