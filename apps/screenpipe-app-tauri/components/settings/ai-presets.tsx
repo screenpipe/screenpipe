@@ -564,6 +564,8 @@ const AISection = ({
 
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
 
   const runDiagnostics = useCallback(async () => {
     if (settingsPreset?.provider === "screenpipe-cloud") return;
@@ -1370,7 +1372,18 @@ const AISection = ({
             AI Model
             <span className="text-destructive">*</span>
           </Label>
-          <Popover modal={true}>
+          <Popover
+            modal={true}
+            open={isModelPickerOpen}
+            onOpenChange={(open) => {
+              setIsModelPickerOpen(open);
+              if (open) {
+                setModelSearch(settingsPreset?.model || "");
+              } else {
+                setModelSearch("");
+              }
+            }}
+          >
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
@@ -1393,26 +1406,32 @@ const AISection = ({
             </PopoverTrigger>
             <PopoverContent className="w-full p-0">
               <Command>
-                <CommandInput 
+                <CommandInput
+                  value={modelSearch}
                   placeholder="Select or type model name" 
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      const input = (e.target as HTMLInputElement).value;
-                      if (input && models.every(m => m.id !== input)) {
+                      const input = modelSearch.trim();
+                      if (!input) return;
+                      const exactModel = models.find((m) => m.id === input);
+                      if (exactModel) {
+                        updateSettingsPreset({ model: exactModel.id });
+                        setIsModelPickerOpen(false);
+                        return;
+                      }
+                      if (models.every(m => m.id !== input)) {
                         updateSettingsPreset({ model: input });
+                        setIsModelPickerOpen(false);
                       }
                     }
                   }}
                   onValueChange={(value) => {
-                    // Allow typing a custom model name
-                    if (value && models.every(m => m.id !== value)) {
-                      updateSettingsPreset({ model: value });
-                    }
+                    setModelSearch(value);
                   }}
                 />
                 <CommandList>
                   <CommandEmpty>
-                    Press enter to use &quot;{settingsPreset?.model}&quot;
+                    Press enter to use &quot;{modelSearch || settingsPreset?.model}&quot;
                   </CommandEmpty>
                   {isLoadingModels ? (
                     <CommandGroup>
@@ -1429,7 +1448,10 @@ const AISection = ({
                             <CommandItem
                               key={model.id}
                               value={model.id}
-                              onSelect={() => updateSettingsPreset({ model: model.id })}
+                              onSelect={() => {
+                                updateSettingsPreset({ model: model.id });
+                                setIsModelPickerOpen(false);
+                              }}
                             >
                               <div className="flex flex-col gap-0.5 w-full">
                                 <div className="flex items-center justify-between">
@@ -1471,6 +1493,7 @@ const AISection = ({
                                 return;
                               }
                               updateSettingsPreset({ model: model.id });
+                              setIsModelPickerOpen(false);
                             }}
                           >
                             <div className="flex flex-col gap-0.5 w-full">
