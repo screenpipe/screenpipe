@@ -190,9 +190,11 @@ export function useDeviceMonitor() {
   );
 
   // Poll loop
+  const prevDevicesRef = useRef<string>("");
   useEffect(() => {
     if (registeredDevices.length === 0) {
       setDevices([]);
+      prevDevicesRef.current = "";
       return;
     }
 
@@ -242,7 +244,12 @@ export function useDeviceMonitor() {
         return true;
       });
 
-      setDevices(deduped);
+      // Skip re-render when status/count is unchanged
+      const snapshot = JSON.stringify(deduped.map((d) => ({ a: d.address, s: d.status, l: d.lastSeen })));
+      if (snapshot !== prevDevicesRef.current) {
+        prevDevicesRef.current = snapshot;
+        setDevices(deduped);
+      }
     }
 
     setDevices(
@@ -481,8 +488,10 @@ export function useDeviceMonitor() {
           monitorDevices: [...current, ...found],
         });
       }
+      return found.length;
     } catch {
       // invoke failed (e.g. not in Tauri context)
+      return 0;
     } finally {
       setDiscovering(false);
     }

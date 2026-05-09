@@ -709,6 +709,8 @@ export function PipesSection() {
   // Device selector: null = local machine, string = remote address
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const { devices, discoverDevices, discovering } = useDeviceMonitor();
+  const [discoverResult, setDiscoverResult] = useState<number | null>(null);
+  const discoverResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [pipes, setPipes] = useState<PipeStatus[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -761,10 +763,14 @@ export function PipesSection() {
   // Live streaming output for running executions: key = "pipeName:executionId"
   const [liveOutput, setLiveOutput] = useState<Record<string, string[]>>({});
   const liveOutputRef = useRef<Record<string, string[]>>({});
-  const sharedPipeNames = new Set(
-    team.configs
-      .filter((c) => c.config_type === "pipe" && c.scope === "team")
-      .map((c) => c.key)
+  const sharedPipeNames = React.useMemo(
+    () =>
+      new Set(
+        team.configs
+          .filter((c) => c.config_type === "pipe" && c.scope === "team")
+          .map((c) => c.key)
+      ),
+    [team.configs]
   );
 
   const isTriggeredPipe = (p: PipeStatus) =>
@@ -775,45 +781,62 @@ export function PipesSection() {
   const isManualPipe = (p: PipeStatus) =>
     (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
 
-  const filteredPipes = pipes
-    .filter((p) => {
-      // Team/personal filter
+  const filteredPipes = React.useMemo(
+    () =>
+      pipes
+        .filter((p) => {
+          if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
+          if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
+
+          if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            if (!p.config.name.toLowerCase().includes(q)) return false;
+          }
+
+          if (pipeTypeFilter === "scheduled" && !isScheduledPipe(p)) return false;
+          if (pipeTypeFilter === "triggered" && !isTriggeredPipe(p)) return false;
+          if (pipeTypeFilter === "manual" && !isManualPipe(p)) return false;
+
+          // Favorites filter — only applied when the user has toggled the star chip on.
+          if (pipeFavorites.showOnly && !pipeFavorites.isFavorite(p.config.name)) return false;
+
+          return true;
+        })
+        .sort((a, b) => {
+          // Starred first — explicit user intent beats everything else
+          const aFav = pipeFavorites.isFavorite(a.config.name);
+          const bFav = pipeFavorites.isFavorite(b.config.name);
+          if (aFav !== bFav) return aFav ? -1 : 1;
+          // Then running
+          if (a.is_running !== b.is_running) return a.is_running ? -1 : 1;
+          // Then by most recent execution from DB (matches the "Xm ago" display)
+          const aExecs = pipeExecutions[a.config.name] || [];
+          const bExecs = pipeExecutions[b.config.name] || [];
+          const aTime = aExecs[0]?.started_at ? new Date(aExecs[0].started_at).getTime() : 0;
+          const bTime = bExecs[0]?.started_at ? new Date(bExecs[0].started_at).getTime() : 0;
+          if (aTime !== bTime) return bTime - aTime;
+          // Then enabled before disabled
+          if (a.config.enabled !== b.config.enabled) return a.config.enabled ? -1 : 1;
+          return 0;
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipes, pipeFilter, searchQuery, pipeTypeFilter, pipeFavorites.showOnly, pipeFavorites.isFavorite, pipeExecutions, sharedPipeNames]
+  );
+
+  // Counts for sub-tab badges — memoized so the filter doesn't re-run on every render
+  const tabCounts = React.useMemo(() => {
+    const base = pipes.filter((p) => {
       if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
       if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-
-      // Search filter
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        if (!p.config.name.toLowerCase().includes(q)) return false;
-      }
-
-      // Filter by pipe type (scheduled / triggered / manual)
-      if (pipeTypeFilter === "scheduled" && !isScheduledPipe(p)) return false;
-      if (pipeTypeFilter === "triggered" && !isTriggeredPipe(p)) return false;
-      if (pipeTypeFilter === "manual" && !isManualPipe(p)) return false;
-
-      // Favorites filter — only applied when the user has toggled the star chip on.
-      if (pipeFavorites.showOnly && !pipeFavorites.isFavorite(p.config.name)) return false;
-
       return true;
-    })
-    .sort((a, b) => {
-      // Starred first — explicit user intent beats everything else
-      const aFav = pipeFavorites.isFavorite(a.config.name);
-      const bFav = pipeFavorites.isFavorite(b.config.name);
-      if (aFav !== bFav) return aFav ? -1 : 1;
-      // Then running
-      if (a.is_running !== b.is_running) return a.is_running ? -1 : 1;
-      // Then by most recent execution from DB (matches the "Xm ago" display)
-      const aExecs = pipeExecutions[a.config.name] || [];
-      const bExecs = pipeExecutions[b.config.name] || [];
-      const aTime = aExecs[0]?.started_at ? new Date(aExecs[0].started_at).getTime() : 0;
-      const bTime = bExecs[0]?.started_at ? new Date(bExecs[0].started_at).getTime() : 0;
-      if (aTime !== bTime) return bTime - aTime;
-      // Then enabled before disabled
-      if (a.config.enabled !== b.config.enabled) return a.config.enabled ? -1 : 1;
-      return 0;
     });
+    return {
+      scheduled: base.filter(isScheduledPipe).length,
+      triggered: base.filter(isTriggeredPipe).length,
+      manual: base.filter(isManualPipe).length,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipes, pipeFilter, sharedPipeNames]);
 
   // Counts for filter chips
 
@@ -867,7 +890,9 @@ export function PipesSection() {
   const fetchPipes = useCallback(async () => {
     try {
       // First load: skip executions for speed. Executions load lazily per-pipe.
-      const res = await fetch(`${apiBase}/pipes`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      const res = await fetch(`${apiBase}/pipes`, { signal: controller.signal }).finally(() => clearTimeout(timeout));
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -1381,49 +1406,16 @@ export function PipesSection() {
     };
   }, []);
 
-  if (loading) {
+  const selectedDeviceInfo = selectedDevice ? devices.find((d) => d.address === selectedDevice) : null;
+  if (selectedDeviceInfo?.status === "offline") {
     return (
-      <div className="space-y-4">
-        {/* Header skeleton */}
-        <div className="flex items-center justify-between">
-          <div>
-            <Skeleton className="h-5 w-16" />
-            <Skeleton className="h-4 w-64 mt-1" />
-          </div>
-          <div className="flex items-center gap-2">
-            <Skeleton className="h-8 w-8 rounded-md" />
-            <Skeleton className="h-8 w-28 rounded-md" />
-          </div>
-        </div>
-        {/* Input skeleton */}
-        <Skeleton className="h-9 w-full rounded-md" />
-        {/* Pipe card skeletons */}
-        <div className="space-y-2">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <Skeleton className="h-4 w-4" />
-                  <Skeleton className="h-4 w-32" />
-                  <div className="flex-1" />
-                  <Skeleton className="h-5 w-20 rounded-full" />
-                  <Skeleton className="h-8 w-8 rounded-md" />
-                  <Skeleton className="h-5 w-9 rounded-full" />
-                </div>
-                <div className="mt-3 space-y-1.5">
-                  {[1, 2, 3].map((j) => (
-                    <div key={j} className="flex items-center gap-3">
-                      <Skeleton className="h-3 w-32" />
-                      <Skeleton className="h-3 w-10" />
-                      <Skeleton className="h-3 w-8" />
-                      <Skeleton className="h-3 w-24" />
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
+        <Monitor className="h-8 w-8 opacity-40" />
+        <p className="text-sm font-medium">{selectedDeviceInfo.label} is offline</p>
+        <p className="text-xs opacity-70">check that screenpipe is running on the remote device</p>
+        <Button variant="outline" size="sm" onClick={() => setSelectedDevice(null)}>
+          back to this device
+        </Button>
       </div>
     );
   }
@@ -1457,7 +1449,7 @@ export function PipesSection() {
                 {devices.map((d) => (
                   <DropdownMenuItem
                     key={d.address}
-                    onClick={() => { setSelectedDevice(d.address); setLoading(true); }}
+                    onClick={() => { setSelectedDevice(d.address); if (d.status !== "offline") setLoading(true); }}
                     className={cn("gap-2", selectedDevice === d.address && "font-medium")}
                   >
                     <Monitor className="h-3.5 w-3.5" />
@@ -1470,9 +1462,27 @@ export function PipesSection() {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => discoverDevices()} disabled={discovering}>
-                  <ScanSearch className="h-3.5 w-3.5 mr-2" />
-                  {discovering ? "scanning..." : "discover devices"}
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    if (discovering) return;
+                    setDiscoverResult(null);
+                    if (discoverResultTimer.current) clearTimeout(discoverResultTimer.current);
+                    discoverDevices().then((count) => {
+                      setDiscoverResult(count);
+                      discoverResultTimer.current = setTimeout(() => setDiscoverResult(null), 4_000);
+                    });
+                  }}
+                  disabled={discovering}
+                >
+                  <ScanSearch className={cn("h-3.5 w-3.5 mr-2", discovering && "animate-spin")} />
+                  {discovering
+                    ? "scanning..."
+                    : discoverResult === null
+                    ? "discover devices"
+                    : discoverResult === 0
+                    ? "no new devices found"
+                    : `found ${discoverResult} device${discoverResult > 1 ? "s" : ""}`}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1511,11 +1521,7 @@ export function PipesSection() {
       {/* Scheduled / Triggered / Manual sub-tabs */}
       <div className="flex items-center gap-4 border-b border-border">
         {(["scheduled", "triggered", "manual"] as const).map((tab) => {
-          const count = pipes.filter((p) => {
-            if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
-            if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-            return tab === "scheduled" ? isScheduledPipe(p) : tab === "triggered" ? isTriggeredPipe(p) : isManualPipe(p);
-          }).length;
+          const count = tabCounts[tab];
           return (
             <button
               key={tab}
@@ -1593,7 +1599,34 @@ export function PipesSection() {
         </div>
       )}
 
-      {filteredPipes.length === 0 ? (
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-4 w-4" />
+                  <Skeleton className="h-4 w-32" />
+                  <div className="flex-1" />
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                  <Skeleton className="h-8 w-8 rounded-md" />
+                  <Skeleton className="h-5 w-9 rounded-full" />
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  {[1, 2, 3].map((j) => (
+                    <div key={j} className="flex items-center gap-3">
+                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-3 w-10" />
+                      <Skeleton className="h-3 w-8" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : filteredPipes.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
