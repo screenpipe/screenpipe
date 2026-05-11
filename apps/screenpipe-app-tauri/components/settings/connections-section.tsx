@@ -1687,19 +1687,18 @@ function ApiIntegrationPanel({ integration, onRefresh, onDisconnected }: {
 
 export function ConnectionsSection() {
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    const pending = sessionStorage.getItem("openConnection");
-    if (pending) {
-      sessionStorage.removeItem("openConnection");
-      return pending;
-    }
-    return null;
-  });
+  const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
 
   const os = typeof window !== "undefined" ? platform() : "";
+
+  useEffect(() => {
+    const pending = sessionStorage.getItem("openConnection");
+    if (!pending) return;
+    sessionStorage.removeItem("openConnection");
+    setSelected(pending);
+  }, []);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -1919,10 +1918,12 @@ export function ConnectionsSection() {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (selected && panelRef.current) {
-      panelRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [selected]);
+    if (!selected || !selectedTile || !panelRef.current) return;
+    const raf = window.requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [selected, selectedTile, integrationsLoaded]);
 
   return (
     <div className="space-y-5">
