@@ -181,9 +181,23 @@ pub async fn start_monitor_watcher(
             }
 
             // ── Normal monitor polling ──────────────────────────────────────
-            // Only poll when running
+            // If stopped (e.g. no monitors after undock/wake), retry start()
             if vision_manager.status().await != VisionManagerStatus::Running {
                 tokio::time::sleep(Duration::from_secs(5)).await;
+                match vision_manager.start().await {
+                    Ok(()) => {
+                        info!("VisionManager recovered after previous start failure");
+                        if let Ok(monitors) = list_monitors_detailed().await {
+                            known_monitors = monitors
+                                .iter()
+                                .map(|m| (m.id(), m.name().to_string()))
+                                .collect();
+                        }
+                    }
+                    Err(_) => {
+                        debug!("VisionManager retry: still no monitors available");
+                    }
+                }
                 continue;
             }
 
