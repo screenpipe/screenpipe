@@ -680,6 +680,10 @@ pub struct PiProviderConfig {
     pub model: String,
     /// Optional API key for the provider
     pub api_key: Option<String>,
+    /// AWS profile name for Bedrock provider (authenticates via ~/.aws/credentials)
+    pub aws_profile: Option<String>,
+    /// AWS region for Bedrock provider (e.g. "us-east-1")
+    pub aws_region: Option<String>,
     /// Max output tokens (default 4096)
     #[serde(default = "default_max_tokens")]
     pub max_tokens: i32,
@@ -722,11 +726,16 @@ async fn build_models_json(
             "openai-chatgpt" => "openai-chatgpt",
             "native-ollama" => "ollama",
             "anthropic" => "anthropic-byok",
+            "bedrock" => "amazon-bedrock",
             "custom" => "custom",
             _ => "", // screenpipe-cloud already added above
         };
 
-        if !provider_name.is_empty() {
+        // Bedrock is built into Pi -- no models.json entry needed.
+        // Auth is handled via AWS_PROFILE env var at spawn time.
+        if provider_name == "amazon-bedrock" {
+            // skip
+        } else if !provider_name.is_empty() {
             let base_url = if config.provider == "native-ollama" && config.url.is_empty() {
                 "http://localhost:11434/v1".to_string()
             } else if config.provider == "openai-chatgpt" {
@@ -1063,6 +1072,7 @@ pub async fn pi_start_inner(
                 "openai-chatgpt" => "openai-chatgpt",
                 "native-ollama" => "ollama",
                 "anthropic" => "anthropic-byok",
+                "bedrock" => "amazon-bedrock",
                 // "custom" requires a valid URL; fall back to screenpipe cloud if missing
                 "custom" if !config.url.is_empty() => "custom",
                 "screenpipe-cloud" | "pi" | _ => "screenpipe",
@@ -1279,6 +1289,18 @@ pub async fn pi_start_inner(
 
             cmd.env("PATH", new_path);
             debug!("Injected bun dir into PATH for pi: {}", bun_dir.display());
+        }
+    }
+
+    // Bedrock: inject AWS credentials so Pi can authenticate via the standard credential chain
+    if pi_provider == "amazon-bedrock" {
+        if let Some(ref config) = provider_config {
+            if let Some(ref profile) = config.aws_profile {
+                cmd.env("AWS_PROFILE", profile);
+            }
+            if let Some(ref region) = config.aws_region {
+                cmd.env("AWS_REGION", region);
+            }
         }
     }
 
@@ -1967,6 +1989,7 @@ pub async fn pi_set_model(
         "openai-chatgpt" => "openai-chatgpt",
         "native-ollama" => "ollama",
         "anthropic" => "anthropic-byok",
+        "bedrock" => "amazon-bedrock",
         "custom" if !provider_config.url.is_empty() => "custom",
         "screenpipe-cloud" | "pi" | _ => "screenpipe",
     };

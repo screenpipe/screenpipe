@@ -2665,6 +2665,8 @@ export function StandaloneChat({
       url: p.url || "",
       model: p.model || "",
       apiKey: ("apiKey" in p ? (p.apiKey as string) : null) || null,
+      awsProfile: ("awsProfile" in p ? (p as any).awsProfile : null) || null,
+      awsRegion: ("awsRegion" in p ? (p as any).awsRegion : null) || null,
       maxTokens: (p as any).maxTokens ?? 4096,
       systemPrompt,
     };
