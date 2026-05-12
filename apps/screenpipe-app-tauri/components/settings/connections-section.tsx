@@ -1435,7 +1435,7 @@ export function ConnectionCredentialForm({
                       <HelpCircle className="h-3 w-3" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="left" sideOffset={4} className="text-xs max-w-[220px] space-y-1">
+                  <TooltipContent side="top" align="start" alignOffset={8} sideOffset={8} className="text-xs max-w-[220px] space-y-1">
                     <p>Learn how to find your {field.label.toLowerCase()} for this integration.</p>
                     <button onClick={() => openUrl(field.help_url)} className="underline hover:text-primary cursor-pointer">
                       Open guide →
