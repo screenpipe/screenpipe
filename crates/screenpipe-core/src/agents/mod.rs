@@ -118,4 +118,7 @@ pub trait AgentExecutor: Send + Sync {
     fn user_token(&self) -> Option<&str> {
         None
     }
+
+    /// Set AWS credentials for the next Bedrock run. Default no-op.
+    fn set_aws_credentials(&self, _profile: Option<String>, _region: Option<String>) {}
 }
