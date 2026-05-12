@@ -422,6 +422,44 @@ pub async fn invalidate_device_cache() {
     *device_cache().lock().await = None;
 }
 
+/// True if cpal reports at least one usable input config for this device.
+///
+/// Filters out "phantom" devices that surface via cpal but have no real
+/// codec behind them — most common on Windows where every USB widget
+/// (game-controller audio adapters, dock mics, monitor line-in stubs,
+/// communications headset descriptors with nothing plugged in) registers
+/// as an input device. cpal returns them via `host.input_devices()` but
+/// `device.supported_input_configs()` is either `Err(...)` or
+/// `Ok(empty_iterator)`, and any subsequent attempt to record fails with
+/// "No supported input configurations found" or
+/// `AUDCLNT_E_UNSUPPORTED_FORMAT`.
+///
+/// Without this filter the device monitor polls every 2s and we spam the
+/// user's logs + Sentry inbox (one real user had 686 of these errors in a
+/// single session from a PDP/Sony controller adapter that exposes itself
+/// as `Microphone (PDP Audio Device)`). The user also sees the phantom
+/// in the settings dropdown and can pick it, only to silently get no
+/// audio. Strict-empty signal — we don't blocklist by name — so it stays
+/// safe across hardware revisions and locales.
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn has_usable_input_configs(device: &cpal::Device) -> bool {
+    match device.supported_input_configs() {
+        Ok(mut configs) => configs.next().is_some(),
+        Err(_) => false,
+    }
+}
+
+/// Output counterpart of [`has_usable_input_configs`]. Same failure
+/// modes apply to output devices on Windows — e.g. unrouted virtual
+/// monitor audio endpoints registered by a discrete-GPU driver.
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "pulseaudio"))))]
+fn has_usable_output_configs(device: &cpal::Device) -> bool {
+    match device.supported_output_configs() {
+        Ok(mut configs) => configs.next().is_some(),
+        Err(_) => false,
+    }
+}
+
 async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
     #[cfg(all(target_os = "linux", feature = "pulseaudio"))]
     {
@@ -434,6 +472,15 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
         let mut devices = Vec::new();
 
         for device in host.input_devices()? {
+            if !has_usable_input_configs(&device) {
+                // Skip phantom devices (see has_usable_input_configs docs).
+                // Don't even log at warn level — these can show up every
+                // 30s cache refresh on hardware that exposes 3-4 of them.
+                if let Ok(name) = device.name() {
+                    tracing::debug!("skipping input device with no usable configs: {}", name);
+                }
+                continue;
+            }
             if let Ok(name) = device.name() {
                 devices.push(AudioDevice::new(name, DeviceType::Input));
             }
@@ -492,6 +539,12 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
 
         #[cfg(not(target_os = "macos"))]
         for device in host.output_devices()? {
+            if !has_usable_output_configs(&device) {
+                if let Ok(name) = device.name() {
+                    tracing::debug!("skipping output device with no usable configs: {}", name);
+                }
+                continue;
+            }
             if let Ok(name) = device.name() {
                 if should_include_output_device(&name) {
                     devices.push(AudioDevice::new(name, DeviceType::Output));
@@ -508,7 +561,10 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
                     Ok(n) => n,
                     Err(_) => continue,
                 };
-                if !devices.iter().any(|d| d.name == name) && should_include_output_device(&name) {
+                if !devices.iter().any(|d| d.name == name)
+                    && should_include_output_device(&name)
+                    && has_usable_output_configs(&device)
+                {
                     // TODO: not sure if it can be input, usually aggregate or multi output
                     devices.push(AudioDevice::new(name, DeviceType::Output));
                 }
@@ -520,12 +576,16 @@ async fn list_audio_devices_uncached() -> Result<Vec<AudioDevice>> {
 }
 
 /// Test if a cpal device actually works by trying to get its supported configs
+///
+/// Uses the same strict-non-empty check as [`has_usable_input_configs`] /
+/// [`has_usable_output_configs`] — `Ok(empty)` doesn't count as usable
+/// since the build-stream call will fail downstream anyway.
 #[cfg(all(target_os = "linux", not(feature = "pulseaudio")))]
 fn test_device_works(device: &cpal::Device, is_input: bool) -> bool {
     if is_input {
-        device.supported_input_configs().is_ok()
+        has_usable_input_configs(device)
     } else {
-        device.supported_output_configs().is_ok()
+        has_usable_output_configs(device)
     }
 }
 
