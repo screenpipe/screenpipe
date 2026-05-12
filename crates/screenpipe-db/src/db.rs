@@ -4933,15 +4933,19 @@ impl DatabaseManager {
     pub async fn delete_speaker(&self, id: i64) -> Result<(), sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
 
-        // Array of (query, operation description) tuples
+        // Collect orphaned chunk IDs before deleting transcriptions (FK: transcriptions -> chunks)
+        let orphan_chunk_ids: Vec<(i64,)> = sqlx::query_as(
+            "SELECT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ? AND start_time IS NULL"
+        )
+        .bind(id)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Delete in FK-safe order: transcriptions first (they reference chunks), then chunks
         let operations = [
             (
                 "DELETE FROM audio_transcriptions WHERE speaker_id = ?",
                 "audio transcriptions",
-            ),
-            (
-                "DELETE FROM audio_chunks WHERE id IN (SELECT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ? AND start_time IS NULL)",
-                "audio chunks",
             ),
             (
                 "DELETE FROM speaker_embeddings WHERE speaker_id = ?",
@@ -4953,14 +4957,24 @@ impl DatabaseManager {
             ),
         ];
 
-        // Execute each deletion operation
         for (query, operation) in operations {
             if let Err(e) = sqlx::query(query).bind(id).execute(&mut **tx.conn()).await {
                 error!("Failed to delete {} for speaker {}: {}", operation, id, e);
-                // tx will rollback automatically on drop
                 return Err(e);
             }
             debug!("Successfully deleted {} for speaker {}", operation, id);
+        }
+
+        // Now delete orphaned chunks (no longer referenced by transcriptions)
+        for (chunk_id,) in &orphan_chunk_ids {
+            if let Err(e) = sqlx::query("DELETE FROM audio_chunks WHERE id = ?")
+                .bind(chunk_id)
+                .execute(&mut **tx.conn())
+                .await
+            {
+                error!("Failed to delete audio chunk {} for speaker {}: {}", chunk_id, id, e);
+                return Err(e);
+            }
         }
 
         tx.commit().await.map_err(|e| {
