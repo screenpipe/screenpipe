@@ -161,9 +161,7 @@ impl PiExecutor {
     }
 
     fn render_screenpipe_api_skill() -> String {
-        let mut s = String::from(include_str!(
-            "../../assets/skills/screenpipe-api/SKILL.md"
-        ));
+        let mut s = String::from(include_str!("../../assets/skills/screenpipe-api/SKILL.md"));
         if Self::cloud_media_analysis_enabled() {
             // Trim trailing whitespace before appending so we don't
             // accumulate blank lines on rebuild.
@@ -173,10 +171,8 @@ impl PiExecutor {
             s.push('\n');
             s.push('\n');
             s.push_str(
-                include_str!(
-                    "../../assets/skills/screenpipe-api/cloud_media_analysis_block.md"
-                )
-                .trim_end(),
+                include_str!("../../assets/skills/screenpipe-api/cloud_media_analysis_block.md")
+                    .trim_end(),
             );
             s.push('\n');
         }
