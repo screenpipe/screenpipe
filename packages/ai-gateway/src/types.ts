@@ -82,6 +82,7 @@ export interface RequestBody {
 	tools?: any[];
 	temperature?: number;
 	max_tokens?: number;
+	max_completion_tokens?: number;
 	tool_choice?: string | { type: 'function'; function: { name: string } };
 	response_format?: ResponseFormat;
 }

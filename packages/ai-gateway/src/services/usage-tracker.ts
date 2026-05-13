@@ -118,6 +118,15 @@ export async function getCreditBalance(env: Env, userId: string): Promise<number
 const MODEL_WEIGHTS: Record<string, number> = {
   // Auto — smart routing, free
   'auto': 0,
+  // OpenAI API
+  'gpt-5.5-pro': 36,
+  'gpt-5.5': 6,
+  'gpt-5.4-pro': 36,
+  'gpt-5.4-mini': 1,
+  'gpt-5.4-nano': 1,
+  'gpt-5.4': 3,
+  'gpt-5-mini': 1,
+  'gpt-5-nano': 1,
   // Vertex MaaS — free for users (GCP credits), weight=0 so they don't eat daily quota
   'glm-4.7': 0,
   'glm-5': 0,
@@ -489,4 +498,3 @@ export function isModelAllowed(model: string, tier: UserTier, env?: Env): boolea
     allowed.toLowerCase().includes(model.toLowerCase())
   );
 }
-
