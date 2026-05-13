@@ -87,7 +87,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
 		// Chat completions - main AI endpoint
 		if (path === '/v1/chat/completions' && request.method === 'POST') {
-			const body = (await request.json()) as RequestBody;
+			let body: RequestBody;
+			try {
+				body = (await request.json()) as RequestBody;
+			} catch {
+				return addCorsHeaders(createErrorResponse(400, JSON.stringify({
+					error: 'invalid_json',
+					message: 'Request body must be valid JSON.',
+				})));
+			}
 
 			// Check if model is allowed for this tier
 			if (!isModelAllowed(body.model, authResult.tier, env)) {

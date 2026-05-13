@@ -42,6 +42,14 @@ interface ModelEntry {
   query_weight?: number;
 }
 
+function hasConfiguredSecret(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  return !['placeholder', 'changeme', 'change-me', 'todo', 'none', 'null', 'undefined'].includes(lower);
+}
+
 /** Curated model catalog — single source of truth */
 const CURATED_MODELS: ModelEntry[] = [
   // ── Auto — smart routing with fallback ──
@@ -537,7 +545,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
 
     // Avoid advertising models that would immediately fail because their
     // provider secret is not configured in the Worker environment yet.
-    models = models.filter(model => !model.requires_env || Boolean(env[model.requires_env]));
+    models = models.filter(model => !model.requires_env || hasConfiguredSecret(env[model.requires_env]));
 
     // Filter models based on tier allowlist
     if (tier !== 'subscribed') {

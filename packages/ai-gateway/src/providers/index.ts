@@ -42,6 +42,29 @@ function isOpenRouterModel(model: string): boolean {
 		OPENROUTER_MODELS.some(m => lower.includes(m));
 }
 
+class ProviderConfigurationError extends Error {
+	status = 503;
+	constructor(message: string) {
+		super(message);
+		this.name = 'ProviderConfigurationError';
+	}
+}
+
+function isConfiguredSecret(value: unknown): value is string {
+	if (typeof value !== 'string') return false;
+	const trimmed = value.trim();
+	if (!trimmed) return false;
+	const lower = trimmed.toLowerCase();
+	return !['placeholder', 'changeme', 'change-me', 'todo', 'none', 'null', 'undefined'].includes(lower);
+}
+
+function requireSecret(value: unknown, message: string): string {
+	if (!isConfiguredSecret(value)) {
+		throw new ProviderConfigurationError(message);
+	}
+	return value.trim();
+}
+
 export function createProvider(model: string, env: Env): AIProvider {
 	model = resolveModelAlias(model);
 
@@ -51,10 +74,7 @@ export function createProvider(model: string, env: Env): AIProvider {
 		return new OpenAIProvider('none', vllmUrl);
 	}
 	if (model.toLowerCase().includes('claude')) {
-		if (!env.ANTHROPIC_API_KEY) {
-			throw new Error('Anthropic API key not configured');
-		}
-		return new AnthropicProvider(env.ANTHROPIC_API_KEY);
+		return new AnthropicProvider(requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'));
 	}
 	if (model.toLowerCase().includes('gemini')) {
 		// Prefer Vertex AI for Gemini (shorter data retention, enterprise ToS)
@@ -66,43 +86,32 @@ export function createProvider(model: string, env: Env): AIProvider {
 			});
 		}
 		// Fallback to API key if Vertex credentials unavailable
-		if (!env.GEMINI_API_KEY) {
-			throw new Error('Gemini API key not configured');
-		}
-		return new GeminiProvider(env.GEMINI_API_KEY);
+		return new GeminiProvider(requireSecret(env.GEMINI_API_KEY, 'Gemini API key not configured'));
 	}
 	// Vertex AI MaaS — GLM-4.7, GLM-5, Kimi K2.5, DeepSeek, Llama, Qwen (burns GCP credits, free for users)
 	if (isVertexMaasModel(model)) {
-		if (!env.VERTEX_SERVICE_ACCOUNT_JSON || !env.VERTEX_PROJECT_ID) {
-			throw new Error('Vertex AI credentials not configured');
-		}
-		return new VertexMaasProvider(env.VERTEX_SERVICE_ACCOUNT_JSON, env.VERTEX_PROJECT_ID);
+		const serviceAccountJson = requireSecret(env.VERTEX_SERVICE_ACCOUNT_JSON, 'Vertex AI credentials not configured');
+		const projectId = requireSecret(env.VERTEX_PROJECT_ID, 'Vertex AI credentials not configured');
+		return new VertexMaasProvider(serviceAccountJson, projectId);
 	}
 	// Tinfoil — confidential inference in secure enclaves (TEE)
 	if (isTinfoilModel(model)) {
-		if (!env.TINFOIL_API_KEY) {
-			throw new Error('Tinfoil API key not configured');
-		}
-		return new TinfoilProvider(env.TINFOIL_API_KEY);
+		return new TinfoilProvider(requireSecret(env.TINFOIL_API_KEY, 'Tinfoil API key not configured'));
 	}
 	// Screenpipe enclave — our own Tinfoil-hosted CVM serving Gemma 4 E4B
 	// (audio + vision + chat) alongside the privacy-filter. Tinfoil tokens
 	// are org-scoped so TINFOIL_API_KEY works against this shim too; we
 	// only require a dedicated SCREENPIPE_ENCLAVE_API_KEY if it's set.
 	if (isScreenpipeEnclaveModel(model)) {
-		const key = env.SCREENPIPE_ENCLAVE_API_KEY || env.TINFOIL_API_KEY;
-		if (!key) {
-			throw new Error('No Tinfoil API key configured (need SCREENPIPE_ENCLAVE_API_KEY or TINFOIL_API_KEY)');
-		}
-		return new ScreenpipeEnclaveProvider(key);
+		const key = isConfiguredSecret(env.SCREENPIPE_ENCLAVE_API_KEY)
+			? env.SCREENPIPE_ENCLAVE_API_KEY
+			: env.TINFOIL_API_KEY;
+		return new ScreenpipeEnclaveProvider(requireSecret(key, 'No Tinfoil API key configured (need SCREENPIPE_ENCLAVE_API_KEY or TINFOIL_API_KEY)'));
 	}
 	if (isOpenRouterModel(model)) {
-		if (!env.OPENROUTER_API_KEY) {
-			throw new Error('OpenRouter API key not configured');
-		}
-		return new OpenRouterProvider(env.OPENROUTER_API_KEY);
+		return new OpenRouterProvider(requireSecret(env.OPENROUTER_API_KEY, 'OpenRouter API key not configured'));
 	}
-	return new OpenAIProvider(env.OPENAI_API_KEY);
+	return new OpenAIProvider(requireSecret(env.OPENAI_API_KEY, 'OpenAI API key not configured'));
 }
 
 export type { AIProvider };

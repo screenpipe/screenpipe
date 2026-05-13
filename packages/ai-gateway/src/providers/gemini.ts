@@ -12,6 +12,30 @@ export interface VertexGeminiConfig {
 	region?: string;
 }
 
+function nonEmptyText(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	return value.trim().length > 0 ? value : null;
+}
+
+function safeToolArgs(value: unknown): Record<string, any> {
+	if (typeof value === 'string') {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return {};
+		}
+	}
+	return (value && typeof value === 'object') ? value as Record<string, any> : {};
+}
+
+function safeJson(value: unknown): string {
+	try {
+		return JSON.stringify(value ?? {});
+	} catch {
+		return '{}';
+	}
+}
+
 export class GeminiProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -688,11 +712,13 @@ export class GeminiProvider implements AIProvider {
 			const parts: any[] = [];
 
 			if (typeof msg.content === 'string') {
-				parts.push({ text: msg.content });
+				const text = nonEmptyText(msg.content);
+				if (text) parts.push({ text });
 			} else if (Array.isArray(msg.content)) {
 				for (const part of msg.content) {
 					if (part.type === 'text') {
-						parts.push({ text: part.text || '' });
+						const text = nonEmptyText(part.text);
+						if (text) parts.push({ text });
 					} else if (part.type === 'image_url' && part.image_url?.url) {
 						const url = part.image_url.url;
 						const dataUrlMatch = url.match(/^data:([^;]+);base64,(.+)$/);
@@ -738,27 +764,32 @@ export class GeminiProvider implements AIProvider {
 								},
 							});
 						}
+					} else if ((part as any).type === 'tool_use' && msg.role === 'assistant') {
+						const toolPart = this.formatFunctionCallPart(
+							(part as any).name,
+							(part as any).input ?? {},
+							(part as any).id,
+						);
+						if (toolPart) parts.push(toolPart);
+					} else if ((part as any).type === 'tool_result') {
+						const text = nonEmptyText(
+							typeof (part as any).content === 'string'
+								? (part as any).content
+								: safeJson((part as any).content),
+						);
+						if (text) parts.push({ text });
 					}
 				}
 			}
 
 			if (msg.role === 'assistant' && (msg as any).tool_calls) {
 				for (const toolCall of (msg as any).tool_calls) {
-					const callPart: any = {
-						functionCall: {
-							name: toolCall.function?.name || toolCall.name,
-							args: typeof toolCall.function?.arguments === 'string'
-								? JSON.parse(toolCall.function.arguments)
-								: toolCall.function?.arguments || {},
-						},
-					};
-					const tsMatch = (toolCall.id || '').match(/_ts_(.+)$/);
-					if (tsMatch) {
-						try {
-							callPart.thoughtSignature = atob(tsMatch[1]);
-						} catch {}
-					}
-					parts.push(callPart);
+					const callPart = this.formatFunctionCallPart(
+						toolCall.function?.name || toolCall.name,
+						toolCall.function?.arguments ?? toolCall.input,
+						toolCall.id,
+					);
+					if (callPart) parts.push(callPart);
 				}
 			}
 
@@ -770,6 +801,24 @@ export class GeminiProvider implements AIProvider {
 		flushToolResponses();
 
 		return formatted;
+	}
+
+	private formatFunctionCallPart(name: unknown, argsInput: unknown, id: unknown): any | null {
+		if (typeof name !== 'string' || name.length === 0) return null;
+		const args = safeToolArgs(argsInput);
+		const tsMatch = typeof id === 'string' ? id.match(/_ts_(.+)$/) : null;
+		if (!tsMatch) {
+			return { text: `[function call: ${name}] ${safeJson(args)}` };
+		}
+		const callPart: any = {
+			functionCall: { name, args },
+		};
+		try {
+			callPart.thoughtSignature = atob(tsMatch[1]);
+		} catch {
+			return { text: `[function call: ${name}] ${safeJson(args)}` };
+		}
+		return callPart;
 	}
 
 	private formatGroundingSources(groundingMetadata: any): string {

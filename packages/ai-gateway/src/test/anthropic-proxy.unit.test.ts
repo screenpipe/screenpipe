@@ -554,6 +554,24 @@ describe('AnthropicProvider.formatMessages', () => {
 		expect(content[0].type).toBe('text');
 		expect(content[0].text).toBe('Hello world');
 	});
+
+	it('filters empty text blocks before sending to Anthropic', () => {
+		const result = provider.formatMessages([
+			{
+				role: 'user',
+				content: [
+					{ type: 'text', text: '' },
+					{ type: 'text', text: '   ' },
+					{ type: 'text', text: 'Hello' },
+				] as any,
+			},
+			{ role: 'assistant', content: '' },
+		]);
+
+		expect(result.length).toBe(1);
+		const content = result[0].content as any[];
+		expect(content).toEqual([{ type: 'text', text: 'Hello' }]);
+	});
 });
 
 // ============================================================================
