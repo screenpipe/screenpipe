@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 log() {
     echo -e "\e[1;34m[INFO]\e[0m $1"
@@ -11,12 +12,13 @@ cd /workspaces/screenpipe/
 
 log "Installing dependencies"
 .github/scripts/install_dependencies.sh
+export OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas
 
 log "Verifying Tesseract installation"
 .github/scripts/verify_tesseract.sh
 
 log "Building CLI"
-cargo build --release
+cargo build --release -p screenpipe-engine --bin screenpipe
 
 log "Setting up virtual display with window manager"
 

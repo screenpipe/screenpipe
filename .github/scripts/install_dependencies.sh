@@ -5,6 +5,11 @@ sudo apt-get install -y xvfb x11-xserver-utils ffmpeg libasound2-dev libgtk-3-de
 # antirez-asr-sys build script emits -llibopenblas (double lib prefix).
 # Create a symlink so the linker finds it, and set OPENBLAS_PATH with lib/ subdir.
 sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/liblibopenblas.so
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/liblibopenblas.a
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
-echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+if [ -n "$GITHUB_ENV" ]; then
+  echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> "$GITHUB_ENV"
+fi
+export OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas

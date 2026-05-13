@@ -1,5 +1,5 @@
 # Use the specified base image
-FROM mcr.microsoft.com/devcontainers/base:ubuntu-22.04
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 # Switch to the vscode user
 USER vscode
@@ -64,6 +64,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
     alsa-utils \
     pulseaudio \
     pulseaudio-utils \
+    ripgrep \
     && sudo apt-get clean \
     && sudo rm -rf /var/lib/apt/lists/*
 
@@ -71,7 +72,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
 RUN curl -fsSL https://bun.sh/install | bash
 
 # Install Tauri Driver
-ENV PATH="${HOME}/.cargo/bin:${PATH}"
+ENV PATH="/home/vscode/.cargo/bin:${PATH}"
 RUN cargo install tauri-driver
 
 EXPOSE 3000 3030
