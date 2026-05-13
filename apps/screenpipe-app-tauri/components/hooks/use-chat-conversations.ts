@@ -107,6 +107,21 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     });
   }, []);
   const [historySearch, setHistorySearch] = useState("");
+  const [showClosed, setShowClosedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("screenpipe:chat-history-show-closed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setShowClosed = useCallback((value: boolean) => {
+    setShowClosedRaw(value);
+    try {
+      localStorage.setItem("screenpipe:chat-history-show-closed", String(value));
+    } catch {
+      // ignore — preference persistence is best-effort
+    }
+  }, []);
   const [fileConversations, setFileConversations] = useState<ChatConversation[]>([]);
 
   // Run migration from store.bin on mount, then load conversations from files
@@ -731,16 +746,24 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setConversationId(newSid);
   };
 
+  const closedCount = useMemo(
+    () => fileConversations.filter((c) => c.hidden === true).length,
+    [fileConversations]
+  );
+
   // ---- filteredConversations ----
   const filteredConversations = useMemo(() => {
-    if (!historySearch.trim()) return fileConversations;
+    const base = showClosed
+      ? fileConversations
+      : fileConversations.filter((c) => c.hidden !== true);
+    if (!historySearch.trim()) return base;
 
     const search = historySearch.toLowerCase();
-    return fileConversations.filter((c: ChatConversation) =>
+    return base.filter((c: ChatConversation) =>
       c.title.toLowerCase().includes(search) ||
       c.messages.some(m => m.content.toLowerCase().includes(search))
     );
-  }, [fileConversations, historySearch]);
+  }, [fileConversations, historySearch, showClosed]);
 
   // ---- groupedConversations ----
   const groupedConversations = useMemo(() => {
@@ -781,6 +804,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setShowHistory,
     historySearch,
     setHistorySearch,
+    showClosed,
+    setShowClosed,
+    closedCount,
     filteredConversations,
     groupedConversations,
     saveConversation,

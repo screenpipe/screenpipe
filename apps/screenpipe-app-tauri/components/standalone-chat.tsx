@@ -15,6 +15,7 @@ import {
 import { pipeSessionId } from "@/lib/events/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
@@ -1916,6 +1917,9 @@ export function StandaloneChat({
     setShowHistory,
     historySearch,
     setHistorySearch,
+    showClosed,
+    setShowClosed,
+    closedCount,
     filteredConversations,
     groupedConversations,
     saveConversation,
@@ -4943,6 +4947,17 @@ export function StandaloneChat({
                     className="h-8 pl-8 text-xs bg-background/50"
                   />
                 </div>
+                <div className="pt-1 flex items-center justify-between gap-2">
+                  <div className="text-xs text-foreground/90">
+                    Show closed
+                    <span className="text-muted-foreground ml-1">({closedCount})</span>
+                  </div>
+                  <Switch
+                    checked={showClosed}
+                    onCheckedChange={setShowClosed}
+                    aria-label="show closed conversations"
+                  />
+                </div>
               </div>
 
               {/* Conversations List */}
@@ -4972,9 +4987,16 @@ export function StandaloneChat({
                           onClick={() => loadConversation(conv)}
                         >
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium truncate">
-                              {conv.title}
-                            </p>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className="text-xs font-medium truncate">
+                                {conv.title}
+                              </p>
+                              {conv.hidden === true && (
+                                <span className="text-[10px] leading-none px-1.5 py-1 rounded-md border border-border/80 text-muted-foreground bg-background/60 shrink-0">
+                                  Closed
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-muted-foreground">
                               {conv.messages.length} messages
                             </p>

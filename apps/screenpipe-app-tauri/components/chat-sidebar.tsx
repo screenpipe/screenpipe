@@ -58,6 +58,7 @@ interface ChatSidebarProps {
 function useVisibleChatSections(): {
   pinned: SessionRecord[];
   recents: SessionRecord[];
+  closed: SessionRecord[];
 } {
   const sessions = useOrderedSessions();
   const runningPipes = useRunningPipes();
@@ -73,13 +74,18 @@ function useVisibleChatSections(): {
   return useMemo(() => {
     const pinned: SessionRecord[] = [];
     const recents: SessionRecord[] = [];
+    const closed: SessionRecord[] = [];
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
       if (s.draft) continue;
+      if (s.hidden) {
+        closed.push(s);
+        continue;
+      }
       (s.pinned ? pinned : recents).push(s);
     }
-    return { pinned, recents };
+    return { pinned, recents, closed };
   }, [sessions, liveScheduledSids]);
 }
 
@@ -179,7 +185,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     void refetchUpcoming();
   };
 
-  const { pinned, recents } = useVisibleChatSections();
+  const { pinned, recents, closed } = useVisibleChatSections();
 
   const handleSelect = (id: string) => {
     // No early return for id === currentId. Two reasons:
@@ -200,7 +206,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     // emitting events for `id`, and pi-event-router's lazy-create branch
     // resurrects the row in the sidebar a beat after the user closed it.
     commands.piAbort(id).catch(() => {});
-    actions.drop(id);
+    actions.patch(id, { hidden: true, unread: false });
     // If the user closed the chat they were viewing, tell standalone-chat
     // to clear the panel. Otherwise the panel would keep showing a
     // conversation that no longer exists in the sidebar.
@@ -313,6 +319,23 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
           />
         ))}
       </CollapsibleRecents>
+
+      {closed.length > 0 && (
+        <CollapsibleClosed count={closed.length}>
+          {closed.map((s) => (
+            <SidebarChatRow
+              key={s.id}
+              session={s}
+              isCurrent={s.id === currentId}
+              queuedCount={0}
+              onSelect={handleSelect}
+              onClose={handleClose}
+              onTogglePin={handleTogglePin}
+              showActions={false}
+            />
+          ))}
+        </CollapsibleClosed>
+      )}
     </div>
   );
 }
@@ -539,6 +562,61 @@ function CollapsibleRecents({
           ) : (
             <div className="flex flex-col">{children}</div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CollapsibleClosed({
+  count,
+  children,
+}: {
+  count: number;
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("screenpipe:closed-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem("screenpipe:closed-collapsed", String(v));
+    } catch {
+      // ignore — collapse state is best-effort
+    }
+  };
+  return (
+    <div className="flex flex-col mb-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
+        aria-expanded={!collapsed}
+        aria-controls="chat-sidebar-closed"
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+          closed
+        </span>
+        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+          {count}
+        </span>
+      </button>
+      {!collapsed && (
+        <div
+          id="chat-sidebar-closed"
+          className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-hide"
+        >
+          <div className="flex flex-col">{children}</div>
         </div>
       )}
     </div>

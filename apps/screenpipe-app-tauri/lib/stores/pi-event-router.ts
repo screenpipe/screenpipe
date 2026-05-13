@@ -310,10 +310,6 @@ async function hydrate() {
   try {
     const metas = await listConversations();
     const records: SessionRecord[] = metas
-      // Hidden conversations are filtered at this boundary so the rest of
-      // the store doesn't need to know about them. A future "show hidden"
-      // UI would need to bypass this filter and read the unfiltered list.
-      .filter((m) => !m.hidden)
       .map((m) => ({
         id: m.id,
         title: m.title || "untitled",
@@ -323,6 +319,7 @@ async function hydrate() {
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
         pinned: m.pinned,
+        hidden: m.hidden,
         // History reload doesn't count as new activity — start clean.
         unread: false,
         lastUserMessageAt: m.lastUserMessageAt,
