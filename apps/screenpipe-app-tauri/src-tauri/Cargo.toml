@@ -246,12 +246,13 @@ custom-protocol = ["tauri/custom-protocol"]
 # Source builds without this flag will show "auto-updates unavailable"
 official-build = []
 
-# Enterprise build: updates managed by IT (Intune/RoboPack), tauri.enterprise
+# Enterprise build: updates are policy-managed (Intune/MDM or Screenpipe),
+# tauri.enterprise
 # bundle identifier, and the periodic telemetry sync that pushes screen + audio
 # activity to the screenpipe enterprise ingest endpoint scoped by license key.
 # Source for the sync lives under `ee/desktop-rust/enterprise_sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
-# Do NOT add official-build here — we skip all in-app update logic for enterprise.
+# Do NOT add official-build here — enterprise has its own policy-gated updater.
 enterprise-build = ["dep:thiserror"]
 
 # On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)

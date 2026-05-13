@@ -13,6 +13,10 @@ import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
 import type { SourceCitation } from "@/lib/source-citations";
+import type {
+	EnterpriseAppUpdatePolicy,
+	EnterpriseInstallMetadata,
+} from "@ee/lib/app-update-policy";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -276,12 +280,16 @@ export type Settings = SettingsStore & {
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
-	monitorDevices?: Array<{
-		address: string;
-		label?: string;
-	}>;
-	/** Enable recording schedule — when on, recording only runs during defined time ranges */
-	scheduleEnabled?: boolean;
+		monitorDevices?: Array<{
+			address: string;
+			label?: string;
+		}>;
+		/** Enterprise app-update policy fetched from the admin dashboard. */
+		enterpriseAppUpdatePolicy?: EnterpriseAppUpdatePolicy;
+		/** Local install/update-manager detection for enterprise fleet reporting. */
+		enterpriseInstallMetadata?: EnterpriseInstallMetadata;
+		/** Enable recording schedule — when on, recording only runs during defined time ranges */
+		scheduleEnabled?: boolean;
 	/** Per-day-of-week time ranges defining when recording is active */
 	scheduleRules?: Array<{
 		dayOfWeek: number;

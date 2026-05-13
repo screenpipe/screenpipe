@@ -47,6 +47,7 @@ mod chatgpt_oauth;
 mod commands;
 mod disk_usage;
 mod embedded_server;
+mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
 mod hardware;
@@ -736,6 +737,7 @@ async fn main() {
                 recording::get_boot_phase,
                 // Commands from commands.rs
                 commands::is_enterprise_build_cmd,
+                enterprise_install_metadata::get_enterprise_install_metadata,
                 commands::set_cloud_media_analysis_skill,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
@@ -877,6 +879,7 @@ async fn main() {
             .typ::<suggestions::CachedSuggestions>()
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
+            .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>();
 
@@ -1009,6 +1012,7 @@ async fn main() {
         .manage(sync_scheduler)
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
+            enterprise_install_metadata::get_enterprise_install_metadata,
             commands::get_local_api_config,
             commands::regenerate_api_auth_key,
             commands::set_api_auth_key,

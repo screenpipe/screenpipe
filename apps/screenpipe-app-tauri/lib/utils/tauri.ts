@@ -271,6 +271,9 @@ async getBootPhase() : Promise<BootPhaseSnapshot> {
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
+async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
+    return await TAURI_INVOKE("get_enterprise_install_metadata");
+},
 /**
  * Toggle the "Cloud audio + video + image analysis" capability
  * in the screenpipe-api skill that Pi installs on every run.
@@ -1502,6 +1505,7 @@ export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
+export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
