@@ -1397,11 +1397,7 @@ const AISection = ({
             open={isModelPickerOpen}
             onOpenChange={(open) => {
               setIsModelPickerOpen(open);
-              if (open) {
-                setModelSearch(settingsPreset?.model || "");
-              } else {
                 setModelSearch("");
-              }
             }}
           >
             <PopoverTrigger asChild>
