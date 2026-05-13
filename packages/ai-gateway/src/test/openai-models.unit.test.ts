@@ -44,7 +44,10 @@ describe('OpenAI API model catalog', () => {
 		const ids = await listedModelIds();
 
 		expect(ids).toContain('gpt-5.5');
+		expect(ids).toContain('gpt-5.5-pro');
 		expect(ids).toContain('gpt-5.4');
+		expect(ids).toContain('gpt-5.4-pro');
+		expect(ids).toContain('gpt-5.3-codex');
 		expect(ids).toContain('gpt-5.4-mini');
 		expect(ids).toContain('gpt-5.4-nano');
 	});
@@ -53,7 +56,10 @@ describe('OpenAI API model catalog', () => {
 		const ids = await listedModelIds({ OPENAI_API_KEY: '' });
 
 		expect(ids).not.toContain('gpt-5.5');
+		expect(ids).not.toContain('gpt-5.5-pro');
 		expect(ids).not.toContain('gpt-5.4');
+		expect(ids).not.toContain('gpt-5.4-pro');
+		expect(ids).not.toContain('gpt-5.3-codex');
 		expect(ids).not.toContain('gpt-5.4-mini');
 		expect(ids).not.toContain('gpt-5.4-nano');
 	});
@@ -83,6 +89,7 @@ describe('OpenAI API accounting and routing', () => {
 
 	it('uses exact OpenAI prices instead of the unknown-model fallback', () => {
 		expect(getModelCost('gpt-5.5', null, null)).toBeCloseTo(0.025, 6);
+		expect(getModelCost('gpt-5.3-codex', null, null)).toBeCloseTo(0.0105, 6);
 		expect(getModelCost('gpt-5.4-nano', null, null)).toBeCloseTo(0.001025, 6);
 		expect(isZeroCostModel('gpt-5.4-nano')).toBe(false);
 	});
@@ -90,6 +97,8 @@ describe('OpenAI API accounting and routing', () => {
 	it('assigns quota weights for expensive and cheap OpenAI models', () => {
 		expect(getModelWeight('gpt-5.5-pro')).toBe(36);
 		expect(getModelWeight('gpt-5.5')).toBe(6);
+		expect(getModelWeight('gpt-5.4-pro')).toBe(36);
+		expect(getModelWeight('gpt-5.3-codex')).toBe(3);
 		expect(getModelWeight('gpt-5.4')).toBe(3);
 		expect(getModelWeight('gpt-5.4-mini')).toBe(1);
 		expect(getModelWeight('gpt-5.4-nano')).toBe(1);

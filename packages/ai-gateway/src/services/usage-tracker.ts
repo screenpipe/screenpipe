@@ -122,6 +122,7 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'gpt-5.5-pro': 36,
   'gpt-5.5': 6,
   'gpt-5.4-pro': 36,
+  'gpt-5.3-codex': 3,
   'gpt-5.4-mini': 1,
   'gpt-5.4-nano': 1,
   'gpt-5.4': 3,
