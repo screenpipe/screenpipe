@@ -14,6 +14,7 @@ mod ffi {
         pub fn tl_init(window_ptr: u64) -> i32;
         pub fn tl_show() -> i32;
         pub fn tl_hide() -> i32;
+        pub fn tl_is_visible() -> i32;
         pub fn tl_init_embedded(window_ptr: u64) -> i32;
         pub fn tl_update_position(x: f64, y: f64, w: f64, h: f64) -> i32;
         pub fn tl_show_embedded() -> i32;
@@ -33,6 +34,7 @@ mod ffi {
     pub fn init_panel(_window_ptr: u64) -> bool { unsafe { tl_init(0) == 0 } }
     pub fn show() -> bool { unsafe { tl_show() == 0 } }
     pub fn hide() -> bool { unsafe { tl_hide() == 0 } }
+    pub fn is_visible() -> bool { unsafe { tl_is_visible() == 1 } }
     pub fn init_embedded(window_ptr: u64) -> bool { unsafe { tl_init_embedded(window_ptr) == 0 } }
     pub fn update_position(x: f64, y: f64, w: f64, h: f64) -> bool { unsafe { tl_update_position(x, y, w, h) == 0 } }
     pub fn show_embedded() -> bool { unsafe { tl_show_embedded() == 0 } }
@@ -64,6 +66,7 @@ mod ffi {
     pub fn init_panel(_: u64) -> bool { false }
     pub fn show() -> bool { false }
     pub fn hide() -> bool { false }
+    pub fn is_visible() -> bool { false }
     pub fn init_embedded(_: u64) -> bool { false }
     pub fn update_position(_: f64, _: f64, _: f64, _: f64) -> bool { false }
     pub fn show_embedded() -> bool { false }

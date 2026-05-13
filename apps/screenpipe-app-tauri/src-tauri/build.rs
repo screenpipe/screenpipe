@@ -620,6 +620,7 @@ int32_t tl_is_available(void) { return -2; }
 int32_t tl_init(uint64_t w) { return -2; }
 int32_t tl_show(void) { return -2; }
 int32_t tl_hide(void) { return -2; }
+int32_t tl_is_visible(void) { return 0; }
 int32_t tl_init_embedded(uint64_t w) { return -2; }
 int32_t tl_update_position(double x, double y, double w, double h) { return -2; }
 int32_t tl_show_embedded(void) { return -2; }

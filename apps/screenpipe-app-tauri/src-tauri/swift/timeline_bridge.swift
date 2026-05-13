@@ -51,6 +51,13 @@ public func tlHide() -> Int32 {
     return 0
 }
 
+@_cdecl("tl_is_visible")
+public func tlIsVisible() -> Int32 {
+    var visible = false
+    onMain { visible = TimelinePanelController.shared.isVisible }
+    return visible ? 1 : 0
+}
+
 // MARK: - Embedded mode (inside Tauri window)
 
 @_cdecl("tl_init_embedded")

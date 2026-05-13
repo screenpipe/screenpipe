@@ -263,11 +263,12 @@ class TimelineDataStore: ObservableObject {
 
 // MARK: - Panel controller (overlay + embedded modes)
 
-class TimelinePanelController {
+class TimelinePanelController: NSObject, NSWindowDelegate {
     static let shared = TimelinePanelController()
 
     // Overlay mode
     private var panel: NSPanel?
+    private var autoHideWorkItem: DispatchWorkItem?
 
     // Embedded mode
     private var embeddedHostingView: NSHostingView<TimelineRootView>?
@@ -297,14 +298,51 @@ class TimelinePanelController {
         p.isMovableByWindowBackground = false // don't eat text selection drags
         p.backgroundColor = .windowBackgroundColor
         p.contentView = hosting
+        p.delegate = self
+        p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
         p.minSize = NSSize(width: 600, height: 400)
         p.center()
         panel = p
     }
 
-    func showOverlay() { panel?.makeKeyAndOrderFront(nil) }
-    func hideOverlay() { panel?.orderOut(nil) }
+    func showOverlay() {
+        autoHideWorkItem?.cancel()
+        autoHideWorkItem = nil
+        panel?.makeKeyAndOrderFront(nil)
+    }
+
+    func hideOverlay() {
+        autoHideWorkItem?.cancel()
+        autoHideWorkItem = nil
+        panel?.orderOut(nil)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        autoHideWorkItem?.cancel()
+        autoHideWorkItem = nil
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        scheduleAutoHide()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        autoHideWorkItem?.cancel()
+        autoHideWorkItem = nil
+    }
+
+    private func scheduleAutoHide() {
+        autoHideWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, let panel = self.panel, panel.isVisible, !panel.isKeyWindow else { return }
+            self.hideOverlay()
+            gTimelineCallback?(makeCString("{\"action\":\"auto_hide\"}"))
+        }
+        autoHideWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
     func toggleOverlay() { isVisible ? hideOverlay() : showOverlay() }
 
     // MARK: - Embedded mode (inside Tauri window)
@@ -352,6 +390,8 @@ class TimelinePanelController {
     // MARK: - Cleanup
 
     func destroy() {
+        autoHideWorkItem?.cancel(); autoHideWorkItem = nil
+        panel?.delegate = nil
         panel?.orderOut(nil); panel = nil
         embeddedHostingView?.removeFromSuperview(); embeddedHostingView = nil
         hostContentView = nil

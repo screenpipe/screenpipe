@@ -164,7 +164,6 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                 use crate::native_timeline;
                 use std::sync::atomic::{AtomicBool, Ordering};
                 static NATIVE_INITED: AtomicBool = AtomicBool::new(false);
-                static NATIVE_VISIBLE: AtomicBool = AtomicBool::new(false);
 
                 if native_timeline::is_available() {
                     if !NATIVE_INITED.load(Ordering::Relaxed) {
@@ -178,14 +177,12 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                         NATIVE_INITED.store(true, Ordering::Relaxed);
                     }
 
-                    if NATIVE_VISIBLE.load(Ordering::Relaxed) {
+                    if native_timeline::is_visible() {
                         info!("hiding native timeline");
                         native_timeline::hide();
-                        NATIVE_VISIBLE.store(false, Ordering::Relaxed);
                     } else {
                         info!("showing native timeline");
                         native_timeline::show();
-                        NATIVE_VISIBLE.store(true, Ordering::Relaxed);
                         // Tell the frontend to connect WebSocket and start pushing frames
                         let _ = app.emit("native-timeline-opened", ());
                     }
