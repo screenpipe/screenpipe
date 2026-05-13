@@ -202,9 +202,8 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
   const handleClose = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    // Abort the Pi process first. Otherwise a still-streaming Pi keeps
-    // emitting events for `id`, and pi-event-router's lazy-create branch
-    // resurrects the row in the sidebar a beat after the user closed it.
+    // Stop any active session first to avoid immediate row resurrection
+    // from trailing stream events.
     commands.piAbort(id).catch(() => {});
     actions.patch(id, { hidden: true, unread: false });
     // If the user closed the chat they were viewing, tell standalone-chat
@@ -227,16 +226,11 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       actions.setCurrent(fresh);
       emit("chat-load-conversation", { conversationId: fresh });
     }
-    // Persist hidden=true to disk so the close survives restart. Failures
-    // here are best-effort — if the file doesn't exist (session never
-    // saved) the in-memory drop is enough; if the disk write fails (perm,
-    // disk full) the sidebar will re-show the row on next launch which is
-    // not great but recoverable by closing again. We don't surface an
-    // error toast for this — too low-stakes.
+    // Best-effort persistence for restart durability.
     try {
       await updateConversationFlags(id, { hidden: true });
     } catch {
-      // intentional — see comment above
+      // ignore
     }
   };
 

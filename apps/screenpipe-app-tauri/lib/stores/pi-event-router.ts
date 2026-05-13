@@ -304,8 +304,7 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   }
 }
 
-/** Hydrate the store from on-disk chat history once at boot. The router
- *  keeps this in sync afterwards via incremental events. */
+/** Hydrate chat sessions from disk once at boot. */
 async function hydrate() {
   try {
     const metas = await listConversations();
