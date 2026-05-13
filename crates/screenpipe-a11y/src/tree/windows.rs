@@ -56,6 +56,8 @@ const SKIP_TYPES: &[&str] = &[
     "ProgressBar",
 ];
 
+const RPC_E_CHANGED_MODE_CODE: i32 = 0x80010106u32 as i32;
+
 /// UIA control types that carry user-visible text in name or value.
 const TEXT_TYPES: &[&str] = &[
     "Text",
@@ -82,7 +84,8 @@ const TEXT_TYPES: &[&str] = &[
 /// to mutate on first call (lazy init). The walker is single-threaded.
 struct WalkerState {
     uia: Option<UiaContext>,
-    com_initialized: bool,
+    com_initialized_by_us: bool,
+    com_ready: bool,
 }
 
 /// Windows tree walker using UI Automation CacheRequest.
@@ -103,7 +106,8 @@ impl WindowsTreeWalker {
             config,
             state: UnsafeCell::new(WalkerState {
                 uia: None,
-                com_initialized: false,
+                com_initialized_by_us: false,
+                com_ready: false,
             }),
         }
     }
@@ -113,11 +117,23 @@ impl WindowsTreeWalker {
     /// Safety: caller must ensure single-threaded access (guaranteed by walker design).
     unsafe fn ensure_init(&self) -> Result<&UiaContext> {
         let state = &mut *self.state.get();
-        if !state.com_initialized {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                .ok()
-                .map_err(|e| anyhow::anyhow!("COM init failed: {:?}", e))?;
-            state.com_initialized = true;
+        if !state.com_ready {
+            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            if hr.is_ok() {
+                state.com_initialized_by_us = true;
+                state.com_ready = true;
+            } else if hr.0 == RPC_E_CHANGED_MODE_CODE {
+                // Tokio's blocking pool can reuse a thread that some other
+                // Windows API already initialized as MTA. UI Automation is
+                // usable from MTA too; the important part is not calling
+                // CoUninitialize for an apartment we did not initialize.
+                tracing::debug!(
+                    "COM already initialized with a different apartment; using existing COM apartment for UIA"
+                );
+                state.com_ready = true;
+            } else {
+                return Err(anyhow::anyhow!("COM init failed: {:?}", hr));
+            }
         }
         if state.uia.is_none() {
             let mut last_err = None;
@@ -156,7 +172,7 @@ impl Drop for WindowsTreeWalker {
         let state = self.state.get_mut();
         // Drop UIA before CoUninitialize
         state.uia.take();
-        if state.com_initialized {
+        if state.com_initialized_by_us {
             unsafe {
                 windows::Win32::System::Com::CoUninitialize();
             }

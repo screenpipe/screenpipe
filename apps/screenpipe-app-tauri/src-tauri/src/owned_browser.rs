@@ -36,11 +36,10 @@
 //! `initialization_script`, which Tauri runs on every page load including
 //! cross-origin navigations.
 //!
-//! Cookies/localStorage live in `~/.screenpipe/browsers/default` on
-//! Windows (per-window data dir is supported via WebView2's
-//! `additional_browser_args`). On macOS/Linux the platform webviews share
-//! a single store with the main app webview — Tauri's public API doesn't
-//! expose per-window profiles for WKWebView/webkit2gtk yet.
+//! Cookies/localStorage share the app webview store on all platforms. WebView2
+//! is sensitive to changing environment options after the first webview is
+//! created, so the owned browser must not pass a per-window `--user-data-dir`
+//! through `additional_browser_args` on Windows.
 
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
@@ -378,16 +377,7 @@ pub async fn install(
     app: &AppHandle,
     screenpipe_dir: PathBuf,
 ) -> Result<Arc<dyn OwnedWebviewHandle>, String> {
-    // Per-instance data directory so the owned browser's cookies and
-    // localStorage don't pollute (or get polluted by) the main app webview.
-    // WKWebView (macOS) and webkit2gtk (Linux) don't expose per-window
-    // profiles via Tauri's public API yet — they share the app's webview
-    // store regardless. WebView2 (Windows) supports it via
-    // `additional_browser_args`.
-    let data_dir = screenpipe_dir.join("browsers").join("default");
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        warn!("owned-browser: failed to create data dir {data_dir:?}: {e}");
-    }
+    let _ = screenpipe_dir;
 
     if app.get_webview_window(WEBVIEW_LABEL).is_none() {
         let blank: url::Url = "about:blank"
@@ -401,7 +391,6 @@ pub async fn install(
                 .decorations(false)
                 .resizable(false)
                 .skip_taskbar(true)
-                .visible(false)
                 // NOT `always_on_top(true)` — that maps to NSFloatingWindowLevel
                 // on macOS, which sits above every other app's normal-level
                 // windows globally. Result: when screenpipe loses focus to
@@ -412,27 +401,44 @@ pub async fn install(
                 // app focus/hide/minimize now propagate to the browser via
                 // the OS's standard cross-app window ordering.
                 .shadow(false)
-                .inner_size(1.0, 1.0)
-                .position(0.0, 0.0)
-                // Spoof a real Safari UA so anti-WebView gates (notably
-                // x.com, which hangs forever on the splash with the default
-                // WKWebView UA) serve us the normal site. No measured impact
-                // on other domains we render here.
-                .user_agent(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
-                     AppleWebKit/605.1.15 (KHTML, like Gecko) \
-                     Version/17.5 Safari/605.1.15",
-                )
                 .initialization_script(BRIDGE_INIT_SCRIPT);
+
+        #[cfg(target_os = "macos")]
+        {
+            // Spoof a real Safari UA so anti-WebView gates (notably x.com,
+            // which hangs forever on the splash with the default WKWebView UA)
+            // serve us the normal site. Do not apply this to WebView2:
+            // YouTube and other Google properties expect the Chromium/Edge
+            // feature surface that WebView2 actually provides.
+            builder = builder.user_agent(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
+                 AppleWebKit/605.1.15 (KHTML, like Gecko) \
+                 Version/17.5 Safari/605.1.15",
+            );
+        }
 
         #[cfg(target_os = "windows")]
         {
+            // WebView2 can fail controller creation with 0x8007139F when the
+            // native window is born hidden at a 1x1 client size during app
+            // startup. Create it as a tiny visible off-screen window and leave
+            // it that way until the sidebar positions or hides it. Hiding
+            // immediately after build can race WebView2's async controller
+            // creation and leave the owned browser unable to open.
             builder = builder
-                .additional_browser_args(&format!("--user-data-dir=\"{}\"", data_dir.display()));
+                .visible(true)
+                .focused(false)
+                .inner_size(64.0, 64.0)
+                .position(-32000.0, -32000.0);
         }
-        // Silence the unused-binding warning on non-Windows targets where
-        // the data_dir is informational only.
-        let _ = &data_dir;
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            builder = builder
+                .visible(false)
+                .inner_size(1.0, 1.0)
+                .position(0.0, 0.0);
+        }
 
         builder
             .build()
