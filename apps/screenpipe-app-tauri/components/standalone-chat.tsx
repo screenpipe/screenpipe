@@ -1627,6 +1627,7 @@ function ChatTitleMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1690,7 +1691,10 @@ function ChatTitleMenu({
   };
   const handleDelete = async () => {
     setOpen(false);
-    if (!confirm("Delete this chat? This cannot be undone.")) return;
+    setConfirmingDelete(true);
+  };
+  const confirmDelete = async () => {
+    setConfirmingDelete(false);
     try {
       await deleteConversation(conversationId);
       useChatStore.getState().actions.drop(conversationId);
@@ -1770,6 +1774,24 @@ function ChatTitleMenu({
           Delete
         </button>
       </PopoverContent>
+      <Dialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>delete chat</DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Delete this chat? This cannot be undone.
+            </p>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmingDelete(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void confirmDelete()}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Popover>
   );
 }
