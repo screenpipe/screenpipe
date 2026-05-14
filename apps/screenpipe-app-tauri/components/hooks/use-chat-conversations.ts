@@ -13,6 +13,7 @@ import {
   type RefObject,
   type MutableRefObject,
 } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import {
@@ -107,19 +108,23 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     });
   }, []);
   const [historySearch, setHistorySearch] = useState("");
-  const [showClosed, setShowClosedRaw] = useState<boolean>(() => {
+  const [historyView, setHistoryViewRaw] = useState<"open" | "archived">(() => {
     try {
-      return localStorage.getItem("screenpipe:chat-history-show-closed") === "true";
+      const saved = localStorage.getItem("screenpipe:chat-history-view");
+      if (!saved && localStorage.getItem("screenpipe:chat-history-show-closed") === "true") {
+        return "archived";
+      }
+      return saved === "archived" ? "archived" : "open";
     } catch {
-      return false;
+      return "open";
     }
   });
-  const setShowClosed = useCallback((value: boolean) => {
-    setShowClosedRaw(value);
+  const setHistoryView = useCallback((value: "open" | "archived") => {
+    setHistoryViewRaw(value);
     try {
-      localStorage.setItem("screenpipe:chat-history-show-closed", String(value));
+      localStorage.setItem("screenpipe:chat-history-view", value);
     } catch {
-      // ignore — preference persistence is best-effort
+      // ignore
     }
   }, []);
   const [fileConversations, setFileConversations] = useState<ChatConversation[]>([]);
@@ -136,10 +141,40 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     })();
   }, []);
 
-  const refreshFileConversations = async () => {
+  const refreshFileConversations = useCallback(async () => {
     const convs = await loadAllConversations();
     setFileConversations(convs);
-  };
+  }, []);
+
+  // Cross-window history sync. Main sidebar actions run in /home and
+  // this drawer list often lives in /chat overlay; refresh file-backed
+  // history when archive/delete/rename happens in another window.
+  useEffect(() => {
+    let offRename: (() => void) | undefined;
+    let offDelete: (() => void) | undefined;
+    let offVisibility: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const r = await listen("chat-renamed", () => {
+        if (!cancelled) void refreshFileConversations();
+      });
+      const d = await listen("chat-deleted", () => {
+        if (!cancelled) void refreshFileConversations();
+      });
+      const v = await listen("chat-visibility-changed", () => {
+        if (!cancelled) void refreshFileConversations();
+      });
+      offRename = r;
+      offDelete = d;
+      offVisibility = v;
+    })();
+    return () => {
+      cancelled = true;
+      offRename?.();
+      offDelete?.();
+      offVisibility?.();
+    };
+  }, [refreshFileConversations]);
 
   // ---- saveConversation ----
   const saveConversation = async (msgs: Message[]) => {
@@ -407,6 +442,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   const deleteConversation = async (convId: string) => {
     await deleteConversationFile(convId);
     await refreshFileConversations();
+    try {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit("chat-deleted", { id: convId });
+    } catch {
+      // ignore
+    }
 
     // Clear activeConversationId if it was the deleted one
     if (conversationId === convId) {
@@ -746,69 +787,41 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setConversationId(newSid);
   };
 
-  const closedCount = useMemo(
+  const archivedCount = useMemo(
     () => fileConversations.filter((c) => c.hidden === true).length,
     [fileConversations]
   );
 
   // ---- filteredConversations ----
   const filteredConversations = useMemo(() => {
-    const base = showClosed
-      ? fileConversations
-      : fileConversations.filter((c) => c.hidden !== true);
-    if (!historySearch.trim()) return base;
+    const base =
+      historyView === "archived"
+        ? fileConversations.filter((c) => c.hidden === true)
+        : fileConversations.filter((c) => c.hidden !== true);
+    const sortedBase = [...base].sort((a, b) => {
+      const ap = a.pinned === true ? 1 : 0;
+      const bp = b.pinned === true ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    });
+    if (!historySearch.trim()) return sortedBase;
 
     const search = historySearch.toLowerCase();
-    return base.filter((c: ChatConversation) =>
+    return sortedBase.filter((c: ChatConversation) =>
       c.title.toLowerCase().includes(search) ||
       c.messages.some(m => m.content.toLowerCase().includes(search))
     );
-  }, [fileConversations, historySearch, showClosed]);
-
-  // ---- groupedConversations ----
-  const groupedConversations = useMemo(() => {
-    const groups: { label: string; conversations: ChatConversation[] }[] = [];
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-    const todayConvs: ChatConversation[] = [];
-    const yesterdayConvs: ChatConversation[] = [];
-    const lastWeekConvs: ChatConversation[] = [];
-    const olderConvs: ChatConversation[] = [];
-
-    for (const conv of filteredConversations) {
-      const convDate = new Date(conv.updatedAt);
-      if (convDate >= today) {
-        todayConvs.push(conv);
-      } else if (convDate >= yesterday) {
-        yesterdayConvs.push(conv);
-      } else if (convDate >= lastWeek) {
-        lastWeekConvs.push(conv);
-      } else {
-        olderConvs.push(conv);
-      }
-    }
-
-    if (todayConvs.length > 0) groups.push({ label: "Today", conversations: todayConvs });
-    if (yesterdayConvs.length > 0) groups.push({ label: "Yesterday", conversations: yesterdayConvs });
-    if (lastWeekConvs.length > 0) groups.push({ label: "Last 7 Days", conversations: lastWeekConvs });
-    if (olderConvs.length > 0) groups.push({ label: "Older", conversations: olderConvs });
-
-    return groups;
-  }, [filteredConversations]);
+  }, [fileConversations, historySearch, historyView]);
 
   return {
     showHistory,
     setShowHistory,
     historySearch,
     setHistorySearch,
-    showClosed,
-    setShowClosed,
-    closedCount,
+    historyView,
+    setHistoryView,
+    archivedCount,
     filteredConversations,
-    groupedConversations,
     saveConversation,
     loadConversation,
     deleteConversation,

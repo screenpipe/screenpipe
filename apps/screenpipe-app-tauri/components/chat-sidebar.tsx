@@ -26,13 +26,22 @@
  *   │                        │         │ writes status/preview to store │
  *   └────────────────────────┘         └────────────────────────────────┘
  *
- * Pin / close persist to the conversation's JSON file on disk so the state
- * survives app restart. Close is non-destructive (sets `hidden: true`);
- * a separate "delete forever" action would unlink the file.
+ * Pin / archive persist to the conversation's JSON file on disk so the state
+ * survives app restart. Delete removes the file.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity, MessageSquare } from "lucide-react";
+import {
+  Pin,
+  Archive,
+  Undo2,
+  Trash2,
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  X,
+} from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
 import { localFetch } from "@/lib/api";
@@ -44,21 +53,51 @@ import {
   useOrderedSessions,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { updateConversationFlags } from "@/lib/chat-storage";
+import { deleteConversationFile, updateConversationFlags } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface ChatSidebarProps {
   className?: string;
 }
 
+function readCollapsedPref(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function useCollapsedPref(key: string) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key));
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem(key, String(v));
+    } catch {
+      // ignore
+    }
+  };
+  return [collapsed, setCollapsed] as const;
+}
+
 function useVisibleChatSections(): {
   pinned: SessionRecord[];
   recents: SessionRecord[];
-  closed: SessionRecord[];
+  archived: SessionRecord[];
 } {
   const sessions = useOrderedSessions();
   const runningPipes = useRunningPipes();
@@ -74,18 +113,18 @@ function useVisibleChatSections(): {
   return useMemo(() => {
     const pinned: SessionRecord[] = [];
     const recents: SessionRecord[] = [];
-    const closed: SessionRecord[] = [];
+    const archived: SessionRecord[] = [];
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
       if (s.draft) continue;
       if (s.hidden) {
-        closed.push(s);
+        archived.push(s);
         continue;
       }
       (s.pinned ? pinned : recents).push(s);
     }
-    return { pinned, recents, closed };
+    return { pinned, recents, archived };
   }, [sessions, liveScheduledSids]);
 }
 
@@ -138,6 +177,16 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   const currentId = useChatStore((s) => s.currentId);
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
+  const [isPinnedScrolling, setIsPinnedScrolling] = useState(false);
+  const [isRecentsScrolling, setIsRecentsScrolling] = useState(false);
+  const [isArchivedScrolling, setIsArchivedScrolling] = useState(false);
+  const [isScheduledScrolling, setIsScheduledScrolling] = useState(false);
+  const scrollStopTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout> | null>>({
+    pinned: null,
+    recents: null,
+    archived: null,
+    scheduled: null,
+  });
 
   // Sync currentId from standalone-chat. Whenever the chat panel switches
   // its piSessionIdRef (new chat, prefill auto-send, history click in the
@@ -185,7 +234,31 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     void refetchUpcoming();
   };
 
-  const { pinned, recents, closed } = useVisibleChatSections();
+  const { pinned, recents, archived } = useVisibleChatSections();
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+
+  const hasScheduledSlice = upcomingPipes.length > 0 || runningPipes.length > 0;
+  const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref("screenpipe:pinned-collapsed");
+  const [recentsCollapsed, setRecentsCollapsed] = useCollapsedPref("screenpipe:recents-collapsed");
+  const [archivedCollapsed, setArchivedCollapsed] = useCollapsedPref("screenpipe:closed-collapsed");
+  const [scheduledCollapsed, setScheduledCollapsed] = useCollapsedPref("screenpipe:scheduled-collapsed");
+  const [upcomingCollapsed, setUpcomingCollapsed] = useCollapsedPref("screenpipe:upcoming-collapsed");
+
+  const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
+
+  const setScrolling = (key: "pinned" | "recents" | "archived" | "scheduled", v: boolean) => {
+    if (key === "pinned") setIsPinnedScrolling(v);
+    if (key === "recents") setIsRecentsScrolling(v);
+    if (key === "archived") setIsArchivedScrolling(v);
+    if (key === "scheduled") setIsScheduledScrolling(v);
+  };
+
+  const handleSliceScroll = (key: "pinned" | "recents" | "archived" | "scheduled") => {
+    setScrolling(key, true);
+    const t = scrollStopTimersRef.current[key];
+    if (t) clearTimeout(t);
+    scrollStopTimersRef.current[key] = setTimeout(() => setScrolling(key, false), 120);
+  };
 
   const handleSelect = (id: string) => {
     // No early return for id === currentId. Two reasons:
@@ -200,15 +273,13 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     emit("chat-load-conversation", { conversationId: id });
   };
 
-  const handleClose = async (e: React.MouseEvent, id: string) => {
+  const handleArchive = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     // Stop any active session first to avoid immediate row resurrection
     // from trailing stream events.
     commands.piAbort(id).catch(() => {});
     actions.patch(id, { hidden: true, unread: false });
-    // If the user closed the chat they were viewing, tell standalone-chat
-    // to clear the panel. Otherwise the panel would keep showing a
-    // conversation that no longer exists in the sidebar.
+    // Move the panel off a chat that just left the visible list.
     if (id === currentId) {
       const fresh = crypto.randomUUID();
       actions.upsert({
@@ -229,8 +300,51 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     // Best-effort persistence for restart durability.
     try {
       await updateConversationFlags(id, { hidden: true });
+      await emit("chat-visibility-changed", { id, hidden: true });
     } catch {
       // ignore
+    }
+  };
+
+  const handleUnarchive = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    actions.patch(id, { hidden: false, unread: false });
+    try {
+      await updateConversationFlags(id, { hidden: false });
+      await emit("chat-visibility-changed", { id, hidden: false });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteConfirmed = async (id: string) => {
+    actions.drop(id);
+    try {
+      await deleteConversationFile(id);
+    } catch {
+      // ignore
+    }
+    try {
+      await emit("chat-deleted", { id });
+    } catch {
+      // ignore
+    }
+    if (id === currentId) {
+      const fresh = crypto.randomUUID();
+      actions.upsert({
+        id: fresh,
+        title: "new chat",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+        draft: true,
+      });
+      actions.setCurrent(fresh);
+      emit("chat-load-conversation", { conversationId: fresh });
     }
   };
 
@@ -247,16 +361,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
-  // Layout contract:
-  //   - Scheduled (pipe runs): only renders when something's running;
-  //     own collapsible scroll viewport capped at ~25% so it never
-  //     squeezes recents off-screen.
-  //   - Pinned (chats): non-scrolling. Few rows in practice.
-  //   - Recents: fixed collapsible header; rows fill the rest and
-  //     scroll. flex-1 + min-h-0 is what makes the inner overflow-y-auto
-  //     actually work without leaking past the sidebar bottom.
-  // Collapse state for both Scheduled and Recents persists in
-  // localStorage — "I closed it, leave it closed" across reloads.
   return (
     // px-2 cancels the parent wrapper's -mx-2 (used to make the
     // border-t span the full sidebar width). Without this the chat
@@ -266,70 +370,187 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       className={cn("flex flex-col min-h-0 text-sm px-2", className)}
       data-testid="chat-sidebar"
     >
-      {upcomingPipes.length > 0 && (
-        <CollapsibleUpcoming
-          pipes={upcomingPipes}
-          onCancel={handleCancelUpcoming}
-        />
-      )}
+      <div className="flex-1 min-h-0 flex flex-col gap-2">
+        {hasScheduledSlice && (
+          <div
+            className={cn(
+              "min-h-0 flex flex-col shrink-0",
+              (scheduledCollapsed && upcomingCollapsed) ? "" : "max-h-[35%]"
+            )}
+          >
+            {upcomingPipes.length > 0 && (
+              <Section
+                title="upcoming"
+                count={upcomingPipes.length}
+                collapsed={upcomingCollapsed}
+                onCollapsedChange={setUpcomingCollapsed}
+                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                onBodyScroll={() => handleSliceScroll("scheduled")}
+              >
+                {upcomingPipes.map((p) => (
+                  <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
+                ))}
+              </Section>
+            )}
+            {runningPipes.length > 0 && (
+              <Section
+                title="scheduled"
+                count={runningPipes.length}
+                collapsed={scheduledCollapsed}
+                onCollapsedChange={setScheduledCollapsed}
+                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                onBodyScroll={() => handleSliceScroll("scheduled")}
+              >
+                {runningPipes.map((p) => (
+                  <ScheduledRow key={p.pipeName} pipe={p} />
+                ))}
+              </Section>
+            )}
+          </div>
+        )}
 
-      {runningPipes.length > 0 && (
-        <CollapsibleScheduled pipes={runningPipes} />
-      )}
+        <div className="min-h-0 flex flex-col flex-1">
+          {pinned.length > 0 && (
+            <div
+              className={cn(
+                "min-h-0 flex flex-col shrink-0",
+                pinnedCollapsed ? "" : (openAllCollapsed ? "flex-1" : "max-h-[30%]")
+              )}
+            >
+              <Section
+                title="pinned"
+                count={pinned.length}
+                collapsed={pinnedCollapsed}
+                onCollapsedChange={setPinnedCollapsed}
+                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                onBodyScroll={() => handleSliceScroll("pinned")}
+              >
+                {pinned.map((s) => (
+                  <SidebarChatRow
+                    key={s.id}
+                    session={s}
+                    isCurrent={s.id === currentId}
+                    disableHover={isPinnedScrolling}
+                    queuedCount={queueDepths.get(s.id) ?? 0}
+                    onSelect={handleSelect}
+                    onArchive={handleArchive}
+                    onUnarchive={handleUnarchive}
+                    onDeleteRequest={setDeletingSessionId}
+                    onTogglePin={handleTogglePin}
+                  />
+                ))}
+              </Section>
+            </div>
+          )}
 
-      {pinned.length > 0 && (
-        <ChatSection title="pinned">
-          {pinned.map((s) => (
-            <SidebarChatRow
-              key={s.id}
-              session={s}
-              isCurrent={s.id === currentId}
-              queuedCount={queueDepths.get(s.id) ?? 0}
-              onSelect={handleSelect}
-              onClose={handleClose}
-              onTogglePin={handleTogglePin}
-            />
-          ))}
-        </ChatSection>
-      )}
+          <div className="min-h-0 flex flex-col flex-1">
+            <div className="min-h-0 flex flex-col flex-1">
+              <div
+                className={cn(
+                  "min-h-0 flex flex-col",
+                  archived.length > 0 && !archivedCollapsed ? "max-h-[70%]" : "",
+                  recentsCollapsed ? "shrink-0" : ""
+                )}
+              >
+                <Section
+                  title="recents"
+                  collapsed={recentsCollapsed}
+                  onCollapsedChange={setRecentsCollapsed}
+                  bodyClassName="overflow-y-auto overflow-x-hidden scrollbar-hide"
+                  onBodyScroll={() => handleSliceScroll("recents")}
+                >
+                  {recents.length === 0 ? (
+                    <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
+                      {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
+                    </div>
+                  ) : (
+                    recents.map((s) => (
+                      <SidebarChatRow
+                        key={s.id}
+                        session={s}
+                        isCurrent={s.id === currentId}
+                        disableHover={isRecentsScrolling}
+                        queuedCount={queueDepths.get(s.id) ?? 0}
+                        onSelect={handleSelect}
+                        onArchive={handleArchive}
+                        onUnarchive={handleUnarchive}
+                        onDeleteRequest={setDeletingSessionId}
+                        onTogglePin={handleTogglePin}
+                      />
+                    ))
+                  )}
+                </Section>
+              </div>
 
-      <CollapsibleRecents
-        empty={recents.length === 0}
-        emptyText={
-          pinned.length === 0
-            ? "no chats yet — click + to start"
-            : "no recent chats"
-        }
+              {archived.length > 0 && (
+                <div
+                  className={cn(
+                    "min-h-0 flex flex-col",
+                    archivedCollapsed ? "shrink-0" : "",
+                    !archivedCollapsed
+                      ? (recentsCollapsed ? "flex-1" : "max-h-[30%]")
+                      : ""
+                  )}
+                >
+                  <Section
+                    title="archived"
+                    count={archived.length}
+                    collapsed={archivedCollapsed}
+                    onCollapsedChange={setArchivedCollapsed}
+                    bodyClassName="overflow-y-auto overflow-x-hidden scrollbar-hide"
+                    onBodyScroll={() => handleSliceScroll("archived")}
+                  >
+                    {archived.map((s) => (
+                      <SidebarChatRow
+                        key={s.id}
+                        session={s}
+                        isCurrent={s.id === currentId}
+                        disableHover={isArchivedScrolling}
+                        queuedCount={0}
+                        onSelect={handleSelect}
+                        onArchive={handleArchive}
+                        onUnarchive={handleUnarchive}
+                        onDeleteRequest={setDeletingSessionId}
+                        onTogglePin={handleTogglePin}
+                      />
+                    ))}
+                  </Section>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Dialog
+        open={!!deletingSessionId}
+        onOpenChange={(open) => {
+          if (!open) setDeletingSessionId(null);
+        }}
       >
-        {recents.map((s) => (
-          <SidebarChatRow
-            key={s.id}
-            session={s}
-            isCurrent={s.id === currentId}
-            queuedCount={queueDepths.get(s.id) ?? 0}
-            onSelect={handleSelect}
-            onClose={handleClose}
-            onTogglePin={handleTogglePin}
-          />
-        ))}
-      </CollapsibleRecents>
-
-      {closed.length > 0 && (
-        <CollapsibleClosed count={closed.length}>
-          {closed.map((s) => (
-            <SidebarChatRow
-              key={s.id}
-              session={s}
-              isCurrent={s.id === currentId}
-              queuedCount={0}
-              onSelect={handleSelect}
-              onClose={handleClose}
-              onTogglePin={handleTogglePin}
-              showActions={false}
-            />
-          ))}
-        </CollapsibleClosed>
-      )}
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete chat</DialogTitle>
+            <DialogDescription>Delete this chat? This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingSessionId(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                const id = deletingSessionId;
+                setDeletingSessionId(null);
+                if (!id) return;
+                await handleDeleteConfirmed(id);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -342,22 +563,28 @@ export function CollapsedChatSidebarButton({
   isTranslucent: boolean;
 }) {
   const currentId = useChatStore((s) => s.currentId);
-  const { pinned, recents } = useVisibleChatSections();
+  const { pinned, recents, archived } = useVisibleChatSections();
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [suppressTooltip, setSuppressTooltip] = useState(false);
-  const [activeTab, setActiveTab] = useState<"recents" | "pinned">("recents");
-  const visiblePinned = pinned;
-  const visibleRecents = recents;
-  const emptyText = visiblePinned.length === 0
+  const [tab, setTab] = useState<"pinned" | "recents" | "archived">(() => {
+    if (pinned.length > 0) return "pinned";
+    if (recents.length > 0) return "recents";
+    return "archived";
+  });
+  const emptyText = pinned.length === 0
     ? "no chats yet — click + to start"
     : "no recent chats";
 
   useEffect(() => {
-    if (visiblePinned.length === 0 && activeTab === "pinned") {
-      setActiveTab("recents");
+    if (tab === "pinned" && pinned.length === 0) {
+      setTab(recents.length > 0 ? "recents" : "archived");
+    } else if (tab === "recents" && recents.length === 0) {
+      setTab(pinned.length > 0 ? "pinned" : "archived");
+    } else if (tab === "archived" && archived.length === 0) {
+      setTab(pinned.length > 0 ? "pinned" : "recents");
     }
-  }, [visiblePinned.length, activeTab]);
+  }, [archived.length, pinned.length, recents.length, tab]);
 
   const handleSelect = (id: string) => {
     setOpen(false);
@@ -418,81 +645,53 @@ export function CollapsedChatSidebarButton({
         sideOffset={8}
         className="w-64 p-0 rounded-none shadow-none"
       >
-        {visiblePinned.length === 0 && visibleRecents.length === 0 ? (
+        {pinned.length === 0 && recents.length === 0 && archived.length === 0 ? (
           <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
             {emptyText}
           </div>
         ) : (
           <Tabs
-            value={activeTab}
-            onValueChange={(value) => setActiveTab(value as "recents" | "pinned")}
+            value={tab}
+            onValueChange={(v) => setTab(v as typeof tab)}
             className="w-full"
           >
-            <TabsList
-              className={cn(
-                "grid w-full h-8 rounded-none bg-transparent border-b border-border p-0",
-                visiblePinned.length > 0 ? "grid-cols-2" : "grid-cols-1"
-              )}
-            >
+            <TabsList className="grid w-full grid-cols-3 h-8 rounded-none bg-transparent border-b border-border p-0">
+              <TabsTrigger
+                value="pinned"
+                disabled={pinned.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+              >
+                Pinned
+              </TabsTrigger>
               <TabsTrigger
                 value="recents"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
+                disabled={recents.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
               >
-                recents
+                Recents
               </TabsTrigger>
-              {visiblePinned.length > 0 && (
-                <TabsTrigger
-                  value="pinned"
-                  className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
-                >
-                  pinned
-                </TabsTrigger>
-              )}
+              <TabsTrigger
+                value="archived"
+                disabled={archived.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+              >
+                Archived
+              </TabsTrigger>
             </TabsList>
-            <TabsContent value="recents" className="mt-0">
-              {visibleRecents.length === 0 ? (
-                <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {visiblePinned.length === 0 ? emptyText : "no recent chats"}
-                </div>
-              ) : (
-                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
-                  <div className="flex flex-col py-1">
-                    {visibleRecents.map((session) => (
-                      <SidebarChatRow
-                        key={session.id}
-                        session={session}
-                        isCurrent={session.id === currentId}
-                        queuedCount={0}
-                        onSelect={handleSelect}
-                        onClose={() => {}}
-                        onTogglePin={() => {}}
-                        showActions={false}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+
+            <TabsContent value="pinned" className="mt-0">
+              <CompactDrawerList
+                items={pinned}
+                currentId={currentId}
+                onSelect={handleSelect}
+              />
             </TabsContent>
-            {visiblePinned.length > 0 && (
-              <TabsContent value="pinned" className="mt-0">
-                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
-                  <div className="flex flex-col py-1">
-                    {visiblePinned.map((session) => (
-                      <SidebarChatRow
-                        key={session.id}
-                        session={session}
-                        isCurrent={session.id === currentId}
-                        queuedCount={0}
-                        onSelect={handleSelect}
-                        onClose={() => {}}
-                        onTogglePin={() => {}}
-                        showActions={false}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </TabsContent>
-            )}
+            <TabsContent value="recents" className="mt-0">
+              <CompactDrawerList items={recents} currentId={currentId} onSelect={handleSelect} />
+            </TabsContent>
+            <TabsContent value="archived" className="mt-0">
+              <CompactDrawerList items={archived} currentId={currentId} onSelect={handleSelect} />
+            </TabsContent>
           </Tabs>
         )}
       </PopoverContent>
@@ -500,198 +699,33 @@ export function CollapsedChatSidebarButton({
   );
 }
 
-/** Recents container with a fixed (non-scrolling) header and a
- *  scrollable body underneath. Click the header to collapse. */
-function CollapsibleRecents({
-  empty,
-  emptyText,
-  children,
+function CompactDrawerList({
+  items,
+  currentId,
+  onSelect,
 }: {
-  empty: boolean;
-  emptyText: string;
-  children: React.ReactNode;
+  items: SessionRecord[];
+  currentId: string | null;
+  onSelect: (id: string) => void;
 }) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:recents-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:recents-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
   return (
-    <div className="flex flex-col flex-1 min-h-0 mb-2">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-recents"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
-          recents
-        </span>
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-recents"
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          {empty ? (
-            <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-              {emptyText}
-            </div>
-          ) : (
-            <div className="flex flex-col">{children}</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CollapsibleClosed({
-  count,
-  children,
-}: {
-  count: number;
-  children: React.ReactNode;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:closed-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:closed-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-closed"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          closed
-        </span>
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {count}
-        </span>
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-closed"
-          className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">{children}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Scheduled (live pipe runs) container — own collapsible scroll
- *  viewport capped at ~25% of available height so even with many
- *  pipes running it never squeezes recents off the screen. Header
- *  shows the count + a tiny live dot so it's obvious at a glance
- *  that something is running in the background. */
-function CollapsibleScheduled({
-  pipes,
-}: {
-  pipes: Array<{
-    pipeName: string;
-    title?: string;
-    executionId?: number;
-    startedAt?: string;
-  }>;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:scheduled-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:scheduled-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-scheduled"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          scheduled
-        </span>
-        {/* Live dot + count — subtle "this section is alive". */}
-        <span
-          className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-          aria-hidden
-        >
-          <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-          <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
-        </span>
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {pipes.length}
-        </span>
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-scheduled"
-          // Cap the scheduled scroll so a long list doesn't take the
-          // whole sidebar. ~max-h-40 ≈ 6 rows; users can scroll within
-          // it. Recents below still gets the rest of the column via
-          // its own flex-1 + min-h-0.
-          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">
-            {pipes.map((p) => (
-              <ScheduledRow key={p.pipeName} pipe={p} />
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-minimal">
+      <div className="flex flex-col py-1">
+        {items.map((session) => (
+          <SidebarChatRow
+            key={session.id}
+            session={session}
+            isCurrent={session.id === currentId}
+            queuedCount={0}
+            onSelect={onSelect}
+            onArchive={() => {}}
+            onUnarchive={() => {}}
+            onDeleteRequest={() => {}}
+            onTogglePin={() => {}}
+            showActions={false}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -795,69 +829,6 @@ function formatCountdown(runAt: string): string | null {
   return remH > 0 ? `in ${d}d ${remH}h` : `in ${d}d`;
 }
 
-/** Sidebar section for one-off pipes (`schedule: at <iso>`) that haven't
- *  fired yet. Mirrors `CollapsibleScheduled` visually but shows a
- *  countdown ("in 2d 4h") instead of an elapsed badge, and uses a steady
- *  (non-pulsing) clock-style dot to differentiate from running pipes. */
-function CollapsibleUpcoming({
-  pipes,
-  onCancel,
-}: {
-  pipes: UpcomingPipe[];
-  onCancel: (pipeName: string) => void | Promise<void>;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:upcoming-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:upcoming-collapsed", String(v));
-    } catch {
-      // ignore
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-upcoming"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          upcoming
-        </span>
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {pipes.length}
-        </span>
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-upcoming"
-          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">
-            {pipes.map((p) => (
-              <UpcomingRow key={p.pipeName} pipe={p} onCancel={onCancel} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function UpcomingRow({
   pipe,
   onCancel,
@@ -920,24 +891,50 @@ function UpcomingRow({
   );
 }
 
-export function ChatSection({
+function Section({
   title,
-  action,
+  count,
+  collapsed,
+  onCollapsedChange,
+  bodyClassName,
+  onBodyScroll,
   children,
 }: {
   title: string;
-  action?: React.ReactNode;
+  count?: number;
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
+  bodyClassName: string;
+  onBodyScroll?: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <div className="mb-2">
-      <div className="px-2.5 py-1.5 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+    <div className="flex flex-col min-h-0">
+      <button
+        type="button"
+        onClick={() => onCollapsedChange(!collapsed)}
+        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
+        aria-expanded={!collapsed}
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
           {title}
         </span>
-        {action}
-      </div>
-      <div className="flex flex-col">{children}</div>
+        {count !== undefined && (
+          <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+            {count}
+          </span>
+        )}
+      </button>
+      {!collapsed && (
+        <div className={bodyClassName} onScroll={onBodyScroll}>
+          <div className="flex flex-col">{children}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -945,44 +942,27 @@ export function ChatSection({
 interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
-  /** Number of follow-up prompts queued for this session at the rust level.
-   *  > 0 → render an unobtrusive `↑N` badge so the user can spot pending
-   *  work in chats they've navigated away from. */
+  disableHover?: boolean;
+  leadingIndicator?: React.ReactNode;
   queuedCount: number;
   onSelect: (id: string) => void;
-  onClose: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onArchive: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onUnarchive: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
   onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
   showActions?: boolean;
 }
 
-/**
- * One chat row.
- *
- * Outer element is a div role=button (NOT a real <button>) so the inline
- * pin/close actions can be real <button>s without nesting — nested
- * <button>s are invalid HTML and broke click handling on the inner ones.
- * (That's why "delete chat doesn't work" — the X click was eaten by the
- * outer button.)
- *
- * Left-side status indicator — minimalist, monochrome (no brand colors;
- * screenpipe is black/white):
- *   ●  filled foreground dot + slow pulse  → streaming/thinking/tool
- *   ●  filled foreground dot               → unread (new content)
- *   ⚠  alert icon, red (single exception)  → error
- *   ○  hollow ring                         → idle (default)
- *
- * Animation is a custom ~1.6s pulse — slow + soft so it sits in the
- * peripheral vision without pulling focus.
- *
- * No preview line below the title. The title alone is what the user
- * picks chats by; partial Pi tokens leaking into the row read as noise.
- */
 export function SidebarChatRow({
   session,
   isCurrent,
+  disableHover = false,
+  leadingIndicator,
   queuedCount,
   onSelect,
-  onClose,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
   onTogglePin,
   showActions = true,
 }: ChatRowProps) {
@@ -992,6 +972,7 @@ export function SidebarChatRow({
     session.status === "tool";
   const isError = session.status === "error";
   const isUnread = session.unread && !isCurrent;
+  const canShowActions = showActions && !disableHover;
   return (
     <div
       role="button"
@@ -1008,20 +989,26 @@ export function SidebarChatRow({
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
-          : "text-muted-foreground hover:bg-muted/40"
+          : disableHover
+            ? "text-muted-foreground"
+            : "text-muted-foreground hover:bg-muted/40"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
     >
       <div className="flex items-center gap-2 min-w-0">
-        {/* Left-side status indicator. One slot, four states, no jitter
-            between them (same outer dimensions). */}
-        <StatusDot
-          isLive={isLive}
-          isError={isError}
-          isUnread={isUnread}
-          status={session.status}
-        />
+        {leadingIndicator ? (
+          <span className="h-3 w-3 shrink-0 flex items-center justify-center" aria-label="pinned">
+            {leadingIndicator}
+          </span>
+        ) : (
+          <StatusDot
+            isLive={isLive}
+            isError={isError}
+            isUnread={isUnread}
+            status={session.status}
+          />
+        )}
         <span
           className={cn(
             "truncate flex-1 text-xs",
@@ -1034,10 +1021,7 @@ export function SidebarChatRow({
         >
           {session.title || "untitled"}
         </span>
-        {/* Queued-prompts badge — only visible when this session has rust-side
-            queued items waiting. Hidden on hover so it doesn't fight the
-            pin/close buttons for the same slot. */}
-        {queuedCount > 0 && showActions && (
+        {queuedCount > 0 && canShowActions && (
           <span
             className="group-hover:hidden inline-flex items-center gap-0.5 px-1 text-[10px] font-mono text-muted-foreground/80 shrink-0"
             title={`${queuedCount} queued`}
@@ -1045,46 +1029,102 @@ export function SidebarChatRow({
             ↑{queuedCount}
           </span>
         )}
-        {/* hover-only actions — REAL <button>s now (was <span role=button>
-            inside the outer <button>, which is invalid nested-button HTML
-            and made the X click silently no-op on close). */}
         <span
           className={cn(
             "shrink-0",
-            showActions ? "hidden group-hover:inline-flex items-center gap-0.5" : "hidden"
+            canShowActions ? "hidden group-hover:inline-flex items-center gap-0.5" : "hidden"
           )}
         >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void onTogglePin(e, session.id);
-            }}
-            className="p-0.5 rounded hover:bg-muted"
-            title={session.pinned ? "unpin" : "pin"}
-            aria-label={session.pinned ? "unpin" : "pin"}
-          >
-            <Pin
-              className={cn(
-                "h-3 w-3",
-                session.pinned
-                  ? "text-foreground fill-current"
-                  : "text-muted-foreground"
-              )}
-            />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void onClose(e, session.id);
-            }}
-            className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-            title="close"
-            aria-label="close"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          {!session.hidden ? (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onTogglePin(e, session.id);
+                    }}
+                    className="p-0.5 rounded hover:bg-muted"
+                    title={session.pinned ? "unpin" : "pin"}
+                    aria-label={session.pinned ? "unpin" : "pin"}
+                  >
+                    <Pin
+                      className={cn(
+                        "h-3 w-3",
+                        session.pinned
+                          ? "text-foreground fill-current"
+                          : "text-muted-foreground"
+                      )}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  {session.pinned ? "Unpin" : "Pin"}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onArchive(e, session.id);
+                    }}
+                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                    title="archive chat"
+                    aria-label="archive chat"
+                  >
+                    <Archive className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Archive
+                </TooltipContent>
+              </Tooltip>
+            </>
+          ) : (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onUnarchive(e, session.id);
+                    }}
+                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                    title="unarchive"
+                    aria-label="unarchive"
+                  >
+                    <Undo2 className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Unarchive
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteRequest(session.id);
+                    }}
+                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                    title="delete forever"
+                    aria-label="delete forever"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Delete forever
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
         </span>
       </div>
     </div>
