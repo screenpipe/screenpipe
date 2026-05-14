@@ -11,6 +11,7 @@ use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -30,6 +31,60 @@ static AX_QUERY_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 const KEY_C: u16 = 8;
 const KEY_X: u16 = 7;
 const KEY_V: u16 = 9;
+
+#[repr(C)]
+struct UCKeyboardLayout {
+    _private: [u8; 0],
+}
+
+type OptionBits = u32;
+type UniCharCount = std::os::raw::c_ulong;
+type UniChar = u16;
+type OSStatus = i32;
+type TISInputSourceRef = *const c_void;
+
+const K_UC_KEY_ACTION_DISPLAY: u16 = 3;
+const K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK: OptionBits = 1;
+
+const CARBON_COMMAND_KEY: u32 = 1 << 8;
+const CARBON_SHIFT_KEY: u32 = 1 << 9;
+const CARBON_ALPHA_LOCK: u32 = 1 << 10;
+const CARBON_OPTION_KEY: u32 = 1 << 11;
+const CARBON_CONTROL_KEY: u32 = 1 << 12;
+
+#[link(name = "Carbon", kind = "framework")]
+extern "C" {
+    #[allow(non_upper_case_globals)]
+    static kTISPropertyUnicodeKeyLayoutData: *const c_void;
+
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> TISInputSourceRef;
+
+    fn TISGetInputSourceProperty(
+        input_source: TISInputSourceRef,
+        property_key: *const c_void,
+    ) -> *const c_void;
+
+    fn LMGetKbdType() -> u8;
+
+    fn UCKeyTranslate(
+        key_layout_ptr: *const UCKeyboardLayout,
+        virtual_key_code: u16,
+        key_action: u16,
+        modifier_key_state: u32,
+        keyboard_type: u32,
+        key_translate_options: OptionBits,
+        dead_key_state: *mut u32,
+        max_string_length: UniCharCount,
+        actual_string_length: *mut UniCharCount,
+        unicode_string: *mut UniChar,
+    ) -> OSStatus;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const c_void);
+    fn CFDataGetBytePtr(the_data: *const c_void) -> *const u8;
+}
 
 /// Permission status for UI capture
 #[derive(Debug, Clone)]
@@ -1254,7 +1309,85 @@ fn truncate(s: &str, max: usize) -> String {
 // ============================================================================
 
 fn keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
-    let shift = mods.0 & Modifiers::SHIFT != 0 || mods.0 & Modifiers::CAPS != 0;
+    layout_keycode_to_char(keycode, mods).or_else(|| us_keycode_to_char(keycode, mods))
+}
+
+fn layout_keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
+    let input_source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+    if input_source.is_null() {
+        return None;
+    }
+
+    let layout_data =
+        unsafe { TISGetInputSourceProperty(input_source, kTISPropertyUnicodeKeyLayoutData) };
+    if layout_data.is_null() {
+        unsafe { CFRelease(input_source) };
+        return None;
+    }
+
+    let layout = unsafe { CFDataGetBytePtr(layout_data) } as *const UCKeyboardLayout;
+    if layout.is_null() {
+        unsafe { CFRelease(input_source) };
+        return None;
+    }
+
+    let mut chars = [0u16; 8];
+    let mut actual_len: UniCharCount = 0;
+    let mut dead_keys = 0u32;
+    let keyboard_type = unsafe { LMGetKbdType() } as u32;
+    let status = unsafe {
+        UCKeyTranslate(
+            layout,
+            keycode,
+            K_UC_KEY_ACTION_DISPLAY,
+            carbon_modifier_state(mods),
+            keyboard_type,
+            K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK,
+            &mut dead_keys,
+            chars.len() as UniCharCount,
+            &mut actual_len,
+            chars.as_mut_ptr(),
+        )
+    };
+    unsafe { CFRelease(input_source) };
+
+    if status != 0 || actual_len == 0 {
+        return None;
+    }
+
+    let text = String::from_utf16_lossy(&chars[..actual_len as usize]);
+    let c = text.chars().next()?;
+    if c == '\0' || (c.is_control() && !matches!(c, '\n' | '\t' | '\x08')) {
+        None
+    } else {
+        Some(c)
+    }
+}
+
+fn carbon_modifier_state(mods: Modifiers) -> u32 {
+    let mut carbon_modifiers = 0u32;
+    if mods.0 & Modifiers::CMD != 0 {
+        carbon_modifiers |= CARBON_COMMAND_KEY;
+    }
+    if mods.0 & Modifiers::SHIFT != 0 {
+        carbon_modifiers |= CARBON_SHIFT_KEY;
+    }
+    if mods.0 & Modifiers::CAPS != 0 {
+        carbon_modifiers |= CARBON_ALPHA_LOCK;
+    }
+    if mods.0 & Modifiers::OPT != 0 {
+        carbon_modifiers |= CARBON_OPTION_KEY;
+    }
+    if mods.0 & Modifiers::CTRL != 0 {
+        carbon_modifiers |= CARBON_CONTROL_KEY;
+    }
+    (carbon_modifiers >> 8) & 0xff
+}
+
+fn us_keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
+    let shift = mods.0 & Modifiers::SHIFT != 0;
+    let caps = mods.0 & Modifiers::CAPS != 0;
+    let letter_shift = shift ^ caps;
 
     let c = match keycode {
         // Letters
@@ -1442,8 +1575,8 @@ fn keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
         _ => return None,
     };
 
-    // Handle shift for letters
-    if shift && c.is_ascii_lowercase() {
+    // Handle shift/caps for letters. Caps does not shift punctuation.
+    if letter_shift && c.is_ascii_lowercase() {
         Some(c.to_ascii_uppercase())
     } else {
         Some(c)
@@ -1558,10 +1691,30 @@ mod tests {
 
     #[test]
     fn test_keycode_mapping() {
-        assert_eq!(keycode_to_char(0, Modifiers::new()), Some('a'));
-        assert_eq!(keycode_to_char(0, Modifiers(Modifiers::SHIFT)), Some('A'));
-        assert_eq!(keycode_to_char(49, Modifiers::new()), Some(' '));
-        assert_eq!(keycode_to_char(36, Modifiers::new()), Some('\n'));
+        assert_eq!(us_keycode_to_char(0, Modifiers::new()), Some('a'));
+        assert_eq!(
+            us_keycode_to_char(0, Modifiers(Modifiers::SHIFT)),
+            Some('A')
+        );
+        assert_eq!(
+            us_keycode_to_char(0, Modifiers(Modifiers::SHIFT | Modifiers::CAPS)),
+            Some('a')
+        );
+        assert_eq!(us_keycode_to_char(49, Modifiers::new()), Some(' '));
+        assert_eq!(us_keycode_to_char(36, Modifiers::new()), Some('\n'));
+    }
+
+    #[test]
+    fn test_carbon_modifier_state() {
+        assert_eq!(carbon_modifier_state(Modifiers::new()), 0);
+        assert_eq!(
+            carbon_modifier_state(Modifiers(Modifiers::SHIFT)),
+            CARBON_SHIFT_KEY >> 8
+        );
+        assert_eq!(
+            carbon_modifier_state(Modifiers(Modifiers::OPT)),
+            CARBON_OPTION_KEY >> 8
+        );
     }
 
     #[test]

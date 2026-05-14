@@ -11,6 +11,7 @@ import {
   remove,
   rename,
   exists,
+  stat,
 } from "@tauri-apps/plugin-fs";
 import type {
   ChatConversation,
@@ -19,6 +20,20 @@ import type {
 } from "@/lib/hooks/use-settings";
 
 let _chatsDir: string | null = null;
+
+export const CHAT_HISTORY_INITIAL_LIMIT = 50;
+export const CHAT_SEARCH_RESULT_LIMIT = 50;
+
+export interface ConversationListOptions {
+  /** Max visible rows to return. Undefined preserves the old "all rows" behavior. */
+  limit?: number;
+  /** Visible-row offset for future pagination / "load more" affordances. */
+  offset?: number;
+  /** Preserve hidden rows unless a caller is rendering normal user-facing lists. */
+  includeHidden?: boolean;
+  /** Restrict results to one conversation surface. Undefined means all kinds. */
+  kind?: ConversationKind | "all";
+}
 
 async function getChatsDir(): Promise<string> {
   if (_chatsDir) return _chatsDir;
@@ -128,48 +143,185 @@ export interface ConversationMeta {
   pipeContext?: PipeContext;
 }
 
-export async function listConversations(): Promise<ConversationMeta[]> {
+interface ConversationEntry {
+  name: string;
+  path: string;
+}
+
+async function listConversationEntries(dir: string): Promise<ConversationEntry[]> {
+  const entries = await readDir(dir);
+  return entries
+    .filter((entry) => entry.name?.endsWith(".json"))
+    .map((entry) => ({
+      name: entry.name!,
+      path: `${dir}/${entry.name}`,
+    }));
+}
+
+function timeToMs(value: unknown): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+async function orderEntriesByMtime(
+  entries: ConversationEntry[]
+): Promise<ConversationEntry[]> {
+  const withTimes = await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        const info = await stat(entry.path);
+        const anyInfo = info as any;
+        const sortTime = Math.max(
+          timeToMs(anyInfo.mtime),
+          timeToMs(anyInfo.modifiedAt),
+          timeToMs(anyInfo.birthtime),
+          timeToMs(anyInfo.createdAt)
+        );
+        return { ...entry, sortTime };
+      } catch {
+        return { ...entry, sortTime: 0 };
+      }
+    })
+  );
+
+  return withTimes
+    .sort((a, b) => b.sortTime - a.sortTime || b.name.localeCompare(a.name))
+    .map(({ sortTime: _sortTime, ...entry }) => entry);
+}
+
+function conversationMetaFromJson(conv: any): ConversationMeta | null {
+  if (!conv || typeof conv.id !== "string") return null;
+
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  let lastUserMessageAt = conv.lastUserMessageAt;
+  if (lastUserMessageAt == null) {
+    for (const m of messages) {
+      if (m?.role === "user" && typeof m.timestamp === "number") {
+        if (lastUserMessageAt == null || m.timestamp > lastUserMessageAt) {
+          lastUserMessageAt = m.timestamp;
+        }
+      }
+    }
+  }
+
+  return {
+    id: conv.id,
+    title: typeof conv.title === "string" ? conv.title : "untitled",
+    createdAt: typeof conv.createdAt === "number" ? conv.createdAt : 0,
+    updatedAt: typeof conv.updatedAt === "number" ? conv.updatedAt : 0,
+    messageCount: messages.length,
+    pinned: conv.pinned === true,
+    hidden: conv.hidden === true,
+    lastUserMessageAt,
+    kind: conv.kind ?? "chat",
+    pipeContext: conv.pipeContext,
+  };
+}
+
+function matchesConversationOptions(
+  meta: ConversationMeta,
+  options: ConversationListOptions
+): boolean {
+  if (options.includeHidden === false && meta.hidden) return false;
+  if (options.kind && options.kind !== "all" && meta.kind !== options.kind) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeLimit(limit: number | undefined): number | undefined {
+  if (limit == null) return undefined;
+  if (!Number.isFinite(limit)) return undefined;
+  return Math.max(0, Math.floor(limit));
+}
+
+export async function listConversations(
+  options: ConversationListOptions = {}
+): Promise<ConversationMeta[]> {
   const dir = await getChatsDir();
   if (!(await exists(dir))) return [];
 
-  const entries = await readDir(dir);
+  const limit = normalizeLimit(options.limit);
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  if (limit === 0) return [];
+  const entries = await listConversationEntries(dir);
+  const orderedEntries =
+    limit == null && offset === 0 ? entries : await orderEntriesByMtime(entries);
   const metas: ConversationMeta[] = [];
+  let skipped = 0;
 
-  for (const entry of entries) {
-    if (!entry.name?.endsWith(".json")) continue;
+  for (const entry of orderedEntries) {
     try {
-      const text = await readTextFile(`${dir}/${entry.name}`);
+      const text = await readTextFile(entry.path);
       const conv = JSON.parse(text) as ChatConversation;
-      // Derive lastUserMessageAt from messages for files that pre-date
-      // the field on disk. Picks the latest user-role message timestamp.
-      let lastUserMessageAt = conv.lastUserMessageAt;
-      if (lastUserMessageAt == null) {
-        for (const m of conv.messages) {
-          if (m.role === "user" && typeof m.timestamp === "number") {
-            if (lastUserMessageAt == null || m.timestamp > lastUserMessageAt) {
-              lastUserMessageAt = m.timestamp;
-            }
-          }
-        }
+      const meta = conversationMetaFromJson(conv);
+      if (!meta || !matchesConversationOptions(meta, options)) continue;
+      if (skipped < offset) {
+        skipped += 1;
+        continue;
       }
-      metas.push({
-        id: conv.id,
-        title: conv.title,
-        createdAt: conv.createdAt,
-        updatedAt: conv.updatedAt,
-        messageCount: conv.messages.length,
-        pinned: conv.pinned === true,
-        hidden: conv.hidden === true,
-        lastUserMessageAt,
-        kind: conv.kind ?? "chat",
-        pipeContext: conv.pipeContext,
-      });
+      metas.push(meta);
+      if (limit != null && metas.length >= limit) break;
     } catch {
       // skip corrupt files
     }
   }
 
   // Sort by updatedAt descending (most recent first)
+  metas.sort((a, b) => b.updatedAt - a.updatedAt);
+  return metas;
+}
+
+function conversationMatchesQuery(conv: ChatConversation, query: string): boolean {
+  const q = query.toLowerCase();
+  const title = typeof conv.title === "string" ? conv.title : "";
+  if (title.toLowerCase().includes(q)) return true;
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  return messages.some((m) => (m.content ?? "").toLowerCase().includes(q));
+}
+
+export async function searchConversations(
+  query: string,
+  options: ConversationListOptions = {}
+): Promise<ConversationMeta[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return listConversations(options);
+
+  const dir = await getChatsDir();
+  if (!(await exists(dir))) return [];
+
+  const limit = normalizeLimit(options.limit ?? CHAT_SEARCH_RESULT_LIMIT);
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  if (limit === 0) return [];
+  const entries = await orderEntriesByMtime(await listConversationEntries(dir));
+  const metas: ConversationMeta[] = [];
+  let skipped = 0;
+
+  for (const entry of entries) {
+    try {
+      const text = await readTextFile(entry.path);
+      if (!text.toLowerCase().includes(q)) continue;
+
+      const conv = JSON.parse(text) as ChatConversation;
+      const meta = conversationMetaFromJson(conv);
+      if (!meta || !matchesConversationOptions(meta, options)) continue;
+      if (!conversationMatchesQuery(conv, q)) continue;
+      if (skipped < offset) {
+        skipped += 1;
+        continue;
+      }
+      metas.push(meta);
+      if (limit != null && metas.length >= limit) break;
+    } catch {
+      // skip corrupt files
+    }
+  }
+
   metas.sort((a, b) => b.updatedAt - a.updatedAt);
   return metas;
 }
@@ -193,18 +345,33 @@ export async function updateConversationFlags(
   await saveConversationFile(next);
 }
 
-export async function loadAllConversations(): Promise<ChatConversation[]> {
+export async function loadAllConversations(
+  options: ConversationListOptions = {}
+): Promise<ChatConversation[]> {
   const dir = await getChatsDir();
   if (!(await exists(dir))) return [];
 
-  const entries = await readDir(dir);
+  const limit = normalizeLimit(options.limit);
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  if (limit === 0) return [];
+  const entries = await listConversationEntries(dir);
+  const orderedEntries =
+    limit == null && offset === 0 ? entries : await orderEntriesByMtime(entries);
   const convs: ChatConversation[] = [];
+  let skipped = 0;
 
-  for (const entry of entries) {
-    if (!entry.name?.endsWith(".json")) continue;
+  for (const entry of orderedEntries) {
     try {
-      const text = await readTextFile(`${dir}/${entry.name}`);
-      convs.push(JSON.parse(text) as ChatConversation);
+      const text = await readTextFile(entry.path);
+      const conv = JSON.parse(text) as ChatConversation;
+      const meta = conversationMetaFromJson(conv);
+      if (!meta || !matchesConversationOptions(meta, options)) continue;
+      if (skipped < offset) {
+        skipped += 1;
+        continue;
+      }
+      convs.push(conv);
+      if (limit != null && convs.length >= limit) break;
     } catch {
       // skip corrupt files
     }

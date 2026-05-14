@@ -66,6 +66,7 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
 
     builder
         .build()
+        .map(crate::window::finalize_webview_window)
         .map(|w| {
             info!("opened viewer window for {}", path);
             w

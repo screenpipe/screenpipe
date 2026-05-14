@@ -290,18 +290,8 @@ fn names_match(user_name: &str, attendee: &str) -> bool {
         return true;
     }
 
-    // Extract name part if email
-    let user_name_part = if let Some(before_at) = user.split('@').next() {
-        before_at.replace(['.', '_'], " ")
-    } else {
-        user.clone()
-    };
-
-    let att_name_part = if let Some(before_at) = att.split('@').next() {
-        before_at.replace(['.', '_'], " ")
-    } else {
-        att.clone()
-    };
+    let user_name_part = normalize_identity_name_part(&user);
+    let att_name_part = normalize_identity_name_part(&att);
 
     // After email normalization, exact match
     if user_name_part == att_name_part {
@@ -333,6 +323,44 @@ fn names_match(user_name: &str, attendee: &str) -> bool {
     }
 
     false
+}
+
+/// Normalize display names and email identities for speaker matching.
+///
+/// Email addresses are often used as calendar attendee names, and Google-style
+/// plus addressing can create aliases for the same person:
+/// `louis+teams1234@screenpi.pe` and `louis@screenpi.pe` should both compare as
+/// `louis`.
+fn normalize_identity_name_part(value: &str) -> String {
+    let trimmed = value.trim().to_lowercase();
+    if trimmed.contains('@') {
+        let before_at = trimmed.split('@').next().unwrap_or(trimmed.as_str());
+        let local = before_at.split('+').next().unwrap_or(before_at);
+        local.replace(['.', '_'], " ")
+    } else {
+        trimmed.replace(['.', '_'], " ")
+    }
+}
+
+fn is_email_identity(value: &str) -> bool {
+    let value = value.trim();
+    value.contains('@') && value.split('@').all(|part| !part.is_empty())
+}
+
+fn preferred_speaker_name<'a>(left: &'a str, right: &'a str) -> &'a str {
+    match (is_email_identity(left), is_email_identity(right)) {
+        (false, true) => left,
+        (true, false) => right,
+        _ => {
+            let left_has_plus = left.split('@').next().unwrap_or(left).contains('+');
+            let right_has_plus = right.split('@').next().unwrap_or(right).contains('+');
+            match (left_has_plus, right_has_plus) {
+                (false, true) => left,
+                (true, false) => right,
+                _ => left,
+            }
+        }
+    }
 }
 
 fn is_unnamed(name: &str) -> bool {
@@ -398,6 +426,87 @@ async fn deduplicate_speaker_by_name(
     }
 }
 
+/// Clean up existing named duplicates created by account/calendar aliases.
+///
+/// This is intentionally conservative: it requires both name normalization and
+/// voice similarity before merging, so two different people with similar names
+/// are not merged just because their email local parts look alike.
+async fn deduplicate_existing_speaker_aliases(db: &screenpipe_db::DatabaseManager) {
+    let speakers = match db.get_named_speakers_with_centroids().await {
+        Ok(speakers) => speakers,
+        Err(e) => {
+            debug!(
+                "speaker alias cleanup: failed to list named speakers: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let mut merged_ids = HashSet::new();
+    for (speaker_id, speaker_name, _) in speakers {
+        if merged_ids.contains(&speaker_id) {
+            continue;
+        }
+
+        let similar = match db.get_similar_speakers(speaker_id, 10).await {
+            Ok(similar) => similar,
+            Err(e) => {
+                debug!(
+                    "speaker alias cleanup: failed to get similar speakers for {}: {}",
+                    speaker_id, e
+                );
+                continue;
+            }
+        };
+
+        for candidate in similar {
+            if merged_ids.contains(&candidate.id) || candidate.name.trim().is_empty() {
+                continue;
+            }
+            if !names_match(&speaker_name, &candidate.name) {
+                continue;
+            }
+
+            let preferred = preferred_speaker_name(&speaker_name, &candidate.name);
+            let (our_res, their_res) = tokio::join!(
+                db.count_embeddings_for_speaker(speaker_id),
+                db.count_embeddings_for_speaker(candidate.id),
+            );
+            let our_count = our_res.unwrap_or(0);
+            let their_count = their_res.unwrap_or(0);
+
+            let (keep_id, merge_id, keep_name) = if preferred == speaker_name {
+                (speaker_id, candidate.id, speaker_name.as_str())
+            } else if preferred == candidate.name {
+                (candidate.id, speaker_id, candidate.name.as_str())
+            } else if our_count >= their_count {
+                (speaker_id, candidate.id, speaker_name.as_str())
+            } else {
+                (candidate.id, speaker_id, candidate.name.as_str())
+            };
+
+            info!(
+                "speaker alias cleanup: merging {} into {} (same voice + alias: '{}' ≈ '{}')",
+                merge_id, keep_id, speaker_name, candidate.name
+            );
+
+            match db.merge_speakers(keep_id, merge_id).await {
+                Ok(_) => {
+                    merged_ids.insert(merge_id);
+                    if let Err(e) = db.update_speaker_name(keep_id, keep_name).await {
+                        debug!(
+                            "speaker alias cleanup: failed to preserve preferred name for {}: {}",
+                            keep_id, e
+                        );
+                    }
+                }
+                Err(e) => warn!("speaker alias cleanup: merge failed: {}", e),
+            }
+        }
+    }
+}
+
 // ── Background task ──────────────────────────────────────────────────────
 
 /// MeetingEvent as published by the meeting detector on the event bus.
@@ -430,6 +539,13 @@ pub fn start_speaker_identification(
     db: Arc<screenpipe_db::DatabaseManager>,
     user_name: Option<String>,
 ) -> tokio::task::JoinHandle<()> {
+    {
+        let db2 = db.clone();
+        tokio::spawn(async move {
+            deduplicate_existing_speaker_aliases(&db2).await;
+        });
+    }
+
     // Auto-name the dominant input speaker as the user (runs independently of meetings)
     if let Some(name) = user_name.clone() {
         if !name.trim().is_empty() {
@@ -679,6 +795,19 @@ mod tests {
         assert!(names_match("Louis", "louis@screenpi.pe"));
         // Reverse: both as emails
         assert!(names_match("louis@screenpi.pe", "louis@company.com"));
+    }
+
+    #[test]
+    fn test_names_match_plus_addressed_email_aliases() {
+        assert!(names_match(
+            "louis+teams1234@screenpi.pe",
+            "louis@screenpi.pe"
+        ));
+        assert!(names_match("Louis", "louis+teams1234@screenpi.pe"));
+        assert!(names_match(
+            "louis.pereira+teams1234@screenpi.pe",
+            "Louis Pereira"
+        ));
     }
 
     #[test]
@@ -1199,6 +1328,32 @@ mod tests {
         // "Louis" should still exist
         let louis = db.find_speaker_by_name("Louis").await.unwrap();
         assert!(louis.is_some(), "Louis should still exist after merge");
+    }
+
+    #[tokio::test]
+    async fn test_startup_alias_cleanup_merges_plus_addressed_duplicate() {
+        let db = setup_db().await;
+
+        let embedding: Vec<f32> = vec![0.1; 512];
+        let id_a = seed_speaker(&db, &embedding, Some("louis@screenpi.pe")).await;
+        let id_b = seed_speaker(&db, &embedding, Some("louis+teams1234@screenpi.pe")).await;
+
+        deduplicate_existing_speaker_aliases(&db).await;
+
+        let base = db.find_speaker_by_name("louis@screenpi.pe").await.unwrap();
+        assert!(base.is_some(), "base email identity should be kept");
+
+        let plus = db
+            .find_speaker_by_name("louis+teams1234@screenpi.pe")
+            .await
+            .unwrap();
+        assert!(plus.is_none(), "plus-addressed duplicate should be merged");
+
+        let merged_id = base.unwrap().id;
+        assert!(
+            merged_id == id_a || merged_id == id_b,
+            "merged speaker should keep one of the original ids"
+        );
     }
 
     #[tokio::test]

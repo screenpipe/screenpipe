@@ -31,6 +31,22 @@ async function openSettings(): Promise<void> {
   await generalSection.waitForExist({ timeout: 8_000 });
 }
 
+const SETTINGS_SECTIONS = [
+  { id: 'display', keywords: ['display', 'theme', 'window', 'sidebar', 'appearance'] },
+  { id: 'general', keywords: ['general', 'startup', 'language', 'auto'] },
+  { id: 'ai', keywords: ['ai', 'model', 'preset', 'openai', 'ollama'] },
+  { id: 'recording', keywords: ['recording', 'fps', 'capture', 'monitor'] },
+  { id: 'shortcuts', keywords: ['shortcut', 'keyboard', 'hotkey', 'overlay'] },
+  { id: 'notifications', keywords: ['notification', 'toast', 'sound'] },
+  { id: 'usage', keywords: ['usage', 'activity', 'analytics'] },
+  { id: 'privacy', keywords: ['privacy', 'api', 'encryption', 'keychain'] },
+  { id: 'storage', keywords: ['storage', 'disk', 'retention', 'cache'] },
+  { id: 'speakers', keywords: ['speaker', 'voice'] },
+  { id: 'team', keywords: ['team', 'share', 'member', 'invite'] },
+  { id: 'account', keywords: ['account', 'sign', 'login', 'cloud'] },
+  { id: 'referral', keywords: ['free month', 'referral', 'invite', 'share'] },
+] as const;
+
 describe('Settings sections', () => {
   before(async () => {
     await waitForAppReady();
@@ -92,6 +108,22 @@ describe('Settings sections', () => {
     const filepath = await saveScreenshot('settings-speakers');
     expect(existsSync(filepath)).toBe(true);
   });
+
+  for (const { id, keywords } of SETTINGS_SECTIONS) {
+    it(`loads Settings > ${id} via the sidebar nav`, async function () {
+      const nav = await $(`[data-testid="settings-nav-${id}"]`);
+      if (!(await nav.isExisting())) {
+        this.skip();
+      }
+      await nav.click();
+      await browser.pause(500);
+
+      const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+      expect(body).not.toContain('unhandled runtime error');
+      expect(body).not.toContain('application error');
+      expect(keywords.some((keyword) => body.includes(keyword))).toBe(true);
+    });
+  }
 
   // ─── Recent regressions / new features (covered as smoke tests) ───────────
   //

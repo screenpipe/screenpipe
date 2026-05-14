@@ -5,7 +5,7 @@
 /**
  * Parallel-chat e2e — Louis's exact repro driven against the running
  * Tauri app via WebDriver. Bypasses Pi entirely (no model, no auth, no
- * network) by emitting `pi_event` envelopes directly from the webview;
+ * network) by emitting `agent_event` envelopes directly from the webview;
  * the panel's listener picks them up the same way it does in
  * production. This isolates the React layer that the vitest data-layer
  * tests can't reach.
@@ -59,6 +59,14 @@ async function emitFromWebview(eventName: string, payload: unknown): Promise<voi
   );
 }
 
+async function emitAgentEvent(sessionId: string, event: unknown): Promise<void> {
+  await emitFromWebview('agent_event', {
+    source: 'pi',
+    sessionId,
+    event,
+  });
+}
+
 /** Switch the chat panel to a given session id. Mirrors what the
  *  sidebar's row click does. */
 async function switchToSession(id: string): Promise<void> {
@@ -73,21 +81,37 @@ async function switchToSession(id: string): Promise<void> {
  *  exposes on `window.__e2eSeedUserMessage`. Required because
  *  `ensureAssistantPlaceholder` only creates an assistant bubble when the
  *  last message in the session is `role: "user"` (added 2026-04-29) — so
- *  faking pi_event with no preceding user message is a no-op. */
+ *  faking agent_event with no preceding user message is a no-op. */
 async function seedUserMessage(sessionId: string, text: string): Promise<void> {
-  await browser.executeAsync(
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        () => typeof (window as any).__e2eSeedUserMessage === "function",
+      )) as boolean,
+    {
+      timeout: t(5_000),
+      interval: 100,
+      timeoutMsg: "E2E chat seed hook did not mount",
+    },
+  );
+  const seeded = (await browser.executeAsync(
     (sid: string, txt: string, done: (v?: unknown) => void) => {
       const g = globalThis as unknown as {
         __e2eSeedUserMessage?: (sid: string, txt: string) => void;
       };
       if (typeof g.__e2eSeedUserMessage === "function") {
         g.__e2eSeedUserMessage(sid, txt);
+        done(true);
+        return;
       }
-      done();
+      done(false);
     },
     sessionId,
     text,
-  );
+  )) as boolean;
+  if (!seeded) {
+    throw new Error("E2E chat seed hook disappeared before seeding");
+  }
   await browser.pause(t(100));
 }
 
@@ -100,9 +124,9 @@ async function seedUserMessage(sessionId: string, text: string): Promise<void> {
 async function fakePiTurn(sessionId: string, fullText: string): Promise<void> {
   await seedUserMessage(sessionId, `(e2e) prompt for: ${fullText}`);
 
-  await emitFromWebview('pi_event', {
-    sessionId,
-    event: { type: 'message_start', message: { role: 'assistant' } },
+  await emitAgentEvent(sessionId, {
+    type: 'message_start',
+    message: { role: 'assistant' },
   });
   await browser.pause(t(50));
 
@@ -111,19 +135,15 @@ async function fakePiTurn(sessionId: string, fullText: string): Promise<void> {
   // the 0.70+ shape standalone-chat handles).
   const half = Math.floor(fullText.length / 2);
   for (const delta of [fullText.slice(0, half), fullText.slice(half)]) {
-    await emitFromWebview('pi_event', {
-      sessionId,
-      event: {
-        type: 'message_update',
-        assistantMessageEvent: { type: 'text_delta', delta },
-      },
+    await emitAgentEvent(sessionId, {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta },
     });
     await browser.pause(t(50));
   }
 
-  await emitFromWebview('pi_event', {
-    sessionId,
-    event: { type: 'agent_end' },
+  await emitAgentEvent(sessionId, {
+    type: 'agent_end',
   });
   await browser.pause(t(100));
 }
@@ -148,41 +168,7 @@ describe('Parallel chat — Louis repro', function () {
     await waitForAppReady();
   });
 
-  // SKIPPED 2026-05-07 — has been red on every PR since 2026-04-29.
-  //
-  // Root cause: e1f55023d ("feat(chat): queue follow-up prompts while pi
-  // is streaming") tightened `ensureAssistantPlaceholder` in
-  // standalone-chat.tsx to require a `role: "user"` tail in the LOCAL
-  // React messages array before materializing an assistant bubble for
-  // a streaming text_delta. This test fakes pi_event envelopes directly
-  // (intentionally bypassing Pi/auth/network) and never sends a real user
-  // message, so the placeholder is never created and the very first
-  // `expect(...).toBe(true)` in the test fails.
-  //
-  // Fix attempts that didn't unstick it (kept here so the next attempt
-  // doesn't repeat them):
-  //   1. fabdba7eb — `window.__e2eSeedUserMessage` hook conditioned on
-  //      `sid === piSessionIdRef.current`. Conditional gate raced the
-  //      async chat-load-conversation listener.
-  //   2. e2d5afd7e — same hook, made unconditional + upsert the session
-  //      record + force piSessionIdRef. STILL failed on the same line —
-  //      either the hook isn't on window at the moment seedUserMessage
-  //      fires, or `setMessages` from inside a `useEffect` closure
-  //      doesn't reach the message list the panel renders, or chat-load
-  //      -conversation rewrites local state AFTER seed (overwriting it).
-  //
-  // Right next move (NOT another hook tweak): drive the test through the
-  // production path. Either (a) type into the chat input and click send,
-  // intercepting the outgoing API call and replying with a mock pi_event
-  // sequence; or (b) seed a real on-disk conversation file that includes
-  // user+assistant messages, then drive `chat-load-conversation` so the
-  // disk-load path populates local React state.
-  //
-  // Until then this is `.skip`'d — every PR was inheriting the failure
-  // and burning CI minutes on the same assertion. The two cases below
-  // share the same `fakePiTurn` machinery, so both need to come back
-  // together when the fix lands.
-  it.skip('switching A → B → A preserves A messages in the DOM', async () => {
+  it('switching A → B → A preserves A messages in the DOM', async () => {
     // openHomeWindow inside the it block matches the working pattern
     // from home-window.spec.ts. Putting it in `before` made the
     // WebKit execute call time out — webview wasn't fully settled
@@ -234,11 +220,7 @@ describe('Parallel chat — Louis repro', function () {
     ).toBe(false);
   });
 
-  // SKIPPED 2026-05-07 — same root cause as the test above (depends on
-  // `fakePiTurn` to materialize an assistant message in DOM). Restore
-  // when the placeholder-injection problem is solved at the production
-  // boundary, not via a window hook.
-  it.skip('sidebar rows do NOT reorder when a backgrounded chat streams', async () => {
+  it('sidebar rows do NOT reorder when a backgrounded chat streams', async () => {
     // Louis: "stop making things change order automatically".
     // After the above test, both A and B exist in the sidebar. A was
     // created earlier than B. Stream into A in the background; B (the

@@ -272,6 +272,12 @@ const results = await pipe.queryScreenpipe({
 });
 ```
 
+## Building from source 
+
+Check CONTRIBUTING.
+
+Make sure to understand the main branch is moving fast and breaking things, if you're looking for a stable version check app releases https://github.com/screenpipe/screenpipe/releases and use the git commit accordingly (production app is behind paywall).
+
 ## Frequently asked questions
 
 **Is screenpipe free?**

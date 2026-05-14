@@ -24,6 +24,17 @@ bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
 bun run test:e2e
 ```
 
+**Run the macOS audio fallback spec**
+
+```bash
+bun run test:e2e:audio-fallback:macos
+```
+
+This uses `SCREENPIPE_E2E_SEED=onboarding,no-recording,cloud-audio-fallback`
+to keep vision capture off while leaving the audio settings visible with
+Screenpipe Cloud saved and no logged-in user. It asserts the Recording fallback
+alert and the persisted `/notifications` entry.
+
 **Or combined (build + test):**
 
 ```bash
@@ -130,5 +141,6 @@ Saves to `e2e/videos/`.
 | `home-window.spec.ts` | Opens Home window; clicks through Home, Pipes, Timeline, Help, Settings nav items |
 | `timeline.spec.ts` | Navigates to Timeline; seeds a capture event; verifies at least one frame renders |
 | `settings-sections.spec.ts` | Navigates General → Recording → AI → Speakers settings; verifies content and no crash |
+| `audio-fallback.spec.ts` | macOS opt-in spec for the Screenpipe Cloud → local Whisper fallback alert and `/notify` history |
 | `pipes.spec.ts` | Opens Pipes section; verifies pipe store mounts without crash; navigates back to Home |
 | `parallel-chat.spec.ts` | Drives chat-load-conversation + fake `pi_event` envelopes from the webview to walk Louis's repro: chat A → chat B → back to A. Asserts A's messages are still in the DOM (catches the "switch wipes A" regression) and that backgrounded streaming does NOT reorder sidebar rows. |

@@ -154,16 +154,18 @@ impl CaptureSession {
         };
 
         // --- Meeting watcher ---
-        {
+        if let Some(meeting_detector) = server.meeting_detector.clone() {
             let v2_in_meeting = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let _meeting_watcher = start_meeting_watcher(
                 server.db.clone(),
                 v2_in_meeting,
                 server.manual_meeting.clone(),
                 shutdown_tx.subscribe(),
-                server.meeting_detector.clone(),
+                Some(meeting_detector),
             );
             info!("meeting watcher started (v2 UI scanning)");
+        } else {
+            info!("meeting watcher skipped because audio capture is disabled");
         }
 
         // --- Speaker identification ---

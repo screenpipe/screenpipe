@@ -116,15 +116,7 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
                 }
 
                 // Save to ~/.screenpipe/store.bin (same file the desktop app uses)
-                let store_path =
-                    screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
-
-                let mut store: Value = if store_path.exists() {
-                    let content = std::fs::read_to_string(&store_path)?;
-                    serde_json::from_str(&content).unwrap_or(json!({}))
-                } else {
-                    json!({})
-                };
+                let mut store: Value = super::store_file::read_store()?;
 
                 // Write to top-level `settings.user` — the canonical path the
                 // desktop app reads (see apps/screenpipe-app-tauri/src-tauri/src/store.rs
@@ -155,7 +147,7 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
                     }
                 }
 
-                std::fs::write(&store_path, serde_json::to_string_pretty(&store)?)?;
+                super::store_file::write_store(&store)?;
 
                 println!();
                 println!();
@@ -183,7 +175,7 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
 /// both the CLI and the desktop app agree the user is signed out. Leaves all
 /// other settings (AI presets, recording prefs, onboarding flags, etc.) intact.
 pub async fn handle_logout_command() -> anyhow::Result<()> {
-    let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
+    let store_path = super::store_file::store_path();
 
     if !store_path.exists() {
         println!();
@@ -192,8 +184,7 @@ pub async fn handle_logout_command() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&store_path)?;
-    let mut store: Value = serde_json::from_str(&content).unwrap_or(json!({}));
+    let mut store: Value = super::store_file::read_store()?;
 
     // Capture email for the goodbye line before we wipe it.
     let email = store
@@ -228,7 +219,7 @@ pub async fn handle_logout_command() -> anyhow::Result<()> {
         user.remove("email");
     }
 
-    std::fs::write(&store_path, serde_json::to_string_pretty(&store)?)?;
+    super::store_file::write_store(&store)?;
 
     println!();
     if !had_token {
@@ -247,25 +238,18 @@ pub async fn handle_logout_command() -> anyhow::Result<()> {
 
 /// Handle `screenpipe whoami` — show current auth status.
 pub async fn handle_whoami_command() -> anyhow::Result<()> {
-    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let store_path = data_dir.join("store.bin");
-
     let token = super::pipe::get_auth_token();
 
     match token {
         Some(t) if !t.is_empty() => {
             let mut email: Option<String> = None;
 
-            if store_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&store_path) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
-                        email = parsed
-                            .pointer("/state/settings/user/email")
-                            .or_else(|| parsed.pointer("/settings/user/email"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                    }
-                }
+            if let Ok(parsed) = super::store_file::read_store() {
+                email = parsed
+                    .pointer("/state/settings/user/email")
+                    .or_else(|| parsed.pointer("/settings/user/email"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
             }
 
             let source = if std::env::var("SCREENPIPE_API_KEY").is_ok() {

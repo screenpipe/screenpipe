@@ -281,9 +281,9 @@ jobs:
         shell: pwsh
         run: |
           # Pre-download CPU onnxruntime so ort crate finds it via ORT_LIB_LOCATION
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+          $zipFile = "onnxruntime-win-x64-1.22.0.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -341,7 +341,7 @@ jobs:
           GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
@@ -386,7 +386,7 @@ jobs:
           # Copy onnxruntime.dll - try target dir first (ort copy-dylibs), fallback to ORT_LIB_LOCATION
           $ortDll = "target/x86_64-pc-windows-msvc/release/onnxruntime.dll"
           if (!(Test-Path $ortDll)) {
-            $ortDll = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib/onnxruntime.dll"
+            $ortDll = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll"
           }
           Copy-Item $ortDll "$packageDir/bin/"
           # Copy OpenBLAS DLL(s) for qwen3-asr (libopenblas.dll or openblas.dll)

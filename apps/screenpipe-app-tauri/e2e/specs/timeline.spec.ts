@@ -14,14 +14,6 @@ describe("Timeline", function () {
   let cleanupTransientApp: (() => void) | null = null;
 
   before(async function () {
-    // The timeline spec walks frames, which only exist if SCK + OCR are
-    // running. The launcher seeds `no-recording` by default so the app
-    // boots without Screen Recording / Microphone TCC; in that mode the
-    // capture pipeline is intentionally not started and there will never
-    // be frames to assert on. Skip cleanly instead of timing out.
-    if (E2E_SEED_FLAGS.split(",").map((s) => s.trim()).includes("no-recording")) {
-      this.skip();
-    }
     await waitForAppReady();
   });
 
@@ -30,7 +22,7 @@ describe("Timeline", function () {
     cleanupTransientApp = null;
   });
 
-  it("opens timeline, seeds capture with a UI event, and renders at least one frame", async () => {
+  async function openTimelineSection() {
     await openHomeWindow();
 
     const homePage = await $('[data-testid="home-page"]');
@@ -42,6 +34,44 @@ describe("Timeline", function () {
 
     const timelineSection = await $('[data-testid="section-timeline"]');
     await timelineSection.waitForExist({ timeout: 20_000 });
+    return timelineSection;
+  }
+
+  it("opens the Timeline shell with recording disabled", async () => {
+    await openTimelineSection();
+
+    await browser.waitUntil(
+      async () => {
+        const bodyText = ((await browser.execute(
+          () => document.body.innerText || "",
+        )) as string).toLowerCase();
+        return (
+          bodyText.includes("screen recording is off") ||
+          bodyText.includes("recording... timeline will appear soon") ||
+          (await $('[data-testid="timeline-slider"]').isExisting())
+        );
+      },
+      {
+        timeout: t(20_000),
+        interval: 500,
+        timeoutMsg: "Timeline shell did not render an empty, recording, or frame state",
+      },
+    );
+
+    const filepath = await saveScreenshot("timeline-shell");
+    expect(existsSync(filepath)).toBe(true);
+  });
+
+  it("opens timeline, seeds capture with a UI event, and renders at least one frame", async function () {
+    // The timeline spec walks frames, which only exist if SCK + OCR are
+    // running. The launcher seeds `no-recording` by default so the app
+    // boots without Screen Recording / Microphone TCC; in that mode the
+    // capture pipeline is intentionally not started and there will never
+    // be frames to assert on. Skip cleanly instead of timing out.
+    if (E2E_SEED_FLAGS.split(",").map((s) => s.trim()).includes("no-recording")) {
+      this.skip();
+    }
+    const timelineSection = await openTimelineSection();
 
     // In-webview clicks only see the Screenpipe UI. Timeline WebSocket payload drops OCR
     // rows whose app name contains "screenpipe", so those captures often yield zero

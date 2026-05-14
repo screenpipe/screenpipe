@@ -1187,7 +1187,17 @@ function ChatGptPanel() {
 // Generic OAuth panel — used for any integration with is_oauth: true
 // ---------------------------------------------------------------------------
 
-function OAuthPanel({ integrationId, integrationName }: { integrationId: string; integrationName: string }) {
+function OAuthPanel({
+  integrationId,
+  integrationName,
+  onConnected,
+  onDisconnected,
+}: {
+  integrationId: string;
+  integrationName: string;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
   const { settings } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
@@ -1225,6 +1235,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
         await fetchStatus();
+        onConnected?.();
       } else {
         setStatus("idle");
       }
@@ -1250,6 +1261,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
     await commands.oauthDisconnect(integrationId, null);
     setStatus("idle");
     setDisplayName(null);
+    onDisconnected?.();
   };
 
   return (
@@ -1837,6 +1849,7 @@ export function ConnectionsSection() {
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
+  const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
   const [calendarUserDisconnected, setCalendarUserDisconnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
 
@@ -1865,6 +1878,13 @@ export function ConnectionsSection() {
     commands.oauthStatus("google-calendar", null).then(res => {
       setGoogleCalendarConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
+    if (typeof window !== "undefined" && platform() === "macos") {
+      commands.getBrowsersAutomationStatus().then(statuses => {
+        setBrowserUrlConnected(
+          statuses.length > 0 && statuses.every(b => b.status === "granted")
+        );
+      }).catch(() => setBrowserUrlConnected(false));
+    }
   }, []);
 
   useEffect(() => { refreshStatus(); }, [selected, refreshStatus]);
@@ -1906,6 +1926,12 @@ export function ConnectionsSection() {
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
+  const refreshIntegrationConnection = useCallback((id: string, connected: boolean) => {
+    setIntegrations(prev => prev.map(i => i.id === id ? { ...i, connected } : i));
+    apiCache.invalidate("connections/list");
+    fetchIntegrations();
+  }, [fetchIntegrations]);
+
   // Build unified tile list
   const allTiles: ConnectionTile[] = useMemo(() => {
     const hardcoded: ConnectionTile[] = [
@@ -1916,7 +1942,7 @@ export function ConnectionsSection() {
       { id: "warp", name: "Warp", icon: "warp", connected: false },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },
       ...(os === "macos" ? [
-        { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: false },
+        { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: browserUrlConnected },
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
       ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
@@ -1957,7 +1983,7 @@ export function ConnectionsSection() {
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     return [...hardcoded, ...apiTiles];
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return allTiles;
@@ -1985,7 +2011,7 @@ export function ConnectionsSection() {
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
       case "user-browser": return <UserBrowserCard />;
-      case "browser-url": return <BrowserUrlCard />;
+      case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
       case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
@@ -2015,7 +2041,12 @@ export function ConnectionsSection() {
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
-            return <OAuthPanel integrationId={selectedIntegration.id} integrationName={selectedIntegration.name} />;
+            return <OAuthPanel
+              integrationId={selectedIntegration.id}
+              integrationName={selectedIntegration.name}
+              onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
+              onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
+            />;
           }
           return <ApiIntegrationPanel
             integration={selectedIntegration}

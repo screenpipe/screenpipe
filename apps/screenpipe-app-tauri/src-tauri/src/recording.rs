@@ -70,6 +70,24 @@ fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     Ok(store.to_recording_config(data_dir))
 }
 
+pub fn notify_audio_engine_fallback(store: &SettingsStore) {
+    if store.recording.disable_audio {
+        return;
+    }
+
+    let resolution = store.audio_engine_resolution();
+    let Some(reason) = resolution.fallback_reason else {
+        return;
+    };
+
+    crate::notifications::client::send_typed(
+        reason.notification_title(),
+        reason.notification_body(),
+        "system",
+        Some(20000),
+    );
+}
+
 pub fn local_api_context_from_app(app: &tauri::AppHandle) -> LocalApiContext {
     if let Some(state) = app.try_state::<RecordingState>() {
         if let Ok(guard) = state.server.try_lock() {
@@ -657,6 +675,7 @@ pub async fn spawn_screenpipe(
         }
     }
 
+    notify_audio_engine_fallback(&store);
     let recording_config = store.to_recording_config(data_dir);
 
     let server_arc = state.server.clone();

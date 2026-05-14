@@ -483,7 +483,7 @@ jobs:
           } else {
             $arch = 'x64'
           }
-          $version = '1.19.2'
+          $version = '1.22.0'
           $url = "https://github.com/microsoft/onnxruntime/releases/download/v$version/onnxruntime-win-$arch-$version.zip"
           $zipFile = "onnxruntime-win-$arch-$version.zip"
           $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-$arch-$version"

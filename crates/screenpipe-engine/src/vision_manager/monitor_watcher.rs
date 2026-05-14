@@ -54,6 +54,8 @@ pub async fn start_monitor_watcher(
         // Set true after DRM/schedule resume so the bulk re-add of monitors
         // doesn't surface as a user-facing "+N displays detected" notification.
         let mut suppress_next_topology_event = false;
+        // Warn once per recovery episode, then keep repeated retries quiet.
+        let mut recovery_retry_warned = false;
 
         // Initialize with current monitors
         match list_monitors_detailed().await {
@@ -181,9 +183,29 @@ pub async fn start_monitor_watcher(
             }
 
             // ── Normal monitor polling ──────────────────────────────────────
-            // Only poll when running
+            // If stopped (e.g. no monitors after undock/wake), retry start()
             if vision_manager.status().await != VisionManagerStatus::Running {
                 tokio::time::sleep(Duration::from_secs(5)).await;
+                match vision_manager.start().await {
+                    Ok(()) => {
+                        info!("VisionManager recovered after previous start failure");
+                        recovery_retry_warned = false;
+                        if let Ok(monitors) = list_monitors_detailed().await {
+                            known_monitors = monitors
+                                .iter()
+                                .map(|m| (m.id(), m.name().to_string()))
+                                .collect();
+                        }
+                    }
+                    Err(e) => {
+                        if recovery_retry_warned {
+                            debug!(?e, "VisionManager retry still failing");
+                        } else {
+                            warn!(?e, "VisionManager retry failed; will keep retrying");
+                            recovery_retry_warned = true;
+                        }
+                    }
+                }
                 continue;
             }
 

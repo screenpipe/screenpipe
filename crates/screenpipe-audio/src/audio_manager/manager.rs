@@ -208,6 +208,11 @@ impl AudioManager {
     }
 
     pub async fn start(&self) -> Result<()> {
+        if self.options.read().await.is_disabled {
+            info!("audio manager start skipped because audio capture is disabled");
+            return Ok(());
+        }
+
         if self.status().await == AudioManagerStatus::Running {
             return Ok(());
         }
@@ -675,52 +680,63 @@ impl AudioManager {
                         out,
                         capture_dt,
                     );
-                    if let Err(e) =
-                        write_audio_to_file(&resampled, SAMPLE_RATE, &PathBuf::from(&path), false)
-                    {
-                        error!("failed to persist audio before deferral: {:?}", e);
-                        None
-                    } else {
-                        debug!("audio persisted to disk: {}", path);
-                        // Insert into DB immediately so retranscribe can find this audio
-                        // even if transcription is deferred. No transcription yet — just the chunk.
-                        // Use the original capture timestamp so audio appears at the correct
-                        // position on the timeline, not when processing happened.
-                        // Retry DB insertion with backoff to survive transient pool saturation.
-                        // Without this, audio files are written to disk but orphaned from the DB,
-                        // causing silent data loss on the timeline.
-                        let mut inserted = false;
-                        for retry in 0..3u32 {
-                            match db.insert_audio_chunk(&path, capture_dt).await {
-                                Ok(_) => {
-                                    inserted = true;
-                                    break;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "failed to insert audio chunk into db (attempt {}/3): {:?}",
-                                        retry + 1,
-                                        e
-                                    );
-                                    if retry < 2 {
-                                        tokio::time::sleep(std::time::Duration::from_millis(
-                                            500 * (retry as u64 + 1),
-                                        ))
-                                        .await;
+                    let path_buf = PathBuf::from(&path);
+                    let write_result = tokio::task::spawn_blocking(move || {
+                        write_audio_to_file(&resampled, SAMPLE_RATE, &path_buf, false)
+                    })
+                    .await;
+
+                    match write_result {
+                        Ok(Ok(())) => {
+                            debug!("audio persisted to disk: {}", path);
+                            // Insert into DB immediately so retranscribe can find this audio
+                            // even if transcription is deferred. No transcription yet — just the chunk.
+                            // Use the original capture timestamp so audio appears at the correct
+                            // position on the timeline, not when processing happened.
+                            // Retry DB insertion with backoff to survive transient pool saturation.
+                            // Without this, audio files are written to disk but orphaned from the DB,
+                            // causing silent data loss on the timeline.
+                            let mut inserted = false;
+                            for retry in 0..3u32 {
+                                match db.insert_audio_chunk(&path, capture_dt).await {
+                                    Ok(_) => {
+                                        inserted = true;
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "failed to insert audio chunk into db (attempt {}/3): {:?}",
+                                            retry + 1,
+                                            e
+                                        );
+                                        if retry < 2 {
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                500 * (retry as u64 + 1),
+                                            ))
+                                            .await;
+                                        }
                                     }
                                 }
                             }
+                            if !inserted {
+                                // path is a structured field so Sentry dedups the
+                                // issue across different devices; otherwise every
+                                // device name creates a new Sentry issue.
+                                error!(
+                                    audio_chunk_path = %path,
+                                    "audio chunk DB insert failed after 3 retries, data may be missing from timeline"
+                                );
+                            }
+                            Some(path)
                         }
-                        if !inserted {
-                            // path is a structured field so Sentry dedups the
-                            // issue across different devices; otherwise every
-                            // device name creates a new Sentry issue.
-                            error!(
-                                audio_chunk_path = %path,
-                                "audio chunk DB insert failed after 3 retries, data may be missing from timeline"
-                            );
+                        Ok(Err(e)) => {
+                            error!("failed to persist audio before deferral: {:?}", e);
+                            None
                         }
-                        Some(path)
+                        Err(e) => {
+                            error!("audio persistence worker failed: {}", e);
+                            None
+                        }
                     }
                 } else {
                     None
@@ -1119,6 +1135,11 @@ impl AudioManager {
     /// Restart central handlers regardless of whether they are dead.
     pub async fn restart_central_handlers(&self) -> CentralHandlerRestartResult {
         let mut result = CentralHandlerRestartResult::default();
+
+        if self.options.read().await.is_disabled {
+            return result;
+        }
+
         {
             let mut recording_guard = self.recording_receiver_handle.write().await;
             if let Some(handle) = recording_guard.take() {
@@ -1198,6 +1219,10 @@ impl AudioManager {
     /// so per-device recording tasks keep sending without interruption.
     pub async fn check_and_restart_central_handlers(&self) -> CentralHandlerRestartResult {
         let mut result = CentralHandlerRestartResult::default();
+
+        if self.options.read().await.is_disabled {
+            return result;
+        }
 
         // --- fast path: read-lock to check liveness ---
         let recording_dead = {

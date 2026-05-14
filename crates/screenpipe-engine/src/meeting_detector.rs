@@ -23,6 +23,7 @@
 //! and non-meeting contexts (Slack chat, etc.). A mute button counts only when
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
+use crate::meeting_telemetry::{capture_detection_decision, MeetingDetectionScanSummary};
 use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
@@ -2502,7 +2503,10 @@ pub async fn run_meeting_detection_loop(
                     let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
 
                     // Try to merge with recently-ended meeting
-                    let meeting_id = match db.find_recent_meeting_for_app(&app, 120).await {
+                    let (meeting_id, decision_trigger) = match db
+                        .find_recent_meeting_for_app(&app, 120)
+                        .await
+                    {
                         Ok(Some(recent)) => match db.reopen_meeting(recent.id).await {
                             Ok(()) => {
                                 info!(
@@ -2531,37 +2535,44 @@ pub async fn run_meeting_detection_loop(
                                         );
                                     }
                                 }
-                                recent.id
+                                (recent.id, "auto_reopen")
                             }
                             Err(e) => {
                                 warn!("meeting v2: failed to reopen meeting {}: {}", recent.id, e);
+                                (
+                                    insert_new_meeting(
+                                        &db,
+                                        &app,
+                                        cal_title.as_deref(),
+                                        attendees_str.as_deref(),
+                                    )
+                                    .await,
+                                    "auto_start",
+                                )
+                            }
+                        },
+                        Ok(None) => (
+                            insert_new_meeting(
+                                &db,
+                                &app,
+                                cal_title.as_deref(),
+                                attendees_str.as_deref(),
+                            )
+                            .await,
+                            "auto_start",
+                        ),
+                        Err(e) => {
+                            warn!("meeting v2: failed to find recent meeting: {}", e);
+                            (
                                 insert_new_meeting(
                                     &db,
                                     &app,
                                     cal_title.as_deref(),
                                     attendees_str.as_deref(),
                                 )
-                                .await
-                            }
-                        },
-                        Ok(None) => {
-                            insert_new_meeting(
-                                &db,
-                                &app,
-                                cal_title.as_deref(),
-                                attendees_str.as_deref(),
+                                .await,
+                                "auto_start",
                             )
-                            .await
-                        }
-                        Err(e) => {
-                            warn!("meeting v2: failed to find recent meeting: {}", e);
-                            insert_new_meeting(
-                                &db,
-                                &app,
-                                cal_title.as_deref(),
-                                attendees_str.as_deref(),
-                            )
-                            .await
                         }
                     };
 
@@ -2586,6 +2597,16 @@ pub async fn run_meeting_detection_loop(
                         resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
                     {
                         emit_meeting_status_changed(&status);
+                    }
+                    if let Ok(meeting) = db.get_meeting_by_id(meeting_id).await {
+                        capture_detection_decision(
+                            &meeting,
+                            decision_trigger,
+                            Some(MeetingDetectionScanSummary::from_scan_results(
+                                &scan_results,
+                                has_output_audio,
+                            )),
+                        );
                     }
                 }
                 StateAction::EndMeeting { meeting_id } => {

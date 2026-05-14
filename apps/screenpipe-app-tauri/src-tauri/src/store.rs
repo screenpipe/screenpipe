@@ -825,6 +825,45 @@ impl Default for User {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioEngineFallbackReason {
+    NotLoggedIn,
+    NotSubscribed,
+    MissingDeepgramKey,
+}
+
+impl AudioEngineFallbackReason {
+    pub fn notification_title(&self) -> &'static str {
+        match self {
+            Self::NotLoggedIn | Self::NotSubscribed => "Screenpipe Cloud unavailable",
+            Self::MissingDeepgramKey => "Deepgram unavailable",
+        }
+    }
+
+    pub fn notification_body(&self) -> &'static str {
+        match self {
+            Self::NotLoggedIn => {
+                "You are not logged in, so audio is being transcribed locally with Whisper Turbo (fast). Log in to use Screenpipe Cloud."
+            }
+            Self::NotSubscribed => {
+                "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally with Whisper Turbo (fast)."
+            }
+            Self::MissingDeepgramKey => {
+                "Deepgram has no API key configured, so audio is being transcribed locally with Whisper Turbo (fast)."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioEngineResolution {
+    pub requested: String,
+    pub active: String,
+    pub fallback_reason: Option<AudioEngineFallbackReason>,
+}
+
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(default)]
 pub struct Credits {
@@ -1128,7 +1167,7 @@ impl SettingsStore {
         &self,
         data_dir: std::path::PathBuf,
     ) -> screenpipe_engine::RecordingConfig {
-        let resolved_engine = self.resolve_audio_engine();
+        let resolved_engine = self.audio_engine_resolution().active;
         let settings = self.to_recording_settings();
         let mut config = screenpipe_engine::RecordingConfig::from_settings(
             &settings,
@@ -1157,27 +1196,44 @@ impl SettingsStore {
         config
     }
 
-    fn resolve_audio_engine(&self) -> String {
+    pub fn audio_engine_resolution(&self) -> AudioEngineResolution {
         let engine = self.recording.audio_transcription_engine.clone();
-        let has_user_id = self.user.id.as_ref().map_or(false, |id| !id.is_empty());
+        let has_cloud_auth = self
+            .user
+            .token
+            .as_ref()
+            .map_or(false, |token| !token.is_empty())
+            || self.user.id.as_ref().map_or(false, |id| !id.is_empty());
         let is_subscribed = self.user.cloud_subscribed == Some(true);
         let has_deepgram_key = !self.recording.deepgram_api_key.is_empty()
             && self.recording.deepgram_api_key != "default";
+        let fallback = "whisper-large-v3-turbo-quantized".to_string();
+        let mut resolution = AudioEngineResolution {
+            requested: engine.clone(),
+            active: engine.clone(),
+            fallback_reason: None,
+        };
+
         match engine.as_str() {
-            "screenpipe-cloud" if !has_user_id => {
+            "screenpipe-cloud" if !has_cloud_auth => {
                 tracing::warn!("screenpipe-cloud selected but user not logged in, falling back to whisper-large-v3-turbo-quantized");
-                "whisper-large-v3-turbo-quantized".to_string()
+                resolution.active = fallback;
+                resolution.fallback_reason = Some(AudioEngineFallbackReason::NotLoggedIn);
             }
             "screenpipe-cloud" if !is_subscribed => {
                 tracing::warn!("screenpipe-cloud selected but user is not a pro subscriber, falling back to whisper-large-v3-turbo-quantized");
-                "whisper-large-v3-turbo-quantized".to_string()
+                resolution.active = fallback;
+                resolution.fallback_reason = Some(AudioEngineFallbackReason::NotSubscribed);
             }
             "deepgram" if !has_deepgram_key => {
                 tracing::warn!("deepgram selected but no API key configured, falling back to whisper-large-v3-turbo-quantized");
-                "whisper-large-v3-turbo-quantized".to_string()
+                resolution.active = fallback;
+                resolution.fallback_reason = Some(AudioEngineFallbackReason::MissingDeepgramKey);
             }
-            _ => engine,
-        }
+            _ => {}
+        };
+
+        resolution
     }
 
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
@@ -1465,6 +1521,70 @@ impl PipeSuggestionsSettingsStore {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
+
+    #[test]
+    fn screenpipe_cloud_falls_back_when_not_logged_in() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.id = None;
+        store.user.token = None;
+        store.user.cloud_subscribed = Some(true);
+
+        let resolution = store.audio_engine_resolution();
+
+        assert_eq!(resolution.requested, "screenpipe-cloud");
+        assert_eq!(resolution.active, FALLBACK_ENGINE);
+        assert_eq!(
+            resolution.fallback_reason,
+            Some(AudioEngineFallbackReason::NotLoggedIn)
+        );
+    }
+
+    #[test]
+    fn screenpipe_cloud_falls_back_when_not_subscribed() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(false);
+
+        let resolution = store.audio_engine_resolution();
+
+        assert_eq!(resolution.active, FALLBACK_ENGINE);
+        assert_eq!(
+            resolution.fallback_reason,
+            Some(AudioEngineFallbackReason::NotSubscribed)
+        );
+    }
+
+    #[test]
+    fn screenpipe_cloud_stays_active_for_subscribed_users() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+        store.user.token = Some("token".to_string());
+        store.user.cloud_subscribed = Some(true);
+
+        let resolution = store.audio_engine_resolution();
+
+        assert_eq!(resolution.active, "screenpipe-cloud");
+        assert_eq!(resolution.fallback_reason, None);
+    }
+
+    #[test]
+    fn deepgram_falls_back_without_api_key() {
+        let mut store = SettingsStore::default();
+        store.recording.audio_transcription_engine = "deepgram".to_string();
+        store.recording.deepgram_api_key = String::new();
+
+        let resolution = store.audio_engine_resolution();
+
+        assert_eq!(resolution.active, FALLBACK_ENGINE);
+        assert_eq!(
+            resolution.fallback_reason,
+            Some(AudioEngineFallbackReason::MissingDeepgramKey)
+        );
+    }
 
     // ---- Settings-loss recovery ----
 

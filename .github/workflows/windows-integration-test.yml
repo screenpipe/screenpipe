@@ -85,9 +85,9 @@ jobs:
     - name: Download ONNX Runtime (CPU)
       shell: pwsh
       run: |
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-        $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-        $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+        $zipFile = "onnxruntime-win-x64-1.22.0.zip"
+        $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
         Invoke-WebRequest -Uri $url -OutFile $zipFile
         if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
         7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -97,7 +97,7 @@ jobs:
       env:
         RUSTFLAGS: "-C link-arg=/LTCG"
         ORT_STRATEGY: system
-        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+        ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
         # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
         AWS_LC_SYS_PREBUILT_NASM: "1"
       run: cargo build --release -p screenpipe-engine --bin screenpipe --target x86_64-pc-windows-msvc
@@ -112,7 +112,7 @@ jobs:
           ".\target\release\screenpipe.exe"
         }
         # Copy onnxruntime.dll next to the binary
-        $ortDll = "apps\screenpipe-app-tauri\src-tauri\onnxruntime-win-x64-1.19.2\lib\onnxruntime.dll"
+        $ortDll = "apps\screenpipe-app-tauri\src-tauri\onnxruntime-win-x64-1.22.0\lib\onnxruntime.dll"
         if (Test-Path $ortDll) {
           Copy-Item $ortDll (Split-Path $exePath) -Force
         }

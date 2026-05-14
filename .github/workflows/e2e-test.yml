@@ -67,7 +67,7 @@ jobs:
         path: |
           apps/screenpipe-app-tauri/src-tauri/ffmpeg
           apps/screenpipe-app-tauri/src-tauri/vcredist
-          apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           apps/screenpipe-app-tauri/src-tauri/bun-x86_64-pc-windows-msvc.exe
         key: Windows-e2e-artifacts-v2-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
         restore-keys: |
@@ -80,6 +80,7 @@ jobs:
         override: true
         rustflags: ""
         target: x86_64-pc-windows-msvc
+        cache-bin: false
 
     - name: Setup sccache
       uses: mozilla-actions/sccache-action@v0.0.9
@@ -95,6 +96,7 @@ jobs:
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
         shared-key: screenpipe-tauri-e2e
+        cache-bin: false
 
     - name: Configure Bun cache on same drive as workspace (Windows perf fix)
       shell: pwsh
@@ -110,12 +112,12 @@ jobs:
     - name: Download ONNX Runtime (CPU) for Windows
       shell: pwsh
       run: |
-        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-        $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+        $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+        $tauriDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
         $ortDir = "ort-system-lib"
-        Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.19.2.zip"
+        Invoke-WebRequest -Uri $url -OutFile "onnxruntime-win-x64-1.22.0.zip"
         if (Test-Path $tauriDir) { Remove-Item $tauriDir -Recurse -Force }
-        7z x onnxruntime-win-x64-1.19.2.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
+        7z x onnxruntime-win-x64-1.22.0.zip -o"apps/screenpipe-app-tauri/src-tauri/" -y
         if (Test-Path $ortDir) { Remove-Item $ortDir -Recurse -Force }
         Copy-Item -Path $tauriDir -Destination $ortDir -Recurse -Force
 
@@ -249,7 +251,7 @@ jobs:
     - name: Cache and install all Linux dependencies
       uses: awalsh128/cache-apt-pkgs-action@v1.6.0
       with:
-        version: ${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
+        version: linux-e2e-deps-v3-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js', '.github/workflows/e2e-test.yml') }}
         packages: >
           tesseract-ocr libtesseract-dev ffmpeg pkg-config build-essential libglib2.0-dev
           libgtk-3-dev libwebkit2gtk-4.1-dev clang cmake
@@ -259,7 +261,7 @@ jobs:
           libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev
           libxi-dev libgl1-mesa-dev mesa-utils libgl1-mesa-dri libegl1-mesa-dev
           libasound2-dev libpulse-dev
-          curl desktop-file-utils xdg-utils dbus-x11 xvfb
+          curl desktop-file-utils xdg-utils dbus-x11 gsettings-desktop-schemas xvfb
           x11-xserver-utils pkg-config libsqlite3-dev libbz2-dev
           zlib1g-dev libonig-dev libayatana-appindicator3-dev
           libsamplerate-dev libwebrtc-audio-processing-dev libgtk-3-dev
@@ -268,6 +270,16 @@ jobs:
           fonts-liberation imagemagick fonts-dejavu alsa-utils
           pulseaudio pulseaudio-utils libpipewire-0.3-dev
           libgbm-dev libwayland-dev libegl-dev libopenblas-dev mold
+
+    - name: Verify GNOME settings schemas
+      run: |
+        set -euo pipefail
+        if ! gsettings list-schemas | grep -qx 'org.gnome.system.proxy'; then
+          sudo apt-get update -qq
+          sudo apt-get install -y --reinstall gsettings-desktop-schemas
+          sudo glib-compile-schemas /usr/share/glib-2.0/schemas
+        fi
+        gsettings list-schemas | grep -qx 'org.gnome.system.proxy'
 
     - name: Normalize OpenBLAS paths for antirez-asr-sys
       run: |
@@ -380,6 +392,7 @@ jobs:
         override: true
         rustflags: ""
         target: x86_64-unknown-linux-gnu
+        cache-bin: false
 
     - name: Setup sccache
       uses: mozilla-actions/sccache-action@v0.0.9
@@ -394,6 +407,7 @@ jobs:
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
         shared-key: screenpipe-tauri-e2e
+        cache-bin: false
 
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri
@@ -482,6 +496,7 @@ jobs:
         override: true
         rustflags: ""
         target: aarch64-apple-darwin
+        cache-bin: false
 
     - name: Setup sccache
       uses: mozilla-actions/sccache-action@v0.0.9
@@ -497,6 +512,7 @@ jobs:
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
         shared-key: screenpipe-tauri-e2e
+        cache-bin: false
 
     - name: Cache macOS build artifacts
       uses: actions/cache@v4

@@ -32,7 +32,8 @@ let requestTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let requestRetryCount = 0;
 const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
 const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
-// No MAX_REQUEST_RETRIES — keep retrying forever with backoff
+const MAX_REQUEST_RETRIES = 5;
+const TIMELINE_STREAM_FRAME_LIMIT = 2500;
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -472,6 +473,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle batched frames - OPTIMIZED: buffer and flush periodically
 				if (Array.isArray(data)) {
+					if (data.length > 0) {
+						requestRetryCount = 0;
+					}
 					// Add to buffer instead of immediate state update
 					frameBuffer.push(...data);
 
@@ -502,6 +506,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle single frame (legacy support)
 				if (data.timestamp && data.devices) {
+					requestRetryCount = 0;
 					frameBuffer.push(data);
 
 					if (!flushTimer) {
@@ -649,6 +654,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						start_time: startTime.toISOString(),
 						end_time: endTime.toISOString(),
 						order: "descending",
+						limit: TIMELINE_STREAM_FRAME_LIMIT,
 					}),
 				);
 
@@ -671,6 +677,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Retry forever with backoff if no frames arrived
 					if (currentFrames.length === 0 || stillSwapping) {
 						requestRetryCount++;
+
+						if (requestRetryCount > MAX_REQUEST_RETRIES) {
+							set({
+								isLoading: false,
+								pendingDateSwap: false,
+								message: currentFrames.length === 0
+									? "Timeline is still warming up. Try again in a moment."
+									: null,
+							});
+							return;
+						}
 
 						// Clear this date from sentRequests to allow retry
 						set((state) => {
@@ -733,6 +750,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					start_time: nextDay.toISOString(),
 					end_time: endTime.toISOString(),
 					order: "descending",
+					limit: TIMELINE_STREAM_FRAME_LIMIT,
 				}),
 			);
 			set((state) => ({

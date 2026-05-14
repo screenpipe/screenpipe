@@ -126,9 +126,9 @@ jobs:
       - name: Download ONNX Runtime (CPU)
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+          $zipFile = "onnxruntime-win-x64-1.22.0.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -157,7 +157,7 @@ jobs:
       - name: Stage ONNX Runtime DLLs next to test binary
         shell: pwsh
         run: |
-          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib"
+          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib"
           $dst = "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release/deps"
           if (-not (Test-Path $dst)) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
@@ -217,7 +217,7 @@ jobs:
       - name: Add ONNX lib dir to PATH for cargo tests
         shell: pwsh
         run: |
-          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib"
+          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib"
           echo $ortLib | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           Write-Host "PATH appended: $ortLib"
 
@@ -225,7 +225,7 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-screen test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
@@ -234,7 +234,7 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-core pii_removal --release --target x86_64-pc-windows-msvc
@@ -243,7 +243,7 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc

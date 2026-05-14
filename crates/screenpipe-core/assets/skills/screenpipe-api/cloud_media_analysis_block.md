@@ -1,12 +1,11 @@
 <!-- BEGIN_CLOUD_MEDIA_ANALYSIS -->
 
-## Cloud audio + video + image analysis — `POST https://api.screenpi.pe/v1/chat/completions`
+## Cloud audio + video + image analysis — `POST /v1/chat/completions`
 
-Use this when the user asks about a meeting's audio, a video file, or any screen capture and you need actual multimodal understanding (not just OCR or tool-based retrieval). Runs Gemma 4 E4B inside an attested confidential enclave (Tinfoil on AMD SEV-SNP H200) — encrypted in flight, encrypted at rest, no plaintext at the provider.
+Use this when the user asks about a meeting's audio, a video file, or any screen capture and you need actual multimodal understanding (not just OCR or tool-based retrieval). Runs Gemma 4 E4B inside an attested confidential enclave (Tinfoil on AMD SEV-SNP H200) — encrypted in flight, encrypted at rest, no plaintext at the provider. You call the local screenpipe server; it signs the upstream request with the user's cloud credential, which you do not have direct access to.
 
 ```bash
-curl -X POST https://api.screenpi.pe/v1/chat/completions \
-  -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+curl -X POST http://localhost:3030/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemma4-e4b",
@@ -33,6 +32,10 @@ curl -X POST https://api.screenpi.pe/v1/chat/completions \
 - Audio: 30 s max per clip (Gemma 4 spec); WAV/MP3 base64
 - Context: 128K tokens (model); `max_model_len` is 8192 in this deployment
 - Latency: ~5 s for 30 s audio, ~2 s for an image
+
+### Failure modes
+- `503 cloud_token_missing` — the user is signed out of screenpipe cloud. Tell them to sign in (Settings → Account) and retry.
+- `502 upstream_unreachable` — transient network issue against the enclave. Retry once; if it persists, report the error and fall back to local tools.
 
 ### When NOT to use it
 - For arbitrary text chat use the user's configured chat model (Claude, Gemini, etc.) — `gemma4-e4b` is for media.

@@ -8,6 +8,7 @@
     "test:bun": "bun test lib/utils/redact-pii.test.ts lib/utils/meeting-state.test.ts lib/__tests__/team-crypto.test.ts lib/__tests__/team-api-contract.test.ts components/__tests__/url-detection-benchmark.test.ts lib/hooks/__tests__/timeline-reconnection.test.ts lib/hooks/__tests__/timeline-store-logic.test.ts lib/hooks/__tests__/server-push-old-frames.test.ts lib/hooks/__tests__/window-focus-refresh.test.ts lib/hooks/__tests__/timeline-ui-issues.test.ts lib/events/__tests__/types.test.ts lib/hooks/__tests__/server-poll-logic.test.ts lib/events/__tests__/bus.test.ts",
     "test:watch": "bunx vitest --config vitest.config.ts",
     "test:e2e": "bun run wdio run e2e/wdio.conf.ts",
+    "test:e2e:audio-fallback:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording,cloud-audio-fallback bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/audio-fallback.spec.ts",
     "typecheck": "bunx tsc --noEmit",
     "build": "next build",
     "predev": "bun scripts/pre_build.js",

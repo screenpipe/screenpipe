@@ -219,7 +219,10 @@ impl ServerCore {
             }
         }
 
-        let meeting_detector: Option<Arc<MeetingDetector>> = {
+        let meeting_detector: Option<Arc<MeetingDetector>> = if config.disable_audio {
+            info!("meeting detector disabled because audio capture is disabled");
+            None
+        } else {
             let detector = Arc::new(MeetingDetector::new());
             info!("meeting detector enabled");
             Some(detector)
@@ -333,6 +336,17 @@ impl ServerCore {
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;
         server.api_auth_key = config.api_auth_key.clone();
+        // Cloud JWT for /v1/chat/completions proxy. config.user_id carries
+        // the Clerk JWT (despite the name — see line 96 where the same value
+        // is used as the cloud transcription bearer). Pi's bash deliberately
+        // can't see this token; the local proxy signs the upstream request.
+        if let Some(ref t) = config.user_id {
+            if !t.is_empty() {
+                if let Ok(mut g) = server.cloud_token.try_write() {
+                    *g = Some(t.clone());
+                }
+            }
+        }
         server.owned_browser = owned_browser;
 
         // Secret store — read-only keychain access on startup.

@@ -2638,9 +2638,6 @@ name = "esaxx-rs"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
-dependencies = [
- "cc",
-]
 
 [[package]]
 name = "etcetera"
@@ -7750,7 +7747,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -7765,7 +7762,6 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "env_logger",
- "esaxx-rs",
  "futures",
  "hf-hub 0.3.2",
  "hound",
@@ -7811,7 +7807,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "clap",
@@ -7826,7 +7822,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -7839,7 +7835,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7872,7 +7868,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -7920,7 +7916,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7946,7 +7942,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8021,7 +8017,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8039,7 +8035,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "clap",
@@ -8051,7 +8047,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8079,7 +8075,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "image",
  "mlx-rs",
@@ -8090,7 +8086,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -8148,7 +8144,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.334"
+version = "0.3.335"
 dependencies = [
  "argon2",
  "chacha20poly1305",

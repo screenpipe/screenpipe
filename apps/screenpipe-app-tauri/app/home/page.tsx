@@ -48,11 +48,13 @@ import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
+import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { useRouter } from "next/navigation";
@@ -101,6 +103,8 @@ function HomeContent() {
   const { isTranslucent } = useSidebarContext();
   const teamState = useTeam();
   const { isSectionHidden, isSettingLocked, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
+  const runningPipes = useRunningPipes();
+  const runningPipeCount = runningPipes.length;
   const selectChatConversation = useCallback((id: string) => {
     setActiveSection("home");
     useChatStore.getState().actions.setCurrent(id);
@@ -127,7 +131,7 @@ function HomeContent() {
   // Mount the Pi event router once, app-wide. Listens for `pi_event` /
   // `pi_session_evicted` outside any chat-component lifecycle and mirrors
   // per-session liveness into the chat store. This is what lets the chat
-  // sidebar show a live ● dot for sessions running in the background while
+  // sidebar show live activity for sessions running in the background while
   // the user is on Timeline / Pipes / Settings — without it, status would
   // freeze the moment the chat unmounts. Idempotent.
   useEffect(() => {
@@ -846,8 +850,8 @@ function HomeContent() {
                         }
                       }}
                       className={cn(
-                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
-                        sidebarCollapsed ? "justify-center" : "space-x-2.5",
+                        "relative w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
+                        sidebarCollapsed ? "justify-center" : "gap-2.5",
                         isActive
                           ? isTranslucent
                             ? "vibrant-nav-active"
@@ -865,7 +869,25 @@ function HomeContent() {
                       )}>
                         {section.icon}
                       </div>
-                      {!sidebarCollapsed && <span className={cn("text-xs truncate", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
+                      {!sidebarCollapsed && <span className={cn("text-xs truncate", section.id === "pipes" && runningPipeCount > 0 && "flex-1", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
+                      {section.id === "pipes" && runningPipeCount > 0 && (
+                        sidebarCollapsed ? (
+                          <PipeActivityIndicator
+                            kind="running"
+                            iconOnly
+                            className="pointer-events-none absolute right-1 top-1 scale-[0.72]"
+                            ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
+                          />
+                        ) : (
+                          <PipeActivityIndicator
+                            kind="running"
+                            label={runningPipeCount}
+                            className="ml-auto shrink-0"
+                            labelClassName="text-muted-foreground/60"
+                            ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
+                          />
+                        )
+                      )}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -1058,7 +1080,7 @@ function HomeContent() {
                 Pi response and lost the partial token stream.
                 The ChatSidebar (recents + live status) is part of the same
                 layer so it's mounted with the chat. The pi-event-router (see
-                the useEffect above) updates the sidebar dots independently
+                the useEffect above) updates sidebar activity independently
                 of the chat panel, so background sessions keep pulsing in the
                 sidebar even on non-chat views — though the sidebar itself is
                 only visible when the user navigates back to the chat. */}

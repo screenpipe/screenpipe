@@ -129,6 +129,85 @@ const getAppIconUrl = (appName: string): string => {
   return `http://localhost:11435/app-icon?name=${encodeURIComponent(appName)}`;
 };
 
+const FALLBACK_TRANSCRIPTION_ENGINE = "whisper-large-v3-turbo-quantized";
+
+const TRANSCRIPTION_ENGINE_LABELS: Record<string, string> = {
+  "screenpipe-cloud": "Screenpipe Cloud",
+  deepgram: "Deepgram",
+  "whisper-large-v3-turbo": "Whisper Turbo",
+  "whisper-large-v3-turbo-quantized": "Whisper Turbo (fast)",
+  "whisper-tiny": "Whisper Tiny",
+  "whisper-tiny-quantized": "Whisper Tiny (fast)",
+  "openai-compatible": "OpenAI Compatible",
+  "qwen3-asr": "Qwen3-ASR",
+  parakeet: "Parakeet",
+  disabled: "Disabled (capture only)",
+};
+
+type AudioEngineFallbackReason =
+  | "notLoggedIn"
+  | "notSubscribed"
+  | "missingDeepgramKey";
+
+type AudioEngineResolution = {
+  requested: string;
+  active: string;
+  fallbackReason: AudioEngineFallbackReason | null;
+};
+
+const getTranscriptionEngineLabel = (engine: string) =>
+  TRANSCRIPTION_ENGINE_LABELS[engine] ?? engine;
+
+const getAudioEngineResolution = (settings: Settings): AudioEngineResolution => {
+  const requested = settings.audioTranscriptionEngine;
+  const fallback = FALLBACK_TRANSCRIPTION_ENGINE;
+  const hasCloudAuth = Boolean(settings.user?.token || settings.user?.id);
+  const hasDeepgramKey = Boolean(
+    settings.deepgramApiKey && settings.deepgramApiKey !== "default"
+  );
+
+  if (requested === "screenpipe-cloud" && !hasCloudAuth) {
+    return {
+      requested,
+      active: fallback,
+      fallbackReason: "notLoggedIn",
+    };
+  }
+
+  if (requested === "screenpipe-cloud" && !settings.user?.cloud_subscribed) {
+    return {
+      requested,
+      active: fallback,
+      fallbackReason: "notSubscribed",
+    };
+  }
+
+  if (requested === "deepgram" && !hasDeepgramKey) {
+    return {
+      requested,
+      active: fallback,
+      fallbackReason: "missingDeepgramKey",
+    };
+  }
+
+  return {
+    requested,
+    active: requested,
+    fallbackReason: null,
+  };
+};
+
+const getAudioFallbackMessage = (reason: AudioEngineFallbackReason) => {
+  switch (reason) {
+    case "notLoggedIn":
+      return "You are not logged in, so audio is being transcribed locally.";
+    case "notSubscribed":
+      return "Screenpipe Cloud requires an active subscription, so audio is being transcribed locally.";
+    case "missingDeepgramKey":
+      return "Deepgram has no API key configured, so audio is being transcribed locally.";
+  }
+};
+
 const createWindowOptions = (
   windowItems: { name: string; count: number; app_name?: string }[],
   existingPatterns: string[]
@@ -555,6 +634,17 @@ export function RecordingSettings() {
   useEffect(() => {
     commands.getHardwareCapability().then(setHwCapability).catch(() => {});
   }, []);
+
+  const audioEngineResolution = useMemo(
+    () => getAudioEngineResolution(settings),
+    [
+      settings.audioTranscriptionEngine,
+      settings.deepgramApiKey,
+      settings.user?.cloud_subscribed,
+      settings.user?.id,
+      settings.user?.token,
+    ]
+  );
 
   const handlePushFilterToTeam = async (configType: string, key: string, filters: string[]) => {
     setPushingFilter(key);
@@ -1243,6 +1333,75 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </SelectContent>
               </Select>
             </div>
+            {audioEngineResolution.fallbackReason && (
+              <Alert
+                data-testid="audio-engine-fallback-alert"
+                className="mt-2 ml-[26px] border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+              >
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle className="text-xs font-semibold">
+                  {getTranscriptionEngineLabel(audioEngineResolution.requested)} is not active
+                </AlertTitle>
+                <AlertDescription className="space-y-2 text-xs">
+                  <p>{getAudioFallbackMessage(audioEngineResolution.fallbackReason)}</p>
+                  <div className="grid gap-1">
+                    <div>
+                      Saved choice:{" "}
+                      <span className="font-medium">
+                        {getTranscriptionEngineLabel(audioEngineResolution.requested)}
+                      </span>
+                    </div>
+                    <div>
+                      Active now:{" "}
+                      <span className="font-medium">
+                        {getTranscriptionEngineLabel(audioEngineResolution.active)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {audioEngineResolution.fallbackReason === "notLoggedIn" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        data-testid="audio-engine-fallback-login"
+                        onClick={() => checkLogin(settings.user)}
+                      >
+                        Log in
+                      </Button>
+                    )}
+                    {audioEngineResolution.fallbackReason === "notSubscribed" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        data-testid="audio-engine-fallback-upgrade"
+                        onClick={() => openUrl("https://screenpi.pe/billing")}
+                      >
+                        Upgrade
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      data-testid="audio-engine-fallback-use-whisper"
+                      onClick={() =>
+                        handleSettingsChange(
+                          { audioTranscriptionEngine: FALLBACK_TRANSCRIPTION_ENGINE },
+                          true
+                        )
+                      }
+                    >
+                      Use Whisper setting
+                    </Button>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            )}
             {settings.audioTranscriptionEngine === "deepgram" && (
               <div className="mt-2 ml-[26px] relative">
                 <ValidatedInput

@@ -84,6 +84,8 @@ mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
+#[cfg(target_os = "windows")]
+mod windows_webview_env;
 
 pub use server::*;
 
@@ -325,6 +327,9 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
 #[tokio::main]
 async fn main() {
     let _ = fix_path_env::fix();
+
+    #[cfg(target_os = "windows")]
+    windows_webview_env::install_user_data_dir();
 
     // Refuse to launch while a `screenpipe db recover|cleanup` operation is in
     // progress. The CLI writes ~/.screenpipe/.db_recovery.lock before doing
@@ -1288,6 +1293,9 @@ async fn main() {
                 registry.init();
             }
 
+            #[cfg(target_os = "windows")]
+            windows_webview_env::log_diagnostics();
+
             // Windows-specific setup
             if cfg!(windows) {
                 let exe_dir = env::current_exe()
@@ -1339,10 +1347,24 @@ async fn main() {
             // app without granting Screen Recording / Microphone TCC. The
             // server (DB + HTTP) still boots; only SCK + audio capture skip.
             // See get_e2e_seed_flags above for parsing.
-            if get_e2e_seed_flags().iter().any(|f| f == "no-recording") {
+            let e2e_flags = get_e2e_seed_flags();
+            if e2e_flags.iter().any(|f| f == "no-recording") {
                 store.recording.disable_audio = true;
                 store.recording.disable_vision = true;
                 info!("E2E seed: recording disabled (vision + audio)");
+            }
+            if e2e_flags.iter().any(|f| f == "cloud-audio-fallback") {
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+                store.user = store::User::default();
+                store
+                    .extra
+                    .insert("_parakeetDefaultMigrationDone".to_string(), json!(true));
+                store
+                    .extra
+                    .insert("_proCloudMigrationDone".to_string(), json!(true));
+                info!("E2E seed: screenpipe cloud audio fallback");
             }
 
             app.manage(store.clone());
@@ -1712,6 +1734,8 @@ async fn main() {
                             if !disable_audio && !permissions_check.microphone.permitted() {
                                 warn!("Microphone permission not granted: {:?}. Audio recording will not work.", permissions_check.microphone);
                             }
+
+                            crate::recording::notify_audio_engine_fallback(&store_clone);
 
                             info!("Starting server core + capture on dedicated runtime...");
 

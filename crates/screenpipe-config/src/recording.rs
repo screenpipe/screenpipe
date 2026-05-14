@@ -137,6 +137,13 @@ pub struct RecordingSettings {
     #[serde(rename = "maxSnapshotWidth", default = "default_max_snapshot_width")]
     pub max_snapshot_width: u32,
 
+    /// Skip the background JPEG→MP4 snapshot compaction worker.
+    /// Use when the MP4 timeline UI is not used (e.g. task-mining tools that consume
+    /// `accessibility_text` / `ui_events` only) — avoids the ffmpeg H.265 encoding load.
+    /// Side effect: JPEGs are not compacted, so disk usage depends on `--retention-days`.
+    #[serde(rename = "disableSnapshotCompaction", default)]
+    pub disable_snapshot_compaction: bool,
+
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
     #[serde(rename = "ignoredWindows")]
@@ -369,6 +376,7 @@ impl Default for RecordingSettings {
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
             max_snapshot_width: default_max_snapshot_width(),
+            disable_snapshot_compaction: false,
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],

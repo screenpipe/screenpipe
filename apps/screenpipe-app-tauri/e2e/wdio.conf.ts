@@ -18,7 +18,17 @@ const shouldRecordDesktopSession =
 const sessionRecorder = shouldRecordDesktopSession ? new TestRecorder() : null;
 const sessionVideoDir = resolve(__dirname, 'videos', 'session');
 
-export const config: Options.Testrunner = {
+type TestrunnerConfig = Options.Testrunner & Record<string, unknown> & {
+  autoCompileOpts?: {
+    autoCompile?: boolean;
+    tsNodeOpts?: {
+      project?: string;
+      transpileOnly?: boolean;
+    };
+  };
+};
+
+export const config: TestrunnerConfig = {
   runner: 'local',
 
   autoCompileOpts: {

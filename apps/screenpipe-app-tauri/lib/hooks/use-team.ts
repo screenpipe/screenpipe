@@ -288,6 +288,47 @@ export function useTeam() {
     [token, fetchTeam]
   );
 
+  // bootstrap secure sharing for teams created on web/checkout before the
+  // desktop app had a chance to generate the local encryption key.
+  const initializeTeamKey = useCallback(async () => {
+    if (!token) throw new Error("not logged in");
+    if (!state.team) throw new Error("no team");
+    if (state.role !== "admin") {
+      throw new Error("only team admins can initialize secure sharing");
+    }
+    if (state.configs.length > 0 && !teamKeyRef.current) {
+      throw new Error(
+        "this team already has shared configs. paste a secure invite link from another admin device to sync the existing key."
+      );
+    }
+
+    const key = teamKeyRef.current ?? (await generateTeamKey());
+    await saveTeamKeyToStore(state.team.id, key);
+    teamKeyRef.current = key;
+
+    const inviteLink =
+      state.inviteLink ?? (await createInviteLink(state.team.name, key, true));
+
+    setState((s) => ({
+      ...s,
+      inviteLink,
+      invitePassphrase: null,
+      missingKey: false,
+      error: null,
+    }));
+    await fetchConfigs(state.team.id, key);
+
+    return inviteLink;
+  }, [
+    token,
+    state.team,
+    state.role,
+    state.configs.length,
+    state.inviteLink,
+    createInviteLink,
+    fetchConfigs,
+  ]);
+
   // join team via:
   // 1. new flow: claim token + passphrase (key fetched from server, unwrapped locally)
   // 2. legacy flow: raw base64 key in URL (backwards compat for old invite links)
@@ -537,6 +578,7 @@ export function useTeam() {
     ...state,
     fetchTeam,
     createTeam,
+    initializeTeamKey,
     joinTeam,
     leaveTeam,
     deleteTeam,

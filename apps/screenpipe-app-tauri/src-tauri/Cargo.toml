@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.4.207"
+version = "2.4.210"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -201,10 +201,15 @@ image = "0.25.5"
 windows-icons = { git = "https://github.com/tribhuwan-kumar/windows-icons.git" }
 base64 = "0.22.1"
 raw-window-handle = "0.6"
+webview2-com = "=0.38.2"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
     "Win32_Graphics_Dwm",
+    "Win32_System_Com",
+    "Win32_System_Threading",
     "Win32_Security_Cryptography",
 ] }
 

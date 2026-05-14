@@ -56,8 +56,10 @@ const APP_ROOT = resolve(__dirname, '../..');
 //
 // Override with `SCREENPIPE_E2E_SEED=onboarding` (or any custom value) when
 // running on a host that DOES have TCC granted and you want to exercise the
-// real capture pipeline. The same env var is read by specs (e.g. timeline)
-// to skip when recording is off.
+// real capture pipeline. `cloud-audio-fallback` is an opt-in macOS seed that
+// leaves audio UI enabled, disables vision, and saves Screenpipe Cloud while
+// logged out so the fallback UX can be asserted. The same env var is read by
+// specs (e.g. timeline) to skip when recording is off.
 export const E2E_SEED_FLAGS = process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording';
 
 export function getAppPath(): string {
