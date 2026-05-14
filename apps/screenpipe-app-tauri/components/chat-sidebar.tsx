@@ -372,10 +372,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     // rows + section headers sit 8px left of the main nav items
     // (Timeline / Memories / ...) and look misaligned.
     <div
-      className={cn("flex flex-col min-h-0 text-sm px-2", className)}
+      className={cn("flex flex-col min-h-full text-sm px-2", className)}
       data-testid="chat-sidebar"
     >
-      <div className="flex-1 min-h-0 flex flex-col gap-2">
+      <div className="flex-1 min-h-0 flex flex-col gap-1">
         {hasScheduledSlice && (
           <div
             className={cn(
@@ -384,32 +384,46 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
             )}
           >
             {upcomingPipes.length > 0 && (
-              <Section
-                title="upcoming"
-                count={upcomingPipes.length}
-                collapsed={upcomingCollapsed}
-                onCollapsedChange={setUpcomingCollapsed}
-                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-                onBodyScroll={() => handleSliceScroll("scheduled")}
+              <div
+                className={cn(
+                  "min-h-0 flex flex-col shrink-0",
+                  upcomingCollapsed ? "" : "flex-1"
+                )}
               >
-                {upcomingPipes.map((p) => (
-                  <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
-                ))}
-              </Section>
+                <Section
+                  title="upcoming"
+                  count={upcomingPipes.length}
+                  collapsed={upcomingCollapsed}
+                  onCollapsedChange={setUpcomingCollapsed}
+                  bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                  onBodyScroll={() => handleSliceScroll("scheduled")}
+                >
+                  {upcomingPipes.map((p) => (
+                    <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
+                  ))}
+                </Section>
+              </div>
             )}
             {runningPipes.length > 0 && (
-              <Section
-                title="scheduled"
-                count={runningPipes.length}
-                collapsed={scheduledCollapsed}
-                onCollapsedChange={setScheduledCollapsed}
-                bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
-                onBodyScroll={() => handleSliceScroll("scheduled")}
+              <div
+                className={cn(
+                  "min-h-0 flex flex-col shrink-0",
+                  scheduledCollapsed ? "" : "flex-1"
+                )}
               >
-                {runningPipes.map((p) => (
-                  <ScheduledRow key={p.pipeName} pipe={p} />
-                ))}
-              </Section>
+                <Section
+                  title="scheduled"
+                  count={runningPipes.length}
+                  collapsed={scheduledCollapsed}
+                  onCollapsedChange={setScheduledCollapsed}
+                  bodyClassName="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                  onBodyScroll={() => handleSliceScroll("scheduled")}
+                >
+                  {runningPipes.map((p) => (
+                    <ScheduledRow key={p.pipeName} pipe={p} />
+                  ))}
+                </Section>
+              </div>
             )}
           </div>
         )}
@@ -419,7 +433,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
             <div
               className={cn(
                 "min-h-0 flex flex-col shrink-0",
-                pinnedCollapsed ? "" : (openAllCollapsed ? "flex-1" : "max-h-[30%]")
+                pinnedCollapsed ? "" : "max-h-[40%]"
               )}
             >
               <Section
@@ -448,12 +462,12 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
             </div>
           )}
 
-          <div className="min-h-0 flex flex-col flex-1">
-            <div className="min-h-0 flex flex-col flex-1">
+          <div className="min-h-0 flex flex-col">
+            <div className="min-h-0 flex flex-col">
               <div
                 className={cn(
                   "min-h-0 flex flex-col",
-                  archived.length > 0 && !archivedCollapsed ? "max-h-[70%]" : "",
+                  archived.length > 0 && !archivedCollapsed ? "max-h-[75%]" : "flex-1",
                   recentsCollapsed ? "shrink-0" : ""
                 )}
               >
@@ -491,10 +505,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
                 <div
                   className={cn(
                     "min-h-0 flex flex-col",
-                    archivedCollapsed ? "shrink-0" : "",
-                    !archivedCollapsed
-                      ? (recentsCollapsed ? "flex-1" : "max-h-[30%]")
-                      : ""
+                    !archivedCollapsed ? "flex-1" : ""
                   )}
                 >
                   <Section
