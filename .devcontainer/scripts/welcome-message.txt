@@ -4,5 +4,9 @@
 
 📝 We have set up an alias 'test-linux' for 'linux_integration.sh' in your shell configurations.
 
+📝 We have set up an alias 'dev-screenpipe' to run Screenpipe continuously for development.
+
 💻 You can run 'test-linux' in the terminal to check if the Linux build of the app is working.
+
+💻 You can run 'dev-screenpipe' in the terminal to keep Screenpipe running while you iterate.
 
