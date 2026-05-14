@@ -4,7 +4,8 @@
  * These tests verify the frame handling logic that would be called when new frames arrive.
  */
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
+import { mergeTimelineFrames } from "../timeline-frame-merge";
 
 // Define the types we need for testing
 interface DeviceResponse {
@@ -59,28 +60,13 @@ function simulateFlushFrameBuffer(
   existingTimestamps: Set<string>,
   newFrames: StreamTimeSeriesResponse[]
 ): { frames: StreamTimeSeriesResponse[]; timestamps: Set<string> } {
-  // Filter out duplicates using O(1) Set lookup
-  const newUniqueFrames = newFrames.filter(
-    (frame) => !existingTimestamps.has(frame.timestamp)
-  );
-
-  if (newUniqueFrames.length === 0) {
-    return { frames: existingFrames, timestamps: existingTimestamps };
-  }
-
-  // Add new timestamps to the Set
-  const updatedTimestamps = new Set(existingTimestamps);
-  newUniqueFrames.forEach((frame) => {
-    updatedTimestamps.add(frame.timestamp);
+  const result = mergeTimelineFrames({
+    existingFrames,
+    existingTimestamps,
+    incomingFrames: newFrames,
   });
 
-  // Single sort per flush instead of per-message
-  const mergedFrames = [...existingFrames, ...newUniqueFrames].sort((a, b) => {
-    // Direct string comparison works for ISO timestamps (lexicographic = chronologic)
-    return b.timestamp.localeCompare(a.timestamp);
-  });
-
-  return { frames: mergedFrames, timestamps: updatedTimestamps };
+  return { frames: result.frames, timestamps: result.timestamps };
 }
 
 describe("Timeline Store Logic - Frame Refresh Bug Tests", () => {
@@ -308,6 +294,63 @@ describe("Timeline Store Logic - Frame Refresh Bug Tests", () => {
     expect(sorted[2]).toBe("2024-01-15T19:41:01Z");
     expect(sorted[3]).toBe("2024-01-15T19:41:00Z");
     expect(sorted[4]).toBe("2024-01-15T09:00:00Z"); // Earliest
+  });
+
+  it("should merge interleaved batches without changing sort semantics", () => {
+    const existingFrames = [
+      createMockFrame("2024-01-15T19:55:00Z", "device1", 4),
+      createMockFrame("2024-01-15T19:50:00Z", "device1", 3),
+      createMockFrame("2024-01-15T19:41:00Z", "device1", 1),
+    ];
+    const existingTimestamps = new Set(existingFrames.map((f) => f.timestamp));
+    const newFrames = [
+      createMockFrame("2024-01-15T19:52:00Z", "device1", 5),
+      createMockFrame("2024-01-15T19:43:00Z", "device1", 2),
+      createMockFrame("2024-01-15T19:41:00Z", "device1", 1),
+    ];
+
+    const result = mergeTimelineFrames({
+      existingFrames,
+      existingTimestamps,
+      incomingFrames: newFrames,
+    });
+
+    expect(result.frames.map((f) => f.timestamp)).toEqual([
+      "2024-01-15T19:55:00Z",
+      "2024-01-15T19:52:00Z",
+      "2024-01-15T19:50:00Z",
+      "2024-01-15T19:43:00Z",
+      "2024-01-15T19:41:00Z",
+    ]);
+    expect(result.newAtFront).toBe(0);
+  });
+
+  it("should replace frames atomically for date navigation", () => {
+    const existingFrames = [
+      createMockFrame("2024-01-15T19:55:00Z", "device1", 4),
+    ];
+    const existingTimestamps = new Set(existingFrames.map((f) => f.timestamp));
+    const newFrames = [
+      createMockFrame("2024-01-14T10:05:00Z", "device1", 5),
+      createMockFrame("2024-01-14T10:00:00Z", "device1", 6),
+      createMockFrame("2024-01-14T10:05:00Z", "device1", 5),
+    ];
+
+    const result = mergeTimelineFrames({
+      existingFrames,
+      existingTimestamps,
+      incomingFrames: newFrames,
+      replace: true,
+    });
+
+    expect(result.frames.map((f) => f.timestamp)).toEqual([
+      "2024-01-14T10:05:00Z",
+      "2024-01-14T10:00:00Z",
+    ]);
+    expect([...result.timestamps].sort()).toEqual([
+      "2024-01-14T10:00:00Z",
+      "2024-01-14T10:05:00Z",
+    ]);
   });
 });
 

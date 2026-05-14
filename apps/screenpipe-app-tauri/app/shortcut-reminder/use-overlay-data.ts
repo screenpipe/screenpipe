@@ -28,6 +28,7 @@ interface UseOverlayDataOptions {
   quantize?: boolean;
   includeOcrPulse?: boolean;
   includeDeviceLevels?: boolean;
+  pauseWhenHidden?: boolean;
 }
 
 const roundTo = (value: number, step: number) =>
@@ -37,7 +38,9 @@ const normalizeOverlayData = (
   data: OverlayData,
   options: Required<UseOverlayDataOptions>,
 ): OverlayData => {
-  if (!options.quantize && options.includeDeviceLevels) return data;
+  if (!options.quantize && options.includeDeviceLevels && options.includeOcrPulse) {
+    return data;
+  }
 
   return {
     audioActive: data.audioActive,
@@ -78,14 +81,22 @@ export function useOverlayData(
   const quantize = options.quantize ?? false;
   const includeOcrPulse = options.includeOcrPulse ?? true;
   const includeDeviceLevels = options.includeDeviceLevels ?? true;
+  const pauseWhenHidden = options.pauseWhenHidden ?? true;
   const normalizedOptions: Required<UseOverlayDataOptions> = useMemo(
     () => ({
       minIntervalMs,
       quantize,
       includeOcrPulse,
       includeDeviceLevels,
+      pauseWhenHidden,
     }),
-    [includeDeviceLevels, includeOcrPulse, minIntervalMs, quantize],
+    [
+      includeDeviceLevels,
+      includeOcrPulse,
+      minIntervalMs,
+      pauseWhenHidden,
+      quantize,
+    ],
   );
   const [data, setData] = useState<OverlayData>(INITIAL_STATE);
   const wsRef = useRef<WebSocket | null>(null);
@@ -98,6 +109,34 @@ export function useOverlayData(
   // Previous counters for delta computation
   const prevFramesCaptured = useRef<number | null>(null);
   const prevOcrCompleted = useRef<number | null>(null);
+
+  const clearRetry = useCallback(() => {
+    if (retryRef.current) {
+      clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
+  }, []);
+
+  const closeSocket = useCallback((code = 1000, reason = "cleanup") => {
+    const ws = wsRef.current;
+    if (!ws) return;
+
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+    try {
+      if (
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING
+      ) {
+        ws.close(code, reason);
+      }
+    } catch {
+      // ignore
+    }
+    if (wsRef.current === ws) wsRef.current = null;
+  }, []);
 
   const applyData = useCallback(
     (rawData: OverlayData) => {
@@ -135,90 +174,135 @@ export function useOverlayData(
   );
 
   const connect = useCallback(() => {
+    const shouldPause =
+      normalizedOptions.pauseWhenHidden &&
+      typeof document !== "undefined" &&
+      document.hidden;
+    if (shouldPause) {
+      closeSocket(1000, "document hidden");
+      clearRetry();
+      return;
+    }
+
     void (async () => {
-      if (wsRef.current) {
-        try {
-          if (
-            wsRef.current.readyState === WebSocket.OPEN ||
-            wsRef.current.readyState === WebSocket.CONNECTING
-          ) {
-            wsRef.current.close();
-          }
-        } catch {
-          // ignore
-        }
-        wsRef.current = null;
-      }
+      closeSocket(1000, "refreshing");
 
       try {
         await ensureApiReady();
+        if (
+          normalizedOptions.pauseWhenHidden &&
+          typeof document !== "undefined" &&
+          document.hidden
+        ) {
+          closeSocket(1000, "document hidden");
+          clearRetry();
+          return;
+        }
+
         const wsBase = getApiBaseUrl().replace("http://", "ws://");
         const ws = new WebSocket(
           appendAuthToken(`${wsBase}/ws/metrics`),
         );
         wsRef.current = ws;
 
-      ws.onopen = () => {
-        backoffRef.current = 1000;
-        if (retryRef.current) {
-          clearTimeout(retryRef.current);
-          retryRef.current = null;
+        ws.onopen = () => {
+          backoffRef.current = 1000;
+          clearRetry();
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const m = JSON.parse(event.data);
+
+            // Audio: real-time RMS level (updated every ~50-100ms in backend, sent every 500ms)
+            const audioLevel = m.audio?.audio_level_rms ?? 0;
+            // Amplify: raw RMS is typically 0.001-0.05 for speech, scale up for visualization
+            const speechRatio = Math.min(1, audioLevel * 15);
+            const audioActive = audioLevel > 0.001;
+
+            // Per-device audio levels
+            const rawDeviceLevels: Record<string, number> = m.audio?.device_levels ?? {};
+            const deviceLevels: Record<string, number> = {};
+            for (const [name, level] of Object.entries(rawDeviceLevels)) {
+              deviceLevels[name] = Math.min(1, (level as number) * 15);
+            }
+
+            // Vision: delta-based FPS from frame counters (updates every 500ms)
+            const curFrames = m.vision?.frames_captured ?? 0;
+            let captureFps = 0;
+            let screenActive = false;
+            if (prevFramesCaptured.current !== null) {
+              const deltaFrames = curFrames - prevFramesCaptured.current;
+              captureFps = deltaFrames / 0.5; // 500ms interval
+              screenActive = deltaFrames > 0;
+            }
+            prevFramesCaptured.current = curFrames;
+
+            // OCR pulse: detect new OCR completions from counter delta
+            const curOcr = m.vision?.ocr_completed ?? 0;
+            let ocrPulseTimestamp = 0;
+            if (prevOcrCompleted.current !== null && curOcr > prevOcrCompleted.current) {
+              ocrPulseTimestamp = Date.now();
+            }
+            prevOcrCompleted.current = curOcr;
+
+            applyData({
+              audioActive,
+              speechRatio,
+              screenActive,
+              captureFps,
+              ocrPulseTimestamp:
+                ocrPulseTimestamp ||
+                pendingDataRef.current?.ocrPulseTimestamp ||
+                lastDataRef.current.ocrPulseTimestamp,
+              deviceLevels,
+            });
+          } catch {
+            // ignore parse errors
+          }
+        };
+
+        const scheduleRetry = () => {
+          if (
+            normalizedOptions.pauseWhenHidden &&
+            typeof document !== "undefined" &&
+            document.hidden
+          ) {
+            return;
+          }
+          if (!retryRef.current) {
+            retryRef.current = setTimeout(() => {
+              retryRef.current = null;
+              connect();
+            }, backoffRef.current);
+            backoffRef.current = Math.min(backoffRef.current * 2, 10000);
+          }
+        };
+
+        ws.onerror = () => {
+          const offlineData = {
+            ...lastDataRef.current,
+            audioActive: false,
+            screenActive: false,
+          };
+          lastDataRef.current = offlineData;
+          setData(offlineData);
+          scheduleRetry();
+        };
+
+        ws.onclose = (event) => {
+          if (event.code !== 1000) {
+            scheduleRetry();
+          }
+        };
+      } catch {
+        if (
+          normalizedOptions.pauseWhenHidden &&
+          typeof document !== "undefined" &&
+          document.hidden
+        ) {
+          return;
         }
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const m = JSON.parse(event.data);
-
-          // Audio: real-time RMS level (updated every ~50-100ms in backend, sent every 500ms)
-          const audioLevel = m.audio?.audio_level_rms ?? 0;
-          // Amplify: raw RMS is typically 0.001-0.05 for speech, scale up for visualization
-          const speechRatio = Math.min(1, audioLevel * 15);
-          const audioActive = audioLevel > 0.001;
-
-          // Per-device audio levels
-          const rawDeviceLevels: Record<string, number> = m.audio?.device_levels ?? {};
-          const deviceLevels: Record<string, number> = {};
-          for (const [name, level] of Object.entries(rawDeviceLevels)) {
-            deviceLevels[name] = Math.min(1, (level as number) * 15);
-          }
-
-          // Vision: delta-based FPS from frame counters (updates every 500ms)
-          const curFrames = m.vision?.frames_captured ?? 0;
-          let captureFps = 0;
-          let screenActive = false;
-          if (prevFramesCaptured.current !== null) {
-            const deltaFrames = curFrames - prevFramesCaptured.current;
-            captureFps = deltaFrames / 0.5; // 500ms interval
-            screenActive = deltaFrames > 0;
-          }
-          prevFramesCaptured.current = curFrames;
-
-          // OCR pulse: detect new OCR completions from counter delta
-          const curOcr = m.vision?.ocr_completed ?? 0;
-          let ocrPulseTimestamp = 0;
-          if (prevOcrCompleted.current !== null && curOcr > prevOcrCompleted.current) {
-            ocrPulseTimestamp = Date.now();
-          }
-          prevOcrCompleted.current = curOcr;
-
-          applyData({
-            audioActive,
-            speechRatio,
-            screenActive,
-            captureFps,
-            ocrPulseTimestamp:
-              ocrPulseTimestamp ||
-              pendingDataRef.current?.ocrPulseTimestamp ||
-              lastDataRef.current.ocrPulseTimestamp,
-            deviceLevels,
-          });
-        } catch {
-          // ignore parse errors
-        }
-      };
-
-      const scheduleRetry = () => {
         if (!retryRef.current) {
           retryRef.current = setTimeout(() => {
             retryRef.current = null;
@@ -226,64 +310,54 @@ export function useOverlayData(
           }, backoffRef.current);
           backoffRef.current = Math.min(backoffRef.current * 2, 10000);
         }
-      };
-
-      ws.onerror = () => {
-        const offlineData = {
-          ...lastDataRef.current,
-          audioActive: false,
-          screenActive: false,
-        };
-        lastDataRef.current = offlineData;
-        setData(offlineData);
-        scheduleRetry();
-      };
-
-      ws.onclose = (event) => {
-        if (event.code !== 1000) {
-          scheduleRetry();
-        }
-      };
-    } catch {
-      if (!retryRef.current) {
-        retryRef.current = setTimeout(() => {
-          retryRef.current = null;
-          connect();
-        }, backoffRef.current);
-        backoffRef.current = Math.min(backoffRef.current * 2, 10000);
       }
-    }
     })();
-  }, [applyData]);
+  }, [
+    applyData,
+    clearRetry,
+    closeSocket,
+    normalizedOptions.pauseWhenHidden,
+  ]);
 
   useEffect(() => {
     connect();
 
     return () => {
-      if (wsRef.current) {
-        try {
-          if (
-            wsRef.current.readyState === WebSocket.OPEN ||
-            wsRef.current.readyState === WebSocket.CONNECTING
-          ) {
-            wsRef.current.close(1000, "unmount");
-          }
-        } catch {
-          // ignore
-        }
-        wsRef.current = null;
-      }
-      if (retryRef.current) {
-        clearTimeout(retryRef.current);
-        retryRef.current = null;
-      }
+      closeSocket(1000, "unmount");
+      clearRetry();
       if (throttleRef.current) {
         clearTimeout(throttleRef.current);
         throttleRef.current = null;
       }
       pendingDataRef.current = null;
     };
-  }, [connect]);
+  }, [clearRetry, closeSocket, connect]);
+
+  useEffect(() => {
+    if (!normalizedOptions.pauseWhenHidden || typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        closeSocket(1000, "document hidden");
+        clearRetry();
+        return;
+      }
+
+      connect();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    clearRetry,
+    closeSocket,
+    connect,
+    normalizedOptions.pauseWhenHidden,
+  ]);
 
   return data;
 }

@@ -55,8 +55,9 @@ function textSimilarity(a: string, b: string): number {
 	return (2 * overlap) / (wordsA.size + wordsB.size);
 }
 
-function deduplicateAudio<T extends { audio_chunk_id: number; is_input: boolean; transcription: string; frameTimestamp: Date }>(
-	entries: T[]
+function deduplicateAudioByTime<T extends { audio_chunk_id: number; is_input: boolean; transcription: string }>(
+	entries: T[],
+	getTime: (entry: T) => number,
 ): T[] {
 	if (entries.length <= 1) return entries;
 
@@ -72,75 +73,51 @@ function deduplicateAudio<T extends { audio_chunk_id: number; is_input: boolean;
 		}
 	}
 
-	// Phase 2: Remove cross-device duplicates (input mic + output display capture same speech)
+	// Phase 2: Remove cross-device duplicates (input mic + output display capture same speech).
+	// Entries are timestamp-sorted by callers, so compare only against the
+	// retained entries inside the duplicate window instead of doing O(n^2)
+	// pairwise scans across a whole meeting/day.
 	const kept: T[] = [];
-	const removed = new Set<number>();
 
-	for (let i = 0; i < uniqueEntries.length; i++) {
-		if (removed.has(i)) continue;
-		for (let j = i + 1; j < uniqueEntries.length; j++) {
-			if (removed.has(j)) continue;
-			if (uniqueEntries[i].is_input === uniqueEntries[j].is_input) continue;
-			const timeDiff = Math.abs(
-				uniqueEntries[i].frameTimestamp.getTime() - uniqueEntries[j].frameTimestamp.getTime()
-			);
-			if (timeDiff > DEDUP_TIME_THRESHOLD_MS) continue;
-			const sim = textSimilarity(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
+	for (const entry of uniqueEntries) {
+		const entryTime = getTime(entry);
+		let duplicateIndex = -1;
+
+		for (let i = kept.length - 1; i >= 0; i--) {
+			const existing = kept[i];
+			const timeDiff = Math.abs(entryTime - getTime(existing));
+			if (timeDiff > DEDUP_TIME_THRESHOLD_MS && getTime(existing) < entryTime) {
+				break;
+			}
+			if (entry.is_input === existing.is_input) continue;
+			const sim = textSimilarity(entry.transcription, existing.transcription);
 			if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
-				if (uniqueEntries[j].is_input) {
-					removed.add(i);
-				} else {
-					removed.add(j);
-				}
+				duplicateIndex = i;
+				break;
 			}
 		}
-		if (!removed.has(i)) kept.push(uniqueEntries[i]);
+
+		if (duplicateIndex === -1) {
+			kept.push(entry);
+		} else if (entry.is_input && !kept[duplicateIndex].is_input) {
+			kept[duplicateIndex] = entry;
+		}
 	}
+
 	return kept;
+}
+
+function deduplicateAudio<T extends { audio_chunk_id: number; is_input: boolean; transcription: string; frameTimestamp: Date }>(
+	entries: T[]
+): T[] {
+	return deduplicateAudioByTime(entries, (entry) => entry.frameTimestamp.getTime());
 }
 
 // Exported for use in audio-transcript.tsx conversation view
 export function deduplicateAudioItems<T extends { audio_chunk_id: number; is_input: boolean; transcription: string; timestamp: Date }>(
 	entries: T[]
 ): T[] {
-	if (entries.length <= 1) return entries;
-
-	// Phase 1: Remove exact duplicates (same chunk_id + same transcription text)
-	const seen = new Set<string>();
-	const uniqueEntries: T[] = [];
-	for (const entry of entries) {
-		const key = `${entry.audio_chunk_id}:${entry.transcription}`;
-		if (!seen.has(key)) {
-			seen.add(key);
-			uniqueEntries.push(entry);
-		}
-	}
-
-	// Phase 2: Remove cross-device duplicates (input mic + output display capture same speech)
-	const kept: T[] = [];
-	const removed = new Set<number>();
-
-	for (let i = 0; i < uniqueEntries.length; i++) {
-		if (removed.has(i)) continue;
-		for (let j = i + 1; j < uniqueEntries.length; j++) {
-			if (removed.has(j)) continue;
-			if (uniqueEntries[i].is_input === uniqueEntries[j].is_input) continue;
-			const timeDiff = Math.abs(
-				uniqueEntries[i].timestamp.getTime() - uniqueEntries[j].timestamp.getTime()
-			);
-			if (timeDiff > DEDUP_TIME_THRESHOLD_MS) continue;
-			const sim = textSimilarity(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
-			if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
-				if (uniqueEntries[j].is_input) {
-					removed.add(i);
-				} else {
-					removed.add(j);
-				}
-			}
-		}
-		if (!removed.has(i)) kept.push(uniqueEntries[i]);
-	}
-	return kept;
+	return deduplicateAudioByTime(entries, (entry) => entry.timestamp.getTime());
 }
 
 function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
@@ -177,6 +154,7 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 	// 3. Group into meetings by adaptive gap threshold
 	const meetingGroups: AudioEntryWithTimestamp[][] = [];
 	let currentGroup: AudioEntryWithTimestamp[] = [dedupedAudio[0]];
+	let currentGroupDuration = dedupedAudio[0].duration_secs;
 
 	for (let i = 1; i < dedupedAudio.length; i++) {
 		const gap =
@@ -184,18 +162,19 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 			dedupedAudio[i - 1].frameTimestamp.getTime();
 
 		// Use extended threshold for established meetings
-		const groupDuration = currentGroup.reduce((s, e) => s + e.duration_secs, 0);
 		const threshold =
 			currentGroup.length >= EXTENDED_GAP_MIN_ENTRIES &&
-			groupDuration >= EXTENDED_GAP_MIN_DURATION_SECS
+			currentGroupDuration >= EXTENDED_GAP_MIN_DURATION_SECS
 				? EXTENDED_GAP_THRESHOLD_MS
 				: BASE_GAP_THRESHOLD_MS;
 
 		if (gap > threshold) {
 			meetingGroups.push(currentGroup);
 			currentGroup = [dedupedAudio[i]];
+			currentGroupDuration = dedupedAudio[i].duration_secs;
 		} else {
 			currentGroup.push(dedupedAudio[i]);
+			currentGroupDuration += dedupedAudio[i].duration_secs;
 		}
 	}
 	meetingGroups.push(currentGroup);

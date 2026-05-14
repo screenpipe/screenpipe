@@ -13,6 +13,7 @@ import {
 	getApiBaseUrl,
 	redactApiUrlForLogs,
 } from "@/lib/api";
+import { mergeTimelineFrames } from "./timeline-frame-merge";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -208,6 +209,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		frameBuffer = [];
 
 		set((state) => {
+			const merged = mergeTimelineFrames({
+				existingFrames: state.frames,
+				existingTimestamps: state.frameTimestamps,
+				incomingFrames: framesToFlush,
+				replace: state.pendingDateSwap,
+			});
+
 			// If pendingDateSwap, replace frames entirely with new batch (date changed)
 			if (state.pendingDateSwap) {
 				// Frames received - clear the request timeout (no need to retry)
@@ -217,25 +225,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				}
 				requestRetryCount = 0;
 
-				const newTimestamps = new Set<string>();
-				framesToFlush.forEach((frame) => newTimestamps.add(frame.timestamp));
-				const sortedFrames = [...framesToFlush].sort(
-					(a, b) => b.timestamp.localeCompare(a.timestamp)
-				);
-
 				// Debounce cache save
 				if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
 				cacheSaveTimer = setTimeout(() => {
 					cacheSaveTimer = null;
-					saveFramesToCache(sortedFrames, state.currentDate);
+					saveFramesToCache(merged.frames, state.currentDate);
 				}, CACHE_SAVE_DEBOUNCE_MS);
 
 				return {
-					frames: sortedFrames,
-					frameTimestamps: newTimestamps,
+					frames: merged.frames,
+					frameTimestamps: merged.timestamps,
 					pendingDateSwap: false,
 					isLoading: false,
-					loadingProgress: { loaded: sortedFrames.length, isStreaming: true },
+					loadingProgress: { loaded: merged.frames.length, isStreaming: true },
 					message: null,
 					error: null,
 					newFramesCount: 0,
@@ -243,12 +245,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				};
 			}
 
-			// Normal merge path — filter out duplicates using O(1) Set lookup
-			const newUniqueFrames = framesToFlush.filter(
-				(frame) => !state.frameTimestamps.has(frame.timestamp)
-			);
-
-			if (newUniqueFrames.length === 0) {
+			if (!merged.changed) {
 				return {
 					isLoading: false,
 					loadingProgress: {
@@ -267,54 +264,26 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 			requestRetryCount = 0; // Reset retry count on success
 
-			// Add new timestamps to the existing Set in-place (avoid cloning 40k+ entries)
-			newUniqueFrames.forEach((frame) => {
-				state.frameTimestamps.add(frame.timestamp);
-			});
-
-			// Single sort per flush instead of per-message
-			// Parse timestamps once for sorting
-			const mergedFrames = [...state.frames, ...newUniqueFrames].sort(
-				(a, b) => {
-					// Direct string comparison works for ISO timestamps (lexicographic = chronologic)
-					return b.timestamp.localeCompare(a.timestamp);
-				}
-			);
-
-			// Count how many new frames ended up at the front (newer than previous newest)
-			// This is used for: 1) animation pulse, 2) adjusting currentIndex when not at live edge
-			const previousNewest = state.frames[0]?.timestamp;
-			let newAtFront = 0;
-			if (previousNewest) {
-				for (const frame of mergedFrames) {
-					if (frame.timestamp.localeCompare(previousNewest) > 0) {
-						newAtFront++;
-					} else {
-						break; // Sorted descending, so once we hit older frames, stop
-					}
-				}
-			}
-
 			// Debounce cache save - don't save on every flush
 			if (cacheSaveTimer) {
 				clearTimeout(cacheSaveTimer);
 			}
 			cacheSaveTimer = setTimeout(() => {
 				cacheSaveTimer = null;
-				saveFramesToCache(mergedFrames, state.currentDate);
+				saveFramesToCache(merged.frames, state.currentDate);
 			}, CACHE_SAVE_DEBOUNCE_MS);
 
 			return {
-				frames: mergedFrames,
-				frameTimestamps: state.frameTimestamps,
+				frames: merged.frames,
+				frameTimestamps: merged.timestamps,
 				isLoading: false,
 				loadingProgress: {
-					loaded: mergedFrames.length,
+					loaded: merged.frames.length,
 					isStreaming: true
 				},
 				message: null,
 				error: null,
-				newFramesCount: newAtFront,
+				newFramesCount: merged.newAtFront,
 				lastFlushTimestamp: Date.now(),
 			};
 		});
