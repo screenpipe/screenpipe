@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles } from "lucide-react";
+import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { BrowserSidebar } from "@/components/browser-sidebar";
@@ -63,6 +63,7 @@ import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { getFaviconUrl } from "@/components/rewind/timeline/favicon-utils";
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
 
@@ -479,7 +480,8 @@ function curlBodyJson(cmd: string): any | null {
 }
 
 function curlMethod(cmd: string): string {
-  const m = cmd.match(/-X\s+([A-Z]+)/);
+  if (/(^|\s)(?:-I|--head)(?=\s|$)/i.test(cmd)) return "HEAD";
+  const m = cmd.match(/(?:-X|--request)\s+([A-Z]+)/i);
   return m ? m[1].toUpperCase() : "GET";
 }
 
@@ -508,9 +510,82 @@ function sqlVerb(sql: string): string {
   return "Ran SQL on";
 }
 
+type WebTargetKind = "fetch" | "navigate" | "eval";
+
+interface WebTargetPresentation {
+  url: string;
+  domain: string;
+  label: string;
+  kind: WebTargetKind;
+}
+
 interface CurlPresentation {
   label: string;
   appName?: string;
+  connectionIconName?: string;
+  webTarget?: WebTargetPresentation;
+}
+
+function parseUrlCandidate(raw: string): URL | null {
+  let candidate = raw;
+  for (let i = 0; i < 4; i++) {
+    try {
+      return new URL(candidate);
+    } catch {
+      candidate = candidate.replace(/[),.;\]}]+$/, "");
+    }
+  }
+  return null;
+}
+
+function urlsInCommand(cmd: string): URL[] {
+  return Array.from(cmd.matchAll(/https?:\/\/[^\s'"`<>]+/g))
+    .map((m) => parseUrlCandidate(m[0]))
+    .filter((url): url is URL => Boolean(url));
+}
+
+function isLocalScreenpipeUrl(url: URL): boolean {
+  return (url.hostname === "localhost" || url.hostname === "127.0.0.1") && url.port === "3030";
+}
+
+function domainForUrl(url: URL): string {
+  return url.hostname.replace(/^www\./i, "");
+}
+
+function displayWebUrl(url: URL): string {
+  const domain = domainForUrl(url);
+  const path = `${url.pathname}${url.search}`;
+  return path && path !== "/" ? trunc(`${domain}${path}`, 48) : domain;
+}
+
+function webTargetFromUrl(url: URL, kind: WebTargetKind): WebTargetPresentation | null {
+  if (isLocalScreenpipeUrl(url)) return null;
+  return {
+    url: url.toString(),
+    domain: domainForUrl(url),
+    label: displayWebUrl(url),
+    kind,
+  };
+}
+
+function webTargetFromUrlString(raw: string, kind: WebTargetKind): WebTargetPresentation | null {
+  const url = parseUrlCandidate(raw);
+  return url ? webTargetFromUrl(url, kind) : null;
+}
+
+function firstExternalWebTarget(cmd: string, kind: WebTargetKind): WebTargetPresentation | null {
+  for (const url of urlsInCommand(cmd)) {
+    const target = webTargetFromUrl(url, kind);
+    if (target) return target;
+  }
+  return null;
+}
+
+function externalCurlLabel(method: string, target: WebTargetPresentation): string {
+  if (method === "GET") return `Fetched ${target.domain}`;
+  if (method === "HEAD") return `Checked ${target.domain}`;
+  if (method === "POST") return `Posted to ${target.domain}`;
+  return `${method} ${target.domain}`;
 }
 
 // Maps pi's bash curl calls to the local screenpipe API into a human label.
@@ -527,13 +602,15 @@ function classifyCurl(cmd: string): CurlPresentation | null {
     return { label: `Searched ${target}${q}`, appName: search.appName || search.windowName };
   }
 
-  const urlMatch = cmd.match(/https?:\/\/[^\s'"`]+/);
-  if (!urlMatch) return null;
-  let url: URL;
-  try { url = new URL(urlMatch[0]); } catch { return null; }
-  if (!url.host.includes("localhost:3030") && !url.host.includes("127.0.0.1:3030")) return null;
-
   const method = curlMethod(cmd);
+  const urls = urlsInCommand(cmd);
+  const url = urls.find(isLocalScreenpipeUrl);
+  if (!url) {
+    const target = firstExternalWebTarget(cmd, "fetch");
+    if (!target || !/\bcurl\b/i.test(cmd)) return null;
+    return { label: externalCurlLabel(method, target), webTarget: target };
+  }
+
   const path = url.pathname.replace(/\/$/, "") || "/";
 
   if (path === "/raw_sql") {
@@ -597,22 +674,33 @@ function classifyCurl(cmd: string): CurlPresentation | null {
   if (path === "/connections/browsers/owned-default/navigate") {
     const body = curlBodyJson(cmd);
     if (body && typeof body.url === "string") {
-      try {
-        const u = new URL(body.url);
-        return { label: `Navigated agent browser → ${u.host}` };
-      } catch {}
+      const target = webTargetFromUrlString(body.url, "navigate");
+      if (target) return { label: `Opened ${target.domain} in agent browser`, webTarget: target };
     }
     return { label: "Navigated agent browser" };
   }
-  if (path === "/connections/browsers/owned-default/eval") return { label: "Ran JS in agent browser" };
+  if (path === "/connections/browsers/owned-default/eval") {
+    const body = curlBodyJson(cmd);
+    if (body && typeof body.url === "string") {
+      const target = webTargetFromUrlString(body.url, "eval");
+      if (target) return { label: `Ran JS on ${target.domain}`, webTarget: target };
+    }
+    return { label: "Ran JS in agent browser" };
+  }
   if (path.startsWith("/connections/browsers/")) return { label: "Agent browser action" };
 
-  if (path === "/connections") return { label: "Listed connections" };
+  if (path === "/connections") {
+    return { label: "Listed connections", connectionIconName: "connections" };
+  }
   if (path.startsWith("/connections/")) {
     const name = path.split("/")[2];
-    if (method === "DELETE") return { label: `Removed ${name} connection` };
-    if (method === "POST" || method === "PATCH" || method === "PUT") return { label: `Configured ${name} connection` };
-    return { label: `${name} connection` };
+    if (method === "DELETE") {
+      return { label: `Removed ${name} connection`, connectionIconName: name };
+    }
+    if (method === "POST" || method === "PATCH" || method === "PUT") {
+      return { label: `Configured ${name} connection`, connectionIconName: name };
+    }
+    return { label: `${name} connection`, connectionIconName: name };
   }
 
   if (path === "/pipes") {
@@ -642,6 +730,20 @@ function classifyCurl(cmd: string): CurlPresentation | null {
 function extractAppFromToolCall(toolCall: ToolCall): string | undefined {
   if (toolCall.toolName === "bash") {
     return classifyCurl(String(toolCall.args?.command ?? ""))?.appName;
+  }
+  return undefined;
+}
+
+function extractConnectionIconFromToolCall(toolCall: ToolCall): string | undefined {
+  if (toolCall.toolName === "bash") {
+    return classifyCurl(String(toolCall.args?.command ?? ""))?.connectionIconName;
+  }
+  return undefined;
+}
+
+function extractWebTargetFromToolCall(toolCall: ToolCall): WebTargetPresentation | undefined {
+  if (toolCall.toolName === "bash") {
+    return classifyCurl(String(toolCall.args?.command ?? ""))?.webTarget;
   }
   return undefined;
 }
@@ -725,6 +827,8 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
   const [expanded, setExpanded] = useState(false);
   const label = friendlyToolLabel(toolCall);
   const appName = extractAppFromToolCall(toolCall);
+  const connectionIconName = extractConnectionIconFromToolCall(toolCall);
+  const webTarget = extractWebTargetFromToolCall(toolCall);
 
   return (
     <div className="relative flex min-w-0">
@@ -732,7 +836,9 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
       <div className="flex flex-col items-center flex-shrink-0 w-5">
         {/* Dot */}
         <div className="relative flex items-center justify-center w-5 h-5">
-          {toolCall.isRunning ? (
+          {connectionIconName && !toolCall.isRunning && !toolCall.isError ? (
+            <ConnectionToolIcon name={connectionIconName} />
+          ) : toolCall.isRunning ? (
             // Pulsing hollow dot for running
             <motion.div
               className="w-2 h-2 border border-foreground"
@@ -764,7 +870,9 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
           onClick={() => setExpanded(!expanded)}
           className="w-full flex items-center gap-1.5 text-left min-w-0 group py-0.5"
         >
-          {appName && (
+          {webTarget ? (
+            <WebTargetIcon target={webTarget} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
+          ) : appName && !connectionIconName && (
             <AppIcon name={appName} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />
           )}
           <span className="truncate flex-1 text-xs font-mono text-foreground/70 group-hover:text-foreground transition-colors duration-150">
@@ -888,9 +996,24 @@ const STATIC_APP_ICONS: Record<string, string> = {
   jira: "/images/jira.png",
   hubspot: "/images/hubspot.png",
   monday: "/images/monday.png",
+  bitrix24: "/images/bitrix24.png",
+  financialsense: "/images/financialsense.png",
+  glean: "/images/glean.svg",
+  "google-calendar": "/images/google-calendar.svg",
   "google calendar": "/images/google-calendar.svg",
+  "google-docs": "/images/google-docs.svg",
   "google docs": "/images/google-docs.svg",
+  "google-sheets": "/images/google-sheets.svg",
   "google sheets": "/images/google-sheets.svg",
+  logseq: "/images/logseq.png",
+  loops: "/images/loops.svg",
+  make: "/images/make.png",
+  n8n: "/images/n8n.png",
+  ntfy: "/images/ntfy.png",
+  pocket: "/images/pocket.png",
+  posthog: "/images/posthog.svg",
+  pushover: "/images/pushover.png",
+  quickbooks: "/images/quickbooks.svg",
   whatsapp: "/images/whatsapp.svg",
   resend: "/images/resend.svg",
   limitless: "/images/limitless.svg",
@@ -937,6 +1060,75 @@ function AppIcon({
       )}
     </div>
   );
+}
+
+function WebTargetIcon({
+  target,
+  sizeClass = "w-5 h-5",
+  letterClass = "text-[10px]",
+}: { target: WebTargetPresentation; sizeClass?: string; letterClass?: string }) {
+  const color = nameToColor(target.domain);
+  const [iconFailed, setIconFailed] = React.useState(false);
+  return (
+    <div
+      className={cn("rounded-sm flex-shrink-0 flex items-center justify-center overflow-hidden bg-background", sizeClass)}
+      title={target.label}
+    >
+      {iconFailed ? (
+        <span
+          className={cn("w-full h-full flex items-center justify-center font-semibold text-white rounded-sm", letterClass)}
+          style={{ backgroundColor: color }}
+        >
+          {target.domain.charAt(0).toUpperCase()}
+        </span>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={getFaviconUrl(target.domain)}
+          alt={target.domain}
+          className="w-full h-full object-contain"
+          onError={() => setIconFailed(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ConnectionToolIcon({ name }: { name: string }) {
+  const key = normalizeAppKey(name);
+  if (key === "connections") {
+    return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="connections" />;
+  }
+  if (key === "gmail") {
+    return (
+      <svg viewBox="0 0 999.517 749.831" className="w-3.5 h-3.5" aria-label="Gmail">
+        <path fill="#4285F4" d="M68.149 749.831h159.014V363.654L0 193.282v488.4C0 719.391 30.553 749.831 68.149 749.831"/>
+        <path fill="#34A853" d="M772.354 749.831h159.014c37.709 0 68.149-30.553 68.149-68.149v-488.4L772.354 363.654"/>
+        <path fill="#FBBC04" d="M772.354 68.342v295.312l227.163-170.372V102.417c0-84.277-96.203-132.322-163.557-81.779"/>
+        <path fill="#EA4335" d="M227.163 363.654V68.342l272.595 204.447 272.595-204.447v295.312L499.758 568.1"/>
+        <path fill="#C5221F" d="M0 102.417v90.865l227.163 170.372V68.342L163.557 20.638C96.09-29.906 0 18.139 0 102.417"/>
+      </svg>
+    );
+  }
+  if (key === "microsoft365" || key === "microsoft-365" || key === "office365" || key === "outlook") {
+    return (
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" aria-label="Microsoft 365">
+        <path fill="#F25022" d="M1 1h10v10H1z"/>
+        <path fill="#7FBA00" d="M13 1h10v10H13z"/>
+        <path fill="#00A4EF" d="M1 13h10v10H1z"/>
+        <path fill="#FFB900" d="M13 13h10v10H13z"/>
+      </svg>
+    );
+  }
+  if (key === "calcom" || key === "cal.com") {
+    return (
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-foreground" fill="currentColor" aria-label="Cal.com">
+        <path d="M2.408 14.488C1.035 14.488 0 13.4 0 12.058c0-1.346.982-2.443 2.408-2.443.758 0 1.282.233 1.691.765l-.66.55a1.343 1.343 0 0 0-1.03-.442c-.93 0-1.44.711-1.44 1.57 0 .86.559 1.557 1.44 1.557.413 0 .765-.147 1.043-.443l.651.573c-.391.51-.929.743-1.695.743zM6.948 10.913h.89v3.49h-.89v-.51c-.185.362-.493.604-1.083.604-.943 0-1.695-.82-1.695-1.826 0-1.007.752-1.825 1.695-1.825.585 0 .898.241 1.083.604zm.026 1.758c0-.546-.374-.998-.964-.998-.568 0-.938.457-.938.998 0 .528.37.998.938.998.586 0 .964-.456.964-.998zM8.467 9.503h.89v4.895h-.89zM9.752 13.937a.53.53 0 0 1 .542-.528c.313 0 .533.242.533.528a.527.527 0 0 1-.533.537.534.534 0 0 1-.542-.537zM14.23 13.839c-.33.403-.832.658-1.426.658a1.806 1.806 0 0 1-1.84-1.826c0-1.007.778-1.825 1.84-1.825.572 0 1.07.241 1.4.622l-.687.577c-.172-.215-.396-.376-.713-.376-.568 0-.938.456-.938.998 0 .541.37.997.938.997.343 0 .58-.179.757-.42zM14.305 12.671c0-1.007.78-1.825 1.84-1.825 1.061 0 1.84.818 1.84 1.825 0 1.007-.779 1.826-1.84 1.826-1.06-.005-1.84-.82-1.84-1.826zm2.778 0c0-.546-.37-.998-.938-.998-.568-.004-.937.452-.937.998 0 .542.37.998.937.998.568 0 .938-.456.938-.998zM24 12.269v2.13h-.89v-1.911c0-.604-.281-.864-.704-.864-.396 0-.678.197-.678.864v1.91h-.89v-1.91c0-.604-.285-.864-.704-.864-.396 0-.744.197-.744.864v1.91h-.89v-3.49h.89v.484c.185-.376.52-.564 1.035-.564.489 0 .898.241 1.123.649.224-.417.554-.65 1.153-.65.731.005 1.299.56 1.299 1.442z"/>
+      </svg>
+    );
+  }
+
+  return <AppIcon name={name} sizeClass="w-3.5 h-3.5" letterClass="text-[8px]" />;
 }
 
 function AppStatsBlock({ content }: { content: string }) {
@@ -1436,7 +1628,6 @@ function ChatTitleMenu({
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Title source order:
@@ -1499,7 +1690,16 @@ function ChatTitleMenu({
   };
   const handleDelete = async () => {
     setOpen(false);
-    setConfirmDeleteOpen(true);
+    if (!confirm("Delete this chat? This cannot be undone.")) return;
+    try {
+      await deleteConversation(conversationId);
+      useChatStore.getState().actions.drop(conversationId);
+      // Land the user on a fresh chat — the panel was rendering the
+      // one we just deleted.
+      await startNewConversation();
+    } catch (e) {
+      console.warn("[chat] delete failed:", e);
+    }
   };
 
   if (renaming) {
@@ -1525,84 +1725,52 @@ function ChatTitleMenu({
   }
 
   return (
-    <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen((o) => !o);
-            }}
-            className="relative z-10 inline-flex items-center gap-1 max-w-[260px] h-7 px-2 rounded-md text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
-            title="Chat options"
-          >
-            <span className="truncate">{title}</span>
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          className="w-44 p-1"
-          align="start"
-          side="bottom"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((o) => !o);
+          }}
+          className="relative z-10 inline-flex items-center gap-1 max-w-[260px] h-7 px-2 rounded-md text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+          title="Chat options"
         >
-          <button
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
-            onClick={handleStartRename}
-          >
-            <Pencil className="h-3.5 w-3.5 shrink-0" />
-            Rename
-          </button>
-          <button
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
-            onClick={() => void handleTogglePin()}
-          >
-            <Pin className="h-3.5 w-3.5 shrink-0" />
-            {isPinned ? "Unpin" : "Pin"}
-          </button>
-          <div className="my-1 border-t border-border" />
-          <button
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-destructive text-left"
-            onClick={() => void handleDelete()}
-          >
-            <Trash2 className="h-3.5 w-3.5 shrink-0" />
-            Delete
-          </button>
-        </PopoverContent>
-      </Popover>
-
-      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete chat</DialogTitle>
-            <p className="text-sm text-muted-foreground">Delete this chat? This cannot be undone.</p>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={async () => {
-                try {
-                  await deleteConversation(conversationId);
-                  useChatStore.getState().actions.drop(conversationId);
-                  await startNewConversation();
-                } catch (e) {
-                  console.warn("[chat] delete failed:", e);
-                } finally {
-                  setConfirmDeleteOpen(false);
-                }
-              }}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+          <span className="truncate">{title}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-44 p-1"
+        align="start"
+        side="bottom"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <button
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
+          onClick={handleStartRename}
+        >
+          <Pencil className="h-3.5 w-3.5 shrink-0" />
+          Rename
+        </button>
+        <button
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
+          onClick={() => void handleTogglePin()}
+        >
+          <Pin className="h-3.5 w-3.5 shrink-0" />
+          {isPinned ? "Unpin" : "Pin"}
+        </button>
+        <div className="my-1 border-t border-border" />
+        <button
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-destructive text-left"
+          onClick={() => void handleDelete()}
+        >
+          <Trash2 className="h-3.5 w-3.5 shrink-0" />
+          Delete
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1940,10 +2108,8 @@ export function StandaloneChat({
     setShowHistory,
     historySearch,
     setHistorySearch,
-    historyView,
-    setHistoryView,
-    archivedCount,
     filteredConversations,
+    groupedConversations,
     saveConversation,
     loadConversation,
     deleteConversation,
@@ -4947,7 +5113,7 @@ export function StandaloneChat({
               className="border-r border-border/50 bg-muted/30 flex flex-col overflow-hidden"
             >
               {/* History Header */}
-              <div className="p-3 space-y-2">
+              <div className="p-3 border-b border-border/50 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Chat History</span>
                   <Button
@@ -4969,122 +5135,85 @@ export function StandaloneChat({
                     className="h-8 pl-8 text-xs bg-background/50"
                   />
                 </div>
-                <div className="pt-1 flex items-center justify-end gap-4 border-b border-border/50 -mx-3 px-3">
-                  <button
-                    type="button"
-                    onClick={() => setHistoryView("open")}
-                    className={cn(
-                      "relative pb-2 text-xs font-medium transition-colors",
-                      historyView === "open"
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    Open
-                    {historyView === "open" && (
-                      <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-foreground" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHistoryView("archived")}
-                    className={cn(
-                      "relative pb-2 text-xs font-medium transition-colors",
-                      historyView === "archived"
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    Archived
-                    {archivedCount > 0 && (
-                      <span className="ml-1 text-[10px] text-muted-foreground">({archivedCount})</span>
-                    )}
-                    {historyView === "archived" && (
-                      <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-foreground" />
-                    )}
-                  </button>
-                </div>
               </div>
 
               {/* Conversations List */}
               <div className="flex-1 overflow-y-auto p-2 space-y-3">
-                {filteredConversations.length === 0 ? (
+                {groupedConversations.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <History className="h-8 w-8 text-muted-foreground/50 mb-2" />
                     <p className="text-xs text-muted-foreground">
-                      {historySearch
-                        ? "No matching conversations"
-                        : historyView === "archived"
-                          ? "No archived chats"
-                          : "No chat history yet"}
+                      {historySearch ? "No matching conversations" : "No chat history yet"}
                     </p>
                   </div>
                 ) : (
-                  filteredConversations.map((conv) => (
-                    <div
-                      key={conv.id}
-                      className={cn(
-                        "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
-                        conv.id === conversationId
-                          ? "bg-foreground/10"
-                          : "hover:bg-foreground/5"
-                      )}
-                      onClick={() => loadConversation(conv)}
-                    >
-                      {conv.pinned === true && historyView === "open" ? (
-                        <Pin className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" aria-label="pinned" />
-                      ) : (
-                        <span className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium truncate">
-                          {conv.title}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground">
-                          {conv.messages.length} messages
-                        </p>
-                      </div>
-                      <Popover
-                        open={openConvMenuId === conv.id}
-                        onOpenChange={(open) => setOpenConvMenuId(open ? conv.id : null)}
-                      >
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => e.stopPropagation()}
-                            className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                  groupedConversations.map((group) => (
+                    <div key={group.label} className="space-y-1">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2 py-1">
+                        {group.label}
+                      </p>
+                      {group.conversations.map((conv) => (
+                        <div
+                          key={conv.id}
+                          className={cn(
+                            "group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+                            conv.id === conversationId
+                              ? "bg-foreground/10"
+                              : "hover:bg-foreground/5"
+                          )}
+                          onClick={() => loadConversation(conv)}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium truncate">
+                              {conv.title}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {conv.messageCount} messages
+                            </p>
+                          </div>
+                          <Popover
+                            open={openConvMenuId === conv.id}
+                            onOpenChange={(open) => setOpenConvMenuId(open ? conv.id : null)}
                           >
-                            <MoreHorizontal size={12} />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-40 p-1" align="end" side="right">
-                          <button
-                            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenConvMenuId(null);
-                              setRenameValue(conv.title);
-                              setRenamingConvId(conv.id);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5 shrink-0" />
-                            Rename
-                          </button>
-                          <div className="my-1 border-t border-border" />
-                          <button
-                            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-destructive text-left"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenConvMenuId(null);
-                              setDeletingConvId(conv.id);
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                            Delete
-                          </button>
-                        </PopoverContent>
-                      </Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                              >
+                                <MoreHorizontal size={12} />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-40 p-1" align="end" side="right">
+                              <button
+                                className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenConvMenuId(null);
+                                  setRenameValue(conv.title);
+                                  setRenamingConvId(conv.id);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5 shrink-0" />
+                                Rename
+                              </button>
+                              <div className="my-1 border-t border-border" />
+                              <button
+                                className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-destructive text-left"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenConvMenuId(null);
+                                  setDeletingConvId(conv.id);
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                                Delete
+                              </button>
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+                      ))}
                     </div>
                   ))
                 )}
@@ -6323,20 +6452,9 @@ export function StandaloneChat({
             </Button>
             <Button
               variant="destructive"
-              onClick={async () => {
-                const id = deletingConvId;
-                if (!id) return;
-                try {
-                  await deleteConversation(id);
-                  useChatStore.getState().actions.drop(id);
-                  if (id === conversationId) {
-                    await startNewConversation();
-                  }
-                } catch (e) {
-                  console.warn("[chat] delete failed:", e);
-                } finally {
-                  setDeletingConvId(null);
-                }
+              onClick={() => {
+                deleteConversation(deletingConvId!);
+                setDeletingConvId(null);
               }}
             >
               Delete

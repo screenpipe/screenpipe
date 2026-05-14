@@ -13,14 +13,16 @@ import {
   type RefObject,
   type MutableRefObject,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
   deleteConversationFile,
-  loadAllConversations,
+  listConversations,
+  searchConversations,
   migrateFromStoreBin,
+  CHAT_HISTORY_INITIAL_LIMIT,
+  type ConversationMeta,
 } from "@/lib/chat-storage";
 
 
@@ -108,73 +110,69 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     });
   }, []);
   const [historySearch, setHistorySearch] = useState("");
-  const [historyView, setHistoryViewRaw] = useState<"open" | "archived">(() => {
-    try {
-      const saved = localStorage.getItem("screenpipe:chat-history-view");
-      if (!saved && localStorage.getItem("screenpipe:chat-history-show-closed") === "true") {
-        return "archived";
-      }
-      return saved === "archived" ? "archived" : "open";
-    } catch {
-      return "open";
-    }
-  });
-  const setHistoryView = useCallback((value: "open" | "archived") => {
-    setHistoryViewRaw(value);
-    try {
-      localStorage.setItem("screenpipe:chat-history-view", value);
-    } catch {
-      // ignore
-    }
-  }, []);
-  const [fileConversations, setFileConversations] = useState<ChatConversation[]>([]);
+  const [fileConversations, setFileConversations] = useState<ConversationMeta[]>([]);
 
   // Run migration from store.bin on mount, then load conversations from files
   const migrationDoneRef = useRef(false);
+  const historyRequestRef = useRef(0);
+  const lastHistoryQueryRef = useRef<string | null>(null);
+  const [historyReady, setHistoryReady] = useState(false);
+  const loadConversationMetas = useCallback(async (query: string) => {
+    const options = {
+      limit: CHAT_HISTORY_INITIAL_LIMIT,
+      includeHidden: false,
+    } as const;
+    const q = query.trim();
+    return q ? searchConversations(q, options) : listConversations(options);
+  }, []);
+
   useEffect(() => {
     if (migrationDoneRef.current) return;
     migrationDoneRef.current = true;
     (async () => {
-      await migrateFromStoreBin();
-      const convs = await loadAllConversations();
-      setFileConversations(convs);
+      try {
+        await migrateFromStoreBin();
+        const convs = await loadConversationMetas("");
+        setFileConversations(convs);
+        lastHistoryQueryRef.current = "";
+      } catch {
+        setFileConversations([]);
+        lastHistoryQueryRef.current = "";
+      } finally {
+        setHistoryReady(true);
+      }
     })();
-  }, []);
+  }, [loadConversationMetas]);
 
-  const refreshFileConversations = useCallback(async () => {
-    const convs = await loadAllConversations();
-    setFileConversations(convs);
-  }, []);
-
-  // Cross-window history sync. Main sidebar actions run in /home and
-  // this drawer list often lives in /chat overlay; refresh file-backed
-  // history when archive/delete/rename happens in another window.
   useEffect(() => {
-    let offRename: (() => void) | undefined;
-    let offDelete: (() => void) | undefined;
-    let offVisibility: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      const r = await listen("chat-renamed", () => {
-        if (!cancelled) void refreshFileConversations();
-      });
-      const d = await listen("chat-deleted", () => {
-        if (!cancelled) void refreshFileConversations();
-      });
-      const v = await listen("chat-visibility-changed", () => {
-        if (!cancelled) void refreshFileConversations();
-      });
-      offRename = r;
-      offDelete = d;
-      offVisibility = v;
-    })();
-    return () => {
-      cancelled = true;
-      offRename?.();
-      offDelete?.();
-      offVisibility?.();
-    };
-  }, [refreshFileConversations]);
+    if (!historyReady) return;
+    const q = historySearch.trim();
+    if (lastHistoryQueryRef.current === q) return;
+    const requestId = ++historyRequestRef.current;
+    const timer = setTimeout(() => {
+      loadConversationMetas(q)
+        .then((convs) => {
+          if (historyRequestRef.current === requestId) {
+            setFileConversations(convs);
+            lastHistoryQueryRef.current = q;
+          }
+        })
+        .catch(() => {
+          if (historyRequestRef.current === requestId) {
+            setFileConversations([]);
+          }
+        });
+    }, q ? 200 : 0);
+
+    return () => clearTimeout(timer);
+  }, [historyReady, historySearch, loadConversationMetas]);
+
+  const refreshFileConversations = async () => {
+    const q = historySearch.trim();
+    const convs = await loadConversationMetas(q);
+    setFileConversations(convs);
+    lastHistoryQueryRef.current = q;
+  };
 
   // ---- saveConversation ----
   const saveConversation = async (msgs: Message[]) => {
@@ -442,12 +440,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   const deleteConversation = async (convId: string) => {
     await deleteConversationFile(convId);
     await refreshFileConversations();
-    try {
-      const { emit } = await import("@tauri-apps/api/event");
-      await emit("chat-deleted", { id: convId });
-    } catch {
-      // ignore
-    }
 
     // Clear activeConversationId if it was the deleted one
     if (conversationId === convId) {
@@ -493,7 +485,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   //      the pi-event router has been accumulating its background
   //      tokens). Fall back to disk only when the store is cold for
   //      this id.
-  const loadConversation = async (conv: ChatConversation) => {
+  const loadConversation = async (conv: ChatConversation | ConversationMeta) => {
     const { useChatStore } = await import("@/lib/stores/chat-store");
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
@@ -580,7 +572,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     } else {
       // Cold session — load from disk and seed the store.
       const { loadConversationFile } = await import("@/lib/chat-storage");
-      const full = (await loadConversationFile(conv.id)) || conv;
+      const loaded = await loadConversationFile(conv.id);
+      const full =
+        loaded ||
+        (Array.isArray((conv as ChatConversation).messages)
+          ? (conv as ChatConversation)
+          : null);
+      if (!full) {
+        await refreshFileConversations();
+        return;
+      }
       messagesForPanel = full.messages.map((m) => ({
         id: m.id,
         role: m.role,
@@ -787,41 +788,50 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setConversationId(newSid);
   };
 
-  const archivedCount = useMemo(
-    () => fileConversations.filter((c) => c.hidden === true).length,
-    [fileConversations]
-  );
-
   // ---- filteredConversations ----
-  const filteredConversations = useMemo(() => {
-    const base =
-      historyView === "archived"
-        ? fileConversations.filter((c) => c.hidden === true)
-        : fileConversations.filter((c) => c.hidden !== true);
-    const sortedBase = [...base].sort((a, b) => {
-      const ap = a.pinned === true ? 1 : 0;
-      const bp = b.pinned === true ? 1 : 0;
-      if (ap !== bp) return bp - ap;
-      return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-    });
-    if (!historySearch.trim()) return sortedBase;
+  const filteredConversations = fileConversations;
 
-    const search = historySearch.toLowerCase();
-    return sortedBase.filter((c: ChatConversation) =>
-      c.title.toLowerCase().includes(search) ||
-      c.messages.some(m => m.content.toLowerCase().includes(search))
-    );
-  }, [fileConversations, historySearch, historyView]);
+  // ---- groupedConversations ----
+  const groupedConversations = useMemo(() => {
+    const groups: { label: string; conversations: ConversationMeta[] }[] = [];
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const todayConvs: ConversationMeta[] = [];
+    const yesterdayConvs: ConversationMeta[] = [];
+    const lastWeekConvs: ConversationMeta[] = [];
+    const olderConvs: ConversationMeta[] = [];
+
+    for (const conv of filteredConversations) {
+      const convDate = new Date(conv.updatedAt);
+      if (convDate >= today) {
+        todayConvs.push(conv);
+      } else if (convDate >= yesterday) {
+        yesterdayConvs.push(conv);
+      } else if (convDate >= lastWeek) {
+        lastWeekConvs.push(conv);
+      } else {
+        olderConvs.push(conv);
+      }
+    }
+
+    if (todayConvs.length > 0) groups.push({ label: "Today", conversations: todayConvs });
+    if (yesterdayConvs.length > 0) groups.push({ label: "Yesterday", conversations: yesterdayConvs });
+    if (lastWeekConvs.length > 0) groups.push({ label: "Last 7 Days", conversations: lastWeekConvs });
+    if (olderConvs.length > 0) groups.push({ label: "Older", conversations: olderConvs });
+
+    return groups;
+  }, [filteredConversations]);
 
   return {
     showHistory,
     setShowHistory,
     historySearch,
     setHistorySearch,
-    historyView,
-    setHistoryView,
-    archivedCount,
     filteredConversations,
+    groupedConversations,
     saveConversation,
     loadConversation,
     deleteConversation,

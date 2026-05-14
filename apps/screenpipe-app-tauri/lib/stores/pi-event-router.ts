@@ -54,6 +54,7 @@ import type {
   AgentSessionEvictedPayload,
 } from "@/lib/events/types";
 import {
+  CHAT_HISTORY_INITIAL_LIMIT,
   listConversations,
   loadConversationFile,
   saveConversationFile,
@@ -304,10 +305,14 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   }
 }
 
-/** Hydrate chat sessions from disk once at boot. */
+/** Hydrate the store from on-disk chat history once at boot. The router
+ *  keeps this in sync afterwards via incremental events. */
 async function hydrate() {
   try {
-    const metas = await listConversations();
+    const metas = await listConversations({
+      limit: CHAT_HISTORY_INITIAL_LIMIT,
+      includeHidden: false,
+    });
     const records: SessionRecord[] = metas
       .map((m) => ({
         id: m.id,
@@ -318,7 +323,6 @@ async function hydrate() {
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
         pinned: m.pinned,
-        hidden: m.hidden,
         // History reload doesn't count as new activity — start clean.
         unread: false,
         lastUserMessageAt: m.lastUserMessageAt,

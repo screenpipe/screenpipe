@@ -70,8 +70,6 @@ export interface SessionRecord {
   lastUserMessageAt?: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
-  /** Archived conversation hidden from recents. */
-  hidden?: boolean;
   /** True when there's new assistant activity (delta or completion) that
    *  the user hasn't seen yet. Set by the event router when content lands
    *  for a session that is NOT the currently-viewed one; cleared the
@@ -256,7 +254,6 @@ export const useChatStore = create<ChatStore>((set) => ({
                 preview: r.preview,
                 messageCount: r.messageCount,
                 pinned: existing.pinned || r.pinned,
-                hidden: existing.hidden ?? r.hidden ?? false,
                 // updatedAt: take the larger so memory doesn't get clobbered
                 updatedAt: Math.max(existing.updatedAt, r.updatedAt),
               }
