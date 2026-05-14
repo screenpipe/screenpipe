@@ -1,0 +1,9 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {
+      "version": "1.2.9",
+      "resolved": "ghcr.io/devcontainers/features/desktop-lite@sha256:d8649bc8ca8e50a52fbee29d281739ea05dc1022905b185434d6bbe9afc8f221",
+      "integrity": "sha256:d8649bc8ca8e50a52fbee29d281739ea05dc1022905b185434d6bbe9afc8f221"
+    }
+  }
+}

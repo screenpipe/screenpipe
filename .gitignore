@@ -81,3 +81,9 @@ apps/screenpipe-app-tauri/src-tauri/openblas/
 apps/screenpipe-app-tauri/src-tauri/mlx.metallib
 .serena/
 .worktrees/
+
+# Test artifacts linux
+.screenpipe-audio-env
+screenpipe.pid
+screenpipe_output.log
+test_image.png

@@ -1,9 +1,23 @@
 #!/bin/bash
+set -euo pipefail
+
+if [[ -f .screenpipe-audio-env ]]; then
+  # shellcheck source=/dev/null
+  source .screenpipe-audio-env
+fi
+
 ls -l .github/scripts/audio_test.wav
 pulseaudio --check
 ps aux | grep pulseaudio
-ls -l /run/user/$(id -u)/pulse/
-PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native paplay --verbose .github/scripts/audio_test.wav
+
+if [[ -n "${PULSE_SERVER:-}" && "$PULSE_SERVER" == unix:* ]]; then
+  pulse_socket_path="${PULSE_SERVER#unix:}"
+  ls -l "$(dirname "$pulse_socket_path")" || true
+fi
+
+if ! paplay --verbose .github/scripts/audio_test.wav; then
+  echo "paplay failed; continuing to validate audio pipeline from logs"
+fi
 # Check resource usage every 10 seconds, for 30 seconds
 for i in {1..3}
 do

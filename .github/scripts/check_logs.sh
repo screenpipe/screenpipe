@@ -4,7 +4,7 @@ if grep -q "panic" screenpipe_output.log; then
   echo "CLI crashed"
   exit 1
 fi
-if ! grep -q "Server listening on 0.0.0.0:3030" screenpipe_output.log; then
+if ! grep -Eq "Server listening on (0\.0\.0\.0|127\.0\.0\.1):3030" screenpipe_output.log; then
   echo "Server did not start correctly"
   exit 1
 fi

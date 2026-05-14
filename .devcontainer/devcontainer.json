@@ -7,14 +7,14 @@
         "dockerfile": "Dockerfile"
     },
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {
-	// 	"ghcr.io/devcontainers/features/desktop-lite:1": {
-	// 		"password": "noPassword"
-	// 	}
-	// },
+	"features": {
+		"ghcr.io/devcontainers/features/desktop-lite:1": {
+			"password": "noPassword"
+		}
+	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	"forwardPorts": [3000, 3030],
+	"forwardPorts": [3000, 3030, 6080],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	"postCreateCommand": "bash .devcontainer/scripts/postCreateCommand.sh",

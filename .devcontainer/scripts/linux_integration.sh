@@ -38,6 +38,11 @@ xwininfo -root -children || echo "xwininfo failed"
 log "Setting up audio"
 .github/scripts/setup_audio.sh
 
+log "Resetting local Screenpipe state"
+pkill -x screenpipe || true
+rm -f screenpipe.pid screenpipe_output.log || true
+rm -f ~/.screenpipe/db.sqlite ~/.screenpipe/db.sqlite-wal ~/.screenpipe/db.sqlite-shm || true
+
 log "Running Screenpipe"
 .github/scripts/run_screenpipe.sh
 

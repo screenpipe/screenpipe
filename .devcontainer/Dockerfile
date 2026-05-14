@@ -58,6 +58,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
     xdotool \
     openbox \
     xterm \
+    python3-xdg \
     fonts-liberation \
     imagemagick \
     fonts-dejavu \
