@@ -92,7 +92,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ToastAction } from "@/components/ui/toast";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { getMediaFile } from "@/lib/actions/video-actions";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
@@ -278,6 +279,27 @@ const formatBacklogFileSize = (bytes?: number | null) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const getAudioPreviewMimeType = (filePath: string) => {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  if (ext === "wav") return "audio/wav";
+  if (ext === "mp3") return "audio/mpeg";
+  if (ext === "ogg") return "audio/ogg";
+  if (ext === "webm") return "audio/webm";
+  return "audio/mp4";
+};
+
+const createAudioPreviewUrl = async (filePath: string) => {
+  const { data } = await getMediaFile(filePath);
+  const binaryData = atob(data);
+  const bytes = new Uint8Array(binaryData.length);
+  for (let i = 0; i < binaryData.length; i += 1) {
+    bytes[i] = binaryData.charCodeAt(i);
+  }
+  return URL.createObjectURL(
+    new Blob([bytes], { type: getAudioPreviewMimeType(filePath) })
+  );
+};
+
 const formatBacklogCapturedAt = (timestamp: string) => {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "n/a";
@@ -314,6 +336,8 @@ function BackgroundTranscriptionDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const [showQuietChunks, setShowQuietChunks] = useState(false);
   const [previewItem, setPreviewItem] = useState<AudioReconciliationBacklogItem | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewLoadingId, setPreviewLoadingId] = useState<number | null>(null);
   const [previewPlayRequest, setPreviewPlayRequest] = useState(0);
   const [playingPreviewId, setPlayingPreviewId] = useState<number | null>(null);
   const [pendingTotal, setPendingTotal] = useState<number | null>(null);
@@ -321,6 +345,7 @@ function BackgroundTranscriptionDialog({
   const [runningId, setRunningId] = useState<number | null>(null);
   const [droppingId, setDroppingId] = useState<number | null>(null);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const previewSrcRef = React.useRef<string | null>(null);
   const { toast } = useToast();
 
   const pending = audioPipeline?.pending_transcription_segments ?? 0;
@@ -332,6 +357,14 @@ function BackgroundTranscriptionDialog({
       : audioPipeline
         ? "running"
         : "waiting";
+
+  const clearPreviewSrc = useCallback(() => {
+    if (previewSrcRef.current) {
+      URL.revokeObjectURL(previewSrcRef.current);
+      previewSrcRef.current = null;
+    }
+    setPreviewSrc(null);
+  }, []);
 
   const refreshItems = useCallback(async () => {
     setLoading(true);
@@ -361,9 +394,60 @@ function BackgroundTranscriptionDialog({
   }, [open, refreshItems]);
 
   useEffect(() => {
-    if (!previewItem || previewPlayRequest === 0) return;
+    return () => {
+      if (previewSrcRef.current) {
+        URL.revokeObjectURL(previewSrcRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!previewItem) {
+      audioRef.current?.pause();
+      clearPreviewSrc();
+      setPreviewLoadingId(null);
+      return;
+    }
+
+    let canceled = false;
+    const previewId = previewItem.audio_chunk_id;
+    clearPreviewSrc();
+    setPreviewLoadingId(previewId);
+
+    void createAudioPreviewUrl(previewItem.file_path)
+      .then((url) => {
+        if (canceled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        previewSrcRef.current = url;
+        setPreviewSrc(url);
+        setPreviewPlayRequest((value) => value + 1);
+      })
+      .catch((error) => {
+        if (canceled) return;
+        toast({
+          title: "could not load audio",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      })
+      .finally(() => {
+        if (!canceled) {
+          setPreviewLoadingId(null);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [clearPreviewSrc, previewItem?.audio_chunk_id, previewItem?.file_path, toast]);
+
+  useEffect(() => {
+    if (!previewItem || !previewSrc || previewPlayRequest === 0) return;
     const audio = audioRef.current;
     if (!audio) return;
+    audio.load();
     void audio.play().catch(() => {
       toast({
         title: "could not play audio",
@@ -371,7 +455,7 @@ function BackgroundTranscriptionDialog({
         variant: "destructive",
       });
     });
-  }, [previewItem, previewPlayRequest, toast]);
+  }, [previewItem, previewPlayRequest, previewSrc, toast]);
 
   const quietItems = useMemo(
     () => items.filter((item) => item.likely_empty),
@@ -407,22 +491,28 @@ function BackgroundTranscriptionDialog({
     if (!activeItems.some((item) => item.audio_chunk_id === previewItemId)) {
       audioRef.current?.pause();
       setPreviewItem(null);
+      setPreviewLoadingId(null);
+      clearPreviewSrc();
       setPlayingPreviewId(null);
     }
-  }, [activeItems, previewItemId]);
+  }, [activeItems, clearPreviewSrc, previewItemId]);
 
   const handlePreviewAudio = useCallback((item: AudioReconciliationBacklogItem) => {
-    if (
-      previewItem?.audio_chunk_id === item.audio_chunk_id &&
-      playingPreviewId === item.audio_chunk_id
-    ) {
-      audioRef.current?.pause();
+    const isCurrentPreview = previewItem?.audio_chunk_id === item.audio_chunk_id;
+    if (isCurrentPreview) {
+      if (playingPreviewId === item.audio_chunk_id) {
+        audioRef.current?.pause();
+        return;
+      }
+
+      if (previewSrc) {
+        setPreviewPlayRequest((value) => value + 1);
+      }
       return;
     }
 
     setPreviewItem(item);
-    setPreviewPlayRequest((value) => value + 1);
-  }, [playingPreviewId, previewItem?.audio_chunk_id]);
+  }, [playingPreviewId, previewItem?.audio_chunk_id, previewSrc]);
 
   const handleForceRun = useCallback(async (audioChunkId: number) => {
     setRunningId(audioChunkId);
@@ -520,6 +610,8 @@ function BackgroundTranscriptionDialog({
           if (!nextOpen) {
             audioRef.current?.pause();
             setPreviewItem(null);
+            setPreviewLoadingId(null);
+            clearPreviewSrc();
             setPlayingPreviewId(null);
           }
         }}
@@ -755,16 +847,29 @@ function BackgroundTranscriptionDialog({
                               <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                                 audio preview
                               </span>
-                              <audio
-                                key={item.audio_chunk_id}
-                                ref={audioRef}
-                                controls
-                                className="h-8 min-w-0 flex-1"
-                                src={convertFileSrc(item.file_path)}
-                                onPlay={() => setPlayingPreviewId(item.audio_chunk_id)}
-                                onPause={() => setPlayingPreviewId(null)}
-                                onEnded={() => setPlayingPreviewId(null)}
-                              />
+                              {previewLoadingId === item.audio_chunk_id && !previewSrc ? (
+                                <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm bg-muted/60 px-3 text-[11px] text-muted-foreground">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  loading audio
+                                </div>
+                              ) : previewSrc ? (
+                                <audio
+                                  key={item.audio_chunk_id}
+                                  ref={audioRef}
+                                  controls
+                                  preload="auto"
+                                  className="h-8 min-w-0 flex-1"
+                                  src={previewSrc}
+                                  onPlay={() => setPlayingPreviewId(item.audio_chunk_id)}
+                                  onPause={() => setPlayingPreviewId(null)}
+                                  onEnded={() => setPlayingPreviewId(null)}
+                                  onError={() => setPlayingPreviewId(null)}
+                                />
+                              ) : (
+                                <div className="flex h-8 min-w-0 flex-1 items-center rounded-sm bg-muted/60 px-3 text-[11px] text-muted-foreground">
+                                  audio unavailable
+                                </div>
+                              )}
                             </div>
                           </td>
                         </tr>
