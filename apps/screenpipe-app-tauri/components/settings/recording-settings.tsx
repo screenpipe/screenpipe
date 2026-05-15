@@ -208,6 +208,121 @@ const getAudioFallbackMessage = (reason: AudioEngineFallbackReason) => {
   }
 };
 
+type AudioPipelineSnapshot = {
+  transcription_mode?: string;
+  segments_deferred?: number;
+  segments_batch_processed?: number;
+  batch_paused_reason?: string | null;
+  pending_transcription_segments?: number;
+  oldest_pending_transcription_at?: string | null;
+  transcription_paused?: boolean;
+};
+
+const formatBacklogAge = (timestamp?: string | null) => {
+  if (!timestamp) return "n/a";
+  const ms = new Date(timestamp).getTime();
+  if (!Number.isFinite(ms)) return "n/a";
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+};
+
+function BackgroundTranscriptionTable({
+  audioPipeline,
+  configuredMode,
+}: {
+  audioPipeline?: AudioPipelineSnapshot | null;
+  configuredMode?: string | null;
+}) {
+  const pending = audioPipeline?.pending_transcription_segments ?? 0;
+  const mode = audioPipeline?.transcription_mode ?? configuredMode ?? "realtime";
+  const workerState = audioPipeline?.batch_paused_reason
+    ? audioPipeline.batch_paused_reason
+    : audioPipeline?.transcription_paused
+      ? "paused"
+      : audioPipeline
+        ? "running"
+        : "waiting";
+  const rows = [
+    {
+      label: "pending",
+      value: pending.toLocaleString(),
+      detail: pending > 0 ? "waiting for background transcription" : "caught up",
+    },
+    {
+      label: "oldest pending",
+      value: pending > 0 ? formatBacklogAge(audioPipeline?.oldest_pending_transcription_at) : "none",
+      detail: audioPipeline?.oldest_pending_transcription_at
+        ? new Date(audioPipeline.oldest_pending_transcription_at).toLocaleString()
+        : "no queued segments",
+    },
+    {
+      label: "mode",
+      value: mode,
+      detail: "current audio transcription path",
+    },
+    {
+      label: "deferred",
+      value: (audioPipeline?.segments_deferred ?? 0).toLocaleString(),
+      detail: "saved for later transcription",
+    },
+    {
+      label: "processed",
+      value: (audioPipeline?.segments_batch_processed ?? 0).toLocaleString(),
+      detail: "completed by background reconciliation",
+    },
+    {
+      label: "worker",
+      value: workerState,
+      detail: audioPipeline ? "latest health check" : "health unavailable",
+    },
+  ];
+
+  return (
+    <Card className="border-border bg-card">
+      <CardContent className="px-3 py-2.5">
+        <div className="flex items-center justify-between gap-3 mb-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium text-foreground">Background transcription</h3>
+              <p className="text-xs text-muted-foreground">Deferred audio backlog</p>
+            </div>
+          </div>
+          <Badge variant={pending > 0 ? "outline" : "secondary"} className="shrink-0">
+            {pending > 0 ? `${pending.toLocaleString()} waiting` : "caught up"}
+          </Badge>
+        </div>
+
+        <div className="overflow-x-auto border border-border/60">
+          <table className="w-full text-xs">
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.label} className="border-b border-border/60 last:border-b-0">
+                  <th className="w-40 px-2 py-1.5 text-left font-medium text-muted-foreground">
+                    {row.label}
+                  </th>
+                  <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
+                    {row.value}
+                  </td>
+                  <td className="px-2 py-1.5 text-muted-foreground">
+                    {row.detail}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 const createWindowOptions = (
   windowItems: { name: string; count: number; app_name?: string }[],
   existingPatterns: string[]
@@ -596,6 +711,7 @@ export function RecordingSettings() {
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
   const isDisabled = health?.status_code === 500;
+  const audioPipeline = health?.audio_pipeline ?? null;
   const [isMacOS, setIsMacOS] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showOpenAIApiKey, setShowOpenAIApiKey] = useState(false);
@@ -1658,6 +1774,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             )}
           </CardContent>
         </Card>
+        )}
+
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+          <BackgroundTranscriptionTable
+            audioPipeline={audioPipeline}
+            configuredMode={settings.transcriptionMode}
+          />
         )}
 
         {/* Meeting Live Notes */}
