@@ -1242,7 +1242,7 @@ export function SidebarChatRow({
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
     >
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0">
           {leadingIndicator ? (
             <span className="h-3 w-3 shrink-0 flex items-center justify-center" aria-label="pinned">
               {leadingIndicator}
@@ -1264,114 +1264,122 @@ export function SidebarChatRow({
         >
           {session.title || "untitled"}
         </span>
-        <RowRightSignal
-          isLive={isLive}
-          isError={isError}
-          isUnread={isUnread}
-          queuedCount={queuedCount}
-          status={session.status}
-          age={age}
-          hideOnHover={showActions}
-        />
-        {/* hover-only actions — REAL <button>s now (was <span role=button>
-            inside the outer <button>, which is invalid nested-button HTML
-            and made the X click silently no-op on close). */}
-        <span
-          className={cn(
-            "shrink-0",
-            canShowActions ? "hidden group-hover:inline-flex items-center gap-0.5" : "hidden"
-          )}
-        >
-          {!session.hidden ? (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void onTogglePin(e, session.id);
-                    }}
-                    className="p-0.5 rounded hover:bg-muted"
-                    title={session.pinned ? "unpin" : "pin"}
-                    aria-label={session.pinned ? "unpin" : "pin"}
-                  >
-                    <Pin
-                      className={cn(
-                        "h-3 w-3",
-                        session.pinned
-                          ? "text-foreground fill-current"
-                          : "text-muted-foreground"
-                      )}
-                    />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
-                  {session.pinned ? "Unpin" : "Pin"}
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void onArchive(e, session.id);
-                    }}
-                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                    title="archive chat"
-                    aria-label="archive chat"
-                  >
-                    <Archive className="h-3 w-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
-                  Archive
-                </TooltipContent>
-              </Tooltip>
-            </>
-          ) : (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void onUnarchive(e, session.id);
-                    }}
-                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                    title="unarchive"
-                    aria-label="unarchive"
-                  >
-                    <Undo2 className="h-3 w-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
-                  Unarchive
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteRequest(session.id);
-                    }}
-                    className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-                    title="delete forever"
-                    aria-label="delete forever"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
-                  Delete forever
-                </TooltipContent>
-              </Tooltip>
-            </>
-          )}
+        <span className="ml-1 w-10 h-4 shrink-0 relative">
+          <span
+            className={cn(
+              "absolute inset-0 inline-flex items-center justify-end transition-opacity duration-100",
+              canShowActions ? "opacity-100 group-hover:opacity-0" : "opacity-100"
+            )}
+          >
+            <RowRightSignal
+              isLive={isLive}
+              isError={isError}
+              isUnread={isUnread}
+              queuedCount={queuedCount}
+              status={session.status}
+              age={age}
+            />
+          </span>
+          {/* hover-only actions in a fixed slot to avoid row reflow flicker */}
+          <span
+            className={cn(
+              "absolute inset-0 inline-flex items-center justify-end gap-0.5 transition-opacity duration-100",
+              canShowActions
+                ? "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto"
+                : "opacity-0 pointer-events-none"
+            )}
+          >
+            {!session.hidden ? (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onTogglePin(e, session.id);
+                      }}
+                      className="p-0.5 rounded hover:bg-muted"
+                      title={session.pinned ? "unpin" : "pin"}
+                      aria-label={session.pinned ? "unpin" : "pin"}
+                    >
+                      <Pin
+                        className={cn(
+                          "h-3 w-3",
+                          session.pinned
+                            ? "text-foreground fill-current"
+                            : "text-muted-foreground"
+                        )}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    {session.pinned ? "Unpin" : "Pin"}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onArchive(e, session.id);
+                      }}
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                      title="archive chat"
+                      aria-label="archive chat"
+                    >
+                      <Archive className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    Archive
+                  </TooltipContent>
+                </Tooltip>
+              </>
+            ) : (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onUnarchive(e, session.id);
+                      }}
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                      title="unarchive"
+                      aria-label="unarchive"
+                    >
+                      <Undo2 className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    Unarchive
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteRequest(session.id);
+                      }}
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                      title="delete forever"
+                      aria-label="delete forever"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs">
+                    Delete forever
+                  </TooltipContent>
+                </Tooltip>
+              </>
+            )}
+          </span>
         </span>
       </div>
     </div>
@@ -1396,7 +1404,6 @@ function RowRightSignal({
   queuedCount,
   status,
   age,
-  hideOnHover,
 }: {
   isLive: boolean;
   isError: boolean;
@@ -1404,7 +1411,6 @@ function RowRightSignal({
   queuedCount: number;
   status: string;
   age: string | null;
-  hideOnHover: boolean;
 }) {
   const content = (() => {
     if (isError) {
@@ -1441,16 +1447,7 @@ function RowRightSignal({
 
   if (!content) return null;
 
-  return (
-    <span
-      className={cn(
-        "ml-1 min-w-5 shrink-0 inline-flex justify-end",
-        hideOnHover && "group-hover:hidden"
-      )}
-    >
-      {content}
-    </span>
-  );
+  return <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>;
 }
 
 function LiveSignal({ ariaLabel = "loading" }: { ariaLabel?: string }) {
