@@ -1,0 +1,55 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="760" fill="#050505"/>
+  <rect x="36" y="34" width="1128" height="692" rx="18" fill="#0A0A0A" stroke="#FFFFFF" stroke-opacity="0.28"/>
+  <rect x="64" y="62" width="1072" height="62" rx="12" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <circle cx="96" cy="93" r="7" fill="#FFFFFF" fill-opacity="0.85"/>
+  <circle cx="120" cy="93" r="7" fill="#FFFFFF" fill-opacity="0.46"/>
+  <circle cx="144" cy="93" r="7" fill="#FFFFFF" fill-opacity="0.24"/>
+  <text x="178" y="100" fill="#FFFFFF" font-size="22" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700">screenpipe status</text>
+  <text x="916" y="100" fill="#FFFFFF" fill-opacity="0.62" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">audio capture active</text>
+
+  <rect x="64" y="154" width="1072" height="98" rx="12" fill="#0D0D0D" stroke="#FFFFFF" stroke-opacity="0.14"/>
+  <text x="92" y="193" fill="#FFFFFF" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700">recording pipeline</text>
+  <text x="92" y="224" fill="#FFFFFF" fill-opacity="0.58" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">screen ok     audio ok     db writes ok     transcription deferred while meeting audio stays live</text>
+  <rect x="942" y="180" width="154" height="38" rx="19" fill="#FFFFFF"/>
+  <text x="975" y="205" fill="#050505" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">healthy</text>
+
+  <rect x="64" y="282" width="1072" height="364" rx="14" fill="#101010" stroke="#FFFFFF" stroke-opacity="0.24"/>
+  <rect x="88" y="306" width="1024" height="56" rx="10" fill="#161616" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <text x="116" y="342" fill="#FFFFFF" font-size="22" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">background transcription</text>
+  <rect x="914" y="317" width="160" height="34" rx="17" fill="#FFFFFF"/>
+  <text x="948" y="339" fill="#050505" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">18 waiting</text>
+
+  <rect x="88" y="386" width="320" height="100" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="116" y="421" fill="#FFFFFF" fill-opacity="0.58" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">oldest pending</text>
+  <text x="116" y="457" fill="#FFFFFF" font-size="34" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">24m ago</text>
+
+  <rect x="440" y="386" width="320" height="100" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="468" y="421" fill="#FFFFFF" fill-opacity="0.58" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">batch mode</text>
+  <text x="468" y="457" fill="#FFFFFF" font-size="34" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">enabled</text>
+
+  <rect x="792" y="386" width="320" height="100" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="820" y="421" fill="#FFFFFF" fill-opacity="0.58" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">processed today</text>
+  <text x="820" y="457" fill="#FFFFFF" font-size="34" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">184</text>
+
+  <rect x="88" y="504" width="672" height="122" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="116" y="538" fill="#FFFFFF" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700">reconciliation lane</text>
+  <line x1="118" y1="574" x2="722" y2="574" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="2"/>
+  <circle cx="152" cy="574" r="10" fill="#FFFFFF"/>
+  <circle cx="270" cy="574" r="10" fill="#FFFFFF" fill-opacity="0.75"/>
+  <circle cx="388" cy="574" r="10" fill="#FFFFFF" fill-opacity="0.52"/>
+  <circle cx="506" cy="574" r="10" fill="#FFFFFF" fill-opacity="0.28"/>
+  <circle cx="624" cy="574" r="10" fill="#FFFFFF" fill-opacity="0.16"/>
+  <text x="116" y="606" fill="#FFFFFF" fill-opacity="0.6" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">captured</text>
+  <text x="248" y="606" fill="#FFFFFF" fill-opacity="0.6" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">queued</text>
+  <text x="354" y="606" fill="#FFFFFF" fill-opacity="0.6" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">transcribing</text>
+  <text x="574" y="606" fill="#FFFFFF" fill-opacity="0.6" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">done</text>
+
+  <rect x="792" y="504" width="320" height="122" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="820" y="538" fill="#FFFFFF" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700">next chunks</text>
+  <text x="820" y="568" fill="#FFFFFF" fill-opacity="0.72" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">08:44:12  31s  pending</text>
+  <text x="820" y="593" fill="#FFFFFF" fill-opacity="0.54" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">08:45:00  29s  pending</text>
+  <text x="820" y="618" fill="#FFFFFF" fill-opacity="0.38" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">08:45:31  30s  pending</text>
+
+  <text x="88" y="684" fill="#FFFFFF" fill-opacity="0.48" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">transparent status only: no new workflow, no transcript browsing, just confidence that deferred audio is catching up</text>
+</svg>
