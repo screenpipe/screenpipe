@@ -265,6 +265,22 @@ const getAudioFileName = (filePath: string) => {
   return name || filePath;
 };
 
+const formatBacklogCapturedAt = (timestamp: string) => {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "n/a";
+
+  const time = date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  if (date.toDateString() === new Date().toDateString()) return time;
+
+  return `${date.toLocaleDateString([], {
+    month: "numeric",
+    day: "numeric",
+  })} ${time}`;
+};
+
 const getFetchErrorMessage = async (response: Response) => {
   try {
     const body = await response.json();
@@ -415,13 +431,15 @@ function BackgroundTranscriptionDialog({
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogTitle>Background transcription backlog</DialogTitle>
-          <DialogDescription>
-            Audio chunks waiting for background transcription reconciliation.
-          </DialogDescription>
+        <DialogContent className="flex max-h-[calc(100vh-4rem)] w-[min(920px,calc(100vw-3rem))] max-w-none flex-col gap-3 overflow-hidden p-4 sm:p-5">
+          <div className="shrink-0 pr-8">
+            <DialogTitle>Background transcription backlog</DialogTitle>
+            <DialogDescription className="mt-1 text-xs">
+              Audio chunks waiting for background transcription reconciliation.
+            </DialogDescription>
+          </div>
 
-          <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="grid shrink-0 grid-cols-3 gap-2 text-xs">
             <div className="border border-border px-2 py-1.5">
               <div className="text-muted-foreground">waiting</div>
               <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
@@ -436,16 +454,16 @@ function BackgroundTranscriptionDialog({
             </div>
           </div>
 
-          <div className="overflow-x-auto border border-border/60">
-            <table className="w-full text-xs">
-              <thead>
+          <div className="min-h-0 flex-1 overflow-auto border border-border/60">
+            <table className="w-full min-w-[720px] table-fixed text-xs">
+              <thead className="sticky top-0 z-10 bg-background">
                 <tr className="border-b border-border/60 bg-muted/30 text-left text-muted-foreground">
-                  <th className="px-2 py-1.5 font-medium">chunk</th>
-                  <th className="px-2 py-1.5 font-medium">age</th>
-                  <th className="px-2 py-1.5 font-medium">captured</th>
+                  <th className="w-[72px] px-2 py-1.5 font-medium">chunk</th>
+                  <th className="w-[64px] px-2 py-1.5 font-medium">age</th>
+                  <th className="w-[92px] px-2 py-1.5 font-medium">captured</th>
                   <th className="px-2 py-1.5 font-medium">file</th>
-                  <th className="px-2 py-1.5 font-medium">status</th>
-                  <th className="px-2 py-1.5 text-right font-medium">actions</th>
+                  <th className="w-[92px] px-2 py-1.5 font-medium">status</th>
+                  <th className="w-[82px] px-2 py-1.5 text-right font-medium">actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -475,11 +493,14 @@ function BackgroundTranscriptionDialog({
                     <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
                       {formatBacklogSeconds(item.age_seconds)}
                     </td>
-                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
-                      {new Date(item.captured_at).toLocaleString()}
+                    <td
+                      className="px-2 py-1.5 font-mono text-muted-foreground whitespace-nowrap"
+                      title={new Date(item.captured_at).toLocaleString()}
+                    >
+                      {formatBacklogCapturedAt(item.captured_at)}
                     </td>
                     <td
-                      className="max-w-[260px] truncate px-2 py-1.5 font-mono text-muted-foreground"
+                      className="truncate px-2 py-1.5 font-mono text-muted-foreground"
                       title={item.file_path}
                     >
                       {getAudioFileName(item.file_path)}
@@ -531,8 +552,8 @@ function BackgroundTranscriptionDialog({
             </table>
           </div>
 
-          <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>
+          <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span className="min-w-0 truncate">
               showing {items.length.toLocaleString()} ready chunks
               {showingLimitedRows ? ` of ${visiblePending.toLocaleString()}` : ""}
             </span>
