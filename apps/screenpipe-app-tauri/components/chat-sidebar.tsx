@@ -597,8 +597,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
 export function CollapsedChatSidebarButton({
   onSelect,
-export function CollapsedChatSidebarButton({
-  onSelect,
   isTranslucent,
 }: {
   onSelect: (id: string) => void;

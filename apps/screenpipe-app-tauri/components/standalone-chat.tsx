@@ -3587,7 +3587,6 @@ export function StandaloneChat({
             // First delta of a queued turn → create the placeholder lazily.
             if (!ensureAssistantPlaceholder()) return;
             piStreamingTextRef.current += evt.delta;
-            setStreamedCharCount(piStreamingTextRef.current.length);
             emitSessionActivity({
               status: "streaming",
               preview: evt.delta,
