@@ -14,7 +14,9 @@ import {
   UserPlus,
   Monitor,
   Mic,
+  MicOff,
   Volume2,
+  VolumeX,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -259,21 +261,41 @@ function HomeContent() {
     quantize: true,
   });
 
-  // Fetch actual recording devices from health endpoint (same source as tray menu)
-  interface RecordingDevice { name: string; kind: "monitor" | "input" | "output"; active: boolean }
+  // Fetch actual recording devices. Audio comes from /audio/device/status so
+  // user-paused devices stay visible and can be resumed from the same control.
+  interface RecordingDevice {
+    name: string;
+    fullName: string;
+    kind: "monitor" | "input" | "output";
+    active: boolean;
+  }
+  interface AudioDeviceStatus {
+    name: string;
+    is_running: boolean;
+    is_user_disabled?: boolean;
+  }
   const [recordingDevices, setRecordingDevices] = useState<RecordingDevice[]>([]);
   const recordingDevicesSnapshotRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
     const fetchDevices = () => {
-      localFetch("/health")
-        .then((r) => r.ok ? r.json() : null)
-        .then((health: { monitors?: string[]; device_status_details?: string } | null) => {
-          if (cancelled || !health) return;
+      Promise.all([
+        localFetch("/health")
+          .then((r) => r.ok ? r.json() : null)
+          .catch(() => null),
+        localFetch("/audio/device/status")
+          .then((r) => r.ok ? r.json() : null)
+          .catch(() => null),
+      ])
+        .then(([health, audioStatus]: [
+          { monitors?: string[]; device_status_details?: string } | null,
+          AudioDeviceStatus[] | null,
+        ]) => {
+          if (cancelled) return;
           const devices: RecordingDevice[] = [];
           // Parse monitors — filter to only those actually being recorded
-          if (health.monitors) {
+          if (health?.monitors) {
             const monitorIds: string[] = settings.monitorIds ?? ["default"];
             const useAll = settings.useAllMonitors ?? true;
             for (const name of health.monitors) {
@@ -288,12 +310,28 @@ function HomeContent() {
                 });
                 if (!matched) continue;
               }
-              devices.push({ name, kind: "monitor", active: true });
+              devices.push({ name, fullName: name, kind: "monitor", active: true });
             }
           }
-          // Parse audio devices from device_status_details
-          // Format: "DeviceName (input): active (last activity: 2s ago), DeviceName (output): inactive"
-          if (health.device_status_details) {
+
+          const visibleAudioDevices = Array.isArray(audioStatus)
+            ? audioStatus.filter((d) => d.is_running || d.is_user_disabled)
+            : [];
+
+          if (visibleAudioDevices.length > 0) {
+            for (const device of visibleAudioDevices) {
+              const kind = device.name.includes("(output)") ? "output" as const : "input" as const;
+              const name = device.name.replace(/\s*\((input|output)\)\s*/gi, "").trim();
+              devices.push({
+                name,
+                fullName: device.name,
+                kind,
+                active: device.is_running,
+              });
+            }
+          } else if (health?.device_status_details) {
+            // Fallback for older sidecars that do not expose /audio/device/status.
+            // Format: "DeviceName (input): active (last activity: 2s ago)"
             for (const part of health.device_status_details.split(", ")) {
               const match = part.split(": ");
               if (match.length < 2) continue;
@@ -303,7 +341,8 @@ function HomeContent() {
                 : nameAndType.includes("(output)") ? "output" as const
                 : "input" as const;
               const name = nameAndType.replace(/\s*\((input|output)\)\s*/gi, "").trim();
-              devices.push({ name, kind, active });
+              const suffix = kind === "input" ? "input" : "output";
+              devices.push({ name, fullName: `${name} (${suffix})`, kind, active });
             }
           }
           const snapshot = JSON.stringify(devices);
@@ -685,22 +724,39 @@ function HomeContent() {
                 const screenOpacity = overlayData.screenActive ? 0.5 + Math.min(overlayData.captureFps / 2, 0.5) : 0.2;
                 const audioOpacity = overlayData.audioActive ? 0.5 + Math.min(overlayData.speechRatio, 0.5) : 0.2;
 
-                const groups: { key: string; icon: typeof Monitor; count: number; title: string; opacity: number; devices: RecordingDevice[] }[] = [];
+                const groups: {
+                  key: "monitor" | "mic" | "output";
+                  icon: typeof Monitor;
+                  pausedIcon?: typeof Monitor;
+                  count: number;
+                  title: string;
+                  opacity: number;
+                  devices: RecordingDevice[];
+                }[] = [];
                 if (monitors.length > 0) groups.push({ key: "monitor", icon: Monitor, count: monitors.length, title: monitors.map((d) => d.name).join(", "), opacity: screenOpacity, devices: monitors });
-                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: inputs });
-                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: outputs });
+                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, pausedIcon: MicOff, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: inputs });
+                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, pausedIcon: VolumeX, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: outputs });
 
                 return (
                   <div className="flex items-center gap-2 mt-1.5">
-                    {groups.map(({ key, icon: Icon, count, title, opacity, devices: groupDevices }) => {
+                    {groups.map(({ key, icon: ActiveIcon, pausedIcon: PausedIcon, count, title, opacity, devices: groupDevices }) => {
+                      const activeCount = groupDevices.filter((d: RecordingDevice) => d.active).length;
                       const allActive = groupDevices.every((d: RecordingDevice) => d.active);
+                      const isAudioGroup = key !== "monitor";
+                      const Icon = isAudioGroup && !allActive && PausedIcon ? PausedIcon : ActiveIcon;
+                      const iconOpacity = isAudioGroup && !allActive ? 0.45 : opacity;
                       const actionLabel = key === "monitor"
                         ? title
-                        : `${title} — click to ${allActive ? "mute" : "unmute"}`;
+                        : allActive
+                          ? `${title} — click to pause capture`
+                          : activeCount === 0
+                            ? `${title} paused — click to resume capture`
+                            : `${title} partially paused — click to resume paused devices`;
                       return (
                         <Tooltip key={key}>
                           <TooltipTrigger asChild>
                             <button
+                              type="button"
                               aria-label={actionLabel}
                               className={cn(
                                 "flex items-center gap-0.5 rounded px-0.5 transition-all",
@@ -715,15 +771,42 @@ function HomeContent() {
                                 const endpoint = allActive
                                   ? "/audio/device/stop"
                                   : "/audio/device/start";
-                                for (const d of groupDevices) {
-                                  if (allActive || !d.active) {
-                                    const suffix = d.kind === "input" ? "input" : "output";
-                                    await localFetch(endpoint, {
+                                const targetFullNames = new Set(
+                                  groupDevices
+                                    .filter((d) => allActive || !d.active)
+                                    .map((d) => d.fullName)
+                                );
+                                if (targetFullNames.size === 0) return;
+
+                                const previousDevices = recordingDevices;
+                                setRecordingDevices((prev) =>
+                                  prev.map((device) =>
+                                    targetFullNames.has(device.fullName)
+                                      ? {
+                                          ...device,
+                                          active: !allActive,
+                                        }
+                                      : device
+                                  )
+                                );
+
+                                const results = await Promise.allSettled(
+                                  Array.from(targetFullNames).map((deviceName) =>
+                                    localFetch(endpoint, {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({ device_name: `${d.name} (${suffix})` }),
-                                    }).catch(() => {});
-                                  }
+                                      body: JSON.stringify({ device_name: deviceName }),
+                                    }).then((response) => {
+                                      if (!response.ok) {
+                                        throw new Error(`audio device toggle failed: ${response.status}`);
+                                      }
+                                      return response;
+                                    })
+                                  )
+                                );
+
+                                if (results.some((result) => result.status === "rejected")) {
+                                  setRecordingDevices(previousDevices);
                                 }
                               }}
                             >
@@ -731,7 +814,7 @@ function HomeContent() {
                                 aria-hidden="true"
                                 focusable="false"
                                 className={cn("h-3 w-3 transition-colors", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
-                                style={{ opacity }}
+                                style={{ opacity: iconOpacity }}
                               />
                               {count > 1 && (
                                 <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
