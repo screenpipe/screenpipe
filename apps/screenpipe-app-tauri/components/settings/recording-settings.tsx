@@ -82,6 +82,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { localFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -377,8 +378,13 @@ function BackgroundTranscriptionDialog({
     setPreviewSrc(null);
   }, []);
 
-  const refreshItems = useCallback(async () => {
-    setLoading(true);
+  const refreshItems = useCallback(async (
+    options: { showLoading?: boolean } = {}
+  ) => {
+    const showLoading = options.showLoading !== false;
+    if (showLoading) {
+      setLoading(true);
+    }
     try {
       const response = await localFetch("/audio/reconciliation/backlog");
       if (!response.ok) {
@@ -394,7 +400,9 @@ function BackgroundTranscriptionDialog({
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [toast]);
 
@@ -575,7 +583,7 @@ function BackgroundTranscriptionDialog({
             ? `audio chunk ${audioChunkId} was processed`
             : `audio chunk ${audioChunkId} did not produce a transcript`,
       });
-      await refreshItems();
+      await refreshItems({ showLoading: false });
     } catch (error) {
       toast({
         title: "could not run transcription",
@@ -625,6 +633,8 @@ function BackgroundTranscriptionDialog({
     ? formatBacklogAge(audioPipeline?.oldest_pending_transcription_at)
     : "none";
   const showingLimitedRows = visiblePending > items.length;
+  const showInitialSkeleton = loading && items.length === 0;
+  const skeletonRows = Array.from({ length: 10 });
 
   return (
     <>
@@ -660,7 +670,7 @@ function BackgroundTranscriptionDialog({
           }
         }}
       >
-        <DialogContent className="flex max-h-[calc(100vh-4rem)] w-[min(920px,calc(100vw-3rem))] max-w-none flex-col gap-3 overflow-hidden p-4 sm:p-5">
+        <DialogContent className="flex h-[min(760px,calc(100vh-4rem))] w-[min(920px,calc(100vw-3rem))] max-w-none flex-col gap-3 overflow-hidden p-4 sm:p-5">
           <div className="flex shrink-0 items-start justify-between gap-3 pr-8">
             <div>
               <DialogTitle>Background transcription backlog</DialogTitle>
@@ -739,7 +749,7 @@ function BackgroundTranscriptionDialog({
             </Button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto border border-border/60">
+          <div className="relative min-h-0 flex-1 overflow-auto border border-border/60" aria-busy={loading}>
             <table className="w-full min-w-[720px] table-fixed text-xs">
               <thead className="sticky top-0 z-10 bg-background">
                 <tr className="border-b border-border/60 bg-muted/30 text-left text-muted-foreground">
@@ -752,15 +762,36 @@ function BackgroundTranscriptionDialog({
                 </tr>
               </thead>
               <tbody>
-                {loading && (
-                  <tr>
-                    <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
-                      <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin" />
-                      loading backlog
+                {showInitialSkeleton && skeletonRows.map((_, index) => (
+                  <tr key={`backlog-skeleton-${index}`} className="border-b border-border/60">
+                    <td className="px-2 py-2">
+                      <Skeleton className="h-3 w-12" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <Skeleton className="h-3 w-10" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <Skeleton className="h-3 w-14" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Skeleton className="h-3 flex-1" />
+                        <Skeleton className="h-3 w-12 shrink-0" />
+                      </div>
+                    </td>
+                    <td className="px-2 py-2">
+                      <Skeleton className="h-5 w-16" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="flex justify-end gap-1">
+                        <Skeleton className="h-7 w-7" />
+                        <Skeleton className="h-7 w-7" />
+                        <Skeleton className="h-7 w-7" />
+                      </div>
                     </td>
                   </tr>
-                )}
-                {!loading && filteredItems.length === 0 && (
+                ))}
+                {!showInitialSkeleton && filteredItems.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
                       {items.length === 0
@@ -771,7 +802,7 @@ function BackgroundTranscriptionDialog({
                     </td>
                   </tr>
                 )}
-                {!loading && filteredItems.map((item) => {
+                {!showInitialSkeleton && filteredItems.map((item) => {
                   const isPreviewing = previewItem?.audio_chunk_id === item.audio_chunk_id;
                   const statusLabel = item.likely_empty ? "quiet" : item.status;
 
