@@ -629,6 +629,21 @@ async fn fetch_provider_identity(
                 .or_else(|| resp["user"]["username"].as_str())
                 .map(String::from)
         }
+        "inoreader" => {
+            let resp: serde_json::Value = client
+                .get("https://www.inoreader.com/reader/api/0/user-info")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            resp["userEmail"]
+                .as_str()
+                .or_else(|| resp["userName"].as_str())
+                .map(String::from)
+        }
         _ => None,
     }
 }

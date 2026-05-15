@@ -31,6 +31,7 @@ pub mod google_docs;
 pub mod google_sheets;
 pub mod granola;
 pub mod hubspot;
+pub mod inoreader;
 pub mod intercom;
 pub mod jira;
 pub mod lexi;
@@ -274,6 +275,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(jira::Jira),
         Box::new(granola::Granola),
         Box::new(hubspot::HubSpot),
+        Box::new(inoreader::Inoreader),
         Box::new(bitrix24::Bitrix24),
         Box::new(limitless::Limitless),
         Box::new(bee::Bee),

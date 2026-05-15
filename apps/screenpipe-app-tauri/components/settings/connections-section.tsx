@@ -470,6 +470,7 @@ export function IntegrationIcon({
     loops: <img src="/images/loops.svg" alt="Loops" className="w-5 h-5" />,
     resend: <img src="/images/resend.svg" alt="Resend" className="w-5 h-5 dark:invert" />,
     readwise: <img src="/images/readwise.svg" alt="Readwise" className="w-5 h-5 dark:invert" />,
+    inoreader: <img src="/images/inoreader.svg" alt="Inoreader" className="w-5 h-5" />,
     supabase: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#3ECF8E" aria-hidden>
         <path d="M13.4 22.6c-.6.7-1.7.3-1.7-.6V14H6.3c-1.1 0-1.7-1.3-1-2.1L10.6 1.4c.6-.7 1.7-.3 1.7.6V10h5.4c1.1 0 1.7 1.3 1 2.1l-5.3 10.5z"/>
