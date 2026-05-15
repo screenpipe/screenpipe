@@ -91,6 +91,8 @@ pub struct AudioReconciliationBacklogItem {
     pub captured_at: DateTime<Utc>,
     pub age_seconds: i64,
     pub file_path: String,
+    pub file_size_bytes: Option<u64>,
+    pub likely_empty: bool,
     pub status: String,
 }
 
@@ -126,6 +128,7 @@ const ASSUMED_AUDIO_CHUNK_SECS: u64 = 30;
 const AUDIO_RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
 const AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
 const AUDIO_RECONCILIATION_BACKLOG_LIMIT: i64 = 100;
+const AUDIO_RECONCILIATION_LIKELY_EMPTY_BYTES: u64 = 32 * 1024;
 
 fn error_response(status: StatusCode, msg: String) -> Response {
     (status, JsonResponse(json!({"error": msg}))).into_response()
@@ -189,12 +192,21 @@ pub async fn audio_reconciliation_backlog_handler(State(state): State<Arc<AppSta
 
     let items = chunks
         .into_iter()
-        .map(|chunk| AudioReconciliationBacklogItem {
-            audio_chunk_id: chunk.id,
-            captured_at: chunk.timestamp,
-            age_seconds: (now - chunk.timestamp).num_seconds().max(0),
-            file_path: chunk.file_path,
-            status: "waiting".to_string(),
+        .map(|chunk| {
+            let file_size_bytes = std::fs::metadata(&chunk.file_path)
+                .ok()
+                .map(|metadata| metadata.len());
+
+            AudioReconciliationBacklogItem {
+                audio_chunk_id: chunk.id,
+                captured_at: chunk.timestamp,
+                age_seconds: (now - chunk.timestamp).num_seconds().max(0),
+                file_path: chunk.file_path,
+                file_size_bytes,
+                likely_empty: file_size_bytes
+                    .is_some_and(|size| size < AUDIO_RECONCILIATION_LIKELY_EMPTY_BYTES),
+                status: "waiting".to_string(),
+            }
         })
         .collect();
 

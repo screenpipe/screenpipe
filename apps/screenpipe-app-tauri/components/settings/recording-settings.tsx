@@ -244,6 +244,8 @@ type AudioReconciliationBacklogItem = {
   captured_at: string;
   age_seconds: number;
   file_path: string;
+  file_size_bytes?: number | null;
+  likely_empty?: boolean;
   status: string;
 };
 
@@ -267,6 +269,13 @@ const formatBacklogSeconds = (seconds?: number | null) => {
 const getAudioFileName = (filePath: string) => {
   const name = filePath.split(/[\\/]/).pop();
   return name || filePath;
+};
+
+const formatBacklogFileSize = (bytes?: number | null) => {
+  if (bytes == null || !Number.isFinite(bytes)) return "n/a";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
 const formatBacklogCapturedAt = (timestamp: string) => {
@@ -303,6 +312,7 @@ function BackgroundTranscriptionDialog({
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<AudioReconciliationBacklogItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showQuietChunks, setShowQuietChunks] = useState(false);
   const [previewItem, setPreviewItem] = useState<AudioReconciliationBacklogItem | null>(null);
   const [previewPlayRequest, setPreviewPlayRequest] = useState(0);
   const [playingPreviewId, setPlayingPreviewId] = useState<number | null>(null);
@@ -363,22 +373,43 @@ function BackgroundTranscriptionDialog({
     });
   }, [previewItem, previewPlayRequest, toast]);
 
+  const quietItems = useMemo(
+    () => items.filter((item) => item.likely_empty),
+    [items]
+  );
+  const activeItems = useMemo(
+    () => showQuietChunks ? items : items.filter((item) => !item.likely_empty),
+    [items, showQuietChunks]
+  );
   const filteredItems = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return items;
+    if (!query) return activeItems;
 
-    return items.filter((item) => {
+    return activeItems.filter((item) => {
       const haystack = [
         item.audio_chunk_id.toString(),
+        item.likely_empty ? "quiet likely empty" : "needs transcription",
         item.status,
         item.file_path,
         getAudioFileName(item.file_path),
         formatBacklogCapturedAt(item.captured_at),
         formatBacklogSeconds(item.age_seconds),
+        formatBacklogFileSize(item.file_size_bytes),
       ].join(" ").toLowerCase();
       return haystack.includes(query);
     });
-  }, [items, searchQuery]);
+  }, [activeItems, searchQuery]);
+
+  const previewItemId = previewItem?.audio_chunk_id ?? null;
+
+  useEffect(() => {
+    if (previewItemId == null) return;
+    if (!activeItems.some((item) => item.audio_chunk_id === previewItemId)) {
+      audioRef.current?.pause();
+      setPreviewItem(null);
+      setPlayingPreviewId(null);
+    }
+  }, [activeItems, previewItemId]);
 
   const handlePreviewAudio = useCallback((item: AudioReconciliationBacklogItem) => {
     if (
@@ -488,6 +519,7 @@ function BackgroundTranscriptionDialog({
           setOpen(nextOpen);
           if (!nextOpen) {
             audioRef.current?.pause();
+            setPreviewItem(null);
             setPlayingPreviewId(null);
           }
         }}
@@ -500,10 +532,14 @@ function BackgroundTranscriptionDialog({
             </DialogDescription>
           </div>
 
-          <div className="grid shrink-0 grid-cols-3 gap-2 text-xs">
+          <div className="grid shrink-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div className="border border-border px-2 py-1.5">
               <div className="text-muted-foreground">waiting</div>
               <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
+            </div>
+            <div className="border border-border px-2 py-1.5">
+              <div className="text-muted-foreground">quiet loaded</div>
+              <div className="font-mono text-sm">{quietItems.length.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
               <div className="text-muted-foreground">oldest</div>
@@ -513,27 +549,6 @@ function BackgroundTranscriptionDialog({
               <div className="text-muted-foreground">worker</div>
               <div className="font-mono text-sm">{workerState}</div>
             </div>
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border border-border/60 px-2 py-1.5 text-xs">
-            <FileAudio className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-[160px] flex-1 truncate font-mono text-muted-foreground">
-              {previewItem ? getAudioFileName(previewItem.file_path) : "select a chunk to preview audio"}
-            </div>
-            {previewItem ? (
-              <audio
-                key={previewItem.audio_chunk_id}
-                ref={audioRef}
-                controls
-                className="h-8 min-w-[260px] flex-1"
-                src={convertFileSrc(previewItem.file_path)}
-                onPlay={() => setPlayingPreviewId(previewItem.audio_chunk_id)}
-                onPause={() => setPlayingPreviewId(null)}
-                onEnded={() => setPlayingPreviewId(null)}
-              />
-            ) : (
-              <span className="shrink-0 text-muted-foreground">audio preview</span>
-            )}
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -547,6 +562,26 @@ function BackgroundTranscriptionDialog({
                 spellCheck={false}
               />
             </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-8 shrink-0 gap-1 border border-border bg-background px-2 text-xs text-foreground hover:bg-muted hover:text-foreground active:bg-muted",
+                showQuietChunks && "bg-muted"
+              )}
+              onClick={() => setShowQuietChunks((value) => !value)}
+            >
+              {showQuietChunks ? (
+                <Eye className="h-3 w-3" />
+              ) : (
+                <EyeOff className="h-3 w-3" />
+              )}
+              {showQuietChunks ? "quiet shown" : "quiet hidden"}
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {quietItems.length.toLocaleString()}
+              </span>
+            </Button>
             <Badge variant="secondary" className="h-8 shrink-0 rounded-none px-2 font-mono text-[10px]">
               {filteredItems.length.toLocaleString()} shown
             </Badge>
@@ -587,106 +622,156 @@ function BackgroundTranscriptionDialog({
                 {!loading && filteredItems.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
-                      {items.length === 0 ? "no waiting chunks" : "no matching chunks"}
+                      {items.length === 0
+                        ? "no waiting chunks"
+                        : activeItems.length === 0 && !showQuietChunks
+                          ? "only quiet chunks are loaded"
+                          : "no matching chunks"}
                     </td>
                   </tr>
                 )}
-                {!loading && filteredItems.map((item) => (
-                  <tr
-                    key={item.audio_chunk_id}
-                    className="border-b border-border/60 last:border-b-0"
-                  >
-                    <td className="px-2 py-1.5 font-mono text-foreground">
-                      {item.audio_chunk_id}
-                    </td>
-                    <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
-                      {formatBacklogSeconds(item.age_seconds)}
-                    </td>
-                    <td
-                      className="px-2 py-1.5 font-mono text-muted-foreground whitespace-nowrap"
-                      title={new Date(item.captured_at).toLocaleString()}
-                    >
-                      {formatBacklogCapturedAt(item.captured_at)}
-                    </td>
-                    <td
-                      className="truncate px-2 py-1.5 font-mono text-muted-foreground"
-                      title={item.file_path}
-                    >
-                      {getAudioFileName(item.file_path)}
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Badge variant="outline" className="font-mono text-[10px]">
-                        {item.status}
-                      </Badge>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <TooltipProvider delayDuration={150}>
-                        <div className="flex justify-end gap-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
-                                aria-label={`play audio chunk ${item.audio_chunk_id}`}
-                                disabled={droppingId === item.audio_chunk_id}
-                                onClick={() => handlePreviewAudio(item)}
-                              >
-                                {playingPreviewId === item.audio_chunk_id ? (
-                                  <Pause className="h-3.5 w-3.5" />
-                                ) : (
-                                  <Play className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">play audio preview</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
-                                aria-label={`transcribe audio chunk ${item.audio_chunk_id}`}
-                                disabled={runningId === item.audio_chunk_id || droppingId === item.audio_chunk_id}
-                                onClick={() => void handleForceRun(item.audio_chunk_id)}
-                              >
-                                {runningId === item.audio_chunk_id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <FileText className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">transcribe this chunk now</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 border border-border bg-background text-muted-foreground hover:bg-muted hover:text-destructive active:bg-muted"
-                                aria-label={`drop audio chunk ${item.audio_chunk_id}`}
-                                disabled={droppingId === item.audio_chunk_id || runningId === item.audio_chunk_id}
-                                onClick={() => void handleDrop(item)}
-                              >
-                                {droppingId === item.audio_chunk_id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">drop this waiting chunk</TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </TooltipProvider>
-                    </td>
-                  </tr>
-                ))}
+                {!loading && filteredItems.map((item) => {
+                  const isPreviewing = previewItem?.audio_chunk_id === item.audio_chunk_id;
+                  const statusLabel = item.likely_empty ? "quiet" : item.status;
+
+                  return (
+                    <React.Fragment key={item.audio_chunk_id}>
+                      <tr
+                        className={cn(
+                          "border-b border-border/60",
+                          item.likely_empty && "bg-muted/20"
+                        )}
+                      >
+                        <td className="px-2 py-1.5 font-mono text-foreground">
+                          {item.audio_chunk_id}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
+                          {formatBacklogSeconds(item.age_seconds)}
+                        </td>
+                        <td
+                          className="px-2 py-1.5 font-mono text-muted-foreground whitespace-nowrap"
+                          title={new Date(item.captured_at).toLocaleString()}
+                        >
+                          {formatBacklogCapturedAt(item.captured_at)}
+                        </td>
+                        <td
+                          className="px-2 py-1.5 font-mono text-muted-foreground"
+                          title={item.file_path}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="truncate">
+                              {getAudioFileName(item.file_path)}
+                            </span>
+                            {item.file_size_bytes != null && (
+                              <span className="shrink-0 text-[10px] text-muted-foreground/80">
+                                {formatBacklogFileSize(item.file_size_bytes)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Badge
+                            variant={item.likely_empty ? "secondary" : "outline"}
+                            className="font-mono text-[10px]"
+                          >
+                            {statusLabel}
+                          </Badge>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <TooltipProvider delayDuration={150}>
+                            <div className="flex justify-end gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className={cn(
+                                      "h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted",
+                                      isPreviewing && "bg-muted"
+                                    )}
+                                    aria-label={`preview audio chunk ${item.audio_chunk_id}`}
+                                    disabled={droppingId === item.audio_chunk_id}
+                                    onClick={() => handlePreviewAudio(item)}
+                                  >
+                                    {playingPreviewId === item.audio_chunk_id ? (
+                                      <Pause className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Play className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top">preview audio in this row</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
+                                    aria-label={`transcribe audio chunk ${item.audio_chunk_id}`}
+                                    disabled={runningId === item.audio_chunk_id || droppingId === item.audio_chunk_id}
+                                    onClick={() => void handleForceRun(item.audio_chunk_id)}
+                                  >
+                                    {runningId === item.audio_chunk_id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <FileText className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top">transcribe this chunk now</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 border border-border bg-background text-muted-foreground hover:bg-muted hover:text-destructive active:bg-muted"
+                                    aria-label={`drop audio chunk ${item.audio_chunk_id}`}
+                                    disabled={droppingId === item.audio_chunk_id || runningId === item.audio_chunk_id}
+                                    onClick={() => void handleDrop(item)}
+                                  >
+                                    {droppingId === item.audio_chunk_id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top">drop this waiting chunk</TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </TooltipProvider>
+                        </td>
+                      </tr>
+                      {isPreviewing && (
+                        <tr className="border-b border-border/60 bg-muted/20">
+                          <td colSpan={6} className="px-2 py-2">
+                            <div className="flex items-center gap-2">
+                              <FileAudio className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                                audio preview
+                              </span>
+                              <audio
+                                key={item.audio_chunk_id}
+                                ref={audioRef}
+                                controls
+                                className="h-8 min-w-0 flex-1"
+                                src={convertFileSrc(item.file_path)}
+                                onPlay={() => setPlayingPreviewId(item.audio_chunk_id)}
+                                onPause={() => setPlayingPreviewId(null)}
+                                onEnded={() => setPlayingPreviewId(null)}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -694,6 +779,7 @@ function BackgroundTranscriptionDialog({
           <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">
               showing {filteredItems.length.toLocaleString()} of {items.length.toLocaleString()} loaded chunks
+              {!showQuietChunks && quietItems.length > 0 ? ` - ${quietItems.length.toLocaleString()} quiet hidden` : ""}
               {showingLimitedRows ? ` - ${visiblePending.toLocaleString()} total waiting` : ""}
             </span>
           </div>
