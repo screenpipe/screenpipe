@@ -59,6 +59,8 @@ import {
   ListTodo,
   Pause,
   Play,
+  Rewind,
+  FastForward,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -300,6 +302,14 @@ const createAudioPreviewUrl = async (filePath: string) => {
   );
 };
 
+const formatAudioPreviewTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const safeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+};
+
 const formatBacklogCapturedAt = (timestamp: string) => {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return "n/a";
@@ -338,8 +348,9 @@ function BackgroundTranscriptionDialog({
   const [previewItem, setPreviewItem] = useState<AudioReconciliationBacklogItem | null>(null);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewLoadingId, setPreviewLoadingId] = useState<number | null>(null);
-  const [previewPlayRequest, setPreviewPlayRequest] = useState(0);
-  const [playingPreviewId, setPlayingPreviewId] = useState<number | null>(null);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
+  const [previewDuration, setPreviewDuration] = useState(0);
   const [pendingTotal, setPendingTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [runningId, setRunningId] = useState<number | null>(null);
@@ -406,6 +417,9 @@ function BackgroundTranscriptionDialog({
       audioRef.current?.pause();
       clearPreviewSrc();
       setPreviewLoadingId(null);
+      setPreviewPlaying(false);
+      setPreviewCurrentTime(0);
+      setPreviewDuration(0);
       return;
     }
 
@@ -413,6 +427,9 @@ function BackgroundTranscriptionDialog({
     const previewId = previewItem.audio_chunk_id;
     clearPreviewSrc();
     setPreviewLoadingId(previewId);
+    setPreviewPlaying(false);
+    setPreviewCurrentTime(0);
+    setPreviewDuration(0);
 
     void createAudioPreviewUrl(previewItem.file_path)
       .then((url) => {
@@ -422,7 +439,6 @@ function BackgroundTranscriptionDialog({
         }
         previewSrcRef.current = url;
         setPreviewSrc(url);
-        setPreviewPlayRequest((value) => value + 1);
       })
       .catch((error) => {
         if (canceled) return;
@@ -442,20 +458,6 @@ function BackgroundTranscriptionDialog({
       canceled = true;
     };
   }, [clearPreviewSrc, previewItem?.audio_chunk_id, previewItem?.file_path, toast]);
-
-  useEffect(() => {
-    if (!previewItem || !previewSrc || previewPlayRequest === 0) return;
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.load();
-    void audio.play().catch(() => {
-      toast({
-        title: "could not play audio",
-        description: "the audio file could not be opened for preview",
-        variant: "destructive",
-      });
-    });
-  }, [previewItem, previewPlayRequest, previewSrc, toast]);
 
   const quietItems = useMemo(
     () => items.filter((item) => item.likely_empty),
@@ -493,26 +495,62 @@ function BackgroundTranscriptionDialog({
       setPreviewItem(null);
       setPreviewLoadingId(null);
       clearPreviewSrc();
-      setPlayingPreviewId(null);
+      setPreviewPlaying(false);
+      setPreviewCurrentTime(0);
+      setPreviewDuration(0);
     }
   }, [activeItems, clearPreviewSrc, previewItemId]);
 
   const handlePreviewAudio = useCallback((item: AudioReconciliationBacklogItem) => {
     const isCurrentPreview = previewItem?.audio_chunk_id === item.audio_chunk_id;
     if (isCurrentPreview) {
-      if (playingPreviewId === item.audio_chunk_id) {
-        audioRef.current?.pause();
-        return;
-      }
-
-      if (previewSrc) {
-        setPreviewPlayRequest((value) => value + 1);
-      }
+      audioRef.current?.pause();
+      setPreviewItem(null);
+      setPreviewLoadingId(null);
+      clearPreviewSrc();
+      setPreviewPlaying(false);
+      setPreviewCurrentTime(0);
+      setPreviewDuration(0);
       return;
     }
 
     setPreviewItem(item);
-  }, [playingPreviewId, previewItem?.audio_chunk_id, previewSrc]);
+  }, [clearPreviewSrc, previewItem?.audio_chunk_id]);
+
+  const handlePreviewPlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !previewSrc) return;
+
+    if (!audio.paused) {
+      audio.pause();
+      return;
+    }
+
+    void audio.play().catch(() => {
+      toast({
+        title: "could not play audio",
+        description: "the audio file could not be opened for preview",
+        variant: "destructive",
+      });
+    });
+  }, [previewSrc, toast]);
+
+  const seekPreview = useCallback((seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const duration = Number.isFinite(audio.duration) ? audio.duration : previewDuration;
+    const max = duration > 0 ? duration : seconds;
+    const nextTime = Math.min(Math.max(seconds, 0), Math.max(max, 0));
+    audio.currentTime = nextTime;
+    setPreviewCurrentTime(nextTime);
+  }, [previewDuration]);
+
+  const stepPreview = useCallback((seconds: number) => {
+    const audio = audioRef.current;
+    const currentTime = audio?.currentTime ?? previewCurrentTime;
+    seekPreview(currentTime + seconds);
+  }, [previewCurrentTime, seekPreview]);
 
   const handleForceRun = useCallback(async (audioChunkId: number) => {
     setRunningId(audioChunkId);
@@ -612,7 +650,9 @@ function BackgroundTranscriptionDialog({
             setPreviewItem(null);
             setPreviewLoadingId(null);
             clearPreviewSrc();
-            setPlayingPreviewId(null);
+            setPreviewPlaying(false);
+            setPreviewCurrentTime(0);
+            setPreviewDuration(0);
           }
         }}
       >
@@ -730,9 +770,11 @@ function BackgroundTranscriptionDialog({
                     <React.Fragment key={item.audio_chunk_id}>
                       <tr
                         className={cn(
-                          "border-b border-border/60",
-                          item.likely_empty && "bg-muted/20"
+                          "cursor-pointer border-b border-border/60",
+                          item.likely_empty && "bg-muted/20",
+                          isPreviewing && "bg-muted/40"
                         )}
+                        onClick={() => handlePreviewAudio(item)}
                       >
                         <td className="px-2 py-1.5 font-mono text-foreground">
                           {item.audio_chunk_id}
@@ -784,16 +826,21 @@ function BackgroundTranscriptionDialog({
                                     )}
                                     aria-label={`preview audio chunk ${item.audio_chunk_id}`}
                                     disabled={droppingId === item.audio_chunk_id}
-                                    onClick={() => handlePreviewAudio(item)}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handlePreviewAudio(item);
+                                    }}
                                   >
-                                    {playingPreviewId === item.audio_chunk_id ? (
-                                      <Pause className="h-3.5 w-3.5" />
+                                    {previewLoadingId === item.audio_chunk_id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                     ) : (
-                                      <Play className="h-3.5 w-3.5" />
+                                      <FileAudio className="h-3.5 w-3.5" />
                                     )}
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent side="top">preview audio in this row</TooltipContent>
+                                <TooltipContent side="top">
+                                  {isPreviewing ? "close audio controls" : "open audio controls"}
+                                </TooltipContent>
                               </Tooltip>
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -804,7 +851,10 @@ function BackgroundTranscriptionDialog({
                                     className="h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
                                     aria-label={`transcribe audio chunk ${item.audio_chunk_id}`}
                                     disabled={runningId === item.audio_chunk_id || droppingId === item.audio_chunk_id}
-                                    onClick={() => void handleForceRun(item.audio_chunk_id)}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleForceRun(item.audio_chunk_id);
+                                    }}
                                   >
                                     {runningId === item.audio_chunk_id ? (
                                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -824,7 +874,10 @@ function BackgroundTranscriptionDialog({
                                     className="h-7 w-7 border border-border bg-background text-muted-foreground hover:bg-muted hover:text-destructive active:bg-muted"
                                     aria-label={`drop audio chunk ${item.audio_chunk_id}`}
                                     disabled={droppingId === item.audio_chunk_id || runningId === item.audio_chunk_id}
-                                    onClick={() => void handleDrop(item)}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleDrop(item);
+                                    }}
                                   >
                                     {droppingId === item.audio_chunk_id ? (
                                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -839,47 +892,114 @@ function BackgroundTranscriptionDialog({
                           </TooltipProvider>
                         </td>
                       </tr>
-                      {isPreviewing && (
-                        <tr className="border-b border-border/60 bg-muted/20">
-                          <td colSpan={6} className="px-2 py-2">
-                            <div className="flex items-center gap-2">
-                              <FileAudio className="h-4 w-4 shrink-0 text-muted-foreground" />
-                              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                                audio preview
-                              </span>
-                              {previewLoadingId === item.audio_chunk_id && !previewSrc ? (
-                                <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm bg-muted/60 px-3 text-[11px] text-muted-foreground">
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                  loading audio
-                                </div>
-                              ) : previewSrc ? (
-                                <audio
-                                  key={item.audio_chunk_id}
-                                  ref={audioRef}
-                                  controls
-                                  preload="auto"
-                                  className="h-8 min-w-0 flex-1"
-                                  src={previewSrc}
-                                  onPlay={() => setPlayingPreviewId(item.audio_chunk_id)}
-                                  onPause={() => setPlayingPreviewId(null)}
-                                  onEnded={() => setPlayingPreviewId(null)}
-                                  onError={() => setPlayingPreviewId(null)}
-                                />
-                              ) : (
-                                <div className="flex h-8 min-w-0 flex-1 items-center rounded-sm bg-muted/60 px-3 text-[11px] text-muted-foreground">
-                                  audio unavailable
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
                     </React.Fragment>
                   );
                 })}
               </tbody>
             </table>
           </div>
+
+          {previewItem && (
+            <div className="shrink-0 border border-border/60 bg-muted/20 p-2">
+              <div className="mb-2 flex min-w-0 items-center gap-2">
+                <FileAudio className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-xs text-foreground">
+                    {previewItem.audio_chunk_id} - {getAudioFileName(previewItem.file_path)}
+                  </div>
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    {formatBacklogFileSize(previewItem.file_size_bytes)}
+                    {previewItem.likely_empty ? " - quiet" : ""}
+                  </div>
+                </div>
+              </div>
+              {previewLoadingId === previewItem.audio_chunk_id && !previewSrc ? (
+                <div className="flex h-9 items-center gap-2 bg-muted/60 px-3 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  loading audio
+                </div>
+              ) : previewSrc ? (
+                <div className="flex h-9 min-w-0 items-center gap-2 bg-muted/60 px-2">
+                  <audio
+                    key={previewItem.audio_chunk_id}
+                    ref={audioRef}
+                    preload="metadata"
+                    className="hidden"
+                    src={previewSrc}
+                    onLoadedMetadata={(event) => {
+                      const duration = event.currentTarget.duration;
+                      setPreviewDuration(Number.isFinite(duration) ? duration : 0);
+                    }}
+                    onTimeUpdate={(event) => {
+                      setPreviewCurrentTime(event.currentTarget.currentTime);
+                    }}
+                    onPlay={() => setPreviewPlaying(true)}
+                    onPause={() => setPreviewPlaying(false)}
+                    onEnded={(event) => {
+                      event.currentTarget.currentTime = 0;
+                      setPreviewPlaying(false);
+                      setPreviewCurrentTime(0);
+                    }}
+                    onError={() => setPreviewPlaying(false)}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
+                    onClick={handlePreviewPlayback}
+                    aria-label={previewPlaying ? "pause audio preview" : "play audio preview"}
+                  >
+                    {previewPlaying ? (
+                      <Pause className="h-3.5 w-3.5" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
+                    onClick={() => stepPreview(-10)}
+                    aria-label="back 10 seconds"
+                    disabled={previewDuration <= 0}
+                  >
+                    <Rewind className="h-3.5 w-3.5" />
+                  </Button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(previewDuration, 0)}
+                    step={0.1}
+                    value={Math.min(previewCurrentTime, previewDuration || 0)}
+                    onChange={(event) => seekPreview(Number(event.target.value))}
+                    disabled={previewDuration <= 0}
+                    className="h-1 min-w-[180px] flex-1 accent-foreground"
+                    aria-label="audio preview position"
+                  />
+                  <span className="w-[76px] shrink-0 text-right font-mono text-[10px] text-muted-foreground">
+                    {formatAudioPreviewTime(previewCurrentTime)} / {formatAudioPreviewTime(previewDuration)}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
+                    onClick={() => stepPreview(10)}
+                    aria-label="forward 10 seconds"
+                    disabled={previewDuration <= 0}
+                  >
+                    <FastForward className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex h-9 items-center bg-muted/60 px-3 text-[11px] text-muted-foreground">
+                  audio unavailable
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">
