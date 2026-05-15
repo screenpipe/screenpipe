@@ -11,6 +11,8 @@ use sqlx::migrate::MigrateDatabase;
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Column;
+use sqlx::ConnectOptions;
+use sqlx::Connection;
 use sqlx::Error as SqlxError;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -299,6 +301,21 @@ impl DatabaseManager {
             // during idle periods instead. WAL grows to ~16MB max (+12MB).
             // Crash recovery: ~200ms replay at most.
             .pragma("wal_autocheckpoint", "4000");
+
+        // Fresh DB conversion to journal_mode=WAL requires an exclusive lock.
+        // When the pool opens read_pool + write_pool connections concurrently,
+        // each connection tries the WAL conversion and they race, with losers
+        // failing initialization with SQLITE_BUSY ("database is locked")
+        // (~50% reproduction with fresh data-dir). Pre-converting via a single
+        // connection before pool creation makes pool connections see a WAL'd
+        // DB and skip conversion entirely — no race.
+        {
+            let mut conn = connect_options.connect().await?;
+            sqlx::query("PRAGMA journal_mode=WAL")
+                .execute(&mut conn)
+                .await?;
+            conn.close().await?;
+        }
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
         let read_pool = SqlitePoolOptions::new()
