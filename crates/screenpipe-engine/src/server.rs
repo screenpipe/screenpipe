@@ -681,6 +681,16 @@ impl SCServer {
             .route("/audio/metrics", get(audio_metrics_handler))
             // Retranscribe/transcribe (not in OpenAPI spec — opaque Response / multipart)
             .route(
+                "/audio/reconciliation/backlog",
+                get(crate::routes::retranscribe::audio_reconciliation_backlog_handler),
+            )
+            .route(
+                "/audio/reconciliation/backlog/:audio_chunk_id",
+                axum::routing::delete(
+                    crate::routes::retranscribe::drop_audio_reconciliation_chunk_handler,
+                ),
+            )
+            .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
             )

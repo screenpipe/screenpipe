@@ -85,6 +85,27 @@ pub struct MeetingRetranscribeResponse {
     pub replaced_segments: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AudioReconciliationBacklogItem {
+    pub audio_chunk_id: i64,
+    pub captured_at: DateTime<Utc>,
+    pub age_seconds: i64,
+    pub file_path: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AudioReconciliationBacklogResponse {
+    pub pending: usize,
+    pub items: Vec<AudioReconciliationBacklogItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AudioReconciliationDropResponse {
+    pub audio_chunk_id: i64,
+    pub dropped: bool,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct ChunkDevice {
     name: String,
@@ -102,6 +123,9 @@ struct PendingMeetingSegment {
 const MEETING_RETRANSCRIBE_MAX_DURATION_SECS: i64 = 2 * 60 * 60;
 const MEETING_RETRANSCRIBE_MAX_GAP_SECS: i64 = 60;
 const ASSUMED_AUDIO_CHUNK_SECS: u64 = 30;
+const AUDIO_RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
+const AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
+const AUDIO_RECONCILIATION_BACKLOG_LIMIT: i64 = 100;
 
 fn error_response(status: StatusCode, msg: String) -> Response {
     (status, JsonResponse(json!({"error": msg}))).into_response()
@@ -119,6 +143,109 @@ fn into_vocabulary(entries: Vec<MeetingRetranscribeVocabularyEntry>) -> Vec<Voca
             replacement: entry.replacement,
         })
         .collect()
+}
+
+fn audio_reconciliation_window() -> (DateTime<Utc>, DateTime<Utc>, DateTime<Utc>) {
+    let now = Utc::now();
+    let since = now - chrono::Duration::hours(AUDIO_RECONCILIATION_LOOKBACK_HOURS);
+    let older_than = now - chrono::Duration::seconds(AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS);
+    (now, since, older_than)
+}
+
+pub async fn audio_reconciliation_backlog_handler(State(state): State<Arc<AppState>>) -> Response {
+    let (now, since, older_than) = audio_reconciliation_window();
+    let pending = match state
+        .db
+        .get_reconciliation_backlog_summary(since, older_than)
+        .await
+    {
+        Ok((count, _)) => count.max(0) as usize,
+        Err(e) => {
+            error!(
+                "failed to query audio reconciliation backlog summary: {}",
+                e
+            );
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("db query failed: {}", e),
+            );
+        }
+    };
+
+    let chunks = match state
+        .db
+        .get_reconciliation_candidate_chunks(since, older_than, AUDIO_RECONCILIATION_BACKLOG_LIMIT)
+        .await
+    {
+        Ok(chunks) => chunks,
+        Err(e) => {
+            error!("failed to query audio reconciliation backlog items: {}", e);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("db query failed: {}", e),
+            );
+        }
+    };
+
+    let items = chunks
+        .into_iter()
+        .map(|chunk| AudioReconciliationBacklogItem {
+            audio_chunk_id: chunk.id,
+            captured_at: chunk.timestamp,
+            age_seconds: (now - chunk.timestamp).num_seconds().max(0),
+            file_path: chunk.file_path,
+            status: "waiting".to_string(),
+        })
+        .collect();
+
+    JsonResponse(json!(AudioReconciliationBacklogResponse { pending, items })).into_response()
+}
+
+pub async fn drop_audio_reconciliation_chunk_handler(
+    State(state): State<Arc<AppState>>,
+    Path(audio_chunk_id): Path<i64>,
+) -> Response {
+    let (_, since, older_than) = audio_reconciliation_window();
+    match state
+        .db
+        .get_reconciliation_candidate_chunk_by_id(audio_chunk_id, since, older_than)
+        .await
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                "audio chunk is no longer waiting for background transcription".into(),
+            );
+        }
+        Err(e) => {
+            error!(
+                "failed to verify audio reconciliation chunk {}: {}",
+                audio_chunk_id, e
+            );
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("db query failed: {}", e),
+            );
+        }
+    }
+
+    if let Err(e) = state.db.delete_audio_chunk(audio_chunk_id).await {
+        error!(
+            "failed to drop audio reconciliation chunk {}: {}",
+            audio_chunk_id, e
+        );
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("db delete failed: {}", e),
+        );
+    }
+
+    JsonResponse(json!(AudioReconciliationDropResponse {
+        audio_chunk_id,
+        dropped: true,
+    }))
+    .into_response()
 }
 
 pub async fn retranscribe_handler(

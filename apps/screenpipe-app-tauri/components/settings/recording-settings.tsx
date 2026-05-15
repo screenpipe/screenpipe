@@ -54,6 +54,8 @@ import {
   Upload,
   Trash2,
   Search,
+  ListTodo,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -73,6 +75,7 @@ import {
 import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { localFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Switch } from "@/components/ui/switch";
@@ -232,15 +235,61 @@ const formatBacklogAge = (timestamp?: string | null) => {
   return `${days}d ${hours % 24}h`;
 };
 
-function BackgroundTranscriptionTable({
+type AudioReconciliationBacklogItem = {
+  audio_chunk_id: number;
+  captured_at: string;
+  age_seconds: number;
+  file_path: string;
+  status: string;
+};
+
+type AudioReconciliationBacklogResponse = {
+  pending: number;
+  items: AudioReconciliationBacklogItem[];
+};
+
+const formatBacklogSeconds = (seconds?: number | null) => {
+  if (seconds == null || !Number.isFinite(seconds)) return "n/a";
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  if (safeSeconds < 60) return `${safeSeconds}s`;
+  const minutes = Math.floor(safeSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+};
+
+const getAudioFileName = (filePath: string) => {
+  const name = filePath.split(/[\\/]/).pop();
+  return name || filePath;
+};
+
+const getFetchErrorMessage = async (response: Response) => {
+  try {
+    const body = await response.json();
+    if (body?.error) return String(body.error);
+  } catch {
+    // Fall through to the status text.
+  }
+  return response.statusText || `request failed (${response.status})`;
+};
+
+function BackgroundTranscriptionDialog({
   audioPipeline,
-  configuredMode,
 }: {
   audioPipeline?: AudioPipelineSnapshot | null;
-  configuredMode?: string | null;
 }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<AudioReconciliationBacklogItem[]>([]);
+  const [pendingTotal, setPendingTotal] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [runningId, setRunningId] = useState<number | null>(null);
+  const [droppingId, setDroppingId] = useState<number | null>(null);
+  const { toast } = useToast();
+
   const pending = audioPipeline?.pending_transcription_segments ?? 0;
-  const mode = audioPipeline?.transcription_mode ?? configuredMode ?? "realtime";
+  const visiblePending = pendingTotal ?? pending;
   const workerState = audioPipeline?.batch_paused_reason
     ? audioPipeline.batch_paused_reason
     : audioPipeline?.transcription_paused
@@ -248,78 +297,260 @@ function BackgroundTranscriptionTable({
       : audioPipeline
         ? "running"
         : "waiting";
-  const rows = [
-    {
-      label: "pending",
-      value: pending.toLocaleString(),
-      detail: pending > 0 ? "waiting for background transcription" : "caught up",
-    },
-    {
-      label: "oldest pending",
-      value: pending > 0 ? formatBacklogAge(audioPipeline?.oldest_pending_transcription_at) : "none",
-      detail: audioPipeline?.oldest_pending_transcription_at
-        ? new Date(audioPipeline.oldest_pending_transcription_at).toLocaleString()
-        : "no queued segments",
-    },
-    {
-      label: "mode",
-      value: mode,
-      detail: "current audio transcription path",
-    },
-    {
-      label: "deferred",
-      value: (audioPipeline?.segments_deferred ?? 0).toLocaleString(),
-      detail: "saved for later transcription",
-    },
-    {
-      label: "processed",
-      value: (audioPipeline?.segments_batch_processed ?? 0).toLocaleString(),
-      detail: "completed by background reconciliation",
-    },
-    {
-      label: "worker",
-      value: workerState,
-      detail: audioPipeline ? "latest health check" : "health unavailable",
-    },
-  ];
+
+  const refreshItems = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await localFetch("/audio/reconciliation/backlog");
+      if (!response.ok) {
+        throw new Error(await getFetchErrorMessage(response));
+      }
+      const data = (await response.json()) as AudioReconciliationBacklogResponse;
+      setItems(data.items ?? []);
+      setPendingTotal(data.pending ?? data.items?.length ?? 0);
+    } catch (error) {
+      toast({
+        title: "could not load backlog",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (open) {
+      void refreshItems();
+    }
+  }, [open, refreshItems]);
+
+  const handleForceRun = useCallback(async (audioChunkId: number) => {
+    setRunningId(audioChunkId);
+    try {
+      const response = await localFetch("/audio/retranscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_chunk_ids: [audioChunkId] }),
+      });
+      if (!response.ok) {
+        throw new Error(await getFetchErrorMessage(response));
+      }
+      const result = await response.json();
+      toast({
+        title: result.chunks_processed > 0 ? "chunk transcribed" : "nothing processed",
+        description:
+          result.chunks_processed > 0
+            ? `audio chunk ${audioChunkId} was processed`
+            : `audio chunk ${audioChunkId} did not produce a transcript`,
+      });
+      await refreshItems();
+    } catch (error) {
+      toast({
+        title: "could not run transcription",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setRunningId(null);
+    }
+  }, [refreshItems, toast]);
+
+  const handleDrop = useCallback(async (item: AudioReconciliationBacklogItem) => {
+    const ok = window.confirm(
+      `drop audio chunk ${item.audio_chunk_id} from the background transcription backlog?`
+    );
+    if (!ok) return;
+
+    setDroppingId(item.audio_chunk_id);
+    try {
+      const response = await localFetch(
+        `/audio/reconciliation/backlog/${item.audio_chunk_id}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        throw new Error(await getFetchErrorMessage(response));
+      }
+      setItems((current) =>
+        current.filter((row) => row.audio_chunk_id !== item.audio_chunk_id)
+      );
+      setPendingTotal((current) => Math.max(0, (current ?? visiblePending) - 1));
+      toast({
+        title: "audio chunk dropped",
+        description: getAudioFileName(item.file_path),
+      });
+    } catch (error) {
+      toast({
+        title: "could not drop chunk",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setDroppingId(null);
+    }
+  }, [toast, visiblePending]);
+
+  const oldestPending = pending > 0
+    ? formatBacklogAge(audioPipeline?.oldest_pending_transcription_at)
+    : "none";
+  const showingLimitedRows = visiblePending > items.length;
 
   return (
-    <Card className="border-border bg-card">
-      <CardContent className="px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3 mb-2.5">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div className="min-w-0">
-              <h3 className="text-sm font-medium text-foreground">Background transcription</h3>
-              <p className="text-xs text-muted-foreground">Deferred audio backlog</p>
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="relative h-7 w-7 shrink-0"
+        aria-label="open background transcription backlog"
+        title="background transcription backlog"
+        onClick={() => setOpen(true)}
+      >
+        <ListTodo className="h-3.5 w-3.5" />
+        {visiblePending > 0 && (
+          <span className="absolute -right-1.5 -top-1.5 min-w-[1rem] rounded-full border border-background bg-foreground px-1 text-[9px] leading-4 text-background">
+            {visiblePending > 99 ? "99+" : visiblePending}
+          </span>
+        )}
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogTitle>Background transcription backlog</DialogTitle>
+          <DialogDescription>
+            Audio chunks waiting for background transcription reconciliation.
+          </DialogDescription>
+
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="border border-border px-2 py-1.5">
+              <div className="text-muted-foreground">waiting</div>
+              <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
+            </div>
+            <div className="border border-border px-2 py-1.5">
+              <div className="text-muted-foreground">oldest</div>
+              <div className="font-mono text-sm">{oldestPending}</div>
+            </div>
+            <div className="border border-border px-2 py-1.5">
+              <div className="text-muted-foreground">worker</div>
+              <div className="font-mono text-sm">{workerState}</div>
             </div>
           </div>
-          <Badge variant={pending > 0 ? "outline" : "secondary"} className="shrink-0">
-            {pending > 0 ? `${pending.toLocaleString()} waiting` : "caught up"}
-          </Badge>
-        </div>
 
-        <div className="overflow-x-auto border border-border/60">
-          <table className="w-full text-xs">
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.label} className="border-b border-border/60 last:border-b-0">
-                  <th className="w-40 px-2 py-1.5 text-left font-medium text-muted-foreground">
-                    {row.label}
-                  </th>
-                  <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
-                    {row.value}
-                  </td>
-                  <td className="px-2 py-1.5 text-muted-foreground">
-                    {row.detail}
-                  </td>
+          <div className="overflow-x-auto border border-border/60">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border/60 bg-muted/30 text-left text-muted-foreground">
+                  <th className="px-2 py-1.5 font-medium">chunk</th>
+                  <th className="px-2 py-1.5 font-medium">age</th>
+                  <th className="px-2 py-1.5 font-medium">captured</th>
+                  <th className="px-2 py-1.5 font-medium">file</th>
+                  <th className="px-2 py-1.5 font-medium">status</th>
+                  <th className="px-2 py-1.5 text-right font-medium">actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
+                      <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin" />
+                      loading backlog
+                    </td>
+                  </tr>
+                )}
+                {!loading && items.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
+                      no waiting chunks
+                    </td>
+                  </tr>
+                )}
+                {!loading && items.map((item) => (
+                  <tr
+                    key={item.audio_chunk_id}
+                    className="border-b border-border/60 last:border-b-0"
+                  >
+                    <td className="px-2 py-1.5 font-mono text-foreground">
+                      {item.audio_chunk_id}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono text-foreground whitespace-nowrap">
+                      {formatBacklogSeconds(item.age_seconds)}
+                    </td>
+                    <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                      {new Date(item.captured_at).toLocaleString()}
+                    </td>
+                    <td
+                      className="max-w-[260px] truncate px-2 py-1.5 font-mono text-muted-foreground"
+                      title={item.file_path}
+                    >
+                      {getAudioFileName(item.file_path)}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        {item.status}
+                      </Badge>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="force transcription now"
+                          aria-label={`force transcription for audio chunk ${item.audio_chunk_id}`}
+                          disabled={runningId === item.audio_chunk_id || droppingId === item.audio_chunk_id}
+                          onClick={() => void handleForceRun(item.audio_chunk_id)}
+                        >
+                          {runningId === item.audio_chunk_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Play className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          title="drop this waiting audio chunk"
+                          aria-label={`drop audio chunk ${item.audio_chunk_id}`}
+                          disabled={droppingId === item.audio_chunk_id || runningId === item.audio_chunk_id}
+                          onClick={() => void handleDrop(item)}
+                        >
+                          {droppingId === item.audio_chunk_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              showing {items.length.toLocaleString()} ready chunks
+              {showingLimitedRows ? ` of ${visiblePending.toLocaleString()}` : ""}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              disabled={loading}
+              onClick={() => void refreshItems()}
+            >
+              <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
+              refresh
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1417,37 +1648,42 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <HelpTooltip text="Cloud engines send audio to a server for fast, accurate transcription. Offline engines run on your device — fully private but use more CPU/RAM." />
                 </h3>
               </div>
-              <Select
-                value={settings.audioTranscriptionEngine}
-                onValueChange={(value) => handleAudioTranscriptionModelChange(value)}
-              >
-                <SelectTrigger className="w-[200px] h-7 text-xs">
-                  <SelectValue placeholder="Select engine" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
-                    <SelectItem value="screenpipe-cloud" disabled={!settings.user?.cloud_subscribed}>
-                      Screenpipe Cloud {!settings.user?.cloud_subscribed && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
-                    </SelectItem>
-                    <SelectItem value="deepgram">Deepgram</SelectItem>
-                  </SelectGroup>
-                  <SelectGroup>
-                    <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">offline</SelectLabel>
-                    <SelectItem value="whisper-large-v3-turbo">Whisper Turbo</SelectItem>
-                    <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Turbo (fast)</SelectItem>
-                    <SelectItem value="whisper-tiny">Whisper Tiny</SelectItem>
-                    <SelectItem value="whisper-tiny-quantized">Whisper Tiny (fast)</SelectItem>
-                    {!isMacOS && <SelectItem value="qwen3-asr">Qwen3-ASR</SelectItem>}
-                    <SelectItem value="parakeet">Parakeet{isMacOS ? " (experimental)" : ""}</SelectItem>
-                  </SelectGroup>
-                  <SelectGroup>
-                    <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>
-                    <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
-                    <SelectItem value="disabled">Disabled (capture only)</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                {settings.audioTranscriptionEngine !== "disabled" && (
+                  <BackgroundTranscriptionDialog audioPipeline={audioPipeline} />
+                )}
+                <Select
+                  value={settings.audioTranscriptionEngine}
+                  onValueChange={(value) => handleAudioTranscriptionModelChange(value)}
+                >
+                  <SelectTrigger className="w-[200px] h-7 text-xs">
+                    <SelectValue placeholder="Select engine" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
+                      <SelectItem value="screenpipe-cloud" disabled={!settings.user?.cloud_subscribed}>
+                        Screenpipe Cloud {!settings.user?.cloud_subscribed && "(pro)"}{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
+                      </SelectItem>
+                      <SelectItem value="deepgram">Deepgram</SelectItem>
+                    </SelectGroup>
+                    <SelectGroup>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">offline</SelectLabel>
+                      <SelectItem value="whisper-large-v3-turbo">Whisper Turbo</SelectItem>
+                      <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Turbo (fast)</SelectItem>
+                      <SelectItem value="whisper-tiny">Whisper Tiny</SelectItem>
+                      <SelectItem value="whisper-tiny-quantized">Whisper Tiny (fast)</SelectItem>
+                      {!isMacOS && <SelectItem value="qwen3-asr">Qwen3-ASR</SelectItem>}
+                      <SelectItem value="parakeet">Parakeet{isMacOS ? " (experimental)" : ""}</SelectItem>
+                    </SelectGroup>
+                    <SelectGroup>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>
+                      <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
+                      <SelectItem value="disabled">Disabled (capture only)</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             {audioEngineResolution.fallbackReason && (
               <Alert
@@ -1774,13 +2010,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             )}
           </CardContent>
         </Card>
-        )}
-
-        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
-          <BackgroundTranscriptionTable
-            audioPipeline={audioPipeline}
-            configuredMode={settings.transcriptionMode}
-          />
         )}
 
         {/* Meeting Live Notes */}

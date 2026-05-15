@@ -1107,6 +1107,54 @@ impl DatabaseManager {
         Ok(rows)
     }
 
+    /// Returns one orphaned audio chunk if it is currently eligible for
+    /// background transcription reconciliation.
+    pub async fn get_reconciliation_candidate_chunk_by_id(
+        &self,
+        chunk_id: i64,
+        since: DateTime<Utc>,
+        older_than: DateTime<Utc>,
+    ) -> Result<Option<UntranscribedChunk>, sqlx::Error> {
+        let row = sqlx::query_as::<_, UntranscribedChunk>(
+            "SELECT ac.id, ac.file_path, ac.timestamp
+             FROM audio_chunks ac
+             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
+             WHERE ac.id = ?1
+               AND at.id IS NULL
+               AND ac.timestamp >= ?2
+               AND ac.timestamp <= ?3
+               AND ac.file_path NOT LIKE 'cloud://%'
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM meetings m
+                 WHERE EXISTS (
+                     SELECT 1
+                     FROM meeting_transcript_segments mts
+                     WHERE mts.meeting_id = m.id
+                   )
+                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
+                   AND julianday(ac.timestamp) <= julianday(datetime(
+                     COALESCE(
+                       m.meeting_end,
+                       (
+                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
+                         FROM meeting_transcript_segments mts2
+                         WHERE mts2.meeting_id = m.id
+                       )
+                     ),
+                     '+60 seconds'
+                   ))
+               )
+             LIMIT 1",
+        )
+        .bind(chunk_id)
+        .bind(since)
+        .bind(older_than)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Returns a compact summary of audio chunks that are ready for background
     /// transcription reconciliation.
     pub async fn get_reconciliation_backlog_summary(
