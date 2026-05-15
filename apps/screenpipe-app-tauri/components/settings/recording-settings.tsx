@@ -463,9 +463,13 @@ function BackgroundTranscriptionDialog({
     () => items.filter((item) => item.likely_empty),
     [items]
   );
+  const readyItems = useMemo(
+    () => items.filter((item) => !item.likely_empty),
+    [items]
+  );
   const activeItems = useMemo(
-    () => showQuietChunks ? items : items.filter((item) => !item.likely_empty),
-    [items, showQuietChunks]
+    () => showQuietChunks ? items : readyItems,
+    [items, readyItems, showQuietChunks]
   );
   const filteredItems = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -657,29 +661,34 @@ function BackgroundTranscriptionDialog({
         }}
       >
         <DialogContent className="flex max-h-[calc(100vh-4rem)] w-[min(920px,calc(100vw-3rem))] max-w-none flex-col gap-3 overflow-hidden p-4 sm:p-5">
-          <div className="shrink-0 pr-8">
-            <DialogTitle>Background transcription backlog</DialogTitle>
-            <DialogDescription className="mt-1 text-xs">
-              Audio chunks waiting for background transcription reconciliation.
-            </DialogDescription>
+          <div className="flex shrink-0 items-start justify-between gap-3 pr-8">
+            <div>
+              <DialogTitle>Background transcription backlog</DialogTitle>
+              <DialogDescription className="mt-1 text-xs">
+                Audio chunks waiting for background transcription reconciliation.
+              </DialogDescription>
+            </div>
+            <Badge variant="outline" className="mt-0.5 shrink-0 rounded-none font-mono text-[10px]">
+              worker {workerState}
+            </Badge>
           </div>
 
           <div className="grid shrink-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">waiting</div>
-              <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
+              <div className="text-muted-foreground">ready loaded</div>
+              <div className="font-mono text-sm">{readyItems.length.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
               <div className="text-muted-foreground">quiet loaded</div>
               <div className="font-mono text-sm">{quietItems.length.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">oldest</div>
-              <div className="font-mono text-sm">{oldestPending}</div>
+              <div className="text-muted-foreground">total candidates</div>
+              <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">worker</div>
-              <div className="font-mono text-sm">{workerState}</div>
+              <div className="text-muted-foreground">oldest candidate</div>
+              <div className="font-mono text-sm">{oldestPending}</div>
             </div>
           </div>
 
@@ -757,7 +766,7 @@ function BackgroundTranscriptionDialog({
                       {items.length === 0
                         ? "no waiting chunks"
                         : activeItems.length === 0 && !showQuietChunks
-                          ? "only quiet chunks are loaded"
+                          ? "only quiet/no-speech chunks are loaded"
                           : "no matching chunks"}
                     </td>
                   </tr>
@@ -1003,9 +1012,11 @@ function BackgroundTranscriptionDialog({
 
           <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">
-              showing {filteredItems.length.toLocaleString()} of {items.length.toLocaleString()} loaded chunks
+              showing {filteredItems.length.toLocaleString()} of{" "}
+              {(showQuietChunks ? items.length : readyItems.length).toLocaleString()}{" "}
+              {showQuietChunks ? "loaded chunks" : "ready loaded chunks"}
               {!showQuietChunks && quietItems.length > 0 ? ` - ${quietItems.length.toLocaleString()} quiet hidden` : ""}
-              {showingLimitedRows ? ` - ${visiblePending.toLocaleString()} total waiting` : ""}
+              {showingLimitedRows ? ` - ${visiblePending.toLocaleString()} total candidates incl. quiet` : ""}
             </span>
           </div>
         </DialogContent>
