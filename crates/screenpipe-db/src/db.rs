@@ -1107,6 +1107,50 @@ impl DatabaseManager {
         Ok(rows)
     }
 
+    /// Returns a compact summary of audio chunks that are ready for background
+    /// transcription reconciliation.
+    pub async fn get_reconciliation_backlog_summary(
+        &self,
+        since: DateTime<Utc>,
+        older_than: DateTime<Utc>,
+    ) -> Result<(i64, Option<DateTime<Utc>>), sqlx::Error> {
+        let summary = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+            "SELECT COUNT(*) as count, MIN(ac.timestamp) as oldest_timestamp
+             FROM audio_chunks ac
+             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
+             WHERE at.id IS NULL
+               AND ac.timestamp >= ?1
+               AND ac.timestamp <= ?2
+               AND ac.file_path NOT LIKE 'cloud://%'
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM meetings m
+                 WHERE EXISTS (
+                     SELECT 1
+                     FROM meeting_transcript_segments mts
+                     WHERE mts.meeting_id = m.id
+                   )
+                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
+                   AND julianday(ac.timestamp) <= julianday(datetime(
+                     COALESCE(
+                       m.meeting_end,
+                       (
+                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
+                         FROM meeting_transcript_segments mts2
+                         WHERE mts2.meeting_id = m.id
+                       )
+                     ),
+                     '+60 seconds'
+                   ))
+               )",
+        )
+        .bind(since)
+        .bind(older_than)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(summary)
+    }
+
     /// Returns true if there are audio transcriptions from output devices
     /// within the given number of seconds. Used by meeting detection to keep
     /// browser-based meetings alive when the user switches tabs but audio is

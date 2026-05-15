@@ -27,6 +27,20 @@ import { useStatusDialog } from "@/lib/hooks/use-status-dialog";
 import { PermissionButtons } from "./status/permission-buttons";
 import { usePlatform } from "@/lib/hooks/use-platform";
 
+const formatBacklogAge = (timestamp?: string | null) => {
+  if (!timestamp) return "n/a";
+  const ms = new Date(timestamp).getTime();
+  if (!Number.isFinite(ms)) return "n/a";
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+};
+
 const HealthStatus = ({ className }: { className?: string }) => {
   const { health, isServerDown } = useHealthCheck();
   const { isOpen, open, close } = useStatusDialog();
@@ -139,6 +153,17 @@ const HealthStatus = ({ className }: { className?: string }) => {
     health?.frame_status ?? "",
     health?.audio_status ?? "",
     settings.disableAudio
+  );
+  const audioPipeline = health?.audio_pipeline ?? null;
+  const pendingTranscriptions =
+    audioPipeline?.pending_transcription_segments ?? 0;
+  const transcriptionBacklogLabel =
+    pendingTranscriptions > 0
+      ? `${pendingTranscriptions} waiting`
+      : "caught up";
+  const transcriptionMode = audioPipeline?.transcription_mode ?? "realtime";
+  const oldestPendingAge = formatBacklogAge(
+    audioPipeline?.oldest_pending_transcription_at ?? null
   );
 
   const handleOpenStatusDialog = async () => {
@@ -305,6 +330,67 @@ const HealthStatus = ({ className }: { className?: string }) => {
                       <PermissionButtons type="audio" />
                     </div>
                   </div>
+
+                  {/* Background Transcription Backlog */}
+                  {!settings.disableAudio && audioPipeline && (
+                    <div className="mt-3 border border-border bg-muted/20 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Activity className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-sm font-medium">
+                            background transcription
+                          </span>
+                          {audioPipeline.transcription_paused && (
+                            <span className="text-xs text-muted-foreground">
+                              paused
+                            </span>
+                          )}
+                        </div>
+                        <Badge
+                          variant={
+                            pendingTranscriptions > 0 ? "outline" : "secondary"
+                          }
+                          className="shrink-0"
+                        >
+                          {transcriptionBacklogLabel}
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        <div>
+                          <div className="text-muted-foreground">mode</div>
+                          <div className="font-mono">{transcriptionMode}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">oldest</div>
+                          <div className="font-mono">
+                            {pendingTranscriptions > 0
+                              ? oldestPendingAge
+                              : "none"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">deferred</div>
+                          <div className="font-mono">
+                            {audioPipeline.segments_deferred ?? 0}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">processed</div>
+                          <div className="font-mono">
+                            {audioPipeline.segments_batch_processed ?? 0}
+                          </div>
+                        </div>
+                      </div>
+
+                      {pendingTranscriptions > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          audio is saved; transcript search will fill in as
+                          reconciliation drains this backlog.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Audio Drops Warning */}
                   {!settings.disableAudio &&

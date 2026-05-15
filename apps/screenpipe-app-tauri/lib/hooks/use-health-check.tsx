@@ -22,6 +22,12 @@ interface AudioPipelineHealth {
   db_inserted: number;
   total_words: number;
   words_per_minute: number;
+  transcription_mode?: string;
+  segments_deferred?: number;
+  segments_batch_processed?: number;
+  batch_paused_reason?: string | null;
+  pending_transcription_segments?: number;
+  oldest_pending_transcription_at?: string | null;
   transcription_paused?: boolean;
   meeting_detected?: boolean;
   meeting_app?: string;
@@ -56,7 +62,9 @@ function isHealthChanged(
     oldHealth.frame_status !== newHealth.frame_status ||
     oldHealth.audio_status !== newHealth.audio_status ||
     oldHealth.ui_status !== newHealth.ui_status ||
-    oldHealth.message !== newHealth.message
+    oldHealth.message !== newHealth.message ||
+    JSON.stringify(oldHealth.audio_pipeline) !==
+      JSON.stringify(newHealth.audio_pipeline)
   );
 }
 
