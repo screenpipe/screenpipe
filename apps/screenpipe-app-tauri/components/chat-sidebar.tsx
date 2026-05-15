@@ -284,6 +284,9 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     // from trailing stream events.
     commands.piAbort(id).catch(() => {});
     actions.patch(id, { hidden: true, unread: false });
+    // Archiving should tuck chats away immediately; users can reopen
+    // the bucket manually when they want to review archived items.
+    setArchivedCollapsed(true);
     // Move the panel off a chat that just left the visible list.
     if (id === currentId) {
       const fresh = crypto.randomUUID();
@@ -305,6 +308,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     // Best-effort persistence for restart durability.
     try {
       await updateConversationFlags(id, { hidden: true });
+    } catch {
+      // ignore
+    }
+    try {
       await emit("chat-visibility-changed", { id, hidden: true });
     } catch {
       // ignore
@@ -316,6 +323,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     actions.patch(id, { hidden: false, unread: false });
     try {
       await updateConversationFlags(id, { hidden: false });
+    } catch {
+      // ignore
+    }
+    try {
       await emit("chat-visibility-changed", { id, hidden: false });
     } catch {
       // ignore
@@ -511,6 +522,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
                   <Section
                     title="archived"
                     count={archived.length}
+                    tone="subtle"
                     collapsed={archivedCollapsed}
                     onCollapsedChange={setArchivedCollapsed}
                     bodyClassName="overflow-y-auto overflow-x-hidden scrollbar-hide"
@@ -522,6 +534,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
                         session={s}
                         isCurrent={s.id === currentId}
                         disableHover={isArchivedScrolling}
+                        tone="subtle"
                         queuedCount={0}
                         onSelect={handleSelect}
                         onArchive={handleArchive}
@@ -936,6 +949,7 @@ function UpcomingRow({
 function Section({
   title,
   count,
+  tone = "default",
   collapsed,
   onCollapsedChange,
   bodyClassName,
@@ -944,6 +958,7 @@ function Section({
 }: {
   title: string;
   count?: number;
+  tone?: "default" | "subtle";
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
   bodyClassName: string;
@@ -955,19 +970,42 @@ function Section({
       <button
         type="button"
         onClick={() => onCollapsedChange(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
+        className={cn(
+          "shrink-0 px-2.5 py-1.5 flex items-center gap-1 rounded-md text-left",
+          tone === "subtle" ? "hover:bg-muted/20" : "hover:bg-muted/30"
+        )}
         aria-expanded={!collapsed}
       >
         {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0",
+              tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
+            )}
+          />
         ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+          <ChevronDown
+            className={cn(
+              "h-3 w-3 shrink-0",
+              tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
+            )}
+          />
         )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+        <span
+          className={cn(
+            "text-[10px] uppercase tracking-wider flex-1",
+            tone === "subtle" ? "text-muted-foreground/45" : "text-muted-foreground/60"
+          )}
+        >
           {title}
         </span>
         {count !== undefined && (
-          <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+          <span
+            className={cn(
+              "text-[10px] tabular-nums",
+              tone === "subtle" ? "text-muted-foreground/40" : "text-muted-foreground/60"
+            )}
+          >
             {count}
           </span>
         )}
@@ -985,6 +1023,7 @@ interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
   disableHover?: boolean;
+  tone?: "default" | "subtle";
   leadingIndicator?: React.ReactNode;
   queuedCount: number;
   onSelect: (id: string) => void;
@@ -999,6 +1038,7 @@ export function SidebarChatRow({
   session,
   isCurrent,
   disableHover = false,
+  tone = "default",
   leadingIndicator,
   queuedCount,
   onSelect,
@@ -1032,8 +1072,12 @@ export function SidebarChatRow({
         isCurrent
           ? "bg-muted/70 text-foreground"
           : disableHover
-            ? "text-muted-foreground"
-            : "text-muted-foreground hover:bg-muted/40"
+            ? tone === "subtle"
+              ? "text-muted-foreground/75"
+              : "text-muted-foreground"
+            : tone === "subtle"
+              ? "text-muted-foreground/75 hover:bg-muted/25"
+              : "text-muted-foreground hover:bg-muted/40"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
@@ -1058,6 +1102,8 @@ export function SidebarChatRow({
               ? "font-semibold text-foreground"
               : isCurrent
                 ? "text-foreground/80"
+                : tone === "subtle"
+                  ? "text-muted-foreground/70"
                 : "text-muted-foreground"
           )}
         >
