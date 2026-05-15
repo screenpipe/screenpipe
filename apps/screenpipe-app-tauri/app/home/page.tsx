@@ -24,7 +24,7 @@ import {
   NotebookPen,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
@@ -146,6 +146,124 @@ function HomeContent() {
     // store; this writer is what makes "switch away and back" preserve
     // the full live transcript. Idempotent.
     void mountPipeWatchWriter();
+  }, []);
+
+  // Overlay-side foreground sessions don't pass through this window's
+  // background router path. Mirror lightweight activity (status + preview)
+  // so the home sidebar stays live without mirroring full message bodies.
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenFn: (() => void) | undefined;
+    (async () => {
+      const unlisten = await listen<{
+        id: string;
+        status?: SessionStatus;
+        preview?: string;
+        title?: string;
+        updatedAt: number;
+        lastError?: string;
+        unreadHint?: boolean;
+      }>("chat-session-activity", (event) => {
+        if (cancelled) return;
+        const { id, status, preview, title, updatedAt, lastError, unreadHint } = event.payload ?? {};
+        if (!id || !updatedAt) return;
+        const store = useChatStore.getState();
+        const existing = store.sessions[id];
+        if (!existing) {
+          store.actions.upsert({
+            id,
+            title: title?.trim() || "new chat",
+            preview: preview ?? "",
+            status: status ?? "idle",
+            lastError,
+            messageCount: 0,
+            createdAt: updatedAt,
+            updatedAt,
+            pinned: false,
+            hidden: false,
+            unread: false,
+          });
+        } else {
+          if (existing.updatedAt > updatedAt) return;
+          const nextTitle = title?.trim() || existing.title;
+          const nextPreview = preview ?? existing.preview;
+          const nextStatus = status ?? existing.status;
+          const nextLastError =
+            lastError !== undefined
+              ? lastError || undefined
+              : nextStatus === "error"
+                ? existing.lastError
+                : undefined;
+          if (
+            existing.title === nextTitle &&
+            existing.preview === nextPreview &&
+            existing.status === nextStatus &&
+            existing.lastError === nextLastError &&
+            existing.updatedAt === updatedAt
+          ) return;
+          store.actions.patch(id, {
+            title: nextTitle,
+            preview: nextPreview,
+            status: nextStatus,
+            lastError: nextLastError,
+            updatedAt,
+          });
+        }
+        if (unreadHint && store.currentId !== id && store.panelSessionId !== id) {
+          store.actions.markUnread(id);
+        }
+      });
+      unlistenFn = unlisten;
+    })();
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, []);
+
+  // Saved-title correction path. Activity updates are best-effort during
+  // streaming; this event is emitted after canonical on-disk save, so use it
+  // to guarantee Main row title converges from "new chat" to real title.
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenFn: (() => void) | undefined;
+    (async () => {
+      const unlisten = await listen<{ id: string; title?: string }>(
+        "chat-conversation-saved",
+        (event) => {
+          if (cancelled) return;
+          const { id, title } = event.payload ?? {};
+          const nextTitle = title?.trim();
+          if (!id || !nextTitle) return;
+
+          const store = useChatStore.getState();
+          const existing = store.sessions[id];
+          if (!existing) {
+            store.actions.upsert({
+              id,
+              title: nextTitle,
+              preview: "",
+              status: "idle",
+              messageCount: 0,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              pinned: false,
+              hidden: false,
+              unread: false,
+            });
+            return;
+          }
+          if (existing.title !== nextTitle) {
+            store.actions.patch(id, { title: nextTitle });
+          }
+        },
+      );
+      unlistenFn = unlisten;
+    })();
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
   }, []);
 
   // Selecting a chat from the sidebar (or any other source that emits
