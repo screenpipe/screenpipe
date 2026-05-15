@@ -29,19 +29,34 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion, AnimatePresence } from "framer-motion";
-import { RotateCw, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { KeyRound, PanelRightClose, PanelRightOpen, RotateCw } from "lucide-react";
 import {
   loadConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
+import { Button } from "@/components/ui/button";
 
 const NAVIGATE_EVENT = "owned-browser:navigate";
+const SESSION_ACCESS_REQUEST_EVENT = "owned-browser:session-access-request";
 const DEFAULT_WIDTH = 480;
 const MIN_WIDTH = 320;
 const MIN_CHAT_WIDTH = 360;
 
 interface BrowserSidebarProps {
   conversationId: string | null;
+}
+
+interface SessionAccessEvent {
+  request_id?: string;
+  requestId?: string;
+  url: string;
+  host: string;
+}
+
+interface ActiveSessionAccessRequest {
+  requestId: string;
+  url: string;
+  host: string;
 }
 
 /** Clamp the panel width so it can never push the chat below MIN_CHAT_WIDTH
@@ -59,6 +74,11 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const [visible, setVisible] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
+  const [sessionAccessRequest, setSessionAccessRequest] =
+    useState<ActiveSessionAccessRequest | null>(null);
+  const [sessionAccessAnswer, setSessionAccessAnswer] = useState<
+    "allow" | "deny" | null
+  >(null);
   const [requestedWidth, setRequestedWidth] = useState(DEFAULT_WIDTH);
   // `availableW` = the width of the panel's flex parent (the host marked
   // with data-browser-panel-host in standalone-chat.tsx). That's the real
@@ -181,11 +201,39 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     const unlistenPromise = listen<string>(NAVIGATE_EVENT, (e) => {
       const url = typeof e.payload === "string" ? e.payload : null;
       if (!url) return;
+      setSessionAccessRequest(null);
+      setSessionAccessAnswer(null);
       setVisible(true);
       setCollapsed(false);
       setCurrentUrl(url);
       persistState({ url, collapsed: false });
     });
+    return () => {
+      unlistenPromise.then((fn) => fn()).catch(() => {});
+    };
+  }, [persistState]);
+
+  useEffect(() => {
+    const unlistenPromise = listen<SessionAccessEvent>(
+      SESSION_ACCESS_REQUEST_EVENT,
+      (e) => {
+        const payload = e.payload;
+        const requestId = payload?.requestId ?? payload?.request_id;
+        if (!requestId || !payload?.url || !payload?.host) return;
+        const request = {
+          requestId,
+          url: payload.url,
+          host: payload.host,
+        };
+        setSessionAccessRequest(request);
+        setSessionAccessAnswer(null);
+        setVisible(true);
+        setCollapsed(false);
+        setCurrentUrl(request.url);
+        persistState({ url: request.url, collapsed: false });
+        invoke("owned_browser_hide").catch(() => {});
+      },
+    );
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
@@ -201,6 +249,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       setVisible(false);
       setCollapsed(false);
       setCurrentUrl(null);
+      setSessionAccessRequest(null);
+      setSessionAccessAnswer(null);
       setRequestedWidth(DEFAULT_WIDTH);
       invoke("owned_browser_hide").catch(() => {});
       return () => {
@@ -401,6 +451,34 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     persistState({ collapsed: false });
   }, [persistState]);
 
+  const answerSessionAccess = useCallback(
+    async (allow: boolean) => {
+      const request = sessionAccessRequest;
+      if (!request || sessionAccessAnswer) return;
+      setSessionAccessAnswer(allow ? "allow" : "deny");
+      try {
+        await invoke("owned_browser_resolve_session_access", {
+          requestId: request.requestId,
+          allow,
+        });
+        if (!allow) {
+          setSessionAccessRequest((current) =>
+            current?.requestId === request.requestId ? null : current,
+          );
+        }
+      } catch (e) {
+        console.error("owned_browser_resolve_session_access failed", e);
+        setSessionAccessRequest((current) =>
+          current?.requestId === request.requestId ? null : current,
+        );
+        setSessionAccessAnswer(null);
+      } finally {
+        if (!allow) setSessionAccessAnswer(null);
+      }
+    },
+    [sessionAccessRequest, sessionAccessAnswer],
+  );
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -460,7 +538,57 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
               ref={placeholderRef}
               className="flex-1 bg-background relative flex items-center justify-center text-xs text-muted-foreground"
             >
-              loading…
+              {sessionAccessRequest ? (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-background p-4">
+                  <div className="w-full max-w-sm border border-border bg-card p-4 shadow-sm">
+                    <div className="mb-3 flex items-start gap-3">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center border border-border bg-muted text-foreground">
+                        <KeyRound className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground">
+                          Use your browser login?
+                        </div>
+                        <div className="mt-1 break-all text-xs text-muted-foreground">
+                          {sessionAccessRequest.host}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      ScreenPipe Browser can copy matching session cookies from
+                      your browser so the agent opens this site already signed
+                      in. It does not read saved passwords.
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      If you allow it, macOS may ask for access to browser safe
+                      storage next.
+                    </p>
+                    <div className="mt-4 flex flex-col gap-2">
+                      <Button
+                        size="sm"
+                        disabled={sessionAccessAnswer !== null}
+                        onClick={() => answerSessionAccess(true)}
+                        className="w-full"
+                      >
+                        {sessionAccessAnswer === "allow"
+                          ? "Waiting for macOS"
+                          : "Use browser session"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={sessionAccessAnswer !== null}
+                        onClick={() => answerSessionAccess(false)}
+                        className="w-full"
+                      >
+                        Continue logged out
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                "loading…"
+              )}
             </div>
           </motion.div>
         )}

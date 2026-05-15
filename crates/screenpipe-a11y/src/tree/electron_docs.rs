@@ -33,7 +33,7 @@
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
@@ -131,6 +131,7 @@ mod obsidian {
     ///   - macOS: `~/Library/Application Support`
     ///   - Windows: `%APPDATA%` (`C:\Users\<u>\AppData\Roaming`)
     ///   - Linux: `~/.config` (or `$XDG_CONFIG_HOME`)
+    ///
     /// Returns `None` if the dir can't be resolved (rare — happens on
     /// some headless / weird-env setups). Caller treats that as "no
     /// Obsidian here" which is the safe default.
@@ -254,6 +255,7 @@ pub(super) mod vscode_fork {
     ///   - macOS: `~/Library/Application Support`
     ///   - Windows: `%APPDATA%`
     ///   - Linux: `~/.config`
+    ///
     /// VS Code, Cursor, Windsurf, VSCodium, and Trae all use this
     /// layout on every supported OS — only the support-dir name
     /// changes between forks, not between platforms.
@@ -305,7 +307,7 @@ pub(super) mod vscode_fork {
     /// Uses `rusqlite` (bundled SQLite, statically linked into the
     /// binary). Pinned to the same `libsqlite3-sys` major as the rest
     /// of the workspace so we don't link two SQLites.
-    fn read_vscode_memento(db_path: &PathBuf) -> Option<Value> {
+    fn read_vscode_memento(db_path: &Path) -> Option<Value> {
         let uri = format!("file:{}?immutable=1", db_path.display());
         let conn = match Connection::open_with_flags(
             &uri,

@@ -1345,9 +1345,7 @@ async fn execute_single_write(
 fn send_error_to_all(batch: &mut Vec<PendingWrite>, error: sqlx::Error) {
     let err_str = error.to_string();
     for pw in batch.drain(..) {
-        let _ = pw
-            .respond
-            .send(Err(sqlx::Error::Protocol(err_str.clone().into())));
+        let _ = pw.respond.send(Err(sqlx::Error::Protocol(err_str.clone())));
     }
     // Log the original error that caused the batch failure
     error!("write_queue: batch failed: {}", error);

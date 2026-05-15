@@ -100,7 +100,7 @@ impl BrowserBridge {
         transport: Arc<dyn ExtensionTransport>,
     ) -> Option<Arc<dyn ExtensionTransport>> {
         let mut slot = self.transport.write().await;
-        std::mem::replace(&mut *slot, Some(transport))
+        (*slot).replace(transport)
     }
 
     /// Detach the given transport — but only if it's still the registered one.

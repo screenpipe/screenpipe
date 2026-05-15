@@ -145,6 +145,10 @@ const MODEL_WEIGHTS: Record<string, number> = {
   'gemini-3-flash': 0,
   'gemini-3.1-flash-lite': 0,
   'gemini-2.5-flash': 0,
+  // OpenAI
+  'gpt-5.5': 6,
+  'gpt-5.4-mini': 1,
+  'gpt-5.4': 3,
   // OpenRouter models
   'qwen3.5-flash': 0,
   'qwen3.5-397b': 3,
@@ -181,6 +185,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
     allowedModels: [
       'auto',
       'claude-haiku-4-5',
+      'gemini-2.5-flash',
       'gemini-3-flash',
       'gemini-3.1-flash-lite',
       'glm-4.7',
@@ -198,6 +203,7 @@ const DEFAULT_TIER_CONFIG: Record<UserTier, TierLimits> = {
       'auto',
       'claude-haiku-4-5',
       'claude-sonnet-4-5',
+      'gemini-2.5-flash',
       'gemini-3-flash',
       'gemini-3.1-flash-lite',
       'gemini-3-pro',

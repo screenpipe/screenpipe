@@ -39,6 +39,7 @@ pub struct CalendarEventItem {
     pub end_display: String,
     pub attendees: Vec<String>,
     pub location: Option<String>,
+    pub meeting_url: Option<String>,
     pub calendar_name: String,
     pub is_all_day: bool,
     /// Source identifier: "native" for OS calendar, "ics" for ICS feeds.
@@ -156,16 +157,11 @@ pub async fn calendar_status() -> Result<CalendarStatus, String> {
 /// No sudo required — tccutil's per-app user scope is user-writable.
 #[tauri::command]
 #[specta::specta]
-pub async fn calendar_reset_permission(
-    app: tauri::AppHandle,
-) -> Result<String, String> {
+pub async fn calendar_reset_permission(app: tauri::AppHandle) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         use tauri::Manager;
-        let bundle_id = app
-            .config()
-            .identifier
-            .clone();
+        let bundle_id = app.config().identifier.clone();
         if bundle_id.is_empty() {
             return Err("no bundle identifier in app config".to_string());
         }
@@ -402,6 +398,7 @@ fn calendar_event_to_item(event: screenpipe_connect::calendar::CalendarEvent) ->
         end_display,
         attendees: event.attendees,
         location: event.location,
+        meeting_url: event.meeting_url,
         calendar_name: event.calendar_name,
         is_all_day: event.is_all_day,
         source: "native".to_string(),
@@ -424,6 +421,7 @@ fn calendar_event_to_item_win(
         end_display,
         attendees: event.attendees,
         location: event.location,
+        meeting_url: event.meeting_url,
         calendar_name: event.calendar_name,
         is_all_day: event.is_all_day,
         source: "native".to_string(),

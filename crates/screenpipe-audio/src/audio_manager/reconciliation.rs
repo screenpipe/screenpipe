@@ -20,6 +20,9 @@ static BACKFILL_LAST_TRIGGERED_MS: AtomicU64 = AtomicU64::new(0);
 
 const BACKFILL_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const BACKFILL_MAX_CHUNKS_PER_PASS: usize = 12;
+const RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
+const RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
+const RECONCILIATION_CHUNKS_PER_SWEEP: i64 = 50;
 
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::metrics::AudioPipelineMetrics;
@@ -108,6 +111,7 @@ fn replace_with_merged_audio(
 /// improving transcription quality — the whole point of batch mode.
 ///
 /// Returns the number of chunks successfully transcribed.
+#[allow(clippy::too_many_arguments)]
 pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
@@ -146,10 +150,15 @@ pub async fn reconcile_untranscribed(
         retry_pending_transcriptions(db, dir, on_insert, metrics.as_ref()).await;
     }
 
-    let since = chrono::Utc::now() - chrono::Duration::hours(24);
+    let now = chrono::Utc::now();
+    let since = now - chrono::Duration::hours(RECONCILIATION_LOOKBACK_HOURS);
+    let older_than = now - chrono::Duration::seconds(RECONCILIATION_FRESHNESS_DELAY_SECS);
     // Limit to 50 chunks per sweep to avoid prolonged CPU spikes.
     // With 120s between sweeps this still clears ~1500 chunks/hour.
-    let chunks = match db.get_untranscribed_chunks(since, 50).await {
+    let chunks = match db
+        .get_reconciliation_candidate_chunks(since, older_than, RECONCILIATION_CHUNKS_PER_SWEEP)
+        .await
+    {
         Ok(c) => c,
         Err(e) => {
             error!(
@@ -165,8 +174,9 @@ pub async fn reconcile_untranscribed(
     }
 
     debug!(
-        "reconciliation: found {} untranscribed audio chunks",
-        chunks.len()
+        "reconciliation: found {} old untranscribed audio chunks (older_than={})",
+        chunks.len(),
+        older_than
     );
 
     // Group consecutive chunks by device for batched transcription.
@@ -915,7 +925,10 @@ pub async fn backfill_missing_speakers(
 }
 
 /// Group chunks into batches of consecutive chunks from the same device.
-/// Chunks are already ordered by timestamp DESC from the DB query (newest first).
+/// Chunks are already ordered by timestamp ASC from the reconciliation query
+/// (oldest first). Keeping this order is important: it gives transcription
+/// engines chronological context and prevents merged playback files from being
+/// rewritten in reverse.
 ///
 /// Batching rules:
 /// 1. Same device only — device change starts a new batch

@@ -601,15 +601,8 @@ pub async fn get_valid_token_instance(
 
 const EXCHANGE_PROXY_URL: &str = "https://screenpi.pe/api/oauth/exchange";
 
-/// Exchange an authorization `code` for tokens via the screenpipe backend
-/// proxy at `screenpi.pe`.  The backend holds `client_secret` — the desktop
-/// app never sees it.
-///
-/// On failure, includes the raw response body in the error so callers can
-/// surface the upstream provider message (AADSTS, invalid_grant, …) instead
-/// of just the HTTP status. Without this, every OAuth failure logged the
-/// same opaque `400 Bad Request` and we had no way to tell the cause.
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     //! Covers the instance fallback added to `load_oauth_json`. The fallback
     //! is the safety net for callers that predate multi-account support —
@@ -916,6 +909,14 @@ mod tests {
     }
 }
 
+/// Exchange an authorization `code` for tokens via the screenpipe backend
+/// proxy at `screenpi.pe`.  The backend holds `client_secret` — the desktop
+/// app never sees it.
+///
+/// On failure, includes the raw response body in the error so callers can
+/// surface the upstream provider message (AADSTS, invalid_grant, …) instead
+/// of just the HTTP status. Without this, every OAuth failure logged the
+/// same opaque `400 Bad Request` and we had no way to tell the cause.
 pub async fn exchange_code(
     client: &reqwest::Client,
     integration_id: &str,

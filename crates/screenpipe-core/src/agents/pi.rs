@@ -1912,11 +1912,13 @@ mod tests {
     #[test]
     fn test_lossy_utf8_handles_invalid_bytes() {
         // Simulate raw bytes from a pipe: "Hi" + 0xFF 0xFE (invalid UTF-8) + newline + "OK" + newline
-        let raw_bytes: &[u8] = b"Hi\xff\xfe\nOK\n";
+        let mut raw_bytes = b"Hi".to_vec();
+        raw_bytes.extend([0xff, 0xfe, b'\n']);
+        raw_bytes.extend_from_slice(b"OK\n");
 
         // Strict UTF-8 should fail
         assert!(
-            std::str::from_utf8(raw_bytes).is_err(),
+            std::str::from_utf8(&raw_bytes).is_err(),
             "raw bytes should not be valid UTF-8"
         );
 

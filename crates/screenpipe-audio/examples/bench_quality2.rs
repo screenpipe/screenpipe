@@ -11,15 +11,10 @@
 //!   cargo run --example bench_quality2 --features parakeet --release
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
 
-use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::vad::silero::SileroVad;
 use screenpipe_audio::vad::VadEngine;
-use screenpipe_audio::TranscriptionEngine;
-use screenpipe_core::Language;
 
 // ─── WAV reading ────────────────────────────────────────────────────────────
 
@@ -61,11 +56,11 @@ fn word_error_rate(reference: &str, hypothesis: &str) -> (f64, usize, usize) {
     let r = ref_words.len();
     let h = hyp_words.len();
     let mut d = vec![vec![0usize; h + 1]; r + 1];
-    for i in 0..=r {
-        d[i][0] = i;
+    for (i, row) in d.iter_mut().enumerate().take(r + 1) {
+        row[0] = i;
     }
-    for j in 0..=h {
-        d[0][j] = j;
+    for (j, cell) in d[0].iter_mut().enumerate().take(h + 1) {
+        *cell = j;
     }
     for i in 1..=r {
         for j in 1..=h {
@@ -92,11 +87,11 @@ fn char_accuracy(reference: &str, hypothesis: &str) -> f64 {
     let h: Vec<char> = hypothesis.to_lowercase().chars().collect();
     let (m, n) = (r.len(), h.len());
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
     }
-    for j in 0..=n {
-        dp[0][j] = j;
+    for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *cell = j;
     }
     for i in 1..=m {
         for j in 1..=n {
@@ -230,7 +225,7 @@ fn merge_and_cut_segments(
     let mut cur_end = segments[0].1;
 
     for &(s, e) in &segments[1..] {
-        let gap = if s > cur_end { s - cur_end } else { 0 };
+        let gap = s.saturating_sub(cur_end);
         let gap_secs = gap as f64 / sr as f64;
         let combined_len = e - cur_start;
 

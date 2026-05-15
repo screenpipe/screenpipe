@@ -46,7 +46,11 @@ impl CaptureSession {
     /// - Speaker identification
     /// - Schedule monitor
     /// - Snapshot compaction
-    pub async fn start(server: &ServerCore, config: &RecordingConfig) -> Result<Self, String> {
+    pub async fn start(
+        server: &ServerCore,
+        config: &RecordingConfig,
+        close_orphaned_meetings_on_start: bool,
+    ) -> Result<Self, String> {
         info!("Starting capture session");
 
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
@@ -162,6 +166,7 @@ impl CaptureSession {
                 server.manual_meeting.clone(),
                 shutdown_tx.subscribe(),
                 Some(meeting_detector),
+                close_orphaned_meetings_on_start,
             );
             info!("meeting watcher started (v2 UI scanning)");
         } else {

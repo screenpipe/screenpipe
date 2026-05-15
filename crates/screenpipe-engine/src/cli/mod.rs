@@ -18,14 +18,15 @@ pub mod sync;
 pub mod vault;
 pub mod vision;
 
-use clap::ValueEnum;
+use clap::parser::ValueSource;
+use clap::{ArgMatches, ValueEnum};
 use clap::{Parser, Subcommand, ValueHint};
 use screenpipe_audio::{
     audio_manager::builder::TranscriptionMode,
     core::engine::AudioTranscriptionEngine as CoreAudioTranscriptionEngine,
 };
 use screenpipe_core::Language;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, ValueEnum, PartialEq)]
 pub enum CliAudioTranscriptionEngine {
@@ -460,12 +461,135 @@ pub struct RecordArgs {
     #[arg(long, value_enum, default_value_t = crate::retention::RetentionMode::Media)]
     pub retention_mode: crate::retention::RetentionMode,
 
-    /// Skip the background JPEG→MP4 snapshot compaction worker.
-    /// Use when the MP4 timeline UI is not used (e.g. task-mining tools that consume
-    /// `accessibility_text` / `ui_events` only) — avoids the ffmpeg H.265 encoding load.
-    /// Side effect: JPEGs stay uncompacted, so disk usage depends on `--retention-days`.
+    /// Skip the background JPEG->MP4 snapshot compaction worker.
+    /// Use when the MP4 timeline UI is not used, e.g. task-mining tools
+    /// that consume accessibility_text / ui_events only.
+    /// Side effect: JPEGs stay uncompacted, so disk usage depends on retention.
     #[arg(long, default_value_t = false)]
     pub disable_snapshot_compaction: bool,
+
+    /// Skip the v2 meeting detector watcher (5s-interval process / AX scan).
+    /// Use when meeting detection is not consumed (task-mining, headless analysis) —
+    /// avoids the constant process enumeration + AX tree walk cost.
+    /// Side effect: meeting-related DB rows are not generated; the audio pipeline's
+    /// in_meeting override flag stays false.
+    #[arg(long, default_value_t = false)]
+    pub disable_meeting_detector: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RecordArgSources {
+    pub audio_chunk_duration: bool,
+    pub port: bool,
+    pub disable_audio: bool,
+    pub audio_device: bool,
+    pub use_system_default_audio: bool,
+    pub experimental_coreaudio_system_audio: bool,
+    pub audio_transcription_engine: bool,
+    pub monitor_id: bool,
+    pub use_all_monitors: bool,
+    pub language: bool,
+    pub use_pii_removal: bool,
+    pub async_pii_redaction: bool,
+    pub async_image_pii_redaction: bool,
+    pub pii_backend: bool,
+    pub filter_music: bool,
+    pub disable_vision: bool,
+    pub ignored_windows: bool,
+    pub included_windows: bool,
+    pub ignored_urls: bool,
+    pub deepgram_api_key: bool,
+    pub transcription_mode: bool,
+    pub disable_telemetry: bool,
+    pub video_quality: bool,
+    pub pause_on_drm_content: bool,
+    pub disable_clipboard_capture: bool,
+    pub api_auth: bool,
+    pub listen_on_lan: bool,
+    pub encrypt_secrets: bool,
+    pub disable_snapshot_compaction: bool,
+    pub disable_meeting_detector: bool,
+}
+
+impl RecordArgSources {
+    pub fn from_cli_matches(matches: &ArgMatches) -> Self {
+        let Some(("record", record)) = matches.subcommand() else {
+            return Self::default();
+        };
+
+        Self {
+            audio_chunk_duration: from_command_line(record, "audio_chunk_duration"),
+            port: from_command_line(record, "port"),
+            disable_audio: from_command_line(record, "disable_audio"),
+            audio_device: from_command_line(record, "audio_device"),
+            use_system_default_audio: from_command_line(record, "use_system_default_audio"),
+            experimental_coreaudio_system_audio: from_command_line(
+                record,
+                "experimental_coreaudio_system_audio",
+            ),
+            audio_transcription_engine: from_command_line(record, "audio_transcription_engine"),
+            monitor_id: from_command_line(record, "monitor_id"),
+            use_all_monitors: from_command_line(record, "use_all_monitors"),
+            language: from_command_line(record, "language"),
+            use_pii_removal: from_command_line(record, "use_pii_removal"),
+            async_pii_redaction: from_command_line(record, "async_pii_redaction"),
+            async_image_pii_redaction: from_command_line(record, "async_image_pii_redaction"),
+            pii_backend: from_command_line(record, "pii_backend"),
+            filter_music: from_command_line(record, "filter_music"),
+            disable_vision: from_command_line(record, "disable_vision"),
+            ignored_windows: from_command_line(record, "ignored_windows"),
+            included_windows: from_command_line(record, "included_windows"),
+            ignored_urls: from_command_line(record, "ignored_urls"),
+            deepgram_api_key: from_command_line(record, "deepgram_api_key"),
+            transcription_mode: from_command_line(record, "transcription_mode"),
+            disable_telemetry: from_command_line(record, "disable_telemetry"),
+            video_quality: from_command_line(record, "video_quality"),
+            pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
+            disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
+            api_auth: from_command_line(record, "api_auth"),
+            listen_on_lan: from_command_line(record, "listen_on_lan"),
+            encrypt_secrets: from_command_line(record, "encrypt_secrets"),
+            disable_snapshot_compaction: from_command_line(record, "disable_snapshot_compaction"),
+            disable_meeting_detector: from_command_line(record, "disable_meeting_detector"),
+        }
+    }
+
+    fn has_recording_override(&self) -> bool {
+        self.audio_chunk_duration
+            || self.port
+            || self.disable_audio
+            || self.audio_device
+            || self.use_system_default_audio
+            || self.experimental_coreaudio_system_audio
+            || self.audio_transcription_engine
+            || self.monitor_id
+            || self.use_all_monitors
+            || self.language
+            || self.use_pii_removal
+            || self.async_pii_redaction
+            || self.async_image_pii_redaction
+            || self.pii_backend
+            || self.filter_music
+            || self.disable_vision
+            || self.ignored_windows
+            || self.included_windows
+            || self.ignored_urls
+            || self.deepgram_api_key
+            || self.transcription_mode
+            || self.disable_telemetry
+            || self.video_quality
+            || self.pause_on_drm_content
+            || self.disable_clipboard_capture
+            || self.api_auth
+            || self.listen_on_lan
+            || self.encrypt_secrets
+            || self.disable_snapshot_compaction
+            || self.disable_meeting_detector
+    }
+}
+
+fn from_command_line(matches: &ArgMatches, id: &str) -> bool {
+    matches.value_source(id) == Some(ValueSource::CommandLine)
 }
 
 impl RecordArgs {
@@ -536,6 +660,7 @@ impl RecordArgs {
             deepgram_api_key: self.deepgram_api_key.clone().unwrap_or_default(),
             video_quality: self.video_quality.clone(),
             disable_snapshot_compaction: self.disable_snapshot_compaction,
+            disable_meeting_detector: self.disable_meeting_detector,
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
@@ -552,12 +677,35 @@ impl RecordArgs {
     pub async fn into_recording_config(
         self,
         data_dir: PathBuf,
-    ) -> crate::recording_config::RecordingConfig {
+        sources: &RecordArgSources,
+    ) -> anyhow::Result<crate::recording_config::RecordingConfig> {
+        let cli_encryption_ready = if self.encrypt_secrets {
+            match screenpipe_secrets::keychain::get_or_create_key() {
+                Some(_) => {
+                    screenpipe_secrets::mark_encryption_enabled(&data_dir)?;
+                    true
+                }
+                None => {
+                    tracing::warn!(
+                        "keychain: failed to create encryption key — secrets will be stored unencrypted"
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
         // Preserve explicit CLI monitor flags so tier defaults don't clobber them.
         let cli_monitor_ids = self.monitor_id.clone();
         let cli_use_all_monitors = self.use_all_monitors;
 
-        let mut settings = self.to_recording_settings();
+        let persisted_settings = load_recording_settings_from_store(&data_dir)?;
+        let loaded_from_store = persisted_settings.is_some();
+        let mut settings = persisted_settings.unwrap_or_else(|| self.to_recording_settings());
+        if loaded_from_store {
+            self.apply_explicit_overrides(&mut settings, sources);
+        }
 
         // First-launch tier detection for CLI users
         if settings.device_tier.is_none() {
@@ -578,7 +726,7 @@ impl RecordArgs {
                 eprintln!("detected hardware tier: {:?}", tier);
                 // Only apply capture defaults (video_quality, power_mode) for truly fresh installs.
                 // Existing config without tier = upgrade — just set the tier for DB/channel tuning.
-                let is_fresh = !config_path.exists();
+                let is_fresh = !config_path.exists() && !loaded_from_store;
                 if is_fresh {
                     screenpipe_config::apply_tier_defaults(&mut settings, tier);
 
@@ -646,8 +794,187 @@ impl RecordArgs {
 
         config.encrypt_secrets = self.encrypt_secrets;
 
-        config
+        if !loaded_from_store || sources.has_recording_override() {
+            persist_recording_settings_to_store(
+                &config.data_dir,
+                &settings,
+                sources.encrypt_secrets && cli_encryption_ready,
+            )?;
+        }
+
+        Ok(config)
     }
+
+    fn apply_explicit_overrides(
+        &self,
+        settings: &mut screenpipe_config::RecordingSettings,
+        sources: &RecordArgSources,
+    ) {
+        if sources.audio_chunk_duration {
+            settings.audio_chunk_duration = self.audio_chunk_duration as i32;
+        }
+        if sources.port {
+            settings.port = self.port;
+        }
+        if sources.disable_audio {
+            settings.disable_audio = self.disable_audio;
+        }
+        if sources.audio_device {
+            settings.audio_devices = self.audio_device.clone();
+            settings.use_system_default_audio = false;
+        }
+        if sources.use_system_default_audio {
+            settings.use_system_default_audio = self.use_system_default_audio;
+        }
+        if sources.experimental_coreaudio_system_audio {
+            settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
+        }
+        if sources.audio_transcription_engine {
+            settings.audio_transcription_engine =
+                cli_engine_to_str(&self.audio_transcription_engine).to_string();
+        }
+        if sources.monitor_id {
+            settings.monitor_ids = self.monitor_id.iter().map(|id| id.to_string()).collect();
+            settings.use_all_monitors = false;
+        } else if sources.use_all_monitors {
+            settings.use_all_monitors = self.use_all_monitors;
+            if self.use_all_monitors {
+                settings.monitor_ids.clear();
+            }
+        }
+        if sources.language {
+            settings.languages = self
+                .language
+                .iter()
+                .map(|l| l.as_lang_code().to_string())
+                .collect();
+        }
+        if sources.use_pii_removal {
+            settings.use_pii_removal = self.use_pii_removal;
+        }
+        if sources.async_pii_redaction {
+            settings.async_pii_redaction = self.async_pii_redaction;
+        }
+        if sources.async_image_pii_redaction {
+            settings.async_image_pii_redaction = self.async_image_pii_redaction;
+        }
+        if sources.pii_backend {
+            settings.pii_backend = self.pii_backend.clone();
+        }
+        if sources.filter_music {
+            settings.filter_music = self.filter_music;
+        }
+        if sources.disable_vision {
+            settings.disable_vision = self.disable_vision;
+        }
+        if sources.ignored_windows {
+            settings.ignored_windows = self.ignored_windows.clone();
+        }
+        if sources.included_windows {
+            settings.included_windows = self.included_windows.clone();
+        }
+        if sources.ignored_urls {
+            settings.ignored_urls = self.ignored_urls.clone();
+        }
+        if sources.deepgram_api_key {
+            settings.deepgram_api_key = self.deepgram_api_key.clone().unwrap_or_default();
+        }
+        if sources.transcription_mode {
+            settings.transcription_mode = match self.transcription_mode {
+                CliTranscriptionMode::Realtime => "realtime".to_string(),
+                CliTranscriptionMode::Batch => "batch".to_string(),
+            };
+        }
+        if sources.disable_telemetry {
+            settings.analytics_enabled = !self.disable_telemetry;
+        }
+        if sources.video_quality {
+            settings.video_quality = self.video_quality.clone();
+        }
+        if sources.pause_on_drm_content {
+            settings.pause_on_drm_content = self.pause_on_drm_content;
+        }
+        if sources.disable_clipboard_capture {
+            settings.disable_clipboard_capture = self.disable_clipboard_capture;
+        }
+        if sources.api_auth {
+            settings.api_auth = self.api_auth;
+        }
+        if sources.listen_on_lan {
+            settings.listen_on_lan = self.listen_on_lan;
+        }
+        if sources.disable_snapshot_compaction {
+            settings.disable_snapshot_compaction = self.disable_snapshot_compaction;
+        }
+        if sources.disable_meeting_detector {
+            settings.disable_meeting_detector = self.disable_meeting_detector;
+        }
+    }
+}
+
+fn load_recording_settings_from_store(
+    data_dir: &Path,
+) -> anyhow::Result<Option<screenpipe_config::RecordingSettings>> {
+    let path = store_file::store_path_for(data_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let store = store_file::read_store_for(data_dir).map_err(|e| {
+        e.context(format!(
+            "reading shared app settings from {}",
+            path.display()
+        ))
+    })?;
+    let Some(settings_value) = store.get("settings") else {
+        return Ok(None);
+    };
+    if settings_value.is_null() {
+        return Ok(None);
+    }
+
+    let settings = serde_json::from_value(settings_value.clone())
+        .map_err(|e| anyhow::anyhow!("parsing recording settings from {}: {e}", path.display()))?;
+    Ok(Some(settings))
+}
+
+fn persist_recording_settings_to_store(
+    data_dir: &Path,
+    settings: &screenpipe_config::RecordingSettings,
+    enable_encryption: bool,
+) -> anyhow::Result<()> {
+    let mut store = store_file::read_store_for(data_dir)?;
+    if !store.is_object() {
+        store = serde_json::json!({});
+    }
+
+    let store_obj = store.as_object_mut().unwrap();
+    let settings_entry = store_obj
+        .entry("settings")
+        .or_insert_with(|| serde_json::json!({}));
+    if !settings_entry.is_object() {
+        *settings_entry = serde_json::json!({});
+    }
+
+    let settings_obj = settings_entry.as_object_mut().unwrap();
+    let recording_value = serde_json::to_value(settings)?;
+    let recording_obj = recording_value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("recording settings did not serialize to an object"))?;
+    for (key, value) in recording_obj {
+        settings_obj.insert(key.clone(), value.clone());
+    }
+    if enable_encryption {
+        settings_obj.insert("encryptStore".to_string(), serde_json::json!(true));
+        screenpipe_secrets::mark_encryption_enabled(data_dir)?;
+    }
+
+    store_file::write_store_for(data_dir, &store).map_err(|e| {
+        e.context(format!(
+            "writing shared app settings to {}",
+            data_dir.display()
+        ))
+    })
 }
 
 // =============================================================================
@@ -1078,7 +1405,13 @@ pub fn get_or_create_machine_id(override_id: Option<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use clap::Parser;
+
+    fn record_sources<const N: usize>(args: [&str; N]) -> RecordArgSources {
+        let matches = Cli::command().try_get_matches_from(args).unwrap();
+        RecordArgSources::from_cli_matches(&matches)
+    }
 
     #[test]
     fn test_pause_on_drm_content_default_false() {
@@ -1181,5 +1514,44 @@ mod tests {
             }
             _ => panic!("expected Record command"),
         }
+    }
+
+    #[test]
+    fn test_record_arg_sources_only_mark_explicit_cli_args() {
+        let matches = Cli::command()
+            .try_get_matches_from(["screenpipe", "record", "--port", "4040"])
+            .unwrap();
+        let sources = RecordArgSources::from_cli_matches(&matches);
+
+        assert!(sources.port);
+        assert!(!sources.disable_audio);
+        assert!(!sources.use_pii_removal);
+        assert!(!sources.audio_transcription_engine);
+    }
+
+    #[test]
+    fn test_explicit_cli_overrides_preserve_app_settings_for_absent_defaults() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "record", "--port", "4040", "--disable-audio"])
+                .unwrap();
+        let sources = record_sources(["screenpipe", "record", "--port", "4040", "--disable-audio"]);
+        let mut settings = screenpipe_config::RecordingSettings::default();
+        settings.port = 3030;
+        settings.disable_audio = false;
+        settings.use_pii_removal = false;
+
+        match cli.command {
+            Command::Record(args) => {
+                args.apply_explicit_overrides(&mut settings, &sources);
+            }
+            _ => panic!("expected Record command"),
+        }
+
+        assert_eq!(settings.port, 4040);
+        assert!(settings.disable_audio);
+        assert!(
+            !settings.use_pii_removal,
+            "absent CLI defaults must not overwrite app settings"
+        );
     }
 }

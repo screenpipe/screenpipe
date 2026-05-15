@@ -225,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await;
 
-        let mut engine = match engine_result {
+        let engine = match engine_result {
             Ok(e) => e,
             Err(e) => {
                 println!(
@@ -245,8 +245,6 @@ async fn main() -> anyhow::Result<()> {
             }
         };
         let load_time = t_load.elapsed().as_secs_f64();
-        let mem_after_load = get_rss_mb();
-
         // Create session (e.g. whisper state)
         let mut session = match engine.create_session() {
             Ok(s) => s,

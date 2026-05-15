@@ -15,6 +15,7 @@ use crate::{
         engine::AudioTranscriptionEngine,
     },
     meeting_detector::MeetingDetector,
+    meeting_streaming::MeetingStreamingConfig,
     transcription::{
         deepgram::CUSTOM_DEEPGRAM_API_TOKEN, stt::OpenAICompatibleConfig, VocabularyEntry,
     },
@@ -69,6 +70,9 @@ pub struct AudioManagerOptions {
     /// Meeting detector for batch mode — used for metadata/summaries.
     /// Shared with UI recorder which feeds app switch events into it.
     pub meeting_detector: Option<Arc<MeetingDetector>>,
+    /// Meeting-only live transcription overlay. This is separate from
+    /// continuous 24/7 chunk transcription.
+    pub meeting_streaming: MeetingStreamingConfig,
     /// Custom vocabulary entries for transcription biasing and word replacement.
     pub vocabulary: Vec<VocabularyEntry>,
     /// User-configurable maximum batch duration in seconds for reconciliation.
@@ -105,6 +109,7 @@ impl Default for AudioManagerOptions {
             experimental_coreaudio_system_audio: false,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
+            meeting_streaming: MeetingStreamingConfig::default(),
             vocabulary: vec![],
             batch_max_duration_secs: None,
             channel_config: ChannelConfig::default(),
@@ -208,6 +213,11 @@ impl AudioManagerBuilder {
 
     pub fn meeting_detector(mut self, detector: Arc<MeetingDetector>) -> Self {
         self.options.meeting_detector = Some(detector);
+        self
+    }
+
+    pub fn meeting_streaming(mut self, config: MeetingStreamingConfig) -> Self {
+        self.options.meeting_streaming = config;
         self
     }
 

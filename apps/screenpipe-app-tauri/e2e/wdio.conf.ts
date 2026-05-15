@@ -17,6 +17,8 @@ const shouldRecordDesktopSession =
   Boolean(process.env.CI) && (process.platform === 'win32' || process.platform === 'linux');
 const sessionRecorder = shouldRecordDesktopSession ? new TestRecorder() : null;
 const sessionVideoDir = resolve(__dirname, 'videos', 'session');
+const isCi = Boolean(process.env.CI);
+const isWindowsCi = isCi && process.platform === 'win32';
 
 type TestrunnerConfig = Options.Testrunner & Record<string, unknown> & {
   autoCompileOpts?: {
@@ -46,9 +48,9 @@ export const config: TestrunnerConfig = {
   port: WEBDRIVER_PORT,
   path: '/',
   logLevel: 'warn',
-  waitforTimeout: process.env.CI ? 20000 : 10000,
-  connectionRetryTimeout: 60000,
-  connectionRetryCount: 3,
+  waitforTimeout: isCi ? 20000 : 10000,
+  connectionRetryTimeout: isWindowsCi ? 180000 : 60000,
+  connectionRetryCount: isWindowsCi ? 12 : 3,
   framework: 'mocha',
   reporters: getReporters() as Options.Testrunner['reporters'],
   mochaOpts: { ui: 'bdd', timeout: getMochaTimeout() },

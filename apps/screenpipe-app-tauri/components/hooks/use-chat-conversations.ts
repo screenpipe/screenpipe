@@ -78,6 +78,11 @@ interface UseChatConversationsOpts {
   settings: any;
 }
 
+interface SaveConversationOptions {
+  refreshHistory?: boolean;
+  syncActiveConversation?: boolean;
+}
+
 export function useChatConversations(opts: UseChatConversationsOpts) {
   const {
     messages,
@@ -254,8 +259,53 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     };
   }, [conversationId, scheduleHistoryRefresh, setConversationId, setMessages]);
 
+  const upsertFileConversationMeta = (conversation: ChatConversation) => {
+    if (historySearch.trim()) return;
+
+    const msgs = Array.isArray(conversation.messages) ? conversation.messages : [];
+    let lastUserMessageAt = conversation.lastUserMessageAt;
+    if (lastUserMessageAt == null) {
+      for (const m of msgs) {
+        if (m?.role === "user" && typeof m.timestamp === "number") {
+          if (lastUserMessageAt == null || m.timestamp > lastUserMessageAt) {
+            lastUserMessageAt = m.timestamp;
+          }
+        }
+      }
+    }
+
+    const meta: ConversationMeta = {
+      id: conversation.id,
+      title: typeof conversation.title === "string" ? conversation.title : "untitled",
+      createdAt: typeof conversation.createdAt === "number" ? conversation.createdAt : 0,
+      updatedAt: typeof conversation.updatedAt === "number" ? conversation.updatedAt : 0,
+      messageCount: msgs.length,
+      pinned: conversation.pinned === true,
+      hidden: conversation.hidden === true,
+      lastUserMessageAt,
+      kind: conversation.kind ?? "chat",
+      pipeContext: conversation.pipeContext,
+    };
+
+    setFileConversations((prev) => {
+      const existing = prev.find((c) => c.id === meta.id);
+      const nextMeta = existing
+        ? { ...existing, ...meta, pinned: existing.pinned || meta.pinned }
+        : meta;
+      const without = prev.filter((c) => c.id !== meta.id);
+      const next = nextMeta.hidden ? without : [nextMeta, ...without];
+      return next
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, CHAT_HISTORY_INITIAL_LIMIT);
+    });
+    lastHistoryQueryRef.current = "";
+  };
+
   // ---- saveConversation ----
-  const saveConversation = async (msgs: Message[]) => {
+  const saveConversation = async (
+    msgs: Message[],
+    options: SaveConversationOptions = {}
+  ) => {
     if (msgs.length === 0) return;
 
     const historyEnabled = settings?.chatHistory?.historyEnabled ?? true;
@@ -353,7 +403,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     }
 
     await saveConversationFile(conversation);
-    await refreshFileConversations();
+    if (options.refreshHistory) {
+      await refreshFileConversations();
+    } else {
+      upsertFileConversationMeta(conversation);
+    }
     try {
       await emit("chat-conversation-saved", {
         id: conversation.id,
@@ -390,22 +444,24 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     }
 
     // Update activeConversationId in store (lightweight — no conversation data)
-    try {
-      const { getStore } = await import("@/lib/hooks/use-settings");
-      const store = await getStore();
-      const freshSettings = await store.get<any>("settings");
-      await store.set("settings", {
-        ...freshSettings,
-        chatHistory: {
-          ...(freshSettings?.chatHistory || {}),
-          activeConversationId: convId,
-          historyEnabled: true,
-          conversations: [], // keep empty — data lives in files now
-        },
-      });
-      await store.save();
-    } catch (e) {
-      console.warn("[chat] failed to update activeConversationId:", e);
+    if (options.syncActiveConversation !== false) {
+      try {
+        const { getStore } = await import("@/lib/hooks/use-settings");
+        const store = await getStore();
+        const freshSettings = await store.get<any>("settings");
+        await store.set("settings", {
+          ...freshSettings,
+          chatHistory: {
+            ...(freshSettings?.chatHistory || {}),
+            activeConversationId: convId,
+            historyEnabled: true,
+            conversations: [], // keep empty — data lives in files now
+          },
+        });
+        await store.save();
+      } catch (e) {
+        console.warn("[chat] failed to update activeConversationId:", e);
+      }
     }
 
     if (!conversationId) {
@@ -479,7 +535,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     streamingSaveTimerRef.current = setTimeout(() => {
       streamingSaveTimerRef.current = null;
       // Snapshot inside the timeout so we save the latest, not stale closure.
-      saveConversation(messages);
+      saveConversation(messages, {
+        refreshHistory: false,
+        syncActiveConversation: false,
+      });
     }, 1500);
 
     return () => {

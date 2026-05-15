@@ -148,6 +148,8 @@ pub struct AudioPipelineHealthInfo {
     pub process_errors: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_level_rms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_device_audio_level_rms: Option<std::collections::HashMap<String, f64>>,
     // Audio devices
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_devices: Option<Vec<String>>,
@@ -672,6 +674,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 };
 
             let device_names: Vec<String> = audio_devices.iter().map(|d| d.to_string()).collect();
+            let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
 
             Some(AudioPipelineHealthInfo {
                 uptime_secs: audio_snap.uptime_secs,
@@ -692,6 +695,11 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 chunks_received: Some(audio_snap.chunks_received),
                 process_errors: Some(audio_snap.process_errors),
                 audio_level_rms: Some(audio_snap.audio_level_rms),
+                per_device_audio_level_rms: if per_device_levels.is_empty() {
+                    None
+                } else {
+                    Some(per_device_levels)
+                },
                 audio_devices: if device_names.is_empty() {
                     None
                 } else {

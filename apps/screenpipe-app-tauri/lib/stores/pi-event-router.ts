@@ -332,6 +332,7 @@ async function hydrate() {
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
     // Storage may not be ready yet on first launch — non-fatal.
+    useChatStore.getState().actions.markDiskHydrated();
   }
 }
 

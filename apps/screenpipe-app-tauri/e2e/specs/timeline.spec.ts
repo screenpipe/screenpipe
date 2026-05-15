@@ -48,6 +48,7 @@ describe("Timeline", function () {
         return (
           bodyText.includes("screen recording is off") ||
           bodyText.includes("recording... timeline will appear soon") ||
+          bodyText.includes("loading timeline") ||
           (await $('[data-testid="timeline-slider"]').isExisting())
         );
       },

@@ -148,7 +148,7 @@ paths:
       tags:
       - Search
       summary: Search screen and audio content
-      description: Query captured screen text (OCR), audio transcriptions, and UI elements with filters for time range, app,
+      description: Query captured screen text (accessibility-first with OCR fallback), audio transcriptions, and UI elements with filters for time range, app,
         window, content type, and more.
   /audio/list:
     get:
@@ -296,9 +296,9 @@ paths:
       description: Returns a captured screenshot frame with optional base64 image data.
   /frames/{frame_id}/text:
     get:
-      description: 'Get OCR text positions with bounding boxes for a specific frame.
+      description: 'Get frame text positions with bounding boxes for a specific frame.
 
-        Falls back to accessibility tree node bounds when no OCR data exists.
+        Uses accessibility tree node bounds when available, and OCR fallback positions for visual-only or legacy frames.
 
         Both OCR and accessibility bounds are normalized to 0-1 relative to the
 
@@ -326,7 +326,7 @@ paths:
                 $ref: '#/components/schemas/FrameTextResponse'
       tags:
       - Frames
-      summary: Get frame text (OCR)
+      summary: Get frame text and bounds
     post:
       description: 'Run on-demand OCR on a frame that has no stored bounding boxes.
 
@@ -355,9 +355,9 @@ paths:
       summary: Run OCR on frame
   /frames/{frame_id}/ocr:
     get:
-      description: 'Get OCR text positions with bounding boxes for a specific frame.
+      description: 'Get frame text positions with bounding boxes for a specific frame.
 
-        Falls back to accessibility tree node bounds when no OCR data exists.
+        Uses accessibility tree node bounds when available, and OCR fallback positions for visual-only or legacy frames.
 
         Both OCR and accessibility bounds are normalized to 0-1 relative to the
 
@@ -1696,7 +1696,7 @@ paths:
       tags:
       - Data Management
       summary: Delete data in time range
-      description: Permanently delete all captured data (frames, OCR, audio, etc.) within a time range.
+      description: Permanently delete all captured data (frames, accessibility text, OCR fallback text, audio, etc.) within a time range.
   /data/delete-device:
     post:
       description: Delete all locally-stored data that was synced from a specific remote device.
@@ -2740,7 +2740,7 @@ components:
       - Input
       - Output
     Element:
-      description: A single screen content element (OCR word/block or accessibility node)
+      description: A single screen content element (accessibility node or OCR fallback word/block)
       type: object
       properties:
         id:

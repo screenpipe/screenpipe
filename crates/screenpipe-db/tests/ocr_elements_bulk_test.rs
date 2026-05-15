@@ -12,6 +12,21 @@ mod tests {
     use screenpipe_db::{DatabaseManager, FrameWindowData, OcrEngine, OcrTextBlock};
     use std::sync::Arc;
 
+    type ElementRow = (
+        i64,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        i32,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        i32,
+    );
+
     async fn fresh_db() -> DatabaseManager {
         DatabaseManager::new("sqlite::memory:", Default::default())
             .await
@@ -49,8 +64,7 @@ mod tests {
         assert_eq!(count.0 as usize, expected, "row count mismatch");
 
         // sort_order must be sequential 0..expected
-        let rows: Vec<(i64, String, String, Option<String>, Option<i64>, i32, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i32)> =
-            sqlx::query_as(
+        let rows: Vec<ElementRow> = sqlx::query_as(
                 "SELECT frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order \
                  FROM elements WHERE frame_id = ?1 ORDER BY sort_order ASC",
             )

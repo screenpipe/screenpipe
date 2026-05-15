@@ -22,6 +22,7 @@ pub mod audio_manager;
 mod device;
 pub mod idle_detector;
 pub mod meeting_detector;
+pub mod meeting_streaming;
 mod segmentation;
 
 /// Flag to request invalidation of audio streams after sleep/wake or display

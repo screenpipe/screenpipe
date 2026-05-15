@@ -1469,7 +1469,7 @@ pub async fn pi_start_inner(
                 let _ = app_handle_for_queue.emit(
                     "pi-queue-changed",
                     serde_json::json!({
-                        "session_id": sid_for_queue,
+                        "sessionId": sid_for_queue,
                         "queued": snap,
                     }),
                 );

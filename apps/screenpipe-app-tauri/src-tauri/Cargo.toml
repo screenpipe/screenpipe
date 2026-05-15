@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.4.210"
+version = "2.4.222"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -105,7 +105,7 @@ raw-window-handle = "0.6"
 
 notify = "8.0.0"
 futures = "0.3.30"
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 chrono = "0.4.39"
 chrono-tz = "0.10"

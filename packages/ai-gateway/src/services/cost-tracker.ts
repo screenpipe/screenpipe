@@ -57,6 +57,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+  // OpenAI
+  'gpt-5.5': { input: 5.00, output: 30.00 },
+  'gpt-5.4': { input: 2.50, output: 15.00 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.50 },
 };
 
 // Estimated average tokens per request when streaming can't determine actual usage.

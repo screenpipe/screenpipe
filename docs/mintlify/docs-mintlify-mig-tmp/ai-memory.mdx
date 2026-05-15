@@ -12,7 +12,7 @@ screenpipe acts as a memory layer for AI — it gives LLMs context about what yo
 LLMs are stateless — they don't know what you were working on 5 minutes ago. screenpipe bridges this by:
 
 - capturing everything on your screen 24/7
-- extracting text via OCR
+- extracting app text primarily via accessibility APIs, with OCR fallback for visual-only surfaces
 - making it searchable via REST API on `localhost:3030`
 
 ## connect to AI
@@ -44,7 +44,7 @@ any tool that can make HTTP requests can query screenpipe:
 
 ```bash
 # get recent screen activity
-curl "http://localhost:3030/search?content_type=ocr&limit=20"
+curl "http://localhost:3030/search?content_type=all&limit=20"
 
 # search for specific content
 curl "http://localhost:3030/search?q=meeting+notes&app_name=Slack&limit=10"
@@ -56,7 +56,7 @@ curl "http://localhost:3030/search?q=meeting+notes&app_name=Slack&limit=10"
 |----------|-----|
 | "what was I working on?" | search by time range |
 | "summarize today's meetings" | query audio transcriptions |
-| "find that code snippet" | search OCR text |
+| "find that code snippet" | search screen text |
 | "auto-track my time" | toggl-sync pipe |
 | "sync activity to notes" | obsidian-sync pipe |
 

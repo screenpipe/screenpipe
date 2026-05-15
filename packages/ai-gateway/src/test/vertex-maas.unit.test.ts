@@ -5,10 +5,23 @@
 import { describe, it, expect } from 'bun:test';
 import {
 	isVertexMaasModel,
+	parseVertexMaasJsonResponse,
 	promoteReasoningStream,
 	promoteReasoningToContent,
 	resolveVertexMaasModel,
+	UpstreamError,
+	VertexMaasProvider,
 } from '../providers/vertex-maas';
+
+const FAKE_SA_JSON = JSON.stringify({
+	type: 'service_account',
+	project_id: 'test-project',
+	private_key_id: 'fake',
+	private_key: '-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n',
+	client_email: 'test@test-project.iam.gserviceaccount.com',
+	client_id: '0',
+	token_uri: 'https://oauth2.googleapis.com/token',
+});
 
 describe('isVertexMaasModel', () => {
 	it('should match GLM-4.7 variants', () => {
@@ -104,6 +117,62 @@ describe('promoteReasoningToContent', () => {
 		expect(() => promoteReasoningToContent(null)).not.toThrow();
 		expect(() => promoteReasoningToContent({})).not.toThrow();
 		expect(() => promoteReasoningToContent({ choices: [{}] })).not.toThrow();
+	});
+});
+
+describe('parseVertexMaasJsonResponse', () => {
+	it('turns empty 200 bodies into retryable upstream errors', async () => {
+		try {
+			await parseVertexMaasJsonResponse(new Response('', { status: 200 }), 'glm-5');
+			throw new Error('expected parse to fail');
+		} catch (error) {
+			expect(error).toBeInstanceOf(UpstreamError);
+			expect((error as UpstreamError).status).toBe(502);
+		}
+	});
+
+	it('parses valid JSON bodies', async () => {
+		const result = await parseVertexMaasJsonResponse(
+			new Response(JSON.stringify({ choices: [] }), { status: 200 }),
+			'glm-5',
+		);
+		expect(result).toEqual({ choices: [] });
+	});
+});
+
+describe('VertexMaasProvider.formatMessages', () => {
+	const provider = new VertexMaasProvider(FAKE_SA_JSON, 'test-project');
+
+	it('converts Anthropic tool_use blocks to OpenAI tool_calls for MaaS', () => {
+		const result = provider.formatMessages([{
+			role: 'assistant',
+			content: [
+				{ type: 'thinking', thinking: 'hidden' },
+				{ type: 'text', text: '' },
+				{ type: 'tool_use', id: 'toolu_1', name: 'read', input: { path: '/tmp/a' } },
+			] as any,
+		}]);
+
+		expect(result[0].content).toBeNull();
+		expect(result[0].tool_calls).toEqual([{
+			id: 'toolu_1',
+			type: 'function',
+			function: { name: 'read', arguments: '{"path":"/tmp/a"}' },
+		}]);
+	});
+
+	it('drops unsupported thinking blocks and empty text blocks', () => {
+		const result = provider.formatMessages([{
+			role: 'user',
+			content: [
+				{ type: 'thinking', thinking: 'hidden' },
+				{ type: 'redacted_thinking', data: 'hidden' },
+				{ type: 'text', text: '   ' },
+				{ type: 'text', text: 'hello' },
+			] as any,
+		}]);
+
+		expect(result[0].content).toEqual([{ type: 'text', text: 'hello' }]);
 	});
 });
 

@@ -26,6 +26,13 @@ type NotificationRequested = {
   body: string;
 };
 
+function windowForDeeplink(url: string) {
+  return url.startsWith("screenpipe://meeting/") ||
+    url.startsWith("screenpipe://meeting?")
+    ? { Home: { page: "meetings" } }
+    : "Main";
+}
+
 const NotificationHandler: React.FC = () => {
 
   useEffect(() => {
@@ -180,6 +187,23 @@ const NotificationHandler: React.FC = () => {
           return;
         }
 
+        if (action.type === "meeting_join" && action.url) {
+          const { open } = await import("@tauri-apps/plugin-shell");
+          await open(action.url);
+
+          const deeplink = action.deeplink_url || action.deeplinkUrl;
+          if (typeof deeplink === "string" && deeplink.startsWith("screenpipe://")) {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("show_window_activated", {
+              window: windowForDeeplink(deeplink),
+            });
+            await new Promise((r) => setTimeout(r, 150));
+            const { emit } = await import("@tauri-apps/api/event");
+            await emit("deep-link-received", deeplink);
+          }
+          return;
+        }
+
         // URL-opening actions. Two explicit types so senders can't conflate
         // them:
         //   "link"      — external URL, opens in default browser
@@ -193,7 +217,9 @@ const NotificationHandler: React.FC = () => {
         if ((action.type === "link" || action.type === "deeplink") && action.url) {
           if (typeof action.url === "string" && action.url.startsWith("screenpipe://")) {
             const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("show_window_activated", { window: "Main" });
+            await invoke("show_window_activated", {
+              window: windowForDeeplink(action.url),
+            });
             await new Promise((r) => setTimeout(r, 150));
             const { emit } = await import("@tauri-apps/api/event");
             await emit("deep-link-received", action.url);

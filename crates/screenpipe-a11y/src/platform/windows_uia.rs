@@ -773,14 +773,10 @@ fn capture_and_send(
     // Get window info
     let (app_name, window_title, pid) = get_window_info(hwnd);
 
-    // Check exclusions
-    if !config.should_capture_app(&app_name) {
+    // Check exclusions before making UIA tree calls. Some apps expose slow or
+    // buggy providers, so the guard needs to happen before ElementFromHandle.
+    if !config.should_capture_target(&app_name, window_title.as_deref()) {
         return;
-    }
-    if let Some(ref title) = window_title {
-        if !config.should_capture_window(title) {
-            return;
-        }
     }
 
     // Capture the tree

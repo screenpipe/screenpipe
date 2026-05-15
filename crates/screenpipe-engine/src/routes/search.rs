@@ -353,19 +353,27 @@ pub(crate) async fn search(
                     focused: ocr.focused,
                     device_name: ocr.device_name.clone(),
                 }),
-                SearchResult::Audio(audio) => ContentItem::Audio(AudioContent {
-                    chunk_id: audio.audio_chunk_id,
-                    transcription: truncate(audio.transcription.clone()),
-                    timestamp: audio.timestamp,
-                    file_path: audio.file_path.clone(),
-                    offset_index: audio.offset_index,
-                    tags: audio.tags.clone(),
-                    device_name: audio.device_name.clone(),
-                    device_type: audio.device_type.clone().into(),
-                    speaker: audio.speaker.clone(),
-                    start_time: audio.start_time,
-                    end_time: audio.end_time,
-                }),
+                SearchResult::Audio(audio) => {
+                    let transcription = truncate(audio.transcription.clone());
+                    ContentItem::Audio(AudioContent {
+                        chunk_id: audio.audio_chunk_id,
+                        transcription: transcription.clone(),
+                        text: transcription,
+                        timestamp: audio.timestamp,
+                        file_path: audio.file_path.clone(),
+                        offset_index: audio.offset_index,
+                        tags: audio.tags.clone(),
+                        device_name: audio.device_name.clone(),
+                        device_type: audio.device_type.clone().into(),
+                        speaker: audio.speaker.clone(),
+                        start_time: audio.start_time,
+                        end_time: audio.end_time,
+                        source: audio.source.clone(),
+                        meeting_id: audio.meeting_id,
+                        provider: audio.provider.clone(),
+                        model: audio.model.clone(),
+                    })
+                }
                 SearchResult::UI(ui) => ContentItem::UI(UiContent {
                     id: ui.id,
                     text: truncate(ui.text.clone()),

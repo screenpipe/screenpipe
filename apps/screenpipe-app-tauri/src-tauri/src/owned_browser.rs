@@ -43,16 +43,15 @@
 
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-#[cfg(target_os = "macos")]
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -69,6 +68,12 @@ const NAVIGATE_EVENT: &str = "owned-browser:navigate";
 /// the registry. Lets `BrowserSidebar` retry a per-conversation
 /// `owned_browser_navigate` that lost the install race on cold start.
 const READY_EVENT: &str = "owned-browser:ready";
+
+/// Emitted when the owned browser is about to copy cookies from the
+/// user's real browser. The sidebar answers through the
+/// `owned_browser_resolve_session_access` command.
+const SESSION_ACCESS_REQUEST_EVENT: &str = "owned-browser:session-access-request";
+const SESSION_ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Marker prefix for `document.title`-based result delivery. The bridge JS
 /// sets `document.title = "<MARKER>:<json>"`; the Rust eval polls
@@ -101,6 +106,60 @@ const BRIDGE_INIT_SCRIPT: &str = r#"
 })();
 "#;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserSessionDecision {
+    UseBrowserSession,
+    ContinueLoggedOut,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct BrowserSessionAccessRequestPayload {
+    request_id: String,
+    url: String,
+    host: String,
+}
+
+static SESSION_ACCESS_PENDING: OnceLock<
+    Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>>,
+> = OnceLock::new();
+static SESSION_ACCESS_DECISIONS: OnceLock<Mutex<HashMap<String, BrowserSessionDecision>>> =
+    OnceLock::new();
+
+fn pending_session_access(
+) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
+    SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remembered_session_access() -> &'static Mutex<HashMap<String, BrowserSessionDecision>> {
+    SESSION_ACCESS_DECISIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn remember_session_access_decision(host: &str, decision: BrowserSessionDecision) {
+    remembered_session_access()
+        .lock()
+        .await
+        .insert(host.to_ascii_lowercase(), decision);
+}
+
+#[tauri::command]
+pub async fn owned_browser_resolve_session_access(
+    request_id: String,
+    allow: bool,
+) -> Result<(), String> {
+    let decision = if allow {
+        BrowserSessionDecision::UseBrowserSession
+    } else {
+        BrowserSessionDecision::ContinueLoggedOut
+    };
+    let tx = pending_session_access()
+        .lock()
+        .await
+        .remove(&request_id)
+        .ok_or_else(|| "session access request expired".to_string())?;
+    tx.send(decision)
+        .map_err(|_| "session access request was already closed".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Handle implementation
 // ---------------------------------------------------------------------------
@@ -132,12 +191,11 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
 
         // A hidden WebView2 window can accept `eval()` without actually
         // executing the script. Make sure the native webview is live before
-        // we use JS either for navigation or result delivery. If this was a
-        // code-only background eval, restore the hidden state at the end; URL
-        // navigations are expected to remain visible because the frontend
-        // sidebar will receive NAVIGATE_EVENT and position the window.
+        // code-only evals. URL navigations defer showing until after the
+        // optional session-access prompt, so the sidebar can explain the
+        // request before any native webview covers it.
         let was_visible = webview_window.is_visible().unwrap_or(false);
-        if !was_visible {
+        if !was_visible && url.is_none() {
             let _ = webview_window.show();
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -152,6 +210,10 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
                 .parse()
                 .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
             inject_cookies_for_url(&self.app, &parsed).await;
+            if !webview_window.is_visible().unwrap_or(false) {
+                let _ = webview_window.show();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
             webview_window
                 .navigate(parsed)
@@ -279,14 +341,6 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             .parse()
             .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
 
-        // Make the webview live before navigating — a hidden WebView2
-        // window can silently drop the navigate call. We do NOT hold the
-        // eval_lock here; navigate is independent of in-flight evals so
-        // a long-running snapshot can't queue behind it.
-        if !webview_window.is_visible().unwrap_or(false) {
-            let _ = webview_window.show();
-        }
-
         // Push the user's real-browser cookies for this host into
         // WKHTTPCookieStore before issuing the navigate, so the request
         // ships logged-in. This is the agent's primary path
@@ -296,6 +350,14 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // site even though the Tauri-command-driven sidebar restore
         // path was injecting correctly.
         inject_cookies_for_url(&self.app, &parsed).await;
+
+        // Make the webview live before navigating — a hidden WebView2
+        // window can silently drop the navigate call. We do NOT hold the
+        // eval_lock here; navigate is independent of in-flight evals so
+        // a long-running snapshot can't queue behind it.
+        if !webview_window.is_visible().unwrap_or(false) {
+            let _ = webview_window.show();
+        }
 
         let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
         webview_window
@@ -554,10 +616,7 @@ fn bound_parent() -> &'static Mutex<Option<String>> {
 /// globally over other apps. Cocoa enforces single-parent semantics, so
 /// re-binding to a different parent automatically removes the old one.
 #[cfg(target_os = "macos")]
-async fn bind_owned_browser_to_parent(
-    app: &AppHandle,
-    parent_label: &str,
-) -> Result<(), String> {
+async fn bind_owned_browser_to_parent(app: &AppHandle, parent_label: &str) -> Result<(), String> {
     use objc::runtime::Object;
     use objc::{msg_send, sel, sel_impl};
 
@@ -602,8 +661,7 @@ async fn bind_owned_browser_to_parent(
 
             // NSWindowOrderingMode::NSWindowAbove == 1
             unsafe {
-                let _: () =
-                    msg_send![parent_ptr, addChildWindow: child_ptr ordered: 1i64];
+                let _: () = msg_send![parent_ptr, addChildWindow: child_ptr ordered: 1i64];
             }
             Ok(())
         })();
@@ -660,9 +718,20 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
         info!("owned-browser cookies: skipping inject — url has no host");
         return;
     };
+
+    if browser_session_decision_for_url(app, url).await != BrowserSessionDecision::UseBrowserSession
+    {
+        info!(
+            host,
+            "owned-browser cookies: navigating without real-browser session"
+        );
+        return;
+    }
+
     info!(host, "owned-browser cookies: pre-navigate inject starting");
     let cookies = crate::owned_browser_cookies::cookies_for_host(host).await;
     if cookies.is_empty() {
+        remember_session_access_decision(host, BrowserSessionDecision::ContinueLoggedOut).await;
         info!(
             host,
             "owned-browser cookies: 0 cookies available — navigating without inject \
@@ -688,6 +757,68 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, &cookies); // until Windows/Linux injectors land
+}
+
+async fn browser_session_decision_for_url(
+    app: &AppHandle,
+    url: &url::Url,
+) -> BrowserSessionDecision {
+    let Some(host) = url.host_str() else {
+        return BrowserSessionDecision::ContinueLoggedOut;
+    };
+    let host_key = host.to_ascii_lowercase();
+
+    if !crate::owned_browser_cookies::has_cookies_for_host(&host_key).await {
+        return BrowserSessionDecision::ContinueLoggedOut;
+    }
+
+    if let Some(decision) = remembered_session_access()
+        .lock()
+        .await
+        .get(&host_key)
+        .copied()
+    {
+        return decision;
+    }
+
+    if let Some(webview_window) = app.get_webview_window(WEBVIEW_LABEL) {
+        let _ = webview_window.hide();
+    }
+
+    let request_id = Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    pending_session_access()
+        .lock()
+        .await
+        .insert(request_id.clone(), tx);
+
+    let payload = BrowserSessionAccessRequestPayload {
+        request_id: request_id.clone(),
+        url: url.as_str().to_string(),
+        host: host_key.clone(),
+    };
+
+    if let Err(e) = app.emit(SESSION_ACCESS_REQUEST_EVENT, payload) {
+        pending_session_access().lock().await.remove(&request_id);
+        warn!("owned-browser session access: failed to emit request: {e}");
+        return BrowserSessionDecision::ContinueLoggedOut;
+    }
+
+    let decision = match tokio::time::timeout(SESSION_ACCESS_TIMEOUT, rx).await {
+        Ok(Ok(decision)) => decision,
+        Ok(Err(_)) => BrowserSessionDecision::ContinueLoggedOut,
+        Err(_) => {
+            pending_session_access().lock().await.remove(&request_id);
+            warn!(
+                host = host_key.as_str(),
+                "owned-browser session access: user prompt timed out"
+            );
+            BrowserSessionDecision::ContinueLoggedOut
+        }
+    };
+
+    remember_session_access_decision(&host_key, decision).await;
+    decision
 }
 
 /// macOS only: push a batch of cookies (read from the user's real
@@ -751,9 +882,8 @@ async fn inject_cookies_macos(
                 // as Chromium stored it — that's what controls scope.
                 let domain_v: id = NSString::alloc(nil).init_str(&c.domain);
                 push("Domain", domain_v, &mut keys, &mut vals);
-                let path_v: id = NSString::alloc(nil).init_str(
-                    if c.path.is_empty() { "/" } else { &c.path },
-                );
+                let path_v: id =
+                    NSString::alloc(nil).init_str(if c.path.is_empty() { "/" } else { &c.path });
                 push("Path", path_v, &mut keys, &mut vals);
                 if c.secure {
                     let s: id = NSString::alloc(nil).init_str("TRUE");
@@ -769,7 +899,8 @@ async fn inject_cookies_macos(
                 }
                 if let Some(secs) = c.expires_at {
                     let date_class = class!(NSDate);
-                    let date: id = msg_send![date_class, dateWithTimeIntervalSince1970: secs as f64];
+                    let date: id =
+                        msg_send![date_class, dateWithTimeIntervalSince1970: secs as f64];
                     push("Expires", date, &mut keys, &mut vals);
                 } else {
                     let s: id = NSString::alloc(nil).init_str("TRUE");
@@ -792,13 +923,11 @@ async fn inject_cookies_macos(
 
                 let keys_arr = NSArray::arrayWithObjects(nil, &keys);
                 let vals_arr = NSArray::arrayWithObjects(nil, &vals);
-                let dict: id = NSDictionary::dictionaryWithObjects_forKeys_(
-                    nil, vals_arr, keys_arr,
-                );
+                let dict: id =
+                    NSDictionary::dictionaryWithObjects_forKeys_(nil, vals_arr, keys_arr);
 
                 let cookie_class = class!(NSHTTPCookie);
-                let ns_cookie: id =
-                    msg_send![cookie_class, cookieWithProperties: dict];
+                let ns_cookie: id = msg_send![cookie_class, cookieWithProperties: dict];
                 if ns_cookie.is_null() {
                     continue;
                 }

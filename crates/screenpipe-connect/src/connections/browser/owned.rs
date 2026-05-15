@@ -90,8 +90,9 @@ impl OwnedBrowser {
             "owned-default",
             "Owned Browser",
             "An isolated app-managed webview with its own persistent cookie \
-             jar. Empty by default — does NOT have the user's logged-in \
-             sessions. Use this for: scraping, signups under screenpipe's \
+             jar. Starts logged out; when a site has matching browser cookies, \
+             ScreenPipe asks the user before copying that browser session into \
+             this webview. Use this for: scraping, signups under screenpipe's \
              own accounts, scheduled background tasks, navigating to a public \
              URL the user asked you to open. \
              Navigating auto-opens the embedded sidebar in the user's chat — \

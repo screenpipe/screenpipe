@@ -7,8 +7,6 @@
 //!
 //! Run with: cargo test -p screenpipe-screen --test frame_window_mismatch_test -- --nocapture
 
-use std::collections::HashMap;
-
 /// Simulates the video file - one frame per capture cycle
 struct MockVideoFile {
     frames: Vec<String>, // Each frame is the full-screen content at capture time
@@ -34,6 +32,7 @@ impl MockVideoFile {
 
 /// Simulates a database frame record
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct DbFrameRecord {
     frame_id: i64,
     offset_index: i64,
@@ -71,10 +70,6 @@ impl MockDatabase {
         });
 
         frame_id
-    }
-
-    fn get_frame(&self, frame_id: i64) -> Option<&DbFrameRecord> {
-        self.frames.iter().find(|f| f.frame_id == frame_id)
     }
 }
 

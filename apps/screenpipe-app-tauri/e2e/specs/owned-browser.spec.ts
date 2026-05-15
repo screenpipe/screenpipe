@@ -22,51 +22,9 @@
  */
 
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
+import { invoke } from "../helpers/tauri.js";
 
 const OWNED_BROWSER_LABEL = "owned-browser";
-
-interface InvokeResult<T = unknown> {
-  ok: boolean;
-  value?: T;
-  error?: string;
-}
-
-async function invoke<T = unknown>(
-  cmd: string,
-  args?: object,
-): Promise<InvokeResult<T>> {
-  return (await browser.executeAsync(
-    (
-      command: string,
-      params: object | undefined,
-      done: (r: InvokeResult<T>) => void,
-    ) => {
-      const g = globalThis as unknown as {
-        __TAURI__?: {
-          core?: { invoke: (cmd: string, args?: object) => Promise<unknown> };
-        };
-        __TAURI_INTERNALS__?: {
-          invoke: (cmd: string, args?: object) => Promise<unknown>;
-        };
-      };
-      const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
-      if (!inv) {
-        done({ ok: false, error: "Tauri invoke not available in this context" });
-        return;
-      }
-      void inv(command, params)
-        .then((value) => done({ ok: true, value: value as T }))
-        .catch((e: unknown) =>
-          done({
-            ok: false,
-            error: e instanceof Error ? e.message : String(e),
-          }),
-        );
-    },
-    cmd,
-    args,
-  )) as InvokeResult<T>;
-}
 
 async function waitForOwnedBrowserHandle(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

@@ -81,12 +81,32 @@ pub async fn record_and_transcribe(
     is_running: Arc<AtomicBool>,
     metrics: Arc<crate::metrics::AudioPipelineMetrics>,
 ) -> Result<()> {
+    record_and_transcribe_with_live_tap(
+        audio_stream,
+        duration,
+        whisper_sender,
+        is_running,
+        metrics,
+        None,
+    )
+    .await
+}
+
+pub async fn record_and_transcribe_with_live_tap(
+    audio_stream: Arc<AudioStream>,
+    duration: std::time::Duration,
+    whisper_sender: Arc<crossbeam::channel::Sender<AudioInput>>,
+    is_running: Arc<AtomicBool>,
+    metrics: Arc<crate::metrics::AudioPipelineMetrics>,
+    live_audio_tap: Option<crate::meeting_streaming::MeetingAudioTap>,
+) -> Result<()> {
     run_record_and_transcribe::run_record_and_transcribe(
         audio_stream,
         duration,
         whisper_sender,
         is_running,
         metrics,
+        live_audio_tap,
     )
     .await
 }

@@ -555,6 +555,13 @@ async fn wait_for_done_or_terminated(
 
     tokio::select! {
         _ = state.done_notify.notified() => {
+            if !*alive_rx.borrow_and_update() {
+                warn!(
+                    "pi_command_queue: process terminated while waiting for {} done",
+                    cmd_type
+                );
+                return false;
+            }
             debug!("pi_command_queue: done received for {}", cmd_type);
             true
         }

@@ -153,7 +153,7 @@ Instead of recording every second, screenpipe listens for meaningful events — 
 Captures system audio (what you hear) and microphone input (what you say). Real-time speech-to-text using OpenAI Whisper running locally on your device. Speaker identification and diarization. Works with any audio source — Zoom, Google Meet, Teams, or any other application.
 
 ### AI-powered search
-Natural language search across all OCR text and audio transcriptions. Filter by application name, window title, browser URL, date range. Semantic search using embeddings. Returns screenshots and audio clips alongside text results.
+Natural language search across accessibility-first screen text, OCR fallback text, and audio transcriptions. Filter by application name, window title, browser URL, date range. Semantic search using embeddings. Returns screenshots and audio clips alongside text results.
 
 ### Timeline view
 Visual timeline of your entire screen history. Scroll through your day like a DVR. Click any moment to see the full screenshot and extracted text. Play back audio from any time period.
@@ -252,7 +252,7 @@ screenpipe Teams lets organizations deploy AI agents across their team with full
 
 Search screen content:
 ```
-GET http://localhost:3030/search?q=meeting+notes&content_type=ocr&limit=10
+GET http://localhost:3030/search?q=meeting+notes&content_type=all&limit=10
 ```
 
 Search audio transcriptions:

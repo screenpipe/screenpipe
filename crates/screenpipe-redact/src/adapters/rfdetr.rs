@@ -520,11 +520,11 @@ mod tests {
         // return a RedactError::Runtime, not panic. This test ensures
         // that ORT panics (e.g. "Failed to initialize ORT API") are
         // properly caught and converted to Result::Err.
-        use tempfile::tempdir;
-
         #[cfg(feature = "onnx-cpu")]
         {
             use crate::adapters::rfdetr::imp::RfdetrRedactor;
+            use tempfile::tempdir;
+
             let d = tempdir().unwrap();
             let p = d.path().join("corrupt.onnx");
             // Write a file that is NOT a valid ONNX model.

@@ -62,6 +62,17 @@ pub struct RecordingSettings {
     #[serde(rename = "transcriptionMode")]
     pub transcription_mode: String,
 
+    /// Stream live notes only while a meeting is active. This is separate
+    /// from 24/7 background transcription: the recorder still writes durable
+    /// chunks, while this powers the low-latency meeting note UI.
+    #[serde(rename = "meetingLiveTranscriptionEnabled")]
+    pub meeting_live_transcription_enabled: bool,
+
+    /// Provider for meeting-only live notes. Defaults to the selected audio
+    /// transcription engine so local/custom engines work without Cloud.
+    #[serde(rename = "meetingLiveTranscriptionProvider")]
+    pub meeting_live_transcription_provider: String,
+
     /// Audio device names/IDs to capture from.
     #[serde(rename = "audioDevices")]
     pub audio_devices: Vec<String>,
@@ -137,12 +148,21 @@ pub struct RecordingSettings {
     #[serde(rename = "maxSnapshotWidth", default = "default_max_snapshot_width")]
     pub max_snapshot_width: u32,
 
-    /// Skip the background JPEG→MP4 snapshot compaction worker.
-    /// Use when the MP4 timeline UI is not used (e.g. task-mining tools that consume
-    /// `accessibility_text` / `ui_events` only) — avoids the ffmpeg H.265 encoding load.
-    /// Side effect: JPEGs are not compacted, so disk usage depends on `--retention-days`.
+    /// Skip the background JPEG->MP4 snapshot compaction worker.
+    /// Use when the MP4 timeline UI is not used, e.g. task-mining tools
+    /// that consume accessibility_text / ui_events only.
+    /// Side effect: JPEGs are not compacted, so disk usage depends on retention.
     #[serde(rename = "disableSnapshotCompaction", default)]
     pub disable_snapshot_compaction: bool,
+
+    /// Skip the v2 meeting detector watcher (5s-interval process / AX scan).
+    /// Use when meeting detection is not consumed (task-mining, headless analysis,
+    /// agents that read accessibility_text and ui_events only) — avoids the
+    /// constant process enumeration + AX tree walk cost.
+    /// Side effect: meeting-related DB rows are not generated; the audio pipeline's
+    /// in_meeting override flag stays false.
+    #[serde(rename = "disableMeetingDetector", default)]
+    pub disable_meeting_detector: bool,
 
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
@@ -354,6 +374,14 @@ impl RecordingSettings {
             Some(id)
         }
     }
+
+    /// Returns the display name/email used to label the local microphone speaker.
+    pub fn effective_user_name(&self) -> Option<&str> {
+        self.user_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }
 }
 
 impl Default for RecordingSettings {
@@ -363,6 +391,8 @@ impl Default for RecordingSettings {
             audio_transcription_engine: crate::best_engine_for_platform(crate::detect_tier())
                 .to_string(),
             transcription_mode: "batch".to_string(),
+            meeting_live_transcription_enabled: true,
+            meeting_live_transcription_provider: "selected-engine".to_string(),
             audio_devices: vec![],
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
@@ -377,6 +407,7 @@ impl Default for RecordingSettings {
             video_quality: "balanced".to_string(),
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
+            disable_meeting_detector: false,
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],

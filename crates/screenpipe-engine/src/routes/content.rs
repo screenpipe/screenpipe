@@ -75,6 +75,9 @@ pub struct OCRContent {
 pub struct AudioContent {
     pub chunk_id: i64,
     pub transcription: String,
+    /// Convenience alias for generic clients and agents that read `text` on
+    /// every content row. Same value as `transcription`.
+    pub text: String,
     pub timestamp: DateTime<Utc>,
     pub file_path: String,
     pub offset_index: i64,
@@ -84,6 +87,14 @@ pub struct AudioContent {
     pub speaker: Option<Speaker>,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meeting_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]

@@ -214,6 +214,9 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
 
         let title = event.get_summary().unwrap_or("(no title)").to_string();
         let location = event.get_location().map(|s| s.to_string());
+        let meeting_url = normalize_meeting_url(event.get_url().map(str::to_string))
+            .or_else(|| extract_meeting_url(location.as_deref()))
+            .or_else(|| extract_meeting_url(event.get_description()));
         let uid = event
             .get_uid()
             .map(|u| format!("ics-{}", u))
@@ -262,6 +265,7 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
             end_display,
             attendees,
             location,
+            meeting_url,
             calendar_name: feed_name.to_string(),
             is_all_day: all_day,
             source: "ics".to_string(),
@@ -269,6 +273,40 @@ fn parse_ics_to_events(ics_text: &str, feed_name: &str) -> Vec<CalendarEventItem
     }
 
     items
+}
+
+fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
+    let trimmed = raw?
+        .trim()
+        .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
+        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let is_known_meeting = lower.contains("meet.google.com/")
+        || lower.contains("zoom.us/")
+        || lower.contains("teams.microsoft.com/")
+        || lower.contains("teams.live.com/")
+        || lower.contains("webex.com/");
+
+    if !is_known_meeting {
+        return None;
+    }
+
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(trimmed)
+    } else {
+        Some(format!("https://{}", trimmed.trim_start_matches('/')))
+    }
+}
+
+fn extract_meeting_url(text: Option<&str>) -> Option<String> {
+    let text = text?;
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+        .find_map(|token| normalize_meeting_url(Some(token.to_string())))
 }
 
 // ─── Fetching ────────────────────────────────────────────────────────────────
@@ -468,5 +506,24 @@ mod tests {
         assert_eq!(all_events.len(), 1);
         assert_eq!(all_events[0].id, "ics-12345");
         assert_eq!(all_events[0].title, "Test Event");
+    }
+
+    #[test]
+    fn test_extracts_meeting_url_from_ics_fields() {
+        let now = Utc::now();
+        let start = now + chrono::Duration::hours(2);
+        let end = now + chrono::Duration::hours(3);
+        let ics_data = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:meet-url\r\nDTSTAMP:20241010T101010Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Call\r\nDESCRIPTION:Join https://teams.microsoft.com/l/meetup-join/abc.\r\nEND:VEVENT\r\nEND:VCALENDAR",
+            start.format("%Y%m%dT%H%M%SZ"),
+            end.format("%Y%m%dT%H%M%SZ")
+        );
+
+        let events = parse_ics_to_events(&ics_data, "feed");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].meeting_url.as_deref(),
+            Some("https://teams.microsoft.com/l/meetup-join/abc")
+        );
     }
 }

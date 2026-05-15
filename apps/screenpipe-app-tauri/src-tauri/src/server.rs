@@ -107,7 +107,7 @@ async fn handle_focus(
     if payload.target.as_deref() == Some("browser_pairing") {
         let _ = (ShowRewindWindow::Home { page: None }).show(&state.app_handle);
     } else {
-        show_main_window(&state.app_handle, false);
+        show_main_window(state.app_handle.clone());
     }
 
     if let Some(url) = payload.deep_link_url {

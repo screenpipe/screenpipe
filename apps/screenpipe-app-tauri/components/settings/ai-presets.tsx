@@ -1075,6 +1075,10 @@ const AISection = ({
                 best_for: m.best_for,
                 speed: m.speed,
                 intelligence: m.intelligence,
+                cost_tier: m.cost_tier,
+                recommended_for: m.recommended_for,
+                warning: m.warning,
+                query_weight: m.query_weight,
               }));
               if (piModels.length > 0) {
                 setModels(piModels);

@@ -23,6 +23,8 @@ import { OpenAIProvider } from './openai';
  * for Tinfoil's hosted inference endpoint).
  */
 export class ScreenpipeEnclaveProvider extends OpenAIProvider {
+	supportsTools = false;
+
 	constructor(apiKey: string) {
 		super(apiKey, 'https://pii.screenpipe.containers.tinfoil.dev/v1');
 	}

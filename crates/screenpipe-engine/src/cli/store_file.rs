@@ -12,12 +12,26 @@ pub fn store_path() -> PathBuf {
     screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin")
 }
 
+pub fn store_path_for(data_dir: &Path) -> PathBuf {
+    data_dir.join("store.bin")
+}
+
 pub fn read_store() -> Result<Value> {
     read_store_from(&store_path())
 }
 
+pub fn read_store_for(data_dir: &Path) -> Result<Value> {
+    read_store_from(&store_path_for(data_dir))
+}
+
 pub fn write_store(store: &Value) -> Result<()> {
     let path = store_path();
+    let encrypt = should_encrypt_on_write(&path)?;
+    write_store_to(&path, store, encrypt)
+}
+
+pub fn write_store_for(data_dir: &Path, store: &Value) -> Result<()> {
+    let path = store_path_for(data_dir);
     let encrypt = should_encrypt_on_write(&path)?;
     write_store_to(&path, store, encrypt)
 }

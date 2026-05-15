@@ -174,3 +174,56 @@ describe('GeminiProvider tool schema conversion (Sentry SCREENPIPE-AI-PROXY-9)',
 		expect(out.properties.name.items).toBeUndefined();
 	});
 });
+
+describe('GeminiProvider.formatMessages history sanitization', () => {
+	const provider = new GeminiProvider('fake-api-key') as any;
+
+	it('drops empty text parts', () => {
+		const result = provider.formatMessages([{
+			role: 'user',
+			content: [
+				{ type: 'text', text: '' },
+				{ type: 'text', text: '   ' },
+				{ type: 'text', text: 'hello' },
+			] as any,
+		}]);
+
+		expect(result).toEqual([{ role: 'user', parts: [{ text: 'hello' }] }]);
+	});
+
+	it('does not replay Gemini function calls without thought signatures', () => {
+		const result = provider.formatMessages([{
+			role: 'assistant',
+			content: '',
+			tool_calls: [{
+				id: 'call_read_without_signature',
+				type: 'function',
+				function: { name: 'read', arguments: '{"path":"/tmp/a"}' },
+			}],
+		}]);
+
+		expect(result[0].parts[0]).toEqual({
+			text: '[function call: read] {"path":"/tmp/a"}',
+		});
+		expect(result[0].parts[0].functionCall).toBeUndefined();
+	});
+
+	it('replays Gemini function calls when the encoded thought signature is present', () => {
+		const signature = btoa('sig');
+		const result = provider.formatMessages([{
+			role: 'assistant',
+			content: '',
+			tool_calls: [{
+				id: `call_read_ts_${signature}`,
+				type: 'function',
+				function: { name: 'read', arguments: '{"path":"/tmp/a"}' },
+			}],
+		}]);
+
+		expect(result[0].parts[0].functionCall).toEqual({
+			name: 'read',
+			args: { path: '/tmp/a' },
+		});
+		expect(result[0].parts[0].thoughtSignature).toBe('sig');
+	});
+});

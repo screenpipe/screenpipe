@@ -636,9 +636,8 @@ mod tests {
     #[test]
     fn nonexistent_hint_path_is_ignored() {
         let bogus = "/tmp/definitely-not-a-real-bun-binary-xyz";
-        match resolve_bun_path(Some(bogus)) {
-            Ok(path) => assert_ne!(path, bogus),
-            Err(_) => {} // bun not installed anywhere — fine.
+        if let Ok(path) = resolve_bun_path(Some(bogus)) {
+            assert_ne!(path, bogus);
         }
     }
 }

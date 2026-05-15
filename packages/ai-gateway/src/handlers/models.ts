@@ -42,6 +42,14 @@ interface ModelEntry {
   query_weight?: number;
 }
 
+function hasConfiguredSecret(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  return !['placeholder', 'changeme', 'change-me', 'todo', 'none', 'null', 'undefined'].includes(lower);
+}
+
 /** Curated model catalog — single source of truth */
 const CURATED_MODELS: ModelEntry[] = [
   // ── Auto — smart routing with fallback ──
@@ -245,6 +253,53 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'free',
     recommended_for: ['pipes', 'chat'],
   },
+  // ── OpenAI ──
+  {
+    id: 'gpt-5.5',
+    object: 'model',
+    owned_by: 'openai',
+    name: 'GPT-5.5',
+    description: 'frontier OpenAI model for coding and professional work',
+    tags: ['premium', 'coding', 'reasoning'],
+    free: false,
+    context_window: 270000,
+    best_for: ['complex tasks', 'coding', 'analysis'],
+    speed: 'medium',
+    intelligence: 'highest',
+    cost_tier: 'high',
+    recommended_for: ['chat', 'coding', 'analysis'],
+    warning: 'premium OpenAI model — use GPT-5.4 mini or a free model for high-volume pipes',
+  },
+  {
+    id: 'gpt-5.4',
+    object: 'model',
+    owned_by: 'openai',
+    name: 'GPT-5.4',
+    description: 'balanced OpenAI model for coding and professional work',
+    tags: ['premium', 'coding', 'reasoning'],
+    free: false,
+    context_window: 270000,
+    best_for: ['coding', 'analysis', 'general'],
+    speed: 'medium',
+    intelligence: 'high',
+    cost_tier: 'medium',
+    recommended_for: ['chat', 'coding', 'analysis'],
+  },
+  {
+    id: 'gpt-5.4-mini',
+    object: 'model',
+    owned_by: 'openai',
+    name: 'GPT-5.4 Mini',
+    description: 'fast, lower-cost OpenAI model for coding and agent tasks',
+    tags: ['fast', 'coding'],
+    free: false,
+    context_window: 270000,
+    best_for: ['pipes', 'coding', 'chat'],
+    speed: 'fast',
+    intelligence: 'high',
+    cost_tier: 'low',
+    recommended_for: ['pipes', 'chat', 'coding'],
+  },
   // ── Confidential inference (Tinfoil — secure enclaves) ──
   {
     id: 'gemma4-31b',
@@ -280,6 +335,7 @@ const CURATED_MODELS: ModelEntry[] = [
     intelligence: 'standard',
     cost_tier: 'low',
     recommended_for: ['chat', 'analysis'],
+    warning: 'confidential chat/audio model, but current enclave vLLM does not support tool calls yet — avoid for skills or pipes that need tools',
   },
   // ── OpenAI API (shown only when OPENAI_API_KEY is configured) ──
   {
@@ -537,7 +593,7 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
 
     // Avoid advertising models that would immediately fail because their
     // provider secret is not configured in the Worker environment yet.
-    models = models.filter(model => !model.requires_env || Boolean(env[model.requires_env]));
+    models = models.filter(model => !model.requires_env || hasConfiguredSecret(env[model.requires_env]));
 
     // Filter models based on tier allowlist
     if (tier !== 'subscribed') {

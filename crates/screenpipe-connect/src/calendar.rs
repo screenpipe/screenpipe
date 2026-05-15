@@ -17,7 +17,7 @@ use eventkit::{
 };
 use objc2::rc::Retained;
 use objc2_event_kit::{EKCalendar, EKEventStore};
-use objc2_foundation::{NSArray, NSDate};
+use objc2_foundation::{NSArray, NSDate, NSURL};
 use tracing::debug;
 
 /// A calendar event with attendee information.
@@ -36,6 +36,7 @@ pub struct CalendarEvent {
     pub end_local: DateTime<Local>,
     pub attendees: Vec<String>,
     pub location: Option<String>,
+    pub meeting_url: Option<String>,
     pub calendar_name: String,
     pub is_all_day: bool,
 }
@@ -133,6 +134,11 @@ impl ScreenpipeCalendar {
                 .unwrap_or_default();
             let title = unsafe { event.title() }.to_string();
             let location = unsafe { event.location() }.map(|l| l.to_string());
+            let event_url = unsafe { event.URL() }.and_then(nsurl_to_string);
+            let notes = unsafe { event.notes() }.map(|n| n.to_string());
+            let meeting_url = event_url
+                .or_else(|| extract_meeting_url(location.as_deref()))
+                .or_else(|| extract_meeting_url(notes.as_deref()));
             let is_all_day = unsafe { event.isAllDay() };
             let calendar_name = unsafe { event.calendar() }
                 .map(|c| unsafe { c.title() }.to_string())
@@ -164,6 +170,7 @@ impl ScreenpipeCalendar {
                 end_local: event_end_local,
                 attendees,
                 location,
+                meeting_url,
                 calendar_name,
                 is_all_day,
             });
@@ -193,6 +200,46 @@ fn datetime_to_nsdate(dt: DateTime<Local>) -> Retained<NSDate> {
 fn nsdate_to_local(date: &NSDate) -> DateTime<Local> {
     let timestamp = date.timeIntervalSince1970();
     Local.timestamp_opt(timestamp as i64, 0).unwrap()
+}
+
+fn nsurl_to_string(url: Retained<NSURL>) -> Option<String> {
+    url.absoluteString()
+        .map(|s| s.to_string())
+        .and_then(normalize_meeting_url)
+}
+
+fn normalize_meeting_url(raw: String) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
+        .trim_end_matches([')', ']', ',', '.', ';'])
+        .to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let is_known_meeting = lower.contains("meet.google.com/")
+        || lower.contains("zoom.us/")
+        || lower.contains("teams.microsoft.com/")
+        || lower.contains("teams.live.com/")
+        || lower.contains("webex.com/");
+
+    if !is_known_meeting {
+        return None;
+    }
+
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(trimmed)
+    } else {
+        Some(format!("https://{}", trimmed.trim_start_matches('/')))
+    }
+}
+
+fn extract_meeting_url(text: Option<&str>) -> Option<String> {
+    let text = text?;
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+        .find_map(|token| normalize_meeting_url(token.to_string()))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -258,5 +305,18 @@ mod tests {
         for e in &events {
             println!("  - {} (all_day: {})", e.title, e.is_all_day);
         }
+    }
+
+    #[test]
+    fn extracts_known_meeting_urls() {
+        assert_eq!(
+            extract_meeting_url(Some("Join: meet.google.com/abc-defg-hij")),
+            Some("https://meet.google.com/abc-defg-hij".to_string())
+        );
+        assert_eq!(
+            extract_meeting_url(Some("https://acme.zoom.us/j/123456789?pwd=x.")),
+            Some("https://acme.zoom.us/j/123456789?pwd=x".to_string())
+        );
+        assert!(extract_meeting_url(Some("office")).is_none());
     }
 }

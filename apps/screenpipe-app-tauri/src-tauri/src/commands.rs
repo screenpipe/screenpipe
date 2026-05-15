@@ -25,11 +25,7 @@ use tracing::{debug, error, info, warn};
 /// Call at every `WebviewWindowBuilder::build()` error site instead of
 /// a bare `error!(...)`. Return the error unchanged — this function is
 /// purely observability.
-fn log_webview_build_failure(
-    label: &str,
-    url_hint: &str,
-    err: &(impl std::fmt::Display + ?Sized),
-) {
+fn log_webview_build_failure(label: &str, url_hint: &str, err: &(impl std::fmt::Display + ?Sized)) {
     tracing::error!(
         webview_label = label,
         webview_url = url_hint,
@@ -102,6 +98,58 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         return;
     }
 
+    // Compound meeting action: open the actual call URL, then route the app to
+    // the live note. This is intentionally separate from generic link/deeplink
+    // handling because meeting-start notifications need both side effects.
+    if action_type == Some("meeting_join") {
+        let meeting_url = parsed
+            .as_ref()
+            .and_then(|v| v.get("url"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let deeplink_url = parsed
+            .as_ref()
+            .and_then(|v| v.get("deeplink_url").or_else(|| v.get("deeplinkUrl")))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        let Some(meeting_url) = meeting_url else {
+            warn!("meeting_join notification action has no url: {}", json);
+            return;
+        };
+
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            use tauri_plugin_opener::OpenerExt;
+            if let Err(e) = app_clone.opener().open_url(&meeting_url, None::<&str>) {
+                error!(
+                    "failed to open meeting url '{}' from notification: {}",
+                    meeting_url, e
+                );
+            }
+
+            let Some(deeplink_url) = deeplink_url else {
+                return;
+            };
+            if !is_meeting_deeplink(&deeplink_url) {
+                return;
+            }
+
+            let app_for_show = app_clone.clone();
+            let _ = app_clone.run_on_main_thread(move || {
+                if let Err(e) = (ShowRewindWindow::Home {
+                    page: Some("meetings".to_string()),
+                })
+                .show(&app_for_show)
+                {
+                    error!("failed to show window for meeting_join: {}", e);
+                }
+            });
+            emit_meeting_note_route_with_retries(&app_clone, &deeplink_url);
+        });
+        return;
+    }
+
     // URL-opening actions. Two distinct semantics, explicit types so senders
     // can't conflate them:
     //   "link"      → external URL, opened in the user's default browser
@@ -120,7 +168,11 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let Some(url) = url else {
-            warn!("{} notification action has no url: {}", action_type.unwrap(), json);
+            warn!(
+                "{} notification action has no url: {}",
+                action_type.unwrap(),
+                json
+            );
             return;
         };
 
@@ -131,15 +183,27 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
         let app_clone = app.clone();
         std::thread::spawn(move || {
             if is_in_app {
-                // Show Main first so DeeplinkHandler is mounted, then emit.
+                let target = if is_meeting_deeplink(&url) {
+                    ShowRewindWindow::Home {
+                        page: Some("meetings".to_string()),
+                    }
+                } else {
+                    ShowRewindWindow::Main
+                };
+                // Show the target surface first. Meeting links should not flash
+                // Main/timeline before routing into Home -> Meeting notes.
                 let app_for_show = app_clone.clone();
                 let _ = app_clone.run_on_main_thread(move || {
-                    if let Err(e) = ShowRewindWindow::Main.show(&app_for_show) {
-                        error!("failed to show Main window for deeplink: {}", e);
+                    if let Err(e) = target.show(&app_for_show) {
+                        error!("failed to show window for deeplink: {}", e);
                     }
                 });
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                let _ = app_clone.emit("deep-link-received", url);
+                if is_meeting_deeplink(&url) {
+                    emit_meeting_note_route_with_retries(&app_clone, &url);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    let _ = app_clone.emit("deep-link-received", url);
+                }
             } else {
                 // External URL — hand off to the opener plugin.
                 use tauri_plugin_opener::OpenerExt;
@@ -155,6 +219,95 @@ fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     // actions) still goes to the JS handler. The overlay window owns those
     // because they need access to posthog / localforage / chat prefill.
     let _ = app.emit("native-notification-action", &json);
+}
+
+fn is_meeting_deeplink(url: &str) -> bool {
+    url.starts_with("screenpipe://meeting/") || url.starts_with("screenpipe://meeting?")
+}
+
+#[cfg(target_os = "macos")]
+fn parse_meeting_deeplink(url: &str) -> Option<(u64, bool)> {
+    if !is_meeting_deeplink(url) {
+        return None;
+    }
+
+    let (base, query) = url.split_once('?').unwrap_or((url, ""));
+    let path_id = base
+        .strip_prefix("screenpipe://meeting/")
+        .and_then(|rest| rest.split('/').next())
+        .filter(|id| !id.is_empty());
+    let query_id = query.split('&').find_map(|part| {
+        let (key, value) = part.split_once('=')?;
+        (key == "id" && !value.is_empty()).then_some(value)
+    });
+    let meeting_id = path_id.or(query_id)?.parse::<u64>().ok()?;
+    let transcript = query
+        .split('&')
+        .find_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            (key == "live").then_some(value != "0")
+        })
+        .unwrap_or(true);
+
+    Some((meeting_id, transcript))
+}
+
+#[cfg(target_os = "macos")]
+fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &str) {
+    let Some((meeting_id, transcript)) = parse_meeting_deeplink(deeplink_url) else {
+        warn!(
+            "invalid meeting deeplink from notification: {}",
+            deeplink_url
+        );
+        return;
+    };
+
+    let payload = serde_json::json!({
+        "meetingId": meeting_id,
+        "transcript": transcript,
+    });
+    let nav = serde_json::json!({ "url": "/home?section=meetings" });
+
+    // A notification click can cold-open the Home webview. React listeners are
+    // not guaranteed to be mounted when `show()` returns, so a single emit is
+    // lossy. Retry briefly; opening the same meeting note is idempotent and this
+    // makes one user click survive window startup, route changes, and slow dev
+    // builds.
+    for delay_ms in [150_u64, 500, 1200, 2200] {
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        let _ = app.emit("navigate", nav.clone());
+        let _ = app.emit("open-meeting-note", payload.clone());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::parse_meeting_deeplink;
+
+    #[test]
+    fn parses_meeting_deeplink_path_id() {
+        assert_eq!(
+            parse_meeting_deeplink("screenpipe://meeting/123"),
+            Some((123, true))
+        );
+    }
+
+    #[test]
+    fn parses_meeting_deeplink_query_id_and_live_flag() {
+        assert_eq!(
+            parse_meeting_deeplink("screenpipe://meeting?id=456&live=0"),
+            Some((456, false))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_meeting_deeplink() {
+        assert_eq!(
+            parse_meeting_deeplink("screenpipe://meeting/not-a-number"),
+            None
+        );
+        assert_eq!(parse_meeting_deeplink("screenpipe://settings"), None);
+    }
 }
 
 /// Callback invoked from Swift when user clicks a shortcut reminder action.
@@ -215,9 +368,7 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                         .send()
                         .ok()
                         .and_then(|r| r.json::<serde_json::Value>().ok());
-                    let is_active = status
-                        .as_ref()
-                        .and_then(|v| v["active"].as_bool());
+                    let is_active = status.as_ref().and_then(|v| v["active"].as_bool());
                     let stoppable_id = status
                         .as_ref()
                         .and_then(|v| v["stoppableMeetingId"].as_i64());
@@ -341,7 +492,10 @@ pub async fn set_api_auth_key(app_handle: tauri::AppHandle, key: String) -> Resu
     persist_api_auth_key_to_settings(&app_handle, &key)
 }
 
-fn persist_api_auth_key_to_settings(app_handle: &tauri::AppHandle, key: &str) -> Result<(), String> {
+fn persist_api_auth_key_to_settings(
+    app_handle: &tauri::AppHandle,
+    key: &str,
+) -> Result<(), String> {
     let mut store = SettingsStore::get(app_handle)?.unwrap_or_default();
     store.recording.api_key = key.to_string();
     store.save(app_handle)?;
@@ -379,8 +533,7 @@ pub fn set_cloud_media_analysis_skill(enabled: bool) -> Result<(), String> {
                 .map_err(|e| format!("remove {}: {e}", marker.display()))?;
         }
     } else {
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
         std::fs::write(
             &marker,
             "Opt-out marker — Pi will install the screenpipe-api skill \
@@ -577,12 +730,12 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
+pub fn show_main_window(app_handle: tauri::AppHandle) {
     info!("show_main_window called");
     set_main_close_in_progress(false);
     let window_to_show = ShowRewindWindow::Main;
 
-    match window_to_show.show(app_handle) {
+    match window_to_show.show(&app_handle) {
         Ok(window) => {
             info!(
                 "show_main_window succeeded, window label: {}",
@@ -625,15 +778,48 @@ pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn hide_main_window(app_handle: &tauri::AppHandle) {
+pub fn hide_main_window(app_handle: tauri::AppHandle) {
     // NOTE: Window shortcuts (Escape) are unregistered by the focus-loss
     // handler in window/show.rs. Do NOT also unregister them here — doing
     // so races with the focus handler and causes duplicate unregister calls.
 
     let window_to_close = ShowRewindWindow::Main;
 
-    if let Err(e) = window_to_close.close(app_handle) {
+    if let Err(e) = window_to_close.close(&app_handle) {
         error!("failed to close window: {}", e);
+    }
+}
+
+/// E2E helper: report whether the main overlay is logically visible.
+///
+/// The main window uses platform-specific "hide" semantics (macOS NSPanel with
+/// alpha=0, Windows/Linux hidden WebviewWindow). Tests need a stable signal that
+/// the overlay has been dismissed when opening other surfaces (e.g. search).
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
+    // Avoid exposing internal state in production binaries; E2E builds enable the
+    // `e2e` feature which flips this on.
+    if !cfg!(feature = "e2e") {
+        return false;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app_handle;
+        return crate::window::MAIN_PANEL_SHOWN.load(std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        for label in ["main", "main-window"] {
+            if let Some(w) = app_handle.get_webview_window(label) {
+                if w.is_visible().unwrap_or(false) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -738,20 +924,20 @@ pub fn update_show_screenpipe_shortcut(
                 // the panel's alpha is 0 (auto-hidden on focus loss), causing
                 // the shortcut to "hide" an already-invisible panel.
                 if MAIN_PANEL_SHOWN.load(std::sync::atomic::Ordering::SeqCst) {
-                    hide_main_window(app_handle);
+                    hide_main_window(app_handle.clone());
                 } else {
-                    show_main_window(app_handle, true);
+                    show_main_window(app_handle.clone());
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
                 if let Some(window) = app_handle.get_webview_window("home") {
                     match window.is_visible() {
-                        Ok(true) => hide_main_window(app_handle),
-                        _ => show_main_window(app_handle, true),
+                        Ok(true) => hide_main_window(app_handle.clone()),
+                        _ => show_main_window(app_handle.clone()),
                     }
                 } else {
-                    show_main_window(app_handle, true);
+                    show_main_window(app_handle.clone());
                 }
             }
         },
@@ -763,7 +949,7 @@ pub fn update_show_screenpipe_shortcut(
             let _ = app_handle.global_shortcut().on_shortcut(
                 default_shortcut,
                 move |app_handle, _event, _shortcut| {
-                    show_main_window(app_handle, true);
+                    show_main_window(app_handle.clone());
                 },
             );
         }
@@ -807,10 +993,7 @@ pub async fn open_pipe_window(
         builder = builder.hidden_title(true);
     }
 
-    let window = match builder
-        .build()
-        .map(crate::window::finalize_webview_window)
-    {
+    let window = match builder.build().map(crate::window::finalize_webview_window) {
         Ok(window) => window,
         Err(e) => {
             log_webview_build_failure(&title, &url, &e);
@@ -986,17 +1169,12 @@ pub async fn open_google_calendar_auth_window(
 
     let app_for_nav = app_handle.clone();
 
-    let parsed_url = auth_url
-        .parse()
-        .map_err(|e| format!("invalid url: {e}"))?;
-    let mut builder = WebviewWindowBuilder::new(
-        &app_handle,
-        label,
-        WebviewUrl::External(parsed_url),
-    )
-    .title("connect google calendar")
-    .inner_size(500.0, 700.0)
-    .focused(true);
+    let parsed_url = auth_url.parse().map_err(|e| format!("invalid url: {e}"))?;
+    let mut builder =
+        WebviewWindowBuilder::new(&app_handle, label, WebviewUrl::External(parsed_url))
+            .title("connect google calendar")
+            .inner_size(500.0, 700.0)
+            .focused(true);
 
     #[cfg(target_os = "macos")]
     {
@@ -1018,10 +1196,10 @@ pub async fn open_google_calendar_auth_window(
     builder
         .build()
         .map(crate::window::finalize_webview_window)
-    .map_err(|e| {
-        log_webview_build_failure(label, &auth_url, &e);
-        e.to_string()
-    })?;
+        .map_err(|e| {
+            log_webview_build_failure(label, &auth_url, &e);
+            e.to_string()
+        })?;
 
     Ok(())
 }
@@ -1049,7 +1227,7 @@ pub async fn show_window(
 
     // Hide Main timeline when opening Search (search is standalone, timeline shows on result pick)
     if matches!(window_id, RewindWindowId::Search) {
-        hide_main_window(&app_handle);
+        hide_main_window(app_handle.clone());
     }
 
     window.show(&app_handle).map_err(|e| e.to_string())?;
@@ -1083,8 +1261,7 @@ pub async fn show_window_activated(
                 use objc::{msg_send, sel, sel_impl};
                 use tauri_nspanel::cocoa::base::id;
                 unsafe {
-                    let ns_app: id =
-                        msg_send![objc::class!(NSApplication), sharedApplication];
+                    let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
                     let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
                 }
             })
@@ -1251,8 +1428,7 @@ pub async fn close_window(
     if matches!(window, ShowRewindWindow::Main) {
         set_main_close_in_progress(true);
         info!("shortcut-sync: scheduling unregister (reason=close_window_main)");
-        let expected_gen =
-            WINDOW_SHORTCUTS_GEN.load(std::sync::atomic::Ordering::SeqCst);
+        let expected_gen = WINDOW_SHORTCUTS_GEN.load(std::sync::atomic::Ordering::SeqCst);
         let app_clone = app_handle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1456,6 +1632,57 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 #[specta::specta]
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+    if db_path.exists() {
+        let pool = sqlx::SqlitePool::connect(&db_url).await.map_err(|e| {
+            format!("failed to open secret database before disabling encryption: {e}")
+        })?;
+        let plain_store = screenpipe_secrets::SecretStore::new(pool.clone(), None)
+            .await
+            .map_err(|e| format!("failed to open secret store: {e}"))?;
+        let encrypted_count = plain_store
+            .encrypted_secret_count()
+            .await
+            .map_err(|e| format!("failed to inspect encrypted secrets: {e}"))?;
+
+        if encrypted_count > 0 {
+            let key = match crate::secrets::get_key() {
+                crate::secrets::KeyResult::Found(key) => key,
+                crate::secrets::KeyResult::AccessDenied => {
+                    return Err(format!(
+                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but keychain access was denied."
+                    ));
+                }
+                crate::secrets::KeyResult::NotFound => {
+                    return Err(format!(
+                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain key was not found."
+                    ));
+                }
+                crate::secrets::KeyResult::Unavailable => {
+                    return Err(format!(
+                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain is unavailable."
+                    ));
+                }
+            };
+
+            let encrypted_store = screenpipe_secrets::SecretStore::new(pool, Some(key))
+                .await
+                .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
+            match encrypted_store.decrypt_encrypted_secrets().await {
+                Ok(count) => {
+                    tracing::info!("decrypted {} secrets before keychain opt-out", count);
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Cannot disable encryption until encrypted secrets are decrypted: {e}"
+                    ));
+                }
+            }
+        }
+    }
+
     screenpipe_secrets::mark_encryption_disabled(&data_dir)
         .map_err(|e| format!("failed to remove .encrypt-store flag: {e}"))?;
     if let Err(e) = crate::secrets::delete_key() {
@@ -1575,7 +1802,8 @@ pub async fn show_shortcut_reminder(
                 let guard = state.server.lock().await;
                 if let Some(ref core) = *guard {
                     let mut metrics_ws_url = format!("ws://127.0.0.1:{}/ws/metrics", core.port);
-                    let mut events_ws_url = format!("ws://127.0.0.1:{}/ws/meeting-status", core.port);
+                    let mut events_ws_url =
+                        format!("ws://127.0.0.1:{}/ws/meeting-status", core.port);
                     if let Some(ref key) = core.local_api_key {
                         let enc = urlencoding::encode(key);
                         metrics_ws_url = format!("{}?token={}", metrics_ws_url, enc);
@@ -2178,8 +2406,7 @@ pub fn register_window_shortcuts(app_handle: tauri::AppHandle) -> Result<(), Str
     Ok(())
 }
 
-static WINDOW_SHORTCUTS_GEN: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static WINDOW_SHORTCUTS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static MAIN_CLOSE_IN_PROGRESS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -2479,6 +2706,38 @@ pub async fn open_note_path(path: String) -> Result<(), String> {
         } else {
             Err(format!("failed to open note path: {}", path))
         }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_windows_shell_target(target: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", "", &target])
+            .creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        match cmd.status() {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!(
+                "failed to open Windows shell target {}: {}",
+                target, status
+            )),
+            Err(e) => Err(format!(
+                "failed to open Windows shell target {}: {}",
+                target, e
+            )),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        Err("Windows shell targets are only supported on Windows".to_string())
     }
 }
 

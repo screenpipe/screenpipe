@@ -85,7 +85,7 @@ pub fn setup_space_listener(app: AppHandle) {
                     let _ = app.run_on_main_thread(move || {
                         crate::window::with_autorelease_pool(|| {
                             crate::window::clear_frontmost_app();
-                            hide_main_window(&app_inner);
+                            hide_main_window(app_inner.clone());
                         });
                     });
                 });

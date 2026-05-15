@@ -589,6 +589,7 @@ fn get_native_calendar_events(hours_back: i64, hours_ahead: i64) -> Result<Vec<V
                 "end_display": e.end_local.format("%H:%M").to_string(),
                 "attendees": e.attendees,
                 "location": e.location,
+                "meeting_url": e.meeting_url,
                 "calendar_name": e.calendar_name,
                 "is_all_day": e.is_all_day,
             })
@@ -613,6 +614,7 @@ fn get_native_calendar_events(hours_back: i64, hours_ahead: i64) -> Result<Vec<V
                 "end_display": e.end_local.format("%H:%M").to_string(),
                 "attendees": e.attendees,
                 "location": e.location,
+                "meeting_url": e.meeting_url,
                 "calendar_name": e.calendar_name,
                 "is_all_day": e.is_all_day,
             })
@@ -1040,6 +1042,7 @@ async fn gcal_events_inner(
             ("singleEvents", "true"),
             ("orderBy", "startTime"),
             ("maxResults", "50"),
+            ("conferenceDataVersion", "1"),
         ])
         .send()
         .await?
@@ -1071,6 +1074,7 @@ async fn gcal_events_inner(
                         .collect()
                 })
                 .unwrap_or_default();
+            let meeting_url = google_calendar_meeting_url(&item);
 
             json!({
                 "id": item["id"].as_str().unwrap_or(""),
@@ -1079,6 +1083,7 @@ async fn gcal_events_inner(
                 "end": end,
                 "attendees": attendees,
                 "location": item["location"].as_str(),
+                "meetingUrl": meeting_url,
                 "calendarName": "primary",
                 "isAllDay": is_all_day,
             })
@@ -1086,6 +1091,60 @@ async fn gcal_events_inner(
         .collect();
 
     Ok(events)
+}
+
+fn google_calendar_meeting_url(item: &Value) -> Option<String> {
+    item["hangoutLink"]
+        .as_str()
+        .and_then(|s| normalize_meeting_url(Some(s.to_string())))
+        .or_else(|| {
+            item["conferenceData"]["entryPoints"]
+                .as_array()
+                .and_then(|entry_points| {
+                    entry_points
+                        .iter()
+                        .find(|entry| entry["entryPointType"].as_str() == Some("video"))
+                        .or_else(|| entry_points.first())
+                        .and_then(|entry| entry["uri"].as_str())
+                        .and_then(|uri| normalize_meeting_url(Some(uri.to_string())))
+                })
+        })
+        .or_else(|| extract_meeting_url(item["location"].as_str()))
+        .or_else(|| extract_meeting_url(item["description"].as_str()))
+}
+
+fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
+    let trimmed = raw?
+        .trim()
+        .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
+        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let is_known_meeting = lower.contains("meet.google.com/")
+        || lower.contains("zoom.us/")
+        || lower.contains("teams.microsoft.com/")
+        || lower.contains("teams.live.com/")
+        || lower.contains("webex.com/");
+
+    if !is_known_meeting {
+        return None;
+    }
+
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(trimmed)
+    } else {
+        Some(format!("https://{}", trimmed.trim_start_matches('/')))
+    }
+}
+
+fn extract_meeting_url(text: Option<&str>) -> Option<String> {
+    let text = text?;
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+        .find_map(|token| normalize_meeting_url(Some(token.to_string())))
 }
 
 /// DELETE /connections/google-calendar/disconnect — remove stored tokens.
@@ -1336,6 +1395,32 @@ fn resolve_auth(
     }
 }
 
+fn split_instance_query(raw_query: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(query) = raw_query.filter(|q| !q.is_empty()) else {
+        return (None, None);
+    };
+
+    let mut instance = None;
+    let mut has_forwarded_query = false;
+    let mut forwarded = url::form_urlencoded::Serializer::new(String::new());
+
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let key = key.into_owned();
+        let value = value.into_owned();
+        if key == "instance" && instance.is_none() {
+            if !value.is_empty() {
+                instance = Some(value);
+            }
+        } else {
+            forwarded.append_pair(&key, &value);
+            has_forwarded_query = true;
+        }
+    }
+
+    let forwarded_query = has_forwarded_query.then(|| forwarded.finish());
+    (instance, forwarded_query)
+}
+
 /// Proxy handler: forward requests to third-party APIs with credentials injected.
 /// Route: ANY /connections/:id/proxy/*path
 ///
@@ -1368,6 +1453,8 @@ async fn connection_proxy(
             .into_response();
     }
 
+    let (instance, forwarded_query) = split_instance_query(raw_query.as_deref());
+    let instance_ref = instance.as_deref();
     let mgr = state.cm.lock().await;
 
     // Find the integration and its proxy config
@@ -1385,9 +1472,17 @@ async fn connection_proxy(
     // Load credentials (from connections.json) and the raw OAuth token JSON in parallel.
     // OAuth JSON is passed separately to resolve_base_url so callback-only fields like
     // QuickBooks' {realmId} can fill URL placeholders without polluting the credentials map.
-    let creds = mgr.get_credentials(&id).await.ok().flatten();
-    let oauth_json =
-        screenpipe_connect::oauth::load_oauth_json(state.secret_store.as_deref(), &id, None).await;
+    let creds = mgr
+        .get_credentials_instance(&id, instance_ref)
+        .await
+        .ok()
+        .flatten();
+    let oauth_json = screenpipe_connect::oauth::load_oauth_json(
+        state.secret_store.as_deref(),
+        &id,
+        instance_ref,
+    )
+    .await;
     // Use get_valid_token_instance (not read_oauth_token_instance) so expired
     // access tokens are transparently refreshed via the stored refresh_token.
     // Before this fix the proxy would surface "no credentials found" and 401
@@ -1398,7 +1493,7 @@ async fn connection_proxy(
         state.secret_store.as_deref(),
         &http_client,
         &id,
-        None,
+        instance_ref,
     );
 
     // Resolve auth
@@ -1417,8 +1512,9 @@ async fn connection_proxy(
         )
     {
         tracing::warn!(
-            "proxy: no credentials found for connection '{}' — cannot authenticate",
-            id
+            "proxy: no credentials found for connection '{}' instance {:?} — cannot authenticate",
+            id,
+            instance_ref
         );
         return (
             StatusCode::UNAUTHORIZED,
@@ -1447,7 +1543,7 @@ async fn connection_proxy(
     // `?valueInputOption=USER_ENTERED` for Google Sheets appends) must be
     // forwarded verbatim — without this, callers silently hit defaults and
     // bad requests like 400s on `values:append`.
-    let target_url = match raw_query.as_deref() {
+    let target_url = match forwarded_query.as_deref() {
         Some(q) if !q.is_empty() => {
             format!("{}/{}?{}", base_url, api_path.trim_start_matches('/'), q)
         }
@@ -1456,11 +1552,12 @@ async fn connection_proxy(
 
     // Audit log
     tracing::info!(
-        "proxy: {} {} → {} (connection: {})",
+        "proxy: {} {} → {} (connection: {}, instance: {:?})",
         method,
         api_path,
         target_url,
-        id
+        id,
+        instance_ref
     );
 
     // Forward the request — use a client that trusts any extra root CA the
@@ -1573,9 +1670,11 @@ async fn connection_proxy(
 async fn connection_config(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> (StatusCode, Json<Value>) {
+    let (instance, _) = split_instance_query(raw_query.as_deref());
     let mgr = state.cm.lock().await;
-    match mgr.get_credentials(&id).await {
+    match mgr.get_credentials_instance(&id, instance.as_deref()).await {
         Ok(Some(creds)) => {
             // Filter out secret fields
             let def = mgr.find_def(&id);
@@ -2205,6 +2304,23 @@ mod tests {
     use screenpipe_connect::connections::ProxyAuth;
     use serde_json::json;
 
+    #[test]
+    fn google_calendar_meeting_url_prefers_conference_video() {
+        let item = json!({
+            "location": "Board room",
+            "conferenceData": {
+                "entryPoints": [
+                    { "entryPointType": "phone", "uri": "tel:+15551234567" },
+                    { "entryPointType": "video", "uri": "meet.google.com/abc-defg-hij" }
+                ]
+            }
+        });
+        assert_eq!(
+            google_calendar_meeting_url(&item).as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
+
     // -- resolve_base_url ---------------------------------------------------
 
     #[test]
@@ -2413,6 +2529,21 @@ mod tests {
             resolve_auth(&auth_cfg, None, None, None),
             ResolvedAuth::None
         ));
+    }
+
+    #[test]
+    fn split_instance_query_removes_instance_before_proxying() {
+        let (instance, forwarded) =
+            split_instance_query(Some("instance=work%20calendar&limit=10&q=hello%20world"));
+        assert_eq!(instance.as_deref(), Some("work calendar"));
+        assert_eq!(forwarded.as_deref(), Some("limit=10&q=hello+world"));
+    }
+
+    #[test]
+    fn split_instance_query_preserves_non_instance_queries() {
+        let (instance, forwarded) = split_instance_query(Some("page=1&limit=10"));
+        assert_eq!(instance, None);
+        assert_eq!(forwarded.as_deref(), Some("page=1&limit=10"));
     }
 
     // -- proxy config validation --------------------------------------------

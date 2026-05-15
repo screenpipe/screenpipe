@@ -24,7 +24,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: release-app-${{ github.sha }}
+  group: release-app-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -340,14 +340,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             target/${{ matrix.target }}/release
             apps/screenpipe-app-tauri/src-tauri/target/release
           key: ${{ runner.os }}-artifacts-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-artifacts-${{ matrix.target }}-
+
+      - name: Verify Cargo toolchain
+        shell: bash
+        run: |
+          which cargo
+          cargo --version
 
       - name: Cache Homebrew packages
         if: matrix.platform == 'macos-latest'
@@ -528,41 +531,24 @@ jobs:
           $env:Path = "$found;" + $env:Path
           ninja --version
 
-      - name: Install wget on Windows
+      - name: Verify Windows download support
         if: matrix.os_type == 'windows'
         shell: powershell
         env:
           SKIP_SCREENPIPE_SETUP: true
         run: |
-          # Remove wget alias if it exists
+          # Avoid PowerShell's wget alias shadowing real download behavior.
           if (Test-Path Alias:wget) {
             Remove-Item Alias:wget -Force
           }
 
-          $wgetDir = "C:\wget"
-          # Skip download if already installed (self-hosted runners)
-          if (Test-Path "$wgetDir\wget.exe") {
-            Write-Host "wget already installed, skipping download"
-          } else {
-            New-Item -ItemType Directory -Force -Path $wgetDir
-
-            $wgetUrl = "https://eternallybored.org/misc/wget/releases/wget-1.21.4-win64.zip"
-            $wgetZip = "$wgetDir\wget.zip"
-
-            Invoke-WebRequest -Uri $wgetUrl -OutFile $wgetZip
-            Expand-Archive -Path $wgetZip -DestinationPath $wgetDir -Force
-            Remove-Item $wgetZip
-          }
-
-          # Add to PATH for current session only
-          $env:Path = "$wgetDir;$env:Path"
-
-          # Verify installation
-          & "$wgetDir\wget.exe" --version
+          curl.exe --version
 
       - name: Run pre_build.js
         run: bun ./scripts/pre_build.js ${{ matrix.pre-build-args }}
         working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
+        env:
+          SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
 
       - name: Use production config for release
         shell: bash

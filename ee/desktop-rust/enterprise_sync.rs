@@ -38,6 +38,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+#[path = "enterprise_upload.rs"]
+mod enterprise_upload;
+use enterprise_upload::{
+    upload_direct_encrypted_batch, DirectUploadCursors, DirectUploadRecordCounts,
+    EnterpriseUploadMode,
+};
+
 /// How often we wake up and try to sync.
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -78,13 +85,19 @@ pub struct EnterpriseSyncConfig {
     pub ingest_url: String,
     /// Where to persist the cursor (typically the app data dir).
     pub cursor_path: PathBuf,
+    /// Hosted plaintext ingest or direct encrypted customer-storage upload.
+    pub upload_mode: EnterpriseUploadMode,
 }
 
 impl EnterpriseSyncConfig {
     /// Build config from env vars + the OS device id. Returns `None` when
     /// required env (`SCREENPIPE_ENTERPRISE_LICENSE_KEY`) is missing — caller
     /// should silently skip sync in that case.
-    pub fn from_env(app_data_dir: PathBuf, device_id: String, device_label: String) -> Option<Self> {
+    pub fn from_env(
+        app_data_dir: PathBuf,
+        device_id: String,
+        device_label: String,
+    ) -> Option<Self> {
         let license_key = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY")
             .ok()
             .filter(|s| !s.trim().is_empty())?;
@@ -92,6 +105,7 @@ impl EnterpriseSyncConfig {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
+        let upload_mode = EnterpriseUploadMode::from_env(&ingest_url)?;
         let cursor_path = app_data_dir.join(CURSOR_FILENAME);
         Some(Self {
             license_key,
@@ -99,6 +113,7 @@ impl EnterpriseSyncConfig {
             device_label,
             ingest_url,
             cursor_path,
+            upload_mode,
         })
     }
 }
@@ -137,7 +152,10 @@ impl Cursor {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Cursor::default(),
             Err(e) => {
-                warn!("enterprise sync: cursor read failed ({}), restarting backfill", e);
+                warn!(
+                    "enterprise sync: cursor read failed ({}), restarting backfill",
+                    e
+                );
                 Cursor::default()
             }
         }
@@ -200,9 +218,7 @@ pub trait LocalApiClient: Send + Sync {
     /// implementation chose to skip (e.g. the latest frame is identical
     /// to the previously snapshotted one). Default returns None — shims
     /// that don't support image fetching just don't sync screenshots.
-    async fn fetch_latest_snapshot(
-        &self,
-    ) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
+    async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
         Ok(None)
     }
 }
@@ -334,8 +350,9 @@ pub fn build_jsonl(
     ui: &[UiEventRow],
     snapshots: &[SnapshotRow],
 ) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity((frames.len() + audio.len() + ui.len()) * 256 + snapshots.len() * 50_000);
+    let mut out = Vec::with_capacity(
+        (frames.len() + audio.len() + ui.len()) * 256 + snapshots.len() * 50_000,
+    );
     for f in frames {
         let rec = TelemetryRecord::Frame {
             device_id: device_id.to_string(),
@@ -440,9 +457,7 @@ pub async fn post_jsonl(
     if status.is_success() {
         return Ok(());
     }
-    if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Err(EnterpriseSyncError::IngestAuthRejected);
     }
     if status.is_server_error() {
@@ -534,18 +549,43 @@ pub async fn run_one_sync(
         &snapshots,
     );
     let bytes = body.len();
-    post_jsonl(http, &cfg.ingest_url, &cfg.license_key, body).await?;
 
-    // Advance cursor only on success — partial failure must not skip records.
+    let mut next_cursor = cursor.clone();
     if let Some(latest) = frames.last() {
-        cursor.last_frame_ts = Some(latest.timestamp.clone());
+        next_cursor.last_frame_ts = Some(latest.timestamp.clone());
     }
     if let Some(latest) = audio.last() {
-        cursor.last_audio_ts = Some(latest.timestamp.clone());
+        next_cursor.last_audio_ts = Some(latest.timestamp.clone());
     }
     if let Some(latest) = ui.last() {
-        cursor.last_ui_ts = Some(latest.timestamp.clone());
+        next_cursor.last_ui_ts = Some(latest.timestamp.clone());
     }
+
+    match &cfg.upload_mode {
+        EnterpriseUploadMode::HostedIngest => {
+            post_jsonl(http, &cfg.ingest_url, &cfg.license_key, body).await?;
+        }
+        EnterpriseUploadMode::DirectEncrypted(direct) => {
+            let counts = DirectUploadRecordCounts {
+                frames: frames.len(),
+                audio: audio.len(),
+                ui: ui.len(),
+                snapshots: snapshots.len(),
+            };
+            upload_direct_encrypted_batch(
+                http,
+                cfg,
+                direct,
+                body,
+                counts,
+                DirectUploadCursors::from_cursor(&next_cursor),
+            )
+            .await?;
+        }
+    }
+
+    // Advance cursor only on success — partial failure must not skip records.
+    *cursor = next_cursor;
     cursor.save(&cfg.cursor_path)?;
 
     Ok(SyncTickReport {
@@ -655,6 +695,8 @@ async fn sleep_or_shutdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use enterprise_upload::DirectUploadConfig;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -794,7 +836,12 @@ mod tests {
             "host",
             &[],
             &[],
-            &[ui_event(99, "2026-05-07T10:01:00Z", "Salesforce", "Submit Quote")],
+            &[ui_event(
+                99,
+                "2026-05-07T10:01:00Z",
+                "Salesforce",
+                "Submit Quote",
+            )],
             &[],
         );
         let s = String::from_utf8(body).unwrap();
@@ -866,17 +913,21 @@ mod tests {
         // Snapshot prior env so we don't leak state into other tests.
         let prior_license = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY").ok();
         let prior_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL").ok();
+        let prior_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE").ok();
+        let prior_root_key = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64").ok();
+        let prior_key_id = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID").ok();
+        let prior_recovery_root_key =
+            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64").ok();
+        let prior_recovery_key_id =
+            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID").ok();
 
         // Case 1: no license env → None.
         std::env::remove_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY");
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE");
         let dir = TempDir::new().unwrap();
         assert!(
-            EnterpriseSyncConfig::from_env(
-                dir.path().to_path_buf(),
-                "dev".into(),
-                "host".into()
-            )
-            .is_none(),
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .is_none(),
             "missing license env must yield None"
         );
 
@@ -884,12 +935,8 @@ mod tests {
         std::env::set_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY", "   ");
         let dir = TempDir::new().unwrap();
         assert!(
-            EnterpriseSyncConfig::from_env(
-                dir.path().to_path_buf(),
-                "dev".into(),
-                "host".into()
-            )
-            .is_none(),
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .is_none(),
             "blank license env must yield None"
         );
 
@@ -897,25 +944,88 @@ mod tests {
         std::env::set_var("SCREENPIPE_ENTERPRISE_LICENSE_KEY", "sek_test");
         std::env::remove_var("SCREENPIPE_ENTERPRISE_INGEST_URL");
         let dir = TempDir::new().unwrap();
-        let cfg = EnterpriseSyncConfig::from_env(
-            dir.path().to_path_buf(),
-            "dev".into(),
-            "host".into(),
-        )
-        .expect("license set, must yield Some");
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .expect("license set, must yield Some");
         assert_eq!(cfg.ingest_url, DEFAULT_INGEST_URL);
         assert_eq!(cfg.license_key, "sek_test");
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::HostedIngest
+        ));
 
         // Case 4: ingest url override is respected.
         std::env::set_var("SCREENPIPE_ENTERPRISE_INGEST_URL", "https://staging/ingest");
         let dir = TempDir::new().unwrap();
-        let cfg = EnterpriseSyncConfig::from_env(
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .unwrap();
+        assert_eq!(cfg.ingest_url, "https://staging/ingest");
+
+        // Case 5: direct upload requires an MDM-provisioned root key and
+        // derives sibling control-plane URLs from the ingest URL.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_encrypted",
+        );
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
+            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+        );
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID",
+            "tenant-root-v1",
+        );
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64",
+            base64::engine::general_purpose::STANDARD.encode([8u8; 32]),
+        );
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID",
+            "tenant-recovery-v1",
+        );
+        let dir = TempDir::new().unwrap();
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .unwrap();
+        match cfg.upload_mode {
+            EnterpriseUploadMode::DirectEncrypted(direct) => {
+                assert_eq!(direct.recipients.len(), 2);
+                assert_eq!(direct.recipients[0].purpose, "primary");
+                assert_eq!(direct.recipients[0].key_id, "tenant-root-v1");
+                assert_eq!(direct.recipients[0].root_key, [9u8; 32]);
+                assert_eq!(direct.recipients[1].purpose, "recovery");
+                assert_eq!(direct.recipients[1].key_id, "tenant-recovery-v1");
+                assert_eq!(direct.recipients[1].root_key, [8u8; 32]);
+                assert_eq!(direct.ticket_url, "https://staging/upload-ticket");
+                assert_eq!(direct.complete_url, "https://staging/upload-complete");
+            }
+            EnterpriseUploadMode::HostedIngest => panic!("expected direct upload mode"),
+        }
+
+        // Case 6: direct upload without a valid root key fails closed.
+        std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", "bad");
+        let dir = TempDir::new().unwrap();
+        assert!(EnterpriseSyncConfig::from_env(
             dir.path().to_path_buf(),
             "dev".into(),
             "host".into(),
         )
-        .unwrap();
-        assert_eq!(cfg.ingest_url, "https://staging/ingest");
+        .is_none());
+
+        // Case 7: direct upload without a recovery key also fails closed.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
+            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+        );
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64");
+        let dir = TempDir::new().unwrap();
+        assert!(EnterpriseSyncConfig::from_env(
+            dir.path().to_path_buf(),
+            "dev".into(),
+            "host".into(),
+        )
+        .is_none());
 
         // Restore prior state so we don't pollute other tests / the process.
         match prior_license {
@@ -925,6 +1035,31 @@ mod tests {
         match prior_url {
             Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_INGEST_URL", v),
             None => std::env::remove_var("SCREENPIPE_ENTERPRISE_INGEST_URL"),
+        }
+        match prior_mode {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE"),
+        }
+        match prior_root_key {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64"),
+        }
+        match prior_key_id {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID"),
+        }
+        match prior_recovery_root_key {
+            Some(v) => std::env::set_var(
+                "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64",
+                v,
+            ),
+            None => {
+                std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64")
+            }
+        }
+        match prior_recovery_key_id {
+            Some(v) => std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID", v),
+            None => std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID"),
         }
     }
 
@@ -988,7 +1123,35 @@ mod tests {
             device_label: "louis-mbp".to_string(),
             ingest_url,
             cursor_path: dir.path().join(CURSOR_FILENAME),
+            upload_mode: EnterpriseUploadMode::HostedIngest,
         }
+    }
+
+    fn direct_test_cfg(
+        dir: &TempDir,
+        ticket_url: String,
+        complete_url: String,
+    ) -> EnterpriseSyncConfig {
+        let mut cfg = test_cfg(dir, "http://host/ingest".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::DirectEncrypted(DirectUploadConfig {
+            ticket_url,
+            complete_url,
+            recipients: vec![
+                enterprise_upload::DirectUploadKeyRecipientConfig {
+                    purpose: "primary".to_string(),
+                    key_provider: "mdm_symmetric_v1".to_string(),
+                    key_id: "tenant-root-v1".to_string(),
+                    root_key: [3u8; 32],
+                },
+                enterprise_upload::DirectUploadKeyRecipientConfig {
+                    purpose: "recovery".to_string(),
+                    key_provider: "mdm_symmetric_v1".to_string(),
+                    key_id: "tenant-recovery-v1".to_string(),
+                    root_key: [4u8; 32],
+                },
+            ],
+        });
+        cfg
     }
 
     #[tokio::test]
@@ -998,11 +1161,13 @@ mod tests {
         let mut cursor = Cursor {
             last_frame_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T10:00:00Z".to_string()),
-        last_ui_ts: Some("2026-05-07T10:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T10:00:00Z".to_string()),
         };
         let local = MockLocal::new(vec![vec![]], vec![vec![]]);
         let http = reqwest::Client::new();
-        let report = run_one_sync(&cfg, &mut cursor, &local, &http).await.unwrap();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
         assert_eq!(report, SyncTickReport::default());
         assert_eq!(
             cursor.last_frame_ts.as_deref(),
@@ -1017,7 +1182,9 @@ mod tests {
         let mut cursor = Cursor::default();
         let local = MockLocal::new(vec![vec![]], vec![vec![]]);
         let http = reqwest::Client::new();
-        run_one_sync(&cfg, &mut cursor, &local, &http).await.unwrap();
+        run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
         // Cursor is now seeded — second tick uses it as the `since`.
         let frames_since = local.last_frames_since.lock().unwrap().clone().unwrap();
         let parsed: chrono::DateTime<chrono::Utc> =
@@ -1046,7 +1213,7 @@ mod tests {
         let mut cursor = Cursor {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
-        last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
         };
         let local = MockLocal::new(
             vec![vec![
@@ -1056,7 +1223,9 @@ mod tests {
             vec![vec![audio(1, "2026-05-07T10:00:15Z", "yo")]],
         );
         let http = reqwest::Client::new();
-        let report = run_one_sync(&cfg, &mut cursor, &local, &http).await.unwrap();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
         assert_eq!(report.frames, 2);
         assert_eq!(report.audio, 1);
         assert_eq!(
@@ -1073,6 +1242,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn direct_upload_success_advances_cursor_after_complete() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ticket"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_test"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "ok": true,
+                    "method": "PUT",
+                    "upload_url": format!("{}/blob", server.uri()),
+                    "headers": {
+                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_CONTENT_TYPE,
+                        "x-ms-blob-type": "BlockBlob"
+                    }
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/blob"))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/complete"))
+            .and(wiremock::matchers::header("X-License-Key", "sek_test"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = direct_test_cfg(
+            &dir,
+            format!("{}/ticket", server.uri()),
+            format!("{}/complete", server.uri()),
+        );
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = MockLocal::new(
+            vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
+            vec![vec![]],
+        );
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+
+        assert_eq!(report.frames, 1);
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T10:00:00Z")
+        );
+        let loaded = Cursor::load(&cfg.cursor_path);
+        assert_eq!(loaded.last_frame_ts, cursor.last_frame_ts);
+    }
+
+    #[tokio::test]
+    async fn direct_upload_complete_failure_does_not_advance_cursor() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ticket"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "ok": true,
+                    "method": "PUT",
+                    "upload_url": format!("{}/blob", server.uri()),
+                    "headers": {
+                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_CONTENT_TYPE,
+                        "x-ms-blob-type": "BlockBlob"
+                    }
+                })),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/blob"))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/complete"))
+            .respond_with(wiremock::ResponseTemplate::new(409))
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = direct_test_cfg(
+            &dir,
+            format!("{}/ticket", server.uri()),
+            format!("{}/complete", server.uri()),
+        );
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = MockLocal::new(
+            vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "secret")]],
+            vec![vec![]],
+        );
+        let http = reqwest::Client::new();
+        let err = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EnterpriseSyncError::Ingest(_)));
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T09:00:00Z")
+        );
+        assert!(!cfg.cursor_path.exists());
+    }
+
+    #[tokio::test]
     async fn auth_rejection_is_distinguished() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -1085,7 +1374,7 @@ mod tests {
         let mut cursor = Cursor {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
-        last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -1116,7 +1405,7 @@ mod tests {
         let mut cursor = Cursor {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
-        last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
@@ -1126,10 +1415,7 @@ mod tests {
         let err = run_one_sync(&cfg, &mut cursor, &local, &http)
             .await
             .unwrap_err();
-        assert!(matches!(
-            err,
-            EnterpriseSyncError::IngestServerError(503)
-        ));
+        assert!(matches!(err, EnterpriseSyncError::IngestServerError(503)));
         // Cursor must NOT advance on failure.
         assert_eq!(
             cursor.last_frame_ts.as_deref(),
@@ -1156,14 +1442,16 @@ mod tests {
         let mut cursor = Cursor {
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
-        last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
         };
         let local = MockLocal::new(
             vec![vec![frame(1, "2026-05-07T10:00:00Z", "Arc", "x")]],
             vec![vec![]],
         );
         let http = reqwest::Client::new();
-        run_one_sync(&cfg, &mut cursor, &local, &http).await.unwrap();
+        run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
         // Mock asserts call shape on drop.
     }
 }

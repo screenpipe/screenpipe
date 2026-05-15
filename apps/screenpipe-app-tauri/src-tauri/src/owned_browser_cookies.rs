@@ -21,10 +21,7 @@
 //! ## Currently supports
 //!
 //! - macOS only.
-//! - Arc browser (Keychain service `Arc Safe Storage`, account `Arc`).
-//!   Chrome / Brave use the same cookie format and same SQLite layout —
-//!   adding them is a one-line change to [`KeychainEntry`] + the data
-//!   dir path. Deferred until someone actually asks.
+//! - Chrome / Brave / Edge / Arc default profiles.
 //! - Default profile only. Arc's Spaces / Chrome's profiles are picked
 //!   up the day a user reports they need a non-default one.
 //!
@@ -123,6 +120,16 @@ pub async fn cookies_for_host(host: &str) -> Vec<Cookie> {
     cookies_for_host_impl(host).await
 }
 
+/// Cheap preflight used before showing the session-access prompt. This checks
+/// for matching cookie rows without touching Keychain, so public sites do not
+/// trigger a scary permission flow.
+pub async fn has_cookies_for_host(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    has_cookies_for_host_impl(host).await
+}
+
 #[cfg(not(target_os = "macos"))]
 async fn cookies_for_host_impl(_host: &str) -> Vec<Cookie> {
     // Windows TODO: Chromium-on-Windows stores cookies at
@@ -150,6 +157,11 @@ async fn cookies_for_host_impl(_host: &str) -> Vec<Cookie> {
     Vec::new()
 }
 
+#[cfg(not(target_os = "macos"))]
+async fn has_cookies_for_host_impl(_host: &str) -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 async fn cookies_for_host_impl(host: &str) -> Vec<Cookie> {
     // Lookup cache first — same host hit twice in 30s is the common
@@ -159,7 +171,11 @@ async fn cookies_for_host_impl(host: &str) -> Vec<Cookie> {
         let cache = cache().lock().await;
         if let Some((fetched_at, cookies)) = cache.get(host) {
             if fetched_at.elapsed() < CACHE_TTL {
-                debug!(host, count = cookies.len(), "owned-browser cookies: cache hit");
+                debug!(
+                    host,
+                    count = cookies.len(),
+                    "owned-browser cookies: cache hit"
+                );
                 return cookies.clone();
             }
         }
@@ -203,8 +219,32 @@ async fn cookies_for_host_impl(host: &str) -> Vec<Cookie> {
         cache.insert(host.to_string(), (Instant::now(), cookies.clone()));
     }
 
-    debug!(host, count = cookies.len(), "owned-browser cookies: cache miss → read");
+    debug!(
+        host,
+        count = cookies.len(),
+        "owned-browser cookies: cache miss → read"
+    );
     cookies
+}
+
+#[cfg(target_os = "macos")]
+async fn has_cookies_for_host_impl(host: &str) -> bool {
+    let host_owned = host.to_string();
+    tokio::task::spawn_blocking(move || {
+        for source in SOURCES {
+            match has_cookie_rows(source, &host_owned) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(e) => debug!(
+                    source = source.name,
+                    "owned-browser cookies: row preflight skip — {e}"
+                ),
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +282,7 @@ const SOURCES: &[KeychainEntry] = &[
         name: "Chrome",
         keychain_service: "Chrome Safe Storage",
         keychain_account: "Chrome",
-        cookies_path_under_library:
-            "Application Support/Google/Chrome/Default/Cookies",
+        cookies_path_under_library: "Application Support/Google/Chrome/Default/Cookies",
     },
     KeychainEntry {
         name: "Brave",
@@ -256,15 +295,13 @@ const SOURCES: &[KeychainEntry] = &[
         name: "Edge",
         keychain_service: "Microsoft Edge Safe Storage",
         keychain_account: "Microsoft Edge",
-        cookies_path_under_library:
-            "Application Support/Microsoft Edge/Default/Cookies",
+        cookies_path_under_library: "Application Support/Microsoft Edge/Default/Cookies",
     },
     KeychainEntry {
         name: "Arc",
         keychain_service: "Arc Safe Storage",
         keychain_account: "Arc",
-        cookies_path_under_library:
-            "Application Support/Arc/User Data/Default/Cookies",
+        cookies_path_under_library: "Application Support/Arc/User Data/Default/Cookies",
     },
 ];
 
@@ -308,7 +345,6 @@ fn keychain_key(source: &KeychainEntry) -> Result<[u8; 16], String> {
     Ok(key)
 }
 
-
 /// Resolve `~/Library` for the current user. We don't use $HOME because
 /// it's not always set when launched as a LaunchAgent. `dirs` would do
 /// it but pulling another crate for one path is overkill.
@@ -317,40 +353,59 @@ fn library_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library"))
 }
 
-/// Synchronous worker — runs inside spawn_blocking. Returns Vec on
-/// success, Err with a printable string for the debug log on failure.
 #[cfg(target_os = "macos")]
-fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, String> {
+fn open_cookie_db(source: &KeychainEntry) -> Result<rusqlite::Connection, String> {
     let library = library_dir().ok_or_else(|| "no $HOME".to_string())?;
     let cookies_path = library.join(source.cookies_path_under_library);
     if !cookies_path.exists() {
         return Err(format!("{} not installed (no Cookies file)", source.name));
     }
 
-    // Pull the AES key from Keychain. First call after app launch
-    // surfaces a system "Allow" prompt unless the binary is already
-    // trusted; subsequent navigates within the same process hit the
-    // in-memory cache and skip the prompt. Each Chromium-derived
-    // browser has its own Keychain entry — Chrome won't unlock Arc's
-    // cookies and vice versa.
-    let key = keychain_key(source)?;
-
     // Open read-only — the SQLite file is also held open for write by
     // Arc. Read-only + immutable URI prevents lock contention.
     // `?immutable=1` tells SQLite "I promise no other process will
     // mutate while I read", which lets it skip the WAL/journal dance
     // and avoids "database is locked" against Arc's live writes.
-    let uri = format!(
-        "file:{}?mode=ro&immutable=1",
-        cookies_path.display()
-    );
-    let conn = rusqlite::Connection::open_with_flags(
+    let uri = format!("file:{}?mode=ro&immutable=1", cookies_path.display());
+    rusqlite::Connection::open_with_flags(
         &uri,
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(|e| format!("sqlite open: {e}"))?;
+    .map_err(|e| format!("sqlite open: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn host_where_clause(filters: &[String]) -> String {
+    filters
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("host_key = ?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
+#[cfg(target_os = "macos")]
+fn has_cookie_rows(source: &KeychainEntry, host: &str) -> Result<bool, String> {
+    let conn = open_cookie_db(source)?;
+    let host_filters = host_match_clauses(host);
+    let where_clause = host_where_clause(&host_filters);
+    let sql = format!("SELECT 1 FROM cookies WHERE {where_clause} LIMIT 1");
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params_from_iter(host_filters.iter()))
+        .map_err(|e| format!("query: {e}"))?;
+    rows.next()
+        .map(|row| row.is_some())
+        .map_err(|e| format!("row: {e}"))
+}
+
+/// Synchronous worker — runs inside spawn_blocking. Returns Vec on
+/// success, Err with a printable string for the debug log on failure.
+#[cfg(target_os = "macos")]
+fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, String> {
+    let conn = open_cookie_db(source)?;
 
     // Match cookies whose host_key applies to `host`: exact, dot-prefix
     // for parent domains, no-dot for raw host. eTLD+1 falls out for free
@@ -361,12 +416,7 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
     // signed (-1..=2). expires_utc is microseconds since 1601 — convert
     // to seconds-since-1970 in [`row_to_cookie`].
     let host_filters = host_match_clauses(host);
-    let where_clause = host_filters
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("host_key = ?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(" OR ");
+    let where_clause = host_where_clause(&host_filters);
     let sql = format!(
         "SELECT name, value, encrypted_value, host_key, path, \
                 is_secure, is_httponly, expires_utc, samesite \
@@ -391,51 +441,60 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
         })
         .map_err(|e| format!("query: {e}"))?;
 
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Pull the AES key from Keychain only after we know this source has
+    // cookies for the requested host. First call after app launch surfaces
+    // a system "Allow" prompt unless the binary is already trusted;
+    // subsequent navigates within the same process hit the in-memory cache.
+    // Each Chromium-derived browser has its own Keychain entry — Chrome
+    // won't unlock Arc's cookies and vice versa.
+    let key = keychain_key(source)?;
+
     let mut cookies = Vec::new();
     let mut row_count = 0usize;
     let mut decrypt_failed = 0usize;
-    let mut row_decode_failed = 0usize;
     let mut sample_enc_prefix: Option<String> = None;
-    for row in rows {
+    for (name, plain_val, enc_val, host_key, path, secure, http_only, expires_utc, ss) in rows {
         row_count += 1;
-        match row {
-            Ok((name, plain_val, enc_val, host_key, path, secure, http_only, expires_utc, ss)) => {
-                let value = if enc_val.is_empty() {
-                    plain_val
-                } else {
-                    if sample_enc_prefix.is_none() {
-                        let n = enc_val.len().min(3);
-                        sample_enc_prefix = Some(
-                            enc_val[..n]
-                                .iter()
-                                .map(|b| format!("{:02x}", b))
-                                .collect::<String>(),
-                        );
-                    }
-                    match decrypt_v10(&enc_val, &key) {
-                        Some(v) => v,
-                        None => {
-                            // Skip individual decrypt failures rather
-                            // than abort the whole batch — one corrupt
-                            // row shouldn't deny the agent every cookie.
-                            decrypt_failed += 1;
-                            continue;
-                        }
-                    }
-                };
-                cookies.push(Cookie {
-                    name,
-                    value,
-                    domain: host_key,
-                    path,
-                    secure: secure != 0,
-                    http_only: http_only != 0,
-                    expires_at: chromium_micros_to_unix_secs(expires_utc),
-                    same_site: ss,
-                });
+        let value = if enc_val.is_empty() {
+            plain_val
+        } else {
+            if sample_enc_prefix.is_none() {
+                let n = enc_val.len().min(3);
+                sample_enc_prefix = Some(
+                    enc_val[..n]
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>(),
+                );
             }
-            Err(_) => row_decode_failed += 1,
-        }
+            match decrypt_v10(&enc_val, &key) {
+                Some(v) => v,
+                None => {
+                    // Skip individual decrypt failures rather than abort
+                    // the whole batch — one corrupt row shouldn't deny the
+                    // agent every cookie.
+                    decrypt_failed += 1;
+                    continue;
+                }
+            }
+        };
+        cookies.push(Cookie {
+            name,
+            value,
+            domain: host_key,
+            path,
+            secure: secure != 0,
+            http_only: http_only != 0,
+            expires_at: chromium_micros_to_unix_secs(expires_utc),
+            same_site: ss,
+        });
     }
     info!(
         source = source.name,
@@ -443,7 +502,6 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
         rows = row_count,
         decrypted = cookies.len(),
         decrypt_failed,
-        row_decode_failed,
         first_enc_prefix = sample_enc_prefix.as_deref().unwrap_or("none"),
         "owned-browser cookies: source done"
     );
@@ -524,7 +582,11 @@ fn decrypt_v10(encrypted: &[u8], key: &[u8; 16]) -> Option<String> {
     let plain = Aes128CbcDec::new(key.into(), &iv.into())
         .decrypt_padded_mut::<Pkcs7>(&mut buf)
         .ok()?;
-    let value_bytes = if plain.len() >= 32 { &plain[32..] } else { &plain[..] };
+    let value_bytes = if plain.len() >= 32 {
+        &plain[32..]
+    } else {
+        &plain[..]
+    };
     String::from_utf8(value_bytes.to_vec()).ok()
 }
 
@@ -551,10 +613,7 @@ mod tests {
         // 2026-01-01T00:00:00Z = 1767225600 unix.
         // (Date - 1601-01-01) = 13_411_699_200_000_000 micros.
         let micros = (11_644_473_600 + 1_767_225_600) * 1_000_000;
-        assert_eq!(
-            chromium_micros_to_unix_secs(micros),
-            Some(1_767_225_600)
-        );
+        assert_eq!(chromium_micros_to_unix_secs(micros), Some(1_767_225_600));
     }
 
     #[test]

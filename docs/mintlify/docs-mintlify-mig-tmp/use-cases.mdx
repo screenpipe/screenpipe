@@ -13,6 +13,33 @@ screenpipe captures your screen and audio 24/7 and makes it available to AI. her
 
 ---
 
+## choose your first workflow
+
+*screenpipe gets more useful when you give it a concrete job. start with one workflow, one person, and one week of evidence.*
+
+| if you are... | start with | success looks like |
+| --- | --- | --- |
+| individual founder or operator | daily recap plus open-loops summary | you can ask "what did I do today?" and get useful next steps |
+| developer using Claude, Codex, or Cursor | MCP memory for recent terminal, browser, and meeting context | your AI can recover what you were doing before context loss |
+| team lead | SOP capture for one repeated workflow | one clean process doc from real screen activity |
+| sales or customer success | meeting summary plus follow-up draft | transcript, screen context, objections, and next email in one place |
+| enterprise pilot | one or two test machines, one repeated workflow, clear privacy filters | admin can see device status and the pilot user gets a useful output |
+
+the best first prompt is usually:
+
+```markdown
+Search the last 24 hours of screenpipe data.
+Summarize what mattered.
+Include:
+- work completed
+- meetings and decisions
+- blockers
+- open loops
+- suggested next actions
+```
+
+---
+
 ## close your loops
 
 *you jump between 10 projects a day. you forget where you left off. screenpipe remembers for you.*
@@ -23,6 +50,28 @@ screenpipe captures your screen and audio 24/7 and makes it available to AI. her
 - **search by time**: `curl "http://localhost:3030/search?start_time=2026-04-10T09:00:00Z&end_time=2026-04-10T12:00:00Z"`
 
 **best setup:** connect Claude Desktop or Cursor via MCP → ask natural language questions about your screen history.
+
+---
+
+## turn real work into SOPs
+
+*support, finance, operations, and QA workflows are often trapped in someone's hands. screenpipe turns one good run into a draft process.*
+
+- **record one clean pass**: open the same tools you normally use and complete the workflow once
+- **ask for a step-by-step SOP**: include systems used, decisions, exceptions, and evidence links
+- **review with a teammate**: mark anything the AI guessed or missed
+- **turn it into a pipe**: run the same summary after each repeated workflow
+
+example prompt:
+
+```markdown
+Search the last 60 minutes of screenpipe data.
+Create a training doc for a new teammate.
+Use the screen text, transcript, app names, and timeline moments.
+Flag any step that needs human verification.
+```
+
+**best setup:** desktop app + audio recording + [MCP](/mcp-server) or a custom [pipe](/pipes).
 
 ---
 
@@ -91,6 +140,21 @@ screenpipe captures your screen and audio 24/7 and makes it available to AI. her
 
 ---
 
+## recover from AI context loss
+
+*when an AI chat compacts or a coding agent forgets the last hour, screenpipe gives it somewhere real to look.*
+
+- **recent activity**: "what did I do in the last 20 minutes?"
+- **terminal recovery**: "find the error I saw in Terminal before the chat reset"
+- **meeting memory**: "what did the customer ask for on the last call?"
+- **browser trail**: "what docs page was I reading before I switched apps?"
+
+screenpipe does not recover hidden model context. it gives the AI a local, searchable memory of screen and audio history.
+
+**best setup:** connect the tool you already use through [MCP](/mcp-server), then ask it to cite screenpipe results before acting.
+
+---
+
 ## monitor your AI usage
 
 *how much time are you actually spending in ChatGPT vs. Claude? are you using AI effectively?*
@@ -112,6 +176,27 @@ screenpipe captures your screen and audio 24/7 and makes it available to AI. her
 - **install Brand Listening pipe** (4 installs): monitors topics around your brand based on your screen activity
 
 **best setup:** install [Notion CRM Sync](/pipe-store) if you use Notion, or [Personal CRM](/pipe-store) for standalone relationship tracking.
+
+---
+
+## monitor a specific app or window
+
+*some users want screenpipe to watch a narrow surface: a dashboard, trading terminal, ticket queue, internal tool, or customer app.*
+
+- use included windows so only the target app is captured
+- start with `content_type=all`, then narrow to `accessibility` or `ocr` if needed
+- add a pipe that checks every few minutes and only alerts on a precise condition
+- test the notification path separately before trusting the automation
+
+example:
+
+```markdown
+Every 5 minutes, search the last 10 minutes of screenpipe data for the window named "Operations Dashboard".
+If a red error banner or failed status appears, send a desktop notification and write a short incident note.
+If no matching data appears, log "no matching window data" instead of guessing.
+```
+
+**best setup:** [recording filters](/troubleshooting) + [pipe debugging](/pipe-debugging).
 
 ---
 

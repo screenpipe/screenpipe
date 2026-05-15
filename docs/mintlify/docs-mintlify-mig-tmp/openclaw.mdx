@@ -72,7 +72,7 @@ curl -s "http://localhost:3030/search?q=QUERY&limit=20"
 ## get recent activity
 
 ```bash
-curl -s "http://localhost:3030/search?limit=10&content_type=ocr"
+curl -s "http://localhost:3030/search?limit=10&content_type=all"
 ```
 ````
 
@@ -109,7 +109,7 @@ curl -s "http://SCREENPIPE_IP:3030/search?q=QUERY&limit=20"
 ## filter by type
 
 ```bash
-# screen content (accessibility + OCR)
+# screen content (accessibility-first text plus OCR fallback)
 curl -s "http://SCREENPIPE_IP:3030/search?q=QUERY&content_type=all"
 
 # audio transcriptions
@@ -177,7 +177,7 @@ When connected via MCP (same machine setup), OpenClaw gets access to these tools
 
 | Tool | Description |
 |------|-------------|
-| **search-content** | Search screen text (accessibility/OCR), audio transcriptions, user input. Supports time range, app, window, and speaker filters. |
+| **search-content** | Search screen text (accessibility-first with OCR fallback), audio transcriptions, user input. Supports time range, app, window, and speaker filters. |
 | **activity-summary** | Lightweight overview of app usage, audio speakers, and recent texts for a time range (~200 tokens). |
 | **search-elements** | Search structured UI elements (buttons, links, text fields) from the accessibility tree. |
 | **frame-context** | Get full accessibility tree, URLs, and text for a specific frame. |

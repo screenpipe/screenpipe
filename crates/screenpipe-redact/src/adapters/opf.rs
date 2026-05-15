@@ -32,9 +32,6 @@
 //! translate to screenpipe-redact's `RedactionOutput` (same shape, but
 //! `RedactedSpan` carries `text: String` instead of `score: f32`) by
 //! slicing the input on each span's byte range.
-
-#![cfg(feature = "opf-text")]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

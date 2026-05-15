@@ -7,11 +7,15 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 #[allow(unused_imports)]
 use colored::Colorize;
 use futures::pin_mut;
 use port_check::is_local_ipv4_port_free;
+#[cfg(target_os = "macos")]
+use screenpipe_audio::core::device::{
+    get_cpal_device_and_config, AudioDevice, DeviceType, MACOS_OUTPUT_AUDIO_DEVICE_NAME,
+};
 use screenpipe_audio::{
     core::device::{default_input_device, default_output_device, parse_audio_device},
     meeting_detector::MeetingDetector,
@@ -29,7 +33,7 @@ use screenpipe_engine::{
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
         vision::handle_vision_command,
-        Cli, CliAudioTranscriptionEngine, Command,
+        Cli, Command, RecordArgSources,
     },
     hot_frame_cache::HotFrameCache,
     start_meeting_watcher, start_power_manager, start_sleep_monitor, start_speaker_identification,
@@ -111,6 +115,43 @@ fn set_fd_limit() {
 fn set_fd_limit() {
     // On Windows, file handle limits work differently and are generally not an issue
     // No action needed
+}
+
+#[cfg(target_os = "macos")]
+async fn doctor_check_system_audio_capture() -> bool {
+    let device = AudioDevice::new(
+        MACOS_OUTPUT_AUDIO_DEVICE_NAME.to_string(),
+        DeviceType::Output,
+    );
+
+    match get_cpal_device_and_config(&device).await {
+        Ok(_) => {
+            eprintln!("  system audio capture: ok");
+            true
+        }
+        Err(e) => {
+            let terminal = screenpipe_core::permissions::detect_terminal();
+            eprintln!("  system audio capture: failed");
+            eprintln!("    ScreenCaptureKit could not open System Audio for this CLI session.");
+            eprintln!(
+                "    macOS grants CLI capture through the terminal app, not the screenpipe app."
+            );
+            eprintln!(
+                "    grant or re-toggle \"{}\" in System Settings > Privacy & Security > Screen & System Audio Recording, then fully restart it.",
+                terminal
+            );
+            eprintln!(
+                "    if you only need a workaround: screenpipe record --experimental-coreaudio-system-audio"
+            );
+            eprintln!("    underlying error: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn doctor_check_system_audio_capture() -> bool {
+    true
 }
 
 const DISPLAY: &str = r"
@@ -252,7 +293,9 @@ async fn main() -> anyhow::Result<()> {
     set_fd_limit();
 
     debug!("starting screenpipe server");
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let record_arg_sources = RecordArgSources::from_cli_matches(&matches);
+    let cli = Cli::from_arg_matches(&matches)?;
 
     // Dispatch subcommands — non-recording commands return early
     let record_args = match cli.command {
@@ -337,6 +380,7 @@ async fn main() -> anyhow::Result<()> {
             // permissions
             eprintln!("permissions:");
             let perms_ok = screenpipe_core::permissions::preflight_check(true, true);
+            let system_audio_ok = doctor_check_system_audio_capture().await;
             eprintln!();
 
             // ffmpeg
@@ -357,10 +401,11 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("  port 3030: available");
             } else {
                 eprintln!("  port 3030: in use (screenpipe may already be running)");
+                eprintln!("    stop the existing process or run record with --port <PORT>");
             }
             eprintln!();
 
-            if perms_ok && ffmpeg_ok {
+            if perms_ok && system_audio_ok && ffmpeg_ok && port_ok {
                 eprintln!("all checks passed — ready to record");
             } else {
                 eprintln!("some checks failed — fix the issues above before running screenpipe");
@@ -371,6 +416,22 @@ async fn main() -> anyhow::Result<()> {
         Command::Record(args) => args,
     };
 
+    let local_data_dir = get_base_dir(&record_args.data_dir)?;
+    let local_data_dir_clone = local_data_dir.clone();
+
+    // Build unified RecordingConfig from shared app settings plus explicit CLI args.
+    let config = record_args
+        .clone()
+        .into_recording_config(local_data_dir.clone(), &record_arg_sources)
+        .await?;
+
+    // Store the guard in a variable that lives for the entire main function
+    let _log_guard = Some(setup_logging(
+        &local_data_dir,
+        record_args.debug,
+        !config.analytics_enabled,
+    )?);
+
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
         check_for_updates().await;
@@ -380,7 +441,7 @@ async fn main() -> anyhow::Result<()> {
     screenpipe_engine::cli_reminder::spawn();
 
     // Initialize Sentry only if telemetry is enabled
-    let _sentry_guard = if !record_args.disable_telemetry {
+    let _sentry_guard = if config.analytics_enabled {
         let sentry_release_name_append = env::var("SENTRY_RELEASE_NAME_APPEND").unwrap_or_default();
         let release_name = format!(
             "{}{}",
@@ -471,29 +532,19 @@ async fn main() -> anyhow::Result<()> {
                     let mut map = std::collections::BTreeMap::new();
                     map.insert(
                         "audio_chunk_duration".into(),
-                        json!(record_args.audio_chunk_duration),
+                        json!(config.audio_chunk_duration),
                     );
-                    map.insert("port".into(), json!(record_args.port));
-                    map.insert("disable_audio".into(), json!(record_args.disable_audio));
+                    map.insert("port".into(), json!(config.port));
+                    map.insert("disable_audio".into(), json!(config.disable_audio));
                     map.insert(
                         "audio_transcription_engine".into(),
-                        json!(format!("{:?}", record_args.audio_transcription_engine)),
+                        json!(format!("{:?}", config.audio_transcription_engine)),
                     );
-                    map.insert("monitor_ids".into(), json!(record_args.monitor_id));
-                    map.insert(
-                        "use_all_monitors".into(),
-                        json!(record_args.use_all_monitors),
-                    );
-                    map.insert(
-                        "languages".into(),
-                        json!(record_args
-                            .language
-                            .iter()
-                            .map(|l| format!("{:?}", l))
-                            .collect::<Vec<_>>()),
-                    );
-                    map.insert("use_pii_removal".into(), json!(record_args.use_pii_removal));
-                    map.insert("disable_vision".into(), json!(record_args.disable_vision));
+                    map.insert("monitor_ids".into(), json!(config.monitor_ids));
+                    map.insert("use_all_monitors".into(), json!(config.use_all_monitors));
+                    map.insert("languages".into(), json!(config.languages));
+                    map.insert("use_pii_removal".into(), json!(config.use_pii_removal));
+                    map.insert("disable_vision".into(), json!(config.disable_vision));
                     map.insert("vad_engine".into(), json!("Silero"));
                     map.insert("enable_sync".into(), json!(record_args.enable_sync));
                     map.insert(
@@ -501,26 +552,26 @@ async fn main() -> anyhow::Result<()> {
                         json!(record_args.sync_interval_secs),
                     );
                     map.insert("debug".into(), json!(record_args.debug));
-                    map.insert("api_auth".into(), json!(record_args.api_auth));
-                    map.insert("encrypt_secrets".into(), json!(record_args.encrypt_secrets));
+                    map.insert("api_auth".into(), json!(config.api_auth));
+                    map.insert("encrypt_secrets".into(), json!(config.encrypt_secrets));
                     map.insert("retention_days".into(), json!(record_args.retention_days));
                     map.insert("retention_mode".into(), json!(record_args.retention_mode));
                     // Only send counts for privacy-sensitive lists (not actual values)
                     map.insert(
                         "audio_device_count".into(),
-                        json!(record_args.audio_device.len()),
+                        json!(config.audio_devices.len()),
                     );
                     map.insert(
                         "ignored_windows_count".into(),
-                        json!(record_args.ignored_windows.len()),
+                        json!(config.ignored_windows.len()),
                     );
                     map.insert(
                         "included_windows_count".into(),
-                        json!(record_args.included_windows.len()),
+                        json!(config.included_windows.len()),
                     );
                     map.insert(
                         "ignored_urls_count".into(),
-                        json!(record_args.ignored_urls.len()),
+                        json!(config.ignored_urls.len()),
                     );
                     map
                 }),
@@ -531,22 +582,6 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-
-    let local_data_dir = get_base_dir(&record_args.data_dir)?;
-    let local_data_dir_clone = local_data_dir.clone();
-
-    // Store the guard in a variable that lives for the entire main function
-    let _log_guard = Some(setup_logging(
-        &local_data_dir,
-        record_args.debug,
-        record_args.disable_telemetry,
-    )?);
-
-    // Build unified RecordingConfig from CLI args
-    let config = record_args
-        .clone()
-        .into_recording_config(local_data_dir.clone())
-        .await;
 
     // Replace the current conditional check with:
     let ffmpeg_path = find_ffmpeg_path();
@@ -678,7 +713,10 @@ async fn main() -> anyhow::Result<()> {
     let mut audio_devices = Vec::new();
 
     if !config.disable_audio {
-        if config.audio_devices.is_empty() {
+        if config.audio_devices.is_empty()
+            || config.use_system_default_audio
+            || config.audio_devices == vec!["default".to_string()]
+        {
             // Use default devices
             if let Ok(input_device) = default_input_device() {
                 audio_devices.push(input_device.to_string());
@@ -703,11 +741,11 @@ async fn main() -> anyhow::Result<()> {
 
     let audio_devices_clone = audio_devices.clone();
 
-    let resource_monitor = ResourceMonitor::new(!record_args.disable_telemetry);
+    let resource_monitor = ResourceMonitor::new(config.analytics_enabled);
     resource_monitor.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
 
     // Initialize analytics for API tracking
-    analytics::init(!record_args.disable_telemetry);
+    analytics::init(config.analytics_enabled);
 
     // Check macOS version and send telemetry if below supported versions
     // This helps track users who may have screen capture issues due to old macOS
@@ -756,7 +794,8 @@ async fn main() -> anyhow::Result<()> {
 
     let db_server = db.clone();
 
-    let warning_audio_transcription_engine_clone = record_args.audio_transcription_engine.clone();
+    let warning_audio_transcription_engine_clone =
+        format!("{:?}", config.audio_transcription_engine);
     let monitor_ids: Vec<u32> = if config.use_all_monitors || config.monitor_ids.is_empty() {
         all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
     } else if config.monitor_ids == vec!["default"] {
@@ -793,8 +832,8 @@ async fn main() -> anyhow::Result<()> {
     let output_path_clone = Arc::new(local_data_dir.join("data").to_string_lossy().into_owned());
     let shutdown_tx_clone = shutdown_tx.clone();
 
-    let ignored_windows_clone = record_args.ignored_windows.clone();
-    let included_windows_clone = record_args.included_windows.clone();
+    let ignored_windows_clone = config.ignored_windows.clone();
+    let included_windows_clone = config.included_windows.clone();
     // Create UI recorder config early before cli is moved
     let ui_recorder_config = config.to_ui_recorder_config();
 
@@ -803,6 +842,9 @@ async fn main() -> anyhow::Result<()> {
     // consumer and can add idle CPU.
     let meeting_detector: Option<Arc<MeetingDetector>> = if config.disable_audio {
         info!("meeting detector disabled because audio capture is disabled");
+        None
+    } else if config.disable_meeting_detector {
+        info!("meeting detector disabled via --disable-meeting-detector");
         None
     } else {
         let detector = Arc::new(MeetingDetector::new());
@@ -998,6 +1040,10 @@ async fn main() -> anyhow::Result<()> {
                 match screenpipe_secrets::keychain::get_or_create_key() {
                     Some(k) => {
                         info!("keychain: encryption key ready (--encrypt-secrets)");
+                        if let Err(e) = screenpipe_secrets::mark_encryption_enabled(&local_data_dir)
+                        {
+                            warn!("keychain: failed to persist encryption opt-in flag: {}", e);
+                        }
                         Some(k)
                     }
                     None => {
@@ -1196,20 +1242,14 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!(
         "│ audio chunk duration   │ {:<34} │",
-        format!("{} seconds", record_args.audio_chunk_duration)
+        format!("{} seconds", config.audio_chunk_duration)
     );
-    println!("│ port                   │ {:<34} │", record_args.port);
-    println!(
-        "│ audio disabled         │ {:<34} │",
-        record_args.disable_audio
-    );
-    println!(
-        "│ vision disabled        │ {:<34} │",
-        record_args.disable_vision
-    );
+    println!("│ port                   │ {:<34} │", config.port);
+    println!("│ audio disabled         │ {:<34} │", config.disable_audio);
+    println!("│ vision disabled        │ {:<34} │", config.disable_vision);
     println!(
         "│ pause on DRM content   │ {:<34} │",
-        record_args.pause_on_drm_content
+        config.pause_on_drm_content
     );
     println!(
         "│ audio engine           │ {:<34} │",
@@ -1223,15 +1263,15 @@ async fn main() -> anyhow::Result<()> {
     println!("│ debug mode             │ {:<34} │", record_args.debug);
     println!(
         "│ telemetry              │ {:<34} │",
-        !record_args.disable_telemetry
+        config.analytics_enabled
     );
     println!(
         "│ use pii removal        │ {:<34} │",
-        record_args.use_pii_removal
+        config.use_pii_removal
     );
     println!(
         "│ use all monitors       │ {:<34} │",
-        record_args.use_all_monitors
+        config.use_all_monitors
     );
     println!(
         "│ ignored windows        │ {:<34} │",
@@ -1262,7 +1302,7 @@ async fn main() -> anyhow::Result<()> {
     // For security reasons, you might want to mask the API key if displayed
     println!(
         "│ deepgram key           │ {:<34} │",
-        if record_args.deepgram_api_key.is_some() {
+        if config.deepgram_api_key.is_some() {
             "set (masked)"
         } else {
             "not set"
@@ -1270,7 +1310,7 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "│ api auth               │ {:<34} │",
-        if record_args.api_auth {
+        if config.api_auth {
             "enabled"
         } else {
             "disabled"
@@ -1330,10 +1370,10 @@ async fn main() -> anyhow::Result<()> {
     println!("│ languages              │                                    │");
     const MAX_ITEMS_TO_DISPLAY: usize = 5;
 
-    if record_args.language.is_empty() {
+    if config.languages.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "all languages");
     } else {
-        let total_languages = record_args.language.len();
+        let total_languages = config.languages.len();
         for (_, language) in languages.iter().enumerate().take(MAX_ITEMS_TO_DISPLAY) {
             let language_str = format!("id: {}", language);
             let formatted_language = format_cell(&language_str, VALUE_WIDTH);
@@ -1352,7 +1392,7 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!("│ monitors               │                                    │");
 
-    if record_args.disable_vision {
+    if config.disable_vision {
         println!("│ {:<22} │ {:<34} │", "", "vision disabled");
     } else if monitor_ids.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "no monitors available");
@@ -1376,7 +1416,7 @@ async fn main() -> anyhow::Result<()> {
     println!("├────────────────────────┼────────────────────────────────────┤");
     println!("│ audio devices          │                                    │");
 
-    if record_args.disable_audio {
+    if config.disable_audio {
         println!("│ {:<22} │ {:<34} │", "", "disabled");
     } else if audio_devices_clone.is_empty() {
         println!("│ {:<22} │ {:<34} │", "", "no devices available");
@@ -1403,7 +1443,7 @@ async fn main() -> anyhow::Result<()> {
     println!("└────────────────────────┴────────────────────────────────────┘");
 
     // Add warning for cloud arguments and telemetry
-    if warning_audio_transcription_engine_clone == CliAudioTranscriptionEngine::Deepgram {
+    if warning_audio_transcription_engine_clone == "Deepgram" {
         println!(
             "{}",
             "warning: you are using cloud now. make sure to understand the data privacy risks."
@@ -1418,7 +1458,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Add warning for telemetry
-    if !record_args.disable_telemetry {
+    if config.analytics_enabled {
         println!(
             "{}",
             "warning: telemetry is enabled. only error-level data will be sent.\n\
@@ -1466,7 +1506,7 @@ async fn main() -> anyhow::Result<()> {
                 db.clone(),
                 ui_recorder_config,
                 capture_trigger_tx,
-                record_args.ignored_windows.clone(),
+                config.ignored_windows.clone(),
             )
             .await
             {
@@ -1491,6 +1531,7 @@ async fn main() -> anyhow::Result<()> {
             manual_meeting.clone(),
             shutdown_tx.subscribe(),
             Some(meeting_detector),
+            true,
         ))
     } else {
         info!("meeting watcher skipped because audio capture is disabled");
@@ -1552,14 +1593,14 @@ async fn main() -> anyhow::Result<()> {
     // Spawn the async PII reconciliation worker (issue #3185).
     // Off by default — only runs when `--async-pii-redaction` is set.
     // The capture path is unaffected either way.
-    if !record_args.async_pii_redaction {
+    if !config.async_pii_redaction {
         info!(
             "text-PII worker skipped at startup — async_pii_redaction=false. \
              OPF model (~2.8 GB) will NOT be downloaded or loaded. \
              Toggle via Settings → Privacy → AI PII removal."
         );
     }
-    if record_args.async_pii_redaction {
+    if config.async_pii_redaction {
         use screenpipe_redact::{
             adapters::{
                 opf::{OpfAdapter, OpfConfig},
@@ -1641,14 +1682,14 @@ async fn main() -> anyhow::Result<()> {
     // Independent of the text worker — users can toggle either one
     // without the other. Requires the rfdetr_v9 model present and at
     // least one of the `onnx-*` or `mlx-mac` cargo features built.
-    if !record_args.async_image_pii_redaction {
+    if !config.async_image_pii_redaction {
         info!(
             "image-PII worker skipped at startup — async_image_pii_redaction=false. \
              rfdetr_v9 model (~108 MB) will NOT be downloaded or loaded. \
              Toggle via Settings → Privacy → AI PII removal."
         );
     }
-    if record_args.async_image_pii_redaction {
+    if config.async_image_pii_redaction {
         use screenpipe_redact::adapters::rfdetr::{RfdetrConfig, RfdetrRedactor};
         use screenpipe_redact::image::worker::{ImageWorker, ImageWorkerConfig};
         use screenpipe_redact::ImageRedactor;

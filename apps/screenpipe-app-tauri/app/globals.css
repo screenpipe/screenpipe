@@ -526,6 +526,10 @@
     }
   }
 
+  .meeting-audio-level-bar {
+    transform-origin: bottom;
+  }
+
   .animate-shimmer {
     animation: shimmer 1.5s infinite linear;
   }

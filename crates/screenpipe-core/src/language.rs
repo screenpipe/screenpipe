@@ -342,39 +342,6 @@ impl PartialEq<&str> for Language {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn language_from_str_by_name() {
-        assert_eq!("english".parse::<Language>().unwrap(), Language::English);
-        assert_eq!("french".parse::<Language>().unwrap(), Language::French);
-        assert_eq!("japanese".parse::<Language>().unwrap(), Language::Japanese);
-    }
-
-    #[test]
-    fn language_from_str_by_iso_code() {
-        assert_eq!("en".parse::<Language>().unwrap(), Language::English);
-        assert_eq!("fr".parse::<Language>().unwrap(), Language::French);
-        assert_eq!("ja".parse::<Language>().unwrap(), Language::Japanese);
-    }
-
-    #[test]
-    fn language_from_str_case_insensitive() {
-        assert_eq!("ENGLISH".parse::<Language>().unwrap(), Language::English);
-        assert_eq!("English".parse::<Language>().unwrap(), Language::English);
-        assert_eq!("eNgLiSh".parse::<Language>().unwrap(), Language::English);
-    }
-
-    #[test]
-    fn language_from_str_unknown_returns_error() {
-        let result = "klingon".parse::<Language>();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown language"));
-    }
-}
-
 pub const TESSERACT_LANGUAGES: [(&str, &str); 76] = [
     ("eng", "english"),
     ("chi_sim", "chinese"),
@@ -453,3 +420,36 @@ pub const TESSERACT_LANGUAGES: [(&str, &str); 76] = [
     ("hau", "hausa"),
     ("jav", "javanese"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_from_str_by_name() {
+        assert_eq!("english".parse::<Language>().unwrap(), Language::English);
+        assert_eq!("french".parse::<Language>().unwrap(), Language::French);
+        assert_eq!("japanese".parse::<Language>().unwrap(), Language::Japanese);
+    }
+
+    #[test]
+    fn language_from_str_by_iso_code() {
+        assert_eq!("en".parse::<Language>().unwrap(), Language::English);
+        assert_eq!("fr".parse::<Language>().unwrap(), Language::French);
+        assert_eq!("ja".parse::<Language>().unwrap(), Language::Japanese);
+    }
+
+    #[test]
+    fn language_from_str_case_insensitive() {
+        assert_eq!("ENGLISH".parse::<Language>().unwrap(), Language::English);
+        assert_eq!("English".parse::<Language>().unwrap(), Language::English);
+        assert_eq!("eNgLiSh".parse::<Language>().unwrap(), Language::English);
+    }
+
+    #[test]
+    fn language_from_str_unknown_returns_error() {
+        let result = "klingon".parse::<Language>();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown language"));
+    }
+}

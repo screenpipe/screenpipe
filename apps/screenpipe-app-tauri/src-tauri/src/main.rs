@@ -53,6 +53,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod meeting_live_notes;
 mod oauth;
 mod owned_browser;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
@@ -743,6 +744,8 @@ async fn main() {
                 commands::update_show_screenpipe_shortcut,
                 commands::show_window,
                 commands::show_window_activated,
+                commands::show_main_window,
+                commands::hide_main_window,
                 commands::open_login_window,
                 commands::open_google_calendar_auth_window,
                 commands::ensure_webview_focus,
@@ -894,6 +897,7 @@ async fn main() {
         is_starting: Arc::new(AtomicBool::new(false)),
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
+        interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -953,7 +957,7 @@ async fn main() {
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
             // Focus the existing window
-            show_main_window(&app_for_closure, false);
+            show_main_window(app_for_closure.clone());
 
             // Forward deep-link URL from args
             if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
@@ -1014,6 +1018,7 @@ async fn main() {
             owned_browser::owned_browser_set_bounds,
             owned_browser::owned_browser_navigate,
             owned_browser::owned_browser_hide,
+            owned_browser::owned_browser_resolve_session_access,
             permissions::reset_and_request_permission,
             permissions::get_missing_permissions,
             permissions::check_arc_installed,
@@ -1031,6 +1036,8 @@ async fn main() {
             commands::open_pipe_window,
             commands::show_window,
             commands::show_window_activated,
+            commands::show_main_window,
+            commands::hide_main_window,
             commands::open_login_window,
             commands::ensure_webview_focus,
             commands::close_window,
@@ -1064,6 +1071,7 @@ async fn main() {
             commands::copy_deeplink_to_clipboard,
             commands::copy_text_to_clipboard,
             commands::open_note_path,
+            commands::open_windows_shell_target,
             // In-app file viewer
             viewer::open_viewer_window,
             viewer::read_viewer_file,
@@ -1080,6 +1088,7 @@ async fn main() {
             resume_global_shortcuts,
             get_env,
             get_e2e_seed_flags,
+            commands::e2e_main_overlay_visible,
             vault_status,
             vault_unlock,
             // Sync commands
@@ -1773,7 +1782,7 @@ async fn main() {
                             };
 
                             // Phase 2: Start capture session
-                            let capture = match capture_session::CaptureSession::start(&server, &config).await {
+                            let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
                                 Ok(c) => c,
                                 Err(e) => {
                                     error!("Failed to start capture: {}", e);
@@ -1907,6 +1916,7 @@ async fn main() {
             });
 
             crate::monitor_events::start(app_handle.clone());
+            crate::meeting_live_notes::start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);

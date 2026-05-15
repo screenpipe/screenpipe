@@ -101,11 +101,11 @@ graph TD
     APP[screenpipe-app-tauri<br/><i>desktop app</i>]
     SERVER[screenpipe-server<br/><i>REST API · routes</i>]
     DB[screenpipe-db<br/><i>SQLite · types</i>]
-    VISION[screenpipe-vision<br/><i>screen capture · OCR</i>]
+    VISION[screenpipe-vision<br/><i>screen capture · OCR fallback</i>]
     AUDIO[screenpipe-audio<br/><i>audio capture · STT</i>]
     CORE[screenpipe-core<br/><i>pipes · config</i>]
     EVENTS[screenpipe-events<br/><i>event system</i>]
-    A11Y[screenpipe-accessibility<br/><i>UI events · macOS, Windows</i>]
+    A11Y[screenpipe-accessibility<br/><i>UI events · accessibility tree</i>]
     AI[screenpipe-apple-intelligence<br/><i>Foundation Models</i>]
     INT[screenpipe-integrations<br/><i>MCP · reminders</i>]
 
@@ -162,7 +162,7 @@ additional processing: speaker identification, PII redaction, frame deduplicatio
 
 all data stays local on your machine:
 
-- **SQLite** at `~/.screenpipe/db.sqlite` — metadata, accessibility text, OCR text, transcriptions, speakers, tags, UI elements
+- **SQLite** at `~/.screenpipe/db.sqlite` — metadata, accessibility text, OCR fallback text, transcriptions, speakers, tags, UI elements
 - **media** at `~/.screenpipe/data/` — JPEG screenshots (event-driven frames), audio chunks
 
 ### 4. API
@@ -171,7 +171,7 @@ REST API on `localhost:3030`:
 
 | endpoint | description |
 |----------|-------------|
-| `/search` | filtered content retrieval (OCR, audio, accessibility) |
+| `/search` | filtered content retrieval (accessibility, OCR fallback, audio, input) |
 | `/search/keyword` | keyword search with text positions |
 | `/elements` | lightweight UI element search (accessibility tree data) |
 | `/frames/{id}` | access captured frames |

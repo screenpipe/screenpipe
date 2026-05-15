@@ -104,6 +104,6 @@ impl Default for TextRedactionPolicy {
 impl TextRedactionPolicy {
     /// Is this span eligible for redaction under the current policy?
     pub fn allows(&self, label: SpanLabel) -> bool {
-        self.allow.iter().any(|l| *l == label)
+        self.allow.contains(&label)
     }
 }

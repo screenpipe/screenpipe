@@ -926,16 +926,16 @@ mod tests {
                 "neural networks process natural language understanding efficiently",
             ],
         ];
-        for n in 0..3 {
+        for (n, speaker_transcriptions) in transcriptions.iter().enumerate() {
             let speaker = db.insert_speaker(&vec![n as f32; 512]).await.unwrap();
-            for i in 0..=n {
+            for (i, transcription) in speaker_transcriptions.iter().enumerate() {
                 let audio_chunk_id = db
                     .insert_audio_chunk(&format!("audio{}{}", n, i), None)
                     .await
                     .unwrap();
                 db.insert_audio_transcription(
                     audio_chunk_id,
-                    transcriptions[n][i],
+                    transcription,
                     0,
                     "",
                     &AudioDevice {
@@ -1007,16 +1007,16 @@ mod tests {
                 "ribosomes assemble protein chains from messenger templates",
             ],
         ];
-        for n in 0..3 {
+        for (n, speaker_transcriptions) in transcriptions_ids.iter().enumerate() {
             let speaker = db.insert_speaker(&vec![n as f32; 512]).await.unwrap();
-            for i in 0..=n {
+            for (i, transcription) in speaker_transcriptions.iter().enumerate() {
                 let audio_chunk_id = db
                     .insert_audio_chunk(&format!("audio_ids_{}{}", n, i), None)
                     .await
                     .unwrap();
                 db.insert_audio_transcription(
                     audio_chunk_id,
-                    transcriptions_ids[n][i],
+                    transcription,
                     0,
                     "",
                     &AudioDevice {

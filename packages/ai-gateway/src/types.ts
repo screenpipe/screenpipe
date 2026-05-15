@@ -131,8 +131,10 @@ export interface GeminiResponse {
 
 export interface Env {
 	OPENAI_API_KEY: string;
+	OPENAI_REALTIME_TRANSCRIPTION_COST_PER_HOUR?: string;
 	ANTHROPIC_API_KEY: string;
 	DEEPGRAM_API_KEY: string;
+	DEEPGRAM_LIVE_TRANSCRIPTION_COST_PER_HOUR?: string;
 	RATE_LIMITER: DurableObjectNamespace;
 	CLERK_SECRET_KEY: string;
 	GEMINI_API_KEY: string;

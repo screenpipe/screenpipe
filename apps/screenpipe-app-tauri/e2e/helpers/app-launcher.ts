@@ -105,6 +105,10 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       SCREENPIPE_DATA_DIR: e2eDataDir,
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
       TAURI_WEBDRIVER_PORT: String(port),
+      // When the app panics under E2E (common during early platform bring-up),
+      // a backtrace in CI logs is far more actionable than the default "run with
+      // RUST_BACKTRACE=1" hint.
+      RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

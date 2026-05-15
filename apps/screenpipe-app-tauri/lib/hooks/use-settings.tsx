@@ -172,6 +172,10 @@ export type Settings = SettingsStore & {
 	enableWorkflowEvents?: boolean;
 	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
 	transcriptionMode?: "realtime" | "smart" | "batch";
+	/** Meeting-only live notes. Separate from background 24/7 transcription. */
+	meetingLiveTranscriptionEnabled?: boolean;
+	/** Provider for meeting-only live notes. Defaults to the selected transcription engine. */
+	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "openai-realtime" | "deepgram-live";
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;
 	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
@@ -404,6 +408,8 @@ let DEFAULT_SETTINGS: Settings = {
 			analyticsId: "",
 			devMode: false,
 			audioTranscriptionEngine: "whisper-large-v3-turbo-quantized",
+			meetingLiveTranscriptionEnabled: true,
+			meetingLiveTranscriptionProvider: "selected-engine",
 			ocrEngine: "default",
 			monitorIds: ["default"],
 			audioDevices: ["default"],
@@ -573,6 +579,15 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
+			needsUpdate = true;
+		}
+
+		if (settings.meetingLiveTranscriptionEnabled === undefined) {
+			settings.meetingLiveTranscriptionEnabled = true;
+			needsUpdate = true;
+		}
+		if (!settings.meetingLiveTranscriptionProvider) {
+			settings.meetingLiveTranscriptionProvider = "selected-engine";
 			needsUpdate = true;
 		}
 

@@ -1660,6 +1660,78 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
+        {/* Meeting Live Notes */}
+        {!settings.disableAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Headphones className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Live meeting notes
+                    <HelpTooltip text="Streams only the active meeting into the live note. This is separate from background 24/7 recording and can use your selected transcription engine, screenpipe cloud, or a direct provider." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Meeting-only live captions, separate from background transcription</p>
+                </div>
+              </div>
+              <Switch
+                id="meetingLiveTranscriptionEnabled"
+                checked={settings.meetingLiveTranscriptionEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({
+                    meetingLiveTranscriptionEnabled: checked,
+                    meetingLiveTranscriptionProvider: checked
+                      ? ((settings.meetingLiveTranscriptionProvider && settings.meetingLiveTranscriptionProvider !== "disabled")
+                        ? settings.meetingLiveTranscriptionProvider
+                        : "selected-engine")
+                      : "disabled",
+                  }, true)
+                }
+              />
+            </div>
+            {(settings.meetingLiveTranscriptionEnabled ?? true) && (
+              <div className="mt-2.5 ml-[26px] flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-xs text-muted-foreground">Live engine</Label>
+                  <Select
+                    value={settings.meetingLiveTranscriptionProvider ?? "selected-engine"}
+                    onValueChange={(value) =>
+                      handleSettingsChange({
+                        meetingLiveTranscriptionProvider: value as Settings["meetingLiveTranscriptionProvider"],
+                      }, true)
+                    }
+                  >
+                    <SelectTrigger className="h-8 w-[260px] text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="selected-engine">Current transcription engine</SelectItem>
+                      <SelectItem value="screenpipe-cloud">screenpipe cloud live</SelectItem>
+                      <SelectItem value="deepgram-live">Direct Deepgram live</SelectItem>
+                      <SelectItem value="openai-realtime">Direct OpenAI realtime</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {(settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "screenpipe-cloud" &&
+                  !settings.user?.token &&
+                  !settings.user?.id && (
+                  <p className="text-xs text-muted-foreground">
+                    Log in to screenpipe cloud to use the cloud live provider.
+                  </p>
+                )}
+                {(settings.meetingLiveTranscriptionProvider ?? "selected-engine") === "selected-engine" &&
+                  settings.audioTranscriptionEngine === "disabled" && (
+                  <p className="text-xs text-muted-foreground">
+                    Pick an audio transcription engine above, or choose a cloud/direct live provider.
+                  </p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        )}
+
         {/* Transcription Mode - hidden when transcription engine is disabled */}
         {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
           <Card className="border-border bg-card">

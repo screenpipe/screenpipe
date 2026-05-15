@@ -753,7 +753,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         "show" => {
             let app = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
-                show_main_window(&app, false);
+                show_main_window(app.clone());
                 let _ = app.emit("tray-show-timeline", ());
             });
         }
@@ -761,7 +761,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             // Show floating Search bar only (hide timeline, it reopens when user picks a result)
             let app = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
-                hide_main_window(&app);
+                hide_main_window(app.clone());
                 let _ = ShowRewindWindow::Search { query: None }.show(&app);
                 let _ = app.emit("tray-show-search", ());
             });
@@ -945,8 +945,15 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                         });
                     });
                 } else {
-                    // For production builds, emit event to trigger update
-                    let _ = app.emit("update-now-clicked", ());
+                    // For production builds, run the authenticated update flow.
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<std::sync::Arc<crate::updates::UpdatesManager>>();
+                        if state.has_update_installed().await {
+                            let _ = app.emit("update-now-clicked", ());
+                        } else if let Err(e) = state.check_for_updates(true).await {
+                            tracing::error!("tray menu: check for updates failed: {}", e);
+                        }
+                    });
                 }
             });
         }
@@ -990,7 +997,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                     let _ = win.close();
                 }
                 // Show the main window
-                show_main_window(&app, false);
+                show_main_window(app.clone());
             });
         }
         "onboarding" => {

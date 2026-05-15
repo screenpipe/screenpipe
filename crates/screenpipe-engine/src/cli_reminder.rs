@@ -81,7 +81,7 @@ fn print_install_bundle_tip() {
     );
     eprintln!(
         "       {}",
-        "screenpipe install https://screenpi.pe/start.json"
+        "npx screenpipe install https://screenpi.pe/start.json"
             .green()
             .bold(),
     );
@@ -94,6 +94,6 @@ fn print_login_tip() {
         "  {} sign in for higher AI quotas + cloud sync:",
         "tip:".cyan().bold(),
     );
-    eprintln!("       {}", "screenpipe login".green().bold());
+    eprintln!("       {}", "npx screenpipe login".green().bold());
     eprintln!();
 }

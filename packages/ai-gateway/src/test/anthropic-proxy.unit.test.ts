@@ -554,6 +554,24 @@ describe('AnthropicProvider.formatMessages', () => {
 		expect(content[0].type).toBe('text');
 		expect(content[0].text).toBe('Hello world');
 	});
+
+	it('filters empty text blocks before sending to Anthropic', () => {
+		const result = provider.formatMessages([
+			{
+				role: 'user',
+				content: [
+					{ type: 'text', text: '' },
+					{ type: 'text', text: '   ' },
+					{ type: 'text', text: 'Hello' },
+				] as any,
+			},
+			{ role: 'assistant', content: '' },
+		]);
+
+		expect(result.length).toBe(1);
+		const content = result[0].content as any[];
+		expect(content).toEqual([{ type: 'text', text: 'Hello' }]);
+	});
 });
 
 // ============================================================================
@@ -586,7 +604,7 @@ describe('isModelAllowed with Anthropic model IDs', () => {
 	});
 
 	it('should allow gemini flash for anonymous', () => {
-		expect(isModelAllowed('gemini-2.5-flash', 'anonymous')).toBe(true);
+		expect(isModelAllowed('gemini-3.1-flash-lite', 'anonymous')).toBe(true);
 	});
 });
 

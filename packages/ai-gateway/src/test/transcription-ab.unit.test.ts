@@ -91,7 +91,7 @@ describe('pickProvider', () => {
     } as any;
     for (let i = 0; i < 20; i++) {
       const { primary } = pickProvider(env);
-      expect(primary).toBe('whisper-self-hosted');
+      expect(primary).toBe('whisper');
     }
   });
 
@@ -105,7 +105,7 @@ describe('pickProvider', () => {
       results.add(pickProvider(env).primary);
     }
     expect(results.has('deepgram')).toBe(true);
-    expect(results.has('whisper-self-hosted')).toBe(true);
+    expect(results.has('whisper')).toBe(true);
   });
 
   it('never dual-sends when dual pct is 0', () => {

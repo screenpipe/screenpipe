@@ -9,7 +9,11 @@ use reqwest::{Client, Response};
 use screenpipe_core::Language;
 use serde_json::Value;
 use std::mem::MaybeUninit;
+use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::net::lookup_host;
 use tracing::{debug, error, info};
+use url::Url;
 
 use crate::transcription::deepgram::{CUSTOM_DEEPGRAM_API_TOKEN, DEEPGRAM_API_URL};
 
@@ -153,23 +157,94 @@ async fn get_deepgram_response(
     params: String,
     content_type: &str,
 ) -> Result<Response, reqwest::Error> {
-    let client = Client::new();
+    let url = format!("{}?{}", *DEEPGRAM_API_URL, params);
+    let authorization = if is_custom_endpoint {
+        format!("Bearer {}", api_key)
+    } else {
+        format!("Token {}", api_key)
+    };
 
+    let client = deepgram_client()?;
+    let first = send_deepgram_request(
+        &client,
+        &url,
+        &authorization,
+        audio_data.clone(),
+        content_type,
+    )
+    .await;
+
+    if first.as_ref().is_err_and(should_retry_ipv4) {
+        if let Some((host, addrs)) = ipv4_overrides(&url).await {
+            debug!(
+                "deepgram request IPv6 route failed; retrying {} via {} IPv4 address(es)",
+                host,
+                addrs.len()
+            );
+            let client = deepgram_client_with_resolved_addrs(&host, &addrs)?;
+            return send_deepgram_request(&client, &url, &authorization, audio_data, content_type)
+                .await;
+        }
+    }
+
+    first
+}
+
+fn deepgram_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(120))
+        .build()
+}
+
+fn deepgram_client_with_resolved_addrs(
+    host: &str,
+    addrs: &[SocketAddr],
+) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(120))
+        .resolve_to_addrs(host, addrs)
+        .build()
+}
+
+async fn send_deepgram_request(
+    client: &Client,
+    url: &str,
+    authorization: &str,
+    audio_data: Vec<u8>,
+    content_type: &str,
+) -> Result<Response, reqwest::Error> {
     client
-        .post(format!("{}?{}", *DEEPGRAM_API_URL, params))
+        .post(url)
         .header("Content-Type", content_type)
-        // Use Bearer format when using custom endpoint/proxy
-        .header(
-            "Authorization",
-            if is_custom_endpoint {
-                format!("Bearer {}", api_key)
-            } else {
-                format!("Token {}", api_key)
-            },
-        )
+        .header("Authorization", authorization)
         .body(audio_data)
         .send()
         .await
+}
+
+async fn ipv4_overrides(url: &str) -> Option<(String, Vec<SocketAddr>)> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default()?;
+    let addrs: Vec<_> = lookup_host((host.as_str(), port))
+        .await
+        .ok()?
+        .filter(|addr| addr.is_ipv4())
+        .collect();
+    if addrs.is_empty() {
+        None
+    } else {
+        Some((host, addrs))
+    }
+}
+
+fn should_retry_ipv4(err: &reqwest::Error) -> bool {
+    let err = format!("{err:?}").to_lowercase();
+    err.contains("no route to host")
+        || err.contains("hostunreachable")
+        || err.contains("network is unreachable")
 }
 
 async fn handle_deepgram_response(

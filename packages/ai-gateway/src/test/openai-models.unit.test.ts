@@ -64,6 +64,13 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).not.toContain('gpt-5.4-nano');
 	});
 
+	it('hides OpenAI models when OPENAI_API_KEY is a placeholder', async () => {
+		const ids = await listedModelIds({ OPENAI_API_KEY: 'placeholder' });
+
+		expect(ids).not.toContain('gpt-5.5');
+		expect(ids).not.toContain('gpt-5.4-mini');
+	});
+
 	it('keeps OpenAI models subscribed-only in the tier allowlist', () => {
 		expect(isModelAllowed('gpt-5.4-mini', 'anonymous')).toBe(false);
 		expect(isModelAllowed('gpt-5.4-mini', 'logged_in')).toBe(false);
@@ -85,6 +92,16 @@ describe('OpenAI API accounting and routing', () => {
 		expect(provider).toBeInstanceOf(OpenAIProvider);
 		expect(inferProvider('gpt-5.4-mini')).toBe('openai');
 		expect(inferProvider('o4-mini')).toBe('openai');
+	});
+
+	it('rejects placeholder OpenAI keys before making upstream calls', () => {
+		try {
+			createProvider('gpt-5.5', env({ OPENAI_API_KEY: 'placeholder' }));
+			throw new Error('expected provider creation to fail');
+		} catch (error: any) {
+			expect(error.message).toBe('OpenAI API key not configured');
+			expect(error.status).toBe(503);
+		}
 	});
 
 	it('uses exact OpenAI prices instead of the unknown-model fallback', () => {

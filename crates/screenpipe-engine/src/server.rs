@@ -41,14 +41,15 @@ use crate::{
         },
         meetings::{
             bulk_delete_meetings_handler, delete_meeting_handler, get_meeting_handler,
-            list_meetings_handler, meeting_status_handler, merge_meetings_handler,
-            split_meeting_handler, start_meeting_handler, stop_meeting_handler,
-            update_meeting_handler,
+            get_meeting_transcript_handler, list_meetings_handler, meeting_status_handler,
+            merge_meetings_handler, split_meeting_handler, start_meeting_handler,
+            stop_meeting_handler, update_meeting_handler,
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
             list_memories_handler, list_memory_tags_handler, update_memory_handler,
         },
+        retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
             delete_speaker_handler, get_similar_speakers_handler, get_unnamed_speakers_handler,
@@ -607,9 +608,11 @@ impl SCServer {
             .post("/meetings/bulk-delete", bulk_delete_meetings_handler)
             .post("/meetings/start", start_meeting_handler)
             .post("/meetings/stop", stop_meeting_handler)
+            .get("/meetings/:id/transcript", get_meeting_transcript_handler)
             .get("/meetings/:id", get_meeting_handler)
             .delete("/meetings/:id", delete_meeting_handler)
             .put("/meetings/:id", update_meeting_handler)
+            .post("/meetings/:id/retranscribe", retranscribe_meeting_handler)
             .post("/meetings/:id/split", split_meeting_handler)
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)

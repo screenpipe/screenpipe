@@ -13,13 +13,10 @@
 //! the same way it picks between two Gmail accounts.
 //!
 //! Submodules:
-//! - [`bridge`]   — protocol state for extension-driven browsers
-//!                  (`BrowserBridge`, `ExtensionTransport`)
-//! - [`user`]     — `UserBrowser`, the [`Browser`] impl that wraps a
-//!                  `BrowserBridge`
-//! - [`owned`]    — `OwnedBrowser`, the [`Browser`] impl that drives a
-//!                  Tauri-owned webview (currently a stub; the real Tauri
-//!                  handle is wired in once the desktop app provides it)
+//! - [`bridge`] — protocol state for extension-driven browsers
+//! - [`user`] — `UserBrowser`, the [`Browser`] impl that wraps a `BrowserBridge`
+//! - [`owned`] — `OwnedBrowser`, the [`Browser`] impl that drives a Tauri-owned
+//!   webview
 
 pub mod bridge;
 pub mod owned;

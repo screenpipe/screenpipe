@@ -22,7 +22,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
              https://www.googleapis.com/auth/userinfo.email",
         ),
         ("access_type", "offline"),
-        ("prompt", "consent"),
+        ("prompt", "consent select_account"),
     ],
     redirect_uri_override: None,
 };

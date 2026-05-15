@@ -11,6 +11,16 @@ icon: "bolt"
 
 you're 5 minutes away from having AI that knows everything on your screen. here's the fastest path to value.
 
+## choose your path
+
+| i want... | start here | success looks like |
+| --- | --- | --- |
+| AI memory in Claude, Codex, Cursor, or another agent | follow the MCP connection step below | your AI can answer "what did I do in the last 5 minutes?" |
+| local search and API access | install, record for a few minutes, then try [API recipes](/api-recipes) | `/search` returns recent screen or audio results |
+| recurring automations | install your first pipe, then read [pipe debugging](/pipe-debugging) | the pipe runs manually, logs clearly, and writes a useful output |
+
+<img src="https://docs.screenpi.pe/public/app-screenshots/home-home.png" alt="screenpipe home window after setup" width="1200" />
+
 ## the 5-minute setup
 
 <Steps>
@@ -23,7 +33,7 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
   </Step>
 
   <Step title="let it record for 2 minutes">
-    browse some websites. write some code. check slack. screenpipe is now capturing everything — text via OCR, audio via transcription, and accessibility data from your apps.
+    browse some websites. write some code. check slack. screenpipe is now capturing everything — app text primarily via accessibility APIs, OCR fallback when needed, and audio via transcription.
 
     you can verify it's working:
     ```bash
@@ -65,17 +75,17 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
   <Step title="install your first pipe (30 sec)">
     pipes are AI automations that run on a schedule. click **Pipes** in the sidebar to open the pipe store.
 
-    browse the catalog — try installing **Digital Clone** (most popular, 574 installs) or **Day Recap**. click **GET** to install, then go to **settings → pipes** to enable and run it.
+    browse the catalog — try installing **Digital Clone** or **Day Recap**. click **GET** to install, then go to **settings → pipes** to enable and run it.
 
     popular first pipes:
 
-    | pipe | installs | what it does |
-    |------|----------|-------------|
-    | **Digital Clone** | 574 | builds a persistent AI memory of who you are |
-    | **Obsidian Daily Summary** | 62 | writes daily summaries to your Obsidian vault |
-    | **Focus Assistant** | 38 | notifies you when you're distracted |
-    | **Daily Claude Code Summary** | 34 | summarizes your AI coding sessions |
-    | **Todo List Assistant** | 30 | tracks tasks and reminds you of what's due |
+    | pipe | what it does |
+    |------|-------------|
+    | **Digital Clone** | builds a persistent AI memory of who you are |
+    | **Obsidian Daily Summary** | writes daily summaries to your Obsidian vault |
+    | **Focus Assistant** | notifies you when you're distracted |
+    | **Daily Claude Code Summary** | summarizes your AI coding sessions |
+    | **Todo List Assistant** | tracks tasks and reminds you of what's due |
 
     [browse all pipes →](/pipe-store)
   </Step>
@@ -104,15 +114,18 @@ you're 5 minutes away from having AI that knows everything on your screen. here'
 pipes are scheduled AI agents that run on your screen data. think of them as automations — a pipe can build your digital memory, track your time, sync notes to Obsidian, or anything you can describe in a prompt. browse them in the sidebar under **Pipes**. [learn more →](/pipes)
 
 **"is my data private?"**
-yes. everything runs locally on your device. no data leaves your machine unless you explicitly choose a cloud provider. screenpipe is open source — [audit the code yourself](https://github.com/screenpipe/screenpipe).
+yes. everything is captured and stored locally by default. no data leaves your machine unless you explicitly choose a cloud provider, connected app, archive/sync flow, or remote AI workflow. see [privacy data flow](/privacy-data-flow).
 
 **"can I use my own AI subscription?"**
 yes. you can use your ChatGPT Plus, Claude Pro, or any API key. you can also use local models via Ollama for complete privacy. [learn more →](/chatgpt)
 
 **"what does screenpipe capture?"**
-screen text (via OCR and accessibility APIs), audio transcriptions, app names, window titles, browser URLs, and user input events. you control what's captured in **settings → recording**.
+screen text (primarily via accessibility APIs, with OCR fallback), audio transcriptions, app names, window titles, browser URLs, and user input events. you control what's captured in **settings → recording**.
 
 **"how do I connect my apps?"**
-go to **settings → connections** (under Data & Privacy). screenpipe supports 45+ integrations including Slack, Notion, Gmail, Google Calendar, Obsidian, Toggl, HubSpot, Salesforce, and more. [learn more →](/connections)
+go to **settings → connections** (under Data & Privacy). screenpipe supports dozens of integrations including Slack, Notion, Gmail, Google Calendar, Obsidian, Toggl, HubSpot, Salesforce, PostHog, Sentry, Zoom, and more. [learn more →](/connections)
+
+**"how do I know it worked?"**
+open **Home**, ask a question in your AI tool, or run `curl http://localhost:3030/health`. after a few minutes of recording, `/search` and [API recipes](/api-recipes) should return real activity.
 
 need help? [join our discord](https://discord.gg/screenpipe) — 10k+ members.

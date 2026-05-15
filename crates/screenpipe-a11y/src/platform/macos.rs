@@ -86,6 +86,11 @@ extern "C" {
     fn CFDataGetBytePtr(the_data: *const c_void) -> *const u8;
 }
 
+#[link(name = "System")]
+extern "C" {
+    fn pthread_main_np() -> i32;
+}
+
 /// Permission status for UI capture
 #[derive(Debug, Clone)]
 pub struct PermissionStatus {
@@ -1309,7 +1314,13 @@ fn truncate(s: &str, max: usize) -> String {
 // ============================================================================
 
 fn keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {
-    layout_keycode_to_char(keycode, mods).or_else(|| us_keycode_to_char(keycode, mods))
+    // macOS 26.5 asserts if Text Input Source APIs are called from the event-tap thread.
+    let layout_char = if unsafe { pthread_main_np() != 0 } {
+        layout_keycode_to_char(keycode, mods)
+    } else {
+        None
+    };
+    layout_char.or_else(|| us_keycode_to_char(keycode, mods))
 }
 
 fn layout_keycode_to_char(keycode: u16, mods: Modifiers) -> Option<char> {

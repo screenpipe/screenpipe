@@ -35,6 +35,7 @@
 //!      release of [`DEFAULT_REPO`] was signed by GitHub Actions for
 //!      that repo, extracts the source measurement;
 //!   3. Compares enclave measurement to source measurement.
+//!
 //! Plus TLS cert pinning to the SPKI fingerprint from the attestation
 //! document, so a compromised CA can't MITM. Failures fail-closed —
 //! the worker propagates the error rather than falling back to plain
