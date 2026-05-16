@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   mountAgentEventBus,
@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight, GripVertical } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -110,6 +110,9 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
+// UI-only preview switch for the steer container.
+// Set to `false` to render only real queued prompts.
+const STEER_CONTAINER_UI_PREVIEW = true;
 
 interface Speaker {
   id: number;
@@ -1959,6 +1962,11 @@ export function StandaloneChat({
   // pulls a queued item and writes it to stdin (it's then in-flight).
   const [queuedPrompts, setQueuedPrompts] = useState<PiQueuedPrompt[]>([]);
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
+  const [queueingEnabled, setQueueingEnabled] = useState(true);
+  const [queuedUiOrder, setQueuedUiOrder] = useState<string[]>([]);
+  const [draggedQueuedId, setDraggedQueuedId] = useState<string | null>(null);
+  const [queuedDraftById, setQueuedDraftById] = useState<Record<string, string>>({});
+  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
@@ -5122,11 +5130,13 @@ export function StandaloneChat({
   async function sendMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
 
-    // If Pi is mid-reply, the default composer action is native steering:
-    // the new message should interrupt and redirect the current reply. Queued
-    // follow-up is still available through the clock button.
+    // If Pi is mid-reply, route based on the queueing toggle:
+    // - enabled: keep as follow-up queue
+    // - disabled: steer current reply
     if (isLoading || isStreaming) {
-      return steerMessage(userMessage, displayLabel);
+      return queueingEnabled
+        ? enqueuePiMessage(userMessage, displayLabel)
+        : steerMessage(userMessage, displayLabel);
     }
 
     // All providers route through Pi agent
@@ -5137,6 +5147,31 @@ export function StandaloneChat({
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
     return enqueuePiMessage(userMessage, displayLabel);
   }
+
+  useEffect(() => {
+    const incomingIds = queuedPrompts.map((p) => p.id);
+    setQueuedUiOrder((prev) => {
+      const prevStillPresent = prev.filter((id) => incomingIds.includes(id));
+      const newlyAdded = incomingIds.filter((id) => !prevStillPresent.includes(id));
+      return [...prevStillPresent, ...newlyAdded];
+    });
+    setQueuedDraftById((prev) => {
+      const next: Record<string, string> = {};
+      for (const p of queuedPrompts) {
+        next[p.id] = prev[p.id] ?? p.preview ?? "";
+      }
+      return next;
+    });
+  }, [queuedPrompts]);
+
+  const orderedQueuedPrompts = useMemo(() => {
+    const byId = new Map(queuedPrompts.map((p) => [p.id, p]));
+    const ordered = queuedUiOrder
+      .map((id) => byId.get(id))
+      .filter((p): p is PiQueuedPrompt => Boolean(p));
+    const remaining = queuedPrompts.filter((p) => !queuedUiOrder.includes(p.id));
+    return [...ordered, ...remaining];
+  }, [queuedPrompts, queuedUiOrder]);
 
   function findLocalQueuedMessage(prompt: PiQueuedPrompt): Message | undefined {
     return messages.find(
@@ -6037,9 +6072,221 @@ export function StandaloneChat({
 
       </div> {/* End of main content area with history sidebar */}
 
+      <AnimatePresence>
+        {(queuedPrompts.length > 0 || STEER_CONTAINER_UI_PREVIEW) && (
+          <motion.div
+            key="composer-queued-rail"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{ duration: 0.18 }}
+            className="pointer-events-none relative z-20 mx-auto w-full max-w-4xl px-3 pb-2"
+          >
+            <div className="pointer-events-auto border border-border/60 bg-background/95 backdrop-blur-sm overflow-hidden">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-border/50 bg-background">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                    Queued
+                  </span>
+                </div>
+              </div>
+              <TooltipProvider delayDuration={150}>
+                <div className="h-[112px] overflow-y-auto scrollbar-minimal">
+                  {(orderedQueuedPrompts.length > 0
+                    ? orderedQueuedPrompts
+                    : [
+                        {
+                          id: "preview-queued-1",
+                          preview: "di dyou check properly",
+                          queuedAtMs: 0n,
+                        },
+                        {
+                          id: "preview-queued-2",
+                          preview: "show my recent screen activity",
+                          queuedAtMs: 0n,
+                        },
+                        {
+                          id: "preview-queued-3",
+                          preview:
+                            "summarize all meetings from this morning and pull the key decisions, blockers, and action items by owner with timestamps",
+                          queuedAtMs: 0n,
+                        },
+                        {
+                          id: "preview-queued-4",
+                          preview:
+                            "find what i worked on in vscode around 8 to 10 am and compare it with what i discussed in slack so i can post a proper daily update",
+                          queuedAtMs: 0n,
+                        },
+                        {
+                          id: "preview-queued-5",
+                          preview: "create a quick recap for today",
+                          queuedAtMs: 0n,
+                        },
+                        {
+                          id: "preview-queued-6",
+                          preview:
+                            "check chrome tabs and tell me which docs were open for the payment retry incident root cause analysis",
+                          queuedAtMs: 0n,
+                        },
+                      ]).map((p, i) => {
+                    const isPreview = p.id.startsWith("preview-queued-");
+                    const isBusy = queuedActionPromptId === p.id;
+                    const label = (queuedDraftById[p.id] ?? p.preview) || "image follow-up";
+                    return (
+                      <motion.div
+                        key={p.id}
+                        layout
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, x: 8, scale: 0.98 }}
+                        transition={{ duration: 0.16 }}
+                        draggable={!isPreview && !isBusy}
+                        onDragStart={() => {
+                          if (!isPreview) setDraggedQueuedId(p.id);
+                        }}
+                        onDragOver={(e) => {
+                          if (isPreview || !draggedQueuedId || draggedQueuedId === p.id) return;
+                          e.preventDefault();
+                        }}
+                        onDrop={(e) => {
+                          if (isPreview || !draggedQueuedId || draggedQueuedId === p.id) return;
+                          e.preventDefault();
+                          setQueuedUiOrder((prev) => {
+                            const base = prev.length > 0 ? [...prev] : orderedQueuedPrompts.map((q) => q.id);
+                            const from = base.indexOf(draggedQueuedId);
+                            const to = base.indexOf(p.id);
+                            if (from === -1 || to === -1) return base;
+                            const [moved] = base.splice(from, 1);
+                            base.splice(to, 0, moved);
+                            return base;
+                          });
+                          setDraggedQueuedId(null);
+                        }}
+                        onDragEnd={() => setDraggedQueuedId(null)}
+                        tabIndex={0}
+                        role="listitem"
+                        onKeyDown={(e) => {
+                          if (isBusy || isPreview) return;
+                          if (isQueuedItemSteerShortcut(e, isMac)) {
+                            e.preventDefault();
+                            steerQueuedPrompt(p);
+                          } else if (isQueuedItemCancelShortcut(e)) {
+                            e.preventDefault();
+                            cancelQueuedPrompt(p);
+                          }
+                        }}
+                        className="group/qcard flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
+                        title={label.length > 90 ? label : undefined}
+                      >
+                        <span className="shrink-0 text-muted-foreground/70 cursor-grab active:cursor-grabbing">
+                          <GripVertical className="h-3.5 w-3.5" />
+                        </span>
+                        {editingQueuedId === p.id ? (
+                          <input
+                            autoFocus
+                            value={queuedDraftById[p.id] ?? p.preview ?? ""}
+                            onChange={(e) =>
+                              setQueuedDraftById((prev) => ({ ...prev, [p.id]: e.target.value }))
+                            }
+                            onBlur={() => setEditingQueuedId(null)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === "Escape") {
+                                e.preventDefault();
+                                setEditingQueuedId(null);
+                              }
+                            }}
+                            className="flex-1 min-w-0 bg-transparent border border-border px-2 py-0.5 text-[12px] font-mono"
+                          />
+                        ) : (
+                          <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[12px]">
+                            {label}
+                          </span>
+                        )}
+                        <div className="flex items-center gap-1 shrink-0">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={isBusy || isPreview}
+                              onClick={() => steerQueuedPrompt(p)}
+                              className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
+                              aria-label={`steer queued message ${i + 1}`}
+                            >
+                              {isBusy ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <CornerDownRight className="h-2.5 w-2.5" />
+                                  <span className="text-[10px] font-medium">Steer</span>
+                                </>
+                              )}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            Steer current reply with this message ({formatSteerShortcut(isMac)})
+                          </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={isBusy || isPreview}
+                              onClick={() => cancelQueuedPrompt(p)}
+                              className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
+                              aria-label={`remove queued message ${i + 1}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Remove queued message</TooltipContent>
+                        </Tooltip>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={isBusy || isPreview}
+                              className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
+                              aria-label={`more queued actions ${i + 1}`}
+                            >
+                              <MoreHorizontal className="h-3 w-3" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-44 p-1" align="end" side="top">
+                            <button
+                              type="button"
+                              disabled={isPreview}
+                              onClick={() => {
+                                setEditingQueuedId(p.id);
+                              }}
+                              className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setQueueingEnabled((v) => !v)}
+                              className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted"
+                            >
+                              {queueingEnabled ? "Turn off queueing" : "Turn on queueing"}
+                            </button>
+                          </PopoverContent>
+                        </Popover>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </TooltipProvider>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Input */}
       <div ref={inputSectionRef} className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
         <div className="max-w-4xl mx-auto w-full">
+
         {/* Prefill, filters, suggestions first; then attached images in gap; then agent bar; then form */}
         {/* Prefill context indicator from search */}
         {(prefillContext || prefillFrameId) && (
@@ -6505,102 +6752,6 @@ export function StandaloneChat({
             </AnimatePresence>
           )}
 
-          <AnimatePresence>
-            {queuedPrompts.length > 0 && (
-              <motion.div
-                key="composer-queued-rail"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.18 }}
-                className="mb-2 rounded-lg border border-border/60 bg-background/95 shadow-sm overflow-hidden"
-              >
-                <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                      queued
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-muted-foreground/60">
-                    {queuedPrompts.length}
-                  </span>
-                </div>
-                <TooltipProvider delayDuration={150}>
-                  <div className="max-h-[156px] overflow-y-auto scrollbar-minimal">
-                    {queuedPrompts.map((p, i) => {
-                      const isBusy = queuedActionPromptId === p.id;
-                      const label = p.preview || "image follow-up";
-                      return (
-                        <motion.div
-                          key={p.id}
-                          layout
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 8, scale: 0.98 }}
-                          transition={{ duration: 0.16 }}
-                          tabIndex={0}
-                          role="listitem"
-                          onKeyDown={(e) => {
-                            if (isBusy) return;
-                            if (isQueuedItemSteerShortcut(e, isMac)) {
-                              e.preventDefault();
-                              steerQueuedPrompt(p);
-                            } else if (isQueuedItemCancelShortcut(e)) {
-                              e.preventDefault();
-                              cancelQueuedPrompt(p);
-                            }
-                          }}
-                          className="group/qcard flex items-center gap-2 px-3 py-2 border-b border-border/40 last:border-b-0 text-sm text-muted-foreground/90 focus-visible:outline-none focus-visible:bg-muted/40 hover:bg-muted/30 transition-colors"
-                          title={label.length > 90 ? label : undefined}
-                        >
-                          <span className="font-mono text-[10px] text-muted-foreground/50 shrink-0 w-4 text-right">
-                            {i + 1}
-                          </span>
-                          <span className="truncate flex-1 min-w-0">{label}</span>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => steerQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-foreground bg-muted/70 hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
-                                aria-label={`steer queued message ${i + 1}`}
-                              >
-                                {isBusy ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <CornerDownRight className="h-3 w-3" />
-                                )}
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">
-                              Steer current reply with this message ({formatSteerShortcut(isMac)})
-                            </TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => cancelQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
-                                aria-label={`remove queued message ${i + 1}`}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">Remove queued message</TooltipContent>
-                          </Tooltip>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </TooltipProvider>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           <div
             className={cn(
               "flex flex-col rounded-lg border bg-input ring-offset-background transition-colors focus-within:border-foreground focus-within:ring-foreground/10 focus-within:ring-1",
@@ -6778,7 +6929,7 @@ export function StandaloneChat({
                 const isStopMode = primaryAction === "stop";
                 return (
                   <>
-                    {isSteerMode && (
+                    {isSteerMode && queueingEnabled && (
                       <TooltipProvider delayDuration={150}>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -6793,9 +6944,9 @@ export function StandaloneChat({
                               title="queue follow-up after current reply"
                             >
                               <Clock className="h-3.5 w-3.5" />
-                              {queuedPrompts.length > 0 && (
+                              {orderedQueuedPrompts.length > 0 && (
                                 <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-muted text-foreground text-[9px] font-mono font-semibold flex items-center justify-center border border-background">
-                                  {queuedPrompts.length}
+                                  {orderedQueuedPrompts.length}
                                 </span>
                               )}
                             </Button>
@@ -6819,21 +6970,25 @@ export function StandaloneChat({
                         isStopMode
                           ? "stop"
                           : isSteerMode
-                            ? "steer current reply"
+                            ? queueingEnabled
+                              ? "queue follow-up"
+                              : "steer current reply"
                             : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
                           : isSteerMode
-                            ? "steer current reply"
+                            ? queueingEnabled
+                              ? "queue follow-up"
+                              : "steer current reply"
                             : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
                       ) : isSteerMode ? (
-                        <CornerDownRight className="h-4 w-4" />
+                        queueingEnabled ? <Clock className="h-4 w-4" /> : <CornerDownRight className="h-4 w-4" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}
