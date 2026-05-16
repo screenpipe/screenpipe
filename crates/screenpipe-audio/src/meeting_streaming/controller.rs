@@ -21,7 +21,7 @@ use super::{
     events::{
         MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
         MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
-        MeetingStreamingStatusChanged, MeetingTranscriptFinal,
+        MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
     openai_realtime, selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
@@ -43,6 +43,8 @@ struct ActiveMeetingStream {
     audio_frames_seen: u64,
     audio_samples_seen: u64,
     last_audio_activity_at: Instant,
+    live_transcript_seen: bool,
+    last_live_transcript_at: Option<Instant>,
     device_senders: HashMap<String, mpsc::Sender<MeetingAudioFrame>>,
     device_retry_after: HashMap<String, Instant>,
 }
@@ -72,8 +74,14 @@ pub fn start_meeting_streaming_loop(
             screenpipe_events::subscribe_to_event::<MeetingLifecycleEvent>("meeting_started");
         let mut ended_sub =
             screenpipe_events::subscribe_to_event::<MeetingLifecycleEvent>("meeting_ended");
+        let mut delta_sub = screenpipe_events::subscribe_to_event::<MeetingTranscriptDelta>(
+            "meeting_transcript_delta",
+        );
         let mut final_sub = screenpipe_events::subscribe_to_event::<MeetingTranscriptFinal>(
             "meeting_transcript_final",
+        );
+        let mut error_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingError>(
+            "meeting_streaming_error",
         );
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
@@ -164,6 +172,9 @@ pub fn start_meeting_streaming_loop(
                     }
                 }
                 Some(event) = final_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        note_live_transcript(&audio_tap, session, event.data.meeting_id);
+                    }
                     if !config.persist_finals {
                         continue;
                     }
@@ -171,6 +182,16 @@ pub fn start_meeting_streaming_loop(
                     tokio::spawn(async move {
                         persist_live_final_with_retry(db, event.data).await;
                     });
+                }
+                Some(event) = delta_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        note_live_transcript(&audio_tap, session, event.data.meeting_id);
+                    }
+                }
+                Some(event) = error_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        note_live_transcription_error(&audio_tap, session, &event.data);
+                    }
                 }
                 frame = audio_rx.recv() => {
                     match frame {
@@ -258,7 +279,7 @@ async fn start_streaming_session(
         session_config.provider.supports_live_transcription() && readiness_error.is_none();
     let provider = session_config.provider.as_str().to_string();
     audio_tap.set_active(live_transcription_enabled);
-    audio_tap.set_background_suppressed(live_transcription_enabled);
+    audio_tap.set_background_suppressed(false);
     *active = Some(ActiveMeetingStream {
         meeting_id,
         provider: provider.clone(),
@@ -268,6 +289,8 @@ async fn start_streaming_session(
         audio_frames_seen: 0,
         audio_samples_seen: 0,
         last_audio_activity_at: Instant::now(),
+        live_transcript_seen: false,
+        last_live_transcript_at: None,
         device_senders: HashMap::new(),
         device_retry_after: HashMap::new(),
     });
@@ -464,10 +487,10 @@ fn route_frame_to_provider(
 
     match sender.try_send(frame) {
         Ok(()) => {
-            audio_tap.set_background_suppressed(true);
+            audio_tap.set_background_suppressed(session.live_transcript_seen);
         }
         Err(mpsc::error::TrySendError::Full(_)) => {
-            audio_tap.set_background_suppressed(true);
+            audio_tap.set_background_suppressed(session.live_transcript_seen);
             debug!(
                 "meeting streaming: provider queue full; dropping live audio frame for {}",
                 key
@@ -475,9 +498,9 @@ fn route_frame_to_provider(
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             session.device_senders.remove(&key);
-            if session.device_senders.is_empty() {
-                audio_tap.set_background_suppressed(session.live_transcription_enabled);
-            }
+            session.live_transcript_seen = false;
+            session.last_live_transcript_at = None;
+            audio_tap.set_background_suppressed(false);
             session.device_retry_after.insert(
                 key.clone(),
                 Instant::now() + PROVIDER_STREAM_RESTART_BACKOFF,
@@ -489,6 +512,41 @@ fn route_frame_to_provider(
             );
         }
     }
+}
+
+fn note_live_transcript(
+    audio_tap: &MeetingAudioTap,
+    session: &mut ActiveMeetingStream,
+    meeting_id: i64,
+) {
+    if session.meeting_id != meeting_id || !session.live_transcription_enabled {
+        return;
+    }
+
+    session.live_transcript_seen = true;
+    session.last_live_transcript_at = Some(Instant::now());
+    audio_tap.set_background_suppressed(true);
+}
+
+fn note_live_transcription_error(
+    audio_tap: &MeetingAudioTap,
+    session: &mut ActiveMeetingStream,
+    event: &MeetingStreamingError,
+) {
+    if session.meeting_id != event.meeting_id {
+        return;
+    }
+
+    session.live_transcript_seen = false;
+    session.last_live_transcript_at = None;
+    audio_tap.set_background_suppressed(false);
+    emit_status(
+        true,
+        Some(session.meeting_id),
+        &session.provider,
+        session.live_transcription_enabled,
+        Some(event.message.clone()),
+    );
 }
 
 fn device_stream_key(frame: &MeetingAudioFrame) -> String {
@@ -665,6 +723,8 @@ mod tests {
             audio_frames_seen: 0,
             audio_samples_seen: 0,
             last_audio_activity_at: now,
+            live_transcript_seen: false,
+            last_live_transcript_at: None,
             device_senders: HashMap::new(),
             device_retry_after: HashMap::new(),
         }
@@ -676,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_ready_session_suppresses_background_recording() {
+    async fn live_ready_session_keeps_background_recording_until_transcript_arrives() {
         let audio_tap = test_audio_tap();
         let transcription_engine = Arc::new(RwLock::new(None));
         let mut active = None;
@@ -703,7 +763,7 @@ mod tests {
         let session = active.expect("active live session");
         assert!(session.live_transcription_enabled);
         assert!(audio_tap.is_active());
-        assert!(audio_tap.background_suppressed());
+        assert!(!audio_tap.background_suppressed());
     }
 
     #[tokio::test]
@@ -761,6 +821,41 @@ mod tests {
             now - LIVE_NO_AUDIO_ACTIVITY_TIMEOUT - Duration::from_secs(1);
 
         assert!(!should_request_auto_end_for_inactivity(&session, now));
+    }
+
+    #[test]
+    fn live_transcript_arrival_suppresses_background_recording() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+
+        note_live_transcript(&audio_tap, &mut session, 42);
+
+        assert!(session.live_transcript_seen);
+        assert!(session.last_live_transcript_at.is_some());
+        assert!(audio_tap.background_suppressed());
+    }
+
+    #[tokio::test]
+    async fn live_transcription_error_resumes_background_recording() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        note_live_transcript(&audio_tap, &mut session, 42);
+
+        let event = MeetingStreamingError {
+            meeting_id: 42,
+            provider: "selected-engine".to_string(),
+            model: None,
+            device_name: Some("airpods".to_string()),
+            message: "websocket failed".to_string(),
+            occurred_at: Utc::now(),
+        };
+        note_live_transcription_error(&audio_tap, &mut session, &event);
+
+        assert!(!session.live_transcript_seen);
+        assert!(session.last_live_transcript_at.is_none());
+        assert!(!audio_tap.background_suppressed());
     }
 
     #[tokio::test]

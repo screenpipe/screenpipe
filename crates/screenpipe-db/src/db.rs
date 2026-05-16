@@ -1041,27 +1041,6 @@ impl DatabaseManager {
              LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
              WHERE at.id IS NULL
                AND ac.timestamp >= ?1
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM meetings m
-                 WHERE EXISTS (
-                     SELECT 1
-                     FROM meeting_transcript_segments mts
-                     WHERE mts.meeting_id = m.id
-                   )
-                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
-                   AND julianday(ac.timestamp) <= julianday(datetime(
-                     COALESCE(
-                       m.meeting_end,
-                       (
-                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
-                         FROM meeting_transcript_segments mts2
-                         WHERE mts2.meeting_id = m.id
-                       )
-                     ),
-                     '+60 seconds'
-                   ))
-               )
              ORDER BY ac.timestamp DESC
              LIMIT ?2",
         )
@@ -1092,27 +1071,6 @@ impl DatabaseManager {
                AND ac.timestamp >= ?1
                AND ac.timestamp <= ?2
                AND ac.file_path NOT LIKE 'cloud://%'
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM meetings m
-                 WHERE EXISTS (
-                     SELECT 1
-                     FROM meeting_transcript_segments mts
-                     WHERE mts.meeting_id = m.id
-                   )
-                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
-                   AND julianday(ac.timestamp) <= julianday(datetime(
-                     COALESCE(
-                       m.meeting_end,
-                       (
-                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
-                         FROM meeting_transcript_segments mts2
-                         WHERE mts2.meeting_id = m.id
-                       )
-                     ),
-                     '+60 seconds'
-                   ))
-               )
              ORDER BY ac.timestamp ASC
              LIMIT ?3",
         )
@@ -1141,27 +1099,6 @@ impl DatabaseManager {
                AND ac.timestamp >= ?2
                AND ac.timestamp <= ?3
                AND ac.file_path NOT LIKE 'cloud://%'
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM meetings m
-                 WHERE EXISTS (
-                     SELECT 1
-                     FROM meeting_transcript_segments mts
-                     WHERE mts.meeting_id = m.id
-                   )
-                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
-                   AND julianday(ac.timestamp) <= julianday(datetime(
-                     COALESCE(
-                       m.meeting_end,
-                       (
-                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
-                         FROM meeting_transcript_segments mts2
-                         WHERE mts2.meeting_id = m.id
-                       )
-                     ),
-                     '+60 seconds'
-                   ))
-               )
              LIMIT 1",
         )
         .bind(chunk_id)
@@ -1186,28 +1123,7 @@ impl DatabaseManager {
              WHERE at.id IS NULL
                AND ac.timestamp >= ?1
                AND ac.timestamp <= ?2
-               AND ac.file_path NOT LIKE 'cloud://%'
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM meetings m
-                 WHERE EXISTS (
-                     SELECT 1
-                     FROM meeting_transcript_segments mts
-                     WHERE mts.meeting_id = m.id
-                   )
-                   AND julianday(ac.timestamp) >= julianday(datetime(m.meeting_start, '-60 seconds'))
-                   AND julianday(ac.timestamp) <= julianday(datetime(
-                     COALESCE(
-                       m.meeting_end,
-                       (
-                         SELECT datetime(MAX(mts2.captured_at), '+10 minutes')
-                         FROM meeting_transcript_segments mts2
-                         WHERE mts2.meeting_id = m.id
-                       )
-                     ),
-                     '+60 seconds'
-                   ))
-               )",
+               AND ac.file_path NOT LIKE 'cloud://%'",
         )
         .bind(since)
         .bind(older_than)
@@ -8317,13 +8233,6 @@ LIMIT ? OFFSET ?
                 FROM meetings
                 WHERE id = ?1
             ),
-            live_bounds AS (
-                SELECT
-                    MIN(julianday(captured_at)) AS first_live_at_jd,
-                    MAX(julianday(captured_at)) AS last_live_at_jd
-                FROM meeting_transcript_segments
-                WHERE meeting_id = ?1
-            ),
             live_segments AS (
                 SELECT
                     id,
@@ -8370,17 +8279,11 @@ LIMIT ? OFFSET ?
                 JOIN audio_chunks ac ON ac.id = at.audio_chunk_id
                 JOIN meeting_window mw ON 1 = 1
                 LEFT JOIN speakers s ON s.id = at.speaker_id
-                CROSS JOIN live_bounds lb
                 WHERE julianday(at.timestamp) >= julianday(mw.meeting_start)
                   AND julianday(at.timestamp) <= julianday(mw.meeting_end)
                   AND TRIM(at.transcription) != ''
                   AND ac.file_path NOT LIKE 'cloud://%'
                   AND (s.id IS NULL OR s.hallucination = 0)
-                  AND NOT (
-                      lb.first_live_at_jd IS NOT NULL
-                      AND julianday(at.timestamp) >= lb.first_live_at_jd - (60.0 / 86400.0)
-                      AND julianday(at.timestamp) <= lb.last_live_at_jd + (60.0 / 86400.0)
-                  )
             )
             SELECT * FROM (
                 SELECT * FROM live_segments

@@ -5,7 +5,7 @@
    </a>
 </p>
 
-<h1 align="center">[ screenpipe ]</h1>
+<h1 align="center">[ screenpipe | YC S26 ]</h1>
 
 
 <p align="center">Give AI the ability to live your experience.</p>

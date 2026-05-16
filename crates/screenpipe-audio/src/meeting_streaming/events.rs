@@ -148,7 +148,7 @@ pub struct MeetingStreamingSessionEnded {
     pub audio_samples_seen: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MeetingTranscriptDelta {
     pub meeting_id: i64,
     pub provider: String,
@@ -175,7 +175,7 @@ pub struct MeetingTranscriptFinal {
     pub captured_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MeetingStreamingError {
     pub meeting_id: i64,
     pub provider: String,

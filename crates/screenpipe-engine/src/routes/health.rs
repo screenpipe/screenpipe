@@ -541,15 +541,18 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Audio degradation: chunks_channel_full > 0 means the Whisper consumer
     // couldn't keep up and audio was dropped even after a 30s backpressure wait.
+    // A reconciliation backlog means audio exists but transcript has not landed
+    // yet, which should be visible instead of reported as healthy.
     let audio_degraded = if !state.audio_disabled && audio_snap.uptime_secs > 120.0 {
         let channel_full = audio_snap.chunks_channel_full > 0;
+        let transcription_backlog = pending_transcription_segments.is_some();
         if channel_full {
             warn!(
                 "health_check: {} audio chunk(s) dropped (transcription engine too slow)",
                 audio_snap.chunks_channel_full
             );
         }
-        channel_full || audio_db_write_stalled
+        channel_full || audio_db_write_stalled || transcription_backlog
     } else {
         false
     };
@@ -623,6 +626,12 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 detail_parts.push(format!(
                     "audio transcription writes stalled for {}s — audio captured, transcription not landing",
                     now_ts.saturating_sub(audio_snap.last_db_write_ts)
+                ));
+            }
+            if let Some(count) = pending_transcription_segments {
+                detail_parts.push(format!(
+                    "{} audio segment(s) waiting for background transcription",
+                    count
                 ));
             }
         }

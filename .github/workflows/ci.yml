@@ -40,15 +40,34 @@ jobs:
         run: |
           set -euo pipefail
           manifest="crates/screenpipe-audio/Cargo.toml"
-          expected_url='git = "https://github.com/screenpipe/cpal.git"'
-          expected_rev='rev = "1be10a9d67ac7e6b9e0225d2d67ec56058a7dba2"'
+          expected_url='git = "https://github.com/divanshu-go/cpal.git"'
+          expected_branch='branch = "windows-aec"'
+          expected_lock_source='source = "git+https://github.com/divanshu-go/cpal.git?branch=windows-aec#eeae0269bec7b4fc6e21c461624a0fa0e7acdc82"'
           cpal_line="$(grep -E '^cpal = ' "$manifest" || true)"
 
-          if [[ "$cpal_line" != *"$expected_url"* || "$cpal_line" != *"$expected_rev"* || "$cpal_line" == *'branch ='* ]]; then
-            echo "::error file=${manifest},line=35::cpal pin changed. Run the Windows audio RMS smoke on Win11 24H2 Communications-class hardware before merging, then update this guard with the verified rev."
+          if [[ "$cpal_line" != *"$expected_url"* || "$cpal_line" != *"$expected_branch"* ]]; then
+            echo "::error file=${manifest},line=25::cpal source changed. Run the Windows audio RMS smoke on Win11 24H2 Communications-class hardware before merging, then update this guard with the verified source."
             echo "current cpal line: ${cpal_line:-<missing>}"
             exit 1
           fi
+
+          cpal_lock_source() {
+            local lockfile="$1"
+            awk '
+              $0 == "[[package]]" { in_package = 1; is_cpal = 0 }
+              in_package && $0 == "name = \"cpal\"" { is_cpal = 1 }
+              in_package && is_cpal && /^source = / { print; exit }
+            ' "$lockfile"
+          }
+
+          for lockfile in Cargo.lock apps/screenpipe-app-tauri/src-tauri/Cargo.lock; do
+            lock_source="$(cpal_lock_source "$lockfile")"
+            if [[ "$lock_source" != "$expected_lock_source" ]]; then
+              echo "::error file=${lockfile}::cpal lock source changed. Run the Windows audio RMS smoke on Win11 24H2 Communications-class hardware before merging, then update this guard with the verified lock source."
+              echo "current cpal lock source: ${lock_source:-<missing>}"
+              exit 1
+            fi
+          done
 
   test-ubuntu:
     runs-on: ubuntu-latest

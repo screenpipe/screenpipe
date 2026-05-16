@@ -18,20 +18,10 @@ serde_json = "1.0"
 oasgen = { workspace = true }
 
 # Cross-platform audio capture.
-# Pinned to screenpipe/cpal@1be10a9d (cpal 0.15.3) — the rev we ran
-# in production for months prior to the May 7 fork swap (PR #3257).
-# That swap brought in cpal 0.18 via divanshu-go/screenpipe-cpal,
-# which inherited cpal upstream PR #1097's WASAPI AUTOCONVERTPCM
-# changes. On Windows 11 24H2 those changes cause Communications-class
-# USB mics to deliver silent capture (Jabra Evolve 75, Logi C270 HD,
-# etc.) — same mic records normal speech via DirectShow at -3 dB
-# peak but at -85 dB via WASAPI. See:
-# https://github.com/RustAudio/cpal/issues/1200
-#
-# Tradeoff: we lose the divanshu fork's macOS Voice Processing I/O
-# AEC feature (added 2026-05-06). It hasn't been wired into a user-
-# visible toggle yet, so reverting is no-op for end users while
-# restoring Windows capture across the board.
+# Use the divanshu-go Windows AEC fork so Windows microphone AEC can be
+# wired through screenpipe's capture path. Cargo.lock pins the resolved
+# commit; update the cpal guard in .github/workflows/ci.yml whenever this
+# dependency is intentionally advanced.
 cpal = { git = "https://github.com/divanshu-go/cpal.git", branch = "windows-aec" }
 
 # Wav encoding

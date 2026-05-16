@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_live_meeting_transcript_skips_background_reconciliation() {
+    async fn test_live_meeting_transcript_does_not_block_background_reconciliation() {
         let db = setup_test_db().await;
 
         let ts = Utc::now() - Duration::minutes(1);
@@ -239,8 +239,8 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            candidates.iter().all(|c| c.id != chunk),
-            "background reconciliation should skip chunks covered by live meeting streaming"
+            candidates.iter().any(|c| c.id == chunk),
+            "partial live meeting transcript should not block background recovery"
         );
 
         let background_count: i64 = sqlx::query_scalar(
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ongoing_live_meeting_transcript_skips_background_reconciliation() {
+    async fn test_ongoing_live_meeting_transcript_does_not_block_background_reconciliation() {
         let db = setup_test_db().await;
 
         let ts = Utc::now() - Duration::minutes(30);
@@ -294,8 +294,8 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            candidates.iter().all(|c| c.id != chunk),
-            "background reconciliation should skip chunks from an ongoing live meeting"
+            candidates.iter().any(|c| c.id == chunk),
+            "ongoing live meeting transcript should not block old chunks from background recovery"
         );
     }
 
@@ -453,6 +453,7 @@ mod tests {
             vec![
                 "background before live",
                 "live meeting text",
+                "background duplicate near live",
                 "background after live"
             ]
         );
@@ -469,12 +470,10 @@ mod tests {
         assert_eq!(rows[1].speaker_name.as_deref(), Some("Louis"));
 
         assert_eq!(rows[2].source, "background");
-        assert_eq!(rows[2].audio_chunk_id, Some(after_chunk));
-        assert!(
-            rows.iter()
-                .all(|row| row.transcript != "background duplicate near live"),
-            "background rows inside the live capture window should not duplicate live transcript"
-        );
+        assert_eq!(rows[2].audio_chunk_id, Some(overlap_chunk));
+
+        assert_eq!(rows[3].source, "background");
+        assert_eq!(rows[3].audio_chunk_id, Some(after_chunk));
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ import React, {
 } from "react";
 import {
   ArrowDown,
+  AlertTriangle,
   Check,
   Copy,
   Loader2,
@@ -22,6 +23,7 @@ import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import {
   fetchMeetingAudio,
   type MeetingAudioChunk,
@@ -264,6 +266,7 @@ export function TranscriptPanel({
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const { health } = useHealthCheck();
 
   // Time bounds for the meeting. Live meetings extend to "now" so newly
   // captured chunks are included on each refetch.
@@ -575,6 +578,16 @@ export function TranscriptPanel({
   const showSearch = displayBlocks.length > 0 || Boolean(query.trim());
   const showFollowButton =
     isLive && !query.trim() && hasTranscriptContent && !isFollowingLive;
+  const pendingTranscriptSegments =
+    health?.audio_pipeline?.pending_transcription_segments ?? 0;
+  const showRecoveryBanner =
+    isLive &&
+    Boolean(liveError || (pendingTranscriptSegments > 0 && liveStatus?.active));
+  const recoveryMessage = liveError
+    ? `${liveErrorSummary(liveError)}. Still recording; background transcription will recover missing audio.`
+    : `Still recording; ${pendingTranscriptSegments} audio segment${
+        pendingTranscriptSegments === 1 ? "" : "s"
+      } waiting for background transcription.`;
 
   return (
     <>
@@ -623,6 +636,13 @@ export function TranscriptPanel({
             </Button>
           </div>
         </header>
+
+        {showRecoveryBanner && (
+          <div className="flex items-start gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="leading-5">{recoveryMessage}</span>
+          </div>
+        )}
 
         {showSearch && (
           <div className="px-4 py-2 border-b border-border shrink-0">

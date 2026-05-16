@@ -667,7 +667,6 @@ export async function fetchMeetingAudio(
   meetingId?: number,
 ): Promise<MeetingAudioChunk[]> {
   const routedRows = await fetchRoutedMeetingTranscript(meetingId, cap);
-  if (routedRows.length > 0) return routedRows;
 
   const out: MeetingAudioChunk[] = [];
   const seen = new Set<string>();
@@ -711,7 +710,32 @@ export async function fetchMeetingAudio(
       break;
     }
   }
-  return sortAudioChunks(out);
+  return mergeMeetingAudioChunks(routedRows, out, cap);
+}
+
+function mergeMeetingAudioChunks(
+  liveRows: MeetingAudioChunk[],
+  backgroundRows: MeetingAudioChunk[],
+  cap: number,
+): MeetingAudioChunk[] {
+  const merged = sortAudioChunks([...liveRows, ...backgroundRows]);
+  const seen = new Set<string>();
+  const out: MeetingAudioChunk[] = [];
+
+  for (const chunk of merged) {
+    const key = [
+      Math.round(timestampMs(chunk.timestamp) / 1000),
+      chunk.deviceType,
+      chunk.speakerName,
+      chunk.transcription.replace(/\s+/g, " ").trim().toLowerCase(),
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(chunk);
+    if (out.length >= cap) break;
+  }
+
+  return out;
 }
 
 async function fetchRoutedMeetingTranscript(
