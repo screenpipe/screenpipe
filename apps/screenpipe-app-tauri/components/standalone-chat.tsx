@@ -110,9 +110,32 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
-// UI-only preview switch for the steer container.
-// Set to `false` to render only real queued prompts.
 const STEER_CONTAINER_UI_PREVIEW = true;
+const QUEUE_DEBUG_INTERACTIVE_DUMMY = true;
+const QUEUE_DEBUG_RESEED_ON_LOAD = true;
+const STATIC_PREVIEW_QUEUED_PROMPTS: PiQueuedPrompt[] = [
+  { id: "preview-queued-1", preview: "di dyou check properly", queuedAtMs: 0n },
+  { id: "preview-queued-2", preview: "show my recent screen activity", queuedAtMs: 0n },
+  {
+    id: "preview-queued-3",
+    preview:
+      "summarize all meetings from this morning and pull the key decisions, blockers, and action items by owner with timestamps",
+    queuedAtMs: 0n,
+  },
+  {
+    id: "preview-queued-4",
+    preview:
+      "find what i worked on in vscode around 8 to 10 am and compare it with what i discussed in slack so i can post a proper daily update",
+    queuedAtMs: 0n,
+  },
+  { id: "preview-queued-5", preview: "create a quick recap for today", queuedAtMs: 0n },
+  {
+    id: "preview-queued-6",
+    preview:
+      "check chrome tabs and tell me which docs were open for the payment retry incident root cause analysis",
+    queuedAtMs: 0n,
+  },
+];
 
 interface Speaker {
   id: number;
@@ -1964,9 +1987,17 @@ export function StandaloneChat({
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
   const [queueingEnabled, setQueueingEnabled] = useState(true);
   const [queuedUiOrder, setQueuedUiOrder] = useState<string[]>([]);
-  const [draggedQueuedId, setDraggedQueuedId] = useState<string | null>(null);
+  const [pointerDraggedQueuedId, setPointerDraggedQueuedId] = useState<string | null>(null);
+  const pointerDraggedQueuedIdRef = useRef<string | null>(null);
+  const queuedScrollRef = useRef<HTMLDivElement | null>(null);
+  const queueDragPointerYRef = useRef<number | null>(null);
+  const queueDragAutoScrollRafRef = useRef<number | null>(null);
   const [queuedDraftById, setQueuedDraftById] = useState<Record<string, string>>({});
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
+  const [dummyQueuedPrompts, setDummyQueuedPrompts] = useState<PiQueuedPrompt[]>(
+    STATIC_PREVIEW_QUEUED_PROMPTS
+  );
+  const dummyReseededRef = useRef(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
@@ -5173,6 +5204,129 @@ export function StandaloneChat({
     return [...ordered, ...remaining];
   }, [queuedPrompts, queuedUiOrder]);
 
+  const usingInteractiveDummyQueue =
+    QUEUE_DEBUG_INTERACTIVE_DUMMY && queuedPrompts.length === 0;
+  const displayedQueuedPrompts = useMemo(() => {
+    if (usingInteractiveDummyQueue) return dummyQueuedPrompts;
+    if (queuedPrompts.length > 0) return orderedQueuedPrompts;
+    if (STEER_CONTAINER_UI_PREVIEW) return STATIC_PREVIEW_QUEUED_PROMPTS;
+    return [];
+  }, [usingInteractiveDummyQueue, dummyQueuedPrompts, queuedPrompts.length, orderedQueuedPrompts]);
+
+  const reorderQueuedRows = useCallback(
+    (fromId: string, toId: string) => {
+      if (!fromId || fromId === toId) return;
+      if (usingInteractiveDummyQueue) {
+        setDummyQueuedPrompts((prev) => {
+          const base = [...prev];
+          const from = base.findIndex((q) => q.id === fromId);
+          const to = base.findIndex((q) => q.id === toId);
+          if (from === -1 || to === -1) return base;
+          const [moved] = base.splice(from, 1);
+          base.splice(to, 0, moved);
+          return base;
+        });
+        return;
+      }
+      setQueuedUiOrder((prev) => {
+        const base = prev.length > 0 ? [...prev] : orderedQueuedPrompts.map((q) => q.id);
+        const from = base.indexOf(fromId);
+        const to = base.indexOf(toId);
+        if (from === -1 || to === -1) return base;
+        const [moved] = base.splice(from, 1);
+        base.splice(to, 0, moved);
+        return base;
+      });
+    },
+    [usingInteractiveDummyQueue, orderedQueuedPrompts]
+  );
+
+  useEffect(() => {
+    const clearPointerDrag = () => {
+      pointerDraggedQueuedIdRef.current = null;
+      setPointerDraggedQueuedId(null);
+      queueDragPointerYRef.current = null;
+      if (queueDragAutoScrollRafRef.current !== null) {
+        window.cancelAnimationFrame(queueDragAutoScrollRafRef.current);
+        queueDragAutoScrollRafRef.current = null;
+      }
+    };
+    window.addEventListener("mouseup", clearPointerDrag);
+    window.addEventListener("mouseleave", clearPointerDrag);
+    return () => {
+      window.removeEventListener("mouseup", clearPointerDrag);
+      window.removeEventListener("mouseleave", clearPointerDrag);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pointerDraggedQueuedId) return;
+
+    const tick = () => {
+      const activeDraggedId = pointerDraggedQueuedIdRef.current;
+      const scrollEl = queuedScrollRef.current;
+      const pointerY = queueDragPointerYRef.current;
+      if (!activeDraggedId || !scrollEl) {
+        queueDragAutoScrollRafRef.current = null;
+        return;
+      }
+      if (pointerY == null) {
+        queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      const rect = scrollEl.getBoundingClientRect();
+      const edgeThreshold = 24;
+      let delta = 0;
+
+      if (pointerY < rect.top + edgeThreshold) {
+        const proximity = rect.top + edgeThreshold - pointerY;
+        delta = -Math.min(16, Math.max(3, Math.ceil(proximity / 2)));
+      } else if (pointerY > rect.bottom - edgeThreshold) {
+        const proximity = pointerY - (rect.bottom - edgeThreshold);
+        delta = Math.min(16, Math.max(3, Math.ceil(proximity / 2)));
+      }
+
+      if (delta !== 0) {
+        scrollEl.scrollTop += delta;
+      }
+
+      queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      queueDragPointerYRef.current = e.clientY;
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    if (queueDragAutoScrollRafRef.current === null) {
+      queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
+    }
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      queueDragPointerYRef.current = null;
+      if (queueDragAutoScrollRafRef.current !== null) {
+        window.cancelAnimationFrame(queueDragAutoScrollRafRef.current);
+        queueDragAutoScrollRafRef.current = null;
+      }
+    };
+  }, [pointerDraggedQueuedId]);
+
+  useEffect(() => {
+    if (!QUEUE_DEBUG_RESEED_ON_LOAD) return;
+    if (!usingInteractiveDummyQueue) return;
+    if (dummyReseededRef.current) return;
+    setDummyQueuedPrompts(STATIC_PREVIEW_QUEUED_PROMPTS);
+    setQueuedDraftById((prev) => {
+      const next = { ...prev };
+      for (const p of STATIC_PREVIEW_QUEUED_PROMPTS) {
+        next[p.id] = p.preview ?? "";
+      }
+      return next;
+    });
+    dummyReseededRef.current = true;
+  }, [usingInteractiveDummyQueue]);
+
   function findLocalQueuedMessage(prompt: PiQueuedPrompt): Message | undefined {
     return messages.find(
       (message) =>
@@ -5231,6 +5385,16 @@ export function StandaloneChat({
   }
 
   async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
+    if (usingInteractiveDummyQueue && prompt.id.startsWith("preview-queued-")) {
+      setDummyQueuedPrompts((prev) => prev.filter((queued) => queued.id !== prompt.id));
+      setQueuedDraftById((prev) => {
+        const next = { ...prev };
+        delete next[prompt.id];
+        return next;
+      });
+      return true;
+    }
+
     setQueuedActionPromptId(prompt.id);
     try {
       const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
@@ -5357,6 +5521,11 @@ export function StandaloneChat({
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
+    if (usingInteractiveDummyQueue) {
+      setDummyQueuedPrompts((prev) => prev.filter((q) => q.id !== prompt.id));
+      toast({ title: "dummy steer applied (local only)" });
+      return;
+    }
     const queuedMessage = findLocalQueuedMessage(prompt);
     if (!queuedMessage && (!prompt.preview || prompt.preview.length >= 200)) {
       toast({
@@ -6073,16 +6242,16 @@ export function StandaloneChat({
       </div> {/* End of main content area with history sidebar */}
 
       <AnimatePresence>
-        {(queuedPrompts.length > 0 || STEER_CONTAINER_UI_PREVIEW) && (
+        {displayedQueuedPrompts.length > 0 && (
           <motion.div
             key="composer-queued-rail"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.18 }}
-            className="pointer-events-none relative z-20 mx-auto w-full max-w-4xl px-3 pb-2"
+            className="relative z-20 mx-auto w-full max-w-4xl px-3 pb-2"
           >
-            <div className="pointer-events-auto border border-border/60 bg-background/95 backdrop-blur-sm overflow-hidden">
+            <div className="border border-border/60 bg-background/95 backdrop-blur-sm overflow-hidden">
               <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-border/50 bg-background">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -6092,45 +6261,10 @@ export function StandaloneChat({
                 </div>
               </div>
               <TooltipProvider delayDuration={150}>
-                <div className="h-[112px] overflow-y-auto scrollbar-minimal">
-                  {(orderedQueuedPrompts.length > 0
-                    ? orderedQueuedPrompts
-                    : [
-                        {
-                          id: "preview-queued-1",
-                          preview: "di dyou check properly",
-                          queuedAtMs: 0n,
-                        },
-                        {
-                          id: "preview-queued-2",
-                          preview: "show my recent screen activity",
-                          queuedAtMs: 0n,
-                        },
-                        {
-                          id: "preview-queued-3",
-                          preview:
-                            "summarize all meetings from this morning and pull the key decisions, blockers, and action items by owner with timestamps",
-                          queuedAtMs: 0n,
-                        },
-                        {
-                          id: "preview-queued-4",
-                          preview:
-                            "find what i worked on in vscode around 8 to 10 am and compare it with what i discussed in slack so i can post a proper daily update",
-                          queuedAtMs: 0n,
-                        },
-                        {
-                          id: "preview-queued-5",
-                          preview: "create a quick recap for today",
-                          queuedAtMs: 0n,
-                        },
-                        {
-                          id: "preview-queued-6",
-                          preview:
-                            "check chrome tabs and tell me which docs were open for the payment retry incident root cause analysis",
-                          queuedAtMs: 0n,
-                        },
-                      ]).map((p, i) => {
+                <div ref={queuedScrollRef} className="max-h-[112px] overflow-y-auto scrollbar-minimal">
+                  {displayedQueuedPrompts.map((p, i) => {
                     const isPreview = p.id.startsWith("preview-queued-");
+                    const isReadOnlyPreview = isPreview && !usingInteractiveDummyQueue;
                     const isBusy = queuedActionPromptId === p.id;
                     const label = (queuedDraftById[p.id] ?? p.preview) || "image follow-up";
                     return (
@@ -6141,33 +6275,16 @@ export function StandaloneChat({
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, x: 8, scale: 0.98 }}
                         transition={{ duration: 0.16 }}
-                        draggable={!isPreview && !isBusy}
-                        onDragStart={() => {
-                          if (!isPreview) setDraggedQueuedId(p.id);
+                        onMouseEnter={() => {
+                          if (isReadOnlyPreview || isBusy) return;
+                          const activePointerDraggedId = pointerDraggedQueuedIdRef.current;
+                          if (!activePointerDraggedId || activePointerDraggedId === p.id) return;
+                          reorderQueuedRows(activePointerDraggedId, p.id);
                         }}
-                        onDragOver={(e) => {
-                          if (isPreview || !draggedQueuedId || draggedQueuedId === p.id) return;
-                          e.preventDefault();
-                        }}
-                        onDrop={(e) => {
-                          if (isPreview || !draggedQueuedId || draggedQueuedId === p.id) return;
-                          e.preventDefault();
-                          setQueuedUiOrder((prev) => {
-                            const base = prev.length > 0 ? [...prev] : orderedQueuedPrompts.map((q) => q.id);
-                            const from = base.indexOf(draggedQueuedId);
-                            const to = base.indexOf(p.id);
-                            if (from === -1 || to === -1) return base;
-                            const [moved] = base.splice(from, 1);
-                            base.splice(to, 0, moved);
-                            return base;
-                          });
-                          setDraggedQueuedId(null);
-                        }}
-                        onDragEnd={() => setDraggedQueuedId(null)}
                         tabIndex={0}
                         role="listitem"
                         onKeyDown={(e) => {
-                          if (isBusy || isPreview) return;
+                          if (isBusy || isReadOnlyPreview) return;
                           if (isQueuedItemSteerShortcut(e, isMac)) {
                             e.preventDefault();
                             steerQueuedPrompt(p);
@@ -6176,10 +6293,22 @@ export function StandaloneChat({
                             cancelQueuedPrompt(p);
                           }
                         }}
-                        className="group/qcard flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
+                        className="group/qcard select-none flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
                         title={label.length > 90 ? label : undefined}
                       >
-                        <span className="shrink-0 text-muted-foreground/70 cursor-grab active:cursor-grabbing">
+                        <span
+                          onMouseDown={(e) => {
+                            if (isReadOnlyPreview || isBusy) return;
+                            e.preventDefault();
+                            queueDragPointerYRef.current = e.clientY;
+                            pointerDraggedQueuedIdRef.current = p.id;
+                            setPointerDraggedQueuedId(p.id);
+                          }}
+                          className={cn(
+                            "shrink-0 text-muted-foreground/70 cursor-grab active:cursor-grabbing",
+                            pointerDraggedQueuedId === p.id && "text-foreground"
+                          )}
+                        >
                           <GripVertical className="h-3.5 w-3.5" />
                         </span>
                         {editingQueuedId === p.id ? (
@@ -6208,7 +6337,7 @@ export function StandaloneChat({
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              disabled={isBusy || isPreview}
+                              disabled={isBusy || isReadOnlyPreview}
                               onClick={() => steerQueuedPrompt(p)}
                               className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
                               aria-label={`steer queued message ${i + 1}`}
@@ -6231,7 +6360,7 @@ export function StandaloneChat({
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              disabled={isBusy || isPreview}
+                              disabled={isBusy || isReadOnlyPreview}
                               onClick={() => cancelQueuedPrompt(p)}
                               className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
                               aria-label={`remove queued message ${i + 1}`}
@@ -6245,7 +6374,7 @@ export function StandaloneChat({
                           <PopoverTrigger asChild>
                             <button
                               type="button"
-                              disabled={isBusy || isPreview}
+                              disabled={isBusy || isReadOnlyPreview}
                               className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
                               aria-label={`more queued actions ${i + 1}`}
                             >
@@ -6255,7 +6384,7 @@ export function StandaloneChat({
                           <PopoverContent className="w-44 p-1" align="end" side="top">
                             <button
                               type="button"
-                              disabled={isPreview}
+                              disabled={isReadOnlyPreview}
                               onClick={() => {
                                 setEditingQueuedId(p.id);
                               }}
