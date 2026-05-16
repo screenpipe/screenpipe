@@ -884,7 +884,7 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
 } catch (e) {

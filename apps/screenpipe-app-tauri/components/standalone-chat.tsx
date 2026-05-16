@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight, GripVertical } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -76,7 +76,6 @@ import {
   isQueuedItemCancelShortcut,
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
-  queuedPreviewMatchesText,
 } from "@/lib/chat-queue-controls";
 
 const MermaidDiagram = React.lazy(() =>
@@ -110,32 +109,7 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
-const STEER_CONTAINER_UI_PREVIEW = true;
-const QUEUE_DEBUG_INTERACTIVE_DUMMY = true;
-const QUEUE_DEBUG_RESEED_ON_LOAD = true;
-const STATIC_PREVIEW_QUEUED_PROMPTS: PiQueuedPrompt[] = [
-  { id: "preview-queued-1", preview: "di dyou check properly", queuedAtMs: 0n },
-  { id: "preview-queued-2", preview: "show my recent screen activity", queuedAtMs: 0n },
-  {
-    id: "preview-queued-3",
-    preview:
-      "summarize all meetings from this morning and pull the key decisions, blockers, and action items by owner with timestamps",
-    queuedAtMs: 0n,
-  },
-  {
-    id: "preview-queued-4",
-    preview:
-      "find what i worked on in vscode around 8 to 10 am and compare it with what i discussed in slack so i can post a proper daily update",
-    queuedAtMs: 0n,
-  },
-  { id: "preview-queued-5", preview: "create a quick recap for today", queuedAtMs: 0n },
-  {
-    id: "preview-queued-6",
-    preview:
-      "check chrome tabs and tell me which docs were open for the payment retry incident root cause analysis",
-    queuedAtMs: 0n,
-  },
-];
+const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 
 interface Speaker {
   id: number;
@@ -363,6 +337,15 @@ interface ToolCall {
   isRunning: boolean;
 }
 
+function queuedSnapshotsEqual(a: PiQueuedPrompt[], b: PiQueuedPrompt[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].preview !== b[i].preview) return false;
+  }
+  return true;
+}
+
 type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
@@ -380,11 +363,6 @@ interface Message {
   model?: string;
   provider?: string;
   retryPrompt?: string; // when set, renders a retry CTA on error messages
-  /** True between optimistic enqueue and the moment Pi's drain loop picks
-   *  the prompt up (`agent_start` for this turn). Drives a lighter visual
-   *  treatment so the user can tell at-a-glance which messages are still
-   *  waiting in line vs. already in-flight. Cleared by handleAgentStart. */
-  queued?: boolean;
 }
 
 // Tool icons by name
@@ -1983,21 +1961,10 @@ export function StandaloneChat({
   // Sourced from rust via the `pi-queue-changed` event — single source of
   // truth lives in `pi_command_queue.rs`. Cleared as soon as the drain loop
   // pulls a queued item and writes it to stdin (it's then in-flight).
-  const [queuedPrompts, setQueuedPrompts] = useState<PiQueuedPrompt[]>([]);
+  const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, PiQueuedPrompt[]>>({});
+  const [queuedPayloadBySession, setQueuedPayloadBySession] = useState<Record<string, Record<string, { content: string; displayContent?: string; images: string[] }>>>({});
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
-  const [queueingEnabled, setQueueingEnabled] = useState(true);
-  const [queuedUiOrder, setQueuedUiOrder] = useState<string[]>([]);
-  const [pointerDraggedQueuedId, setPointerDraggedQueuedId] = useState<string | null>(null);
-  const pointerDraggedQueuedIdRef = useRef<string | null>(null);
   const queuedScrollRef = useRef<HTMLDivElement | null>(null);
-  const queueDragPointerYRef = useRef<number | null>(null);
-  const queueDragAutoScrollRafRef = useRef<number | null>(null);
-  const [queuedDraftById, setQueuedDraftById] = useState<Record<string, string>>({});
-  const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
-  const [dummyQueuedPrompts, setDummyQueuedPrompts] = useState<PiQueuedPrompt[]>(
-    STATIC_PREVIEW_QUEUED_PROMPTS
-  );
-  const dummyReseededRef = useRef(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
@@ -2104,6 +2071,8 @@ export function StandaloneChat({
   // no explicit stopReason=error on any message (some providers drop that flag).
   const piLastErrorRef = useRef<string | null>(null);
   const piStartInFlightRef = useRef(false);
+  const sendDispatchInFlightRef = useRef(false);
+  const forceQueueModeRef = useRef(false);
   const piFirstCallRetried = useRef(false);
   const sessionActivityLastEmitAtRef = useRef<Record<string, number>>({});
   const sessionActivityLastSigRef = useRef<Record<string, string>>({});
@@ -2170,6 +2139,11 @@ export function StandaloneChat({
   // sessionId from message 0 — see comment above piSessionIdRef.
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
+  );
+  const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
+  const queuedPrompts = useMemo(
+    () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
+    [queuedPromptsBySession, currentQueueSessionId]
   );
 
   const cancelStreamingMessageRender = useCallback(() => {
@@ -3520,20 +3494,29 @@ export function StandaloneChat({
       const newAssistantId = (Date.now() + 1).toString();
       let created = false;
       setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "user") return prev;
+        let targetIdx = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]?.role === "user") {
+            targetIdx = i;
+            break;
+          }
+        }
+        if (targetIdx === -1) return prev;
+
+        const target = prev[targetIdx];
+        if (!target || target.role !== "user") return prev;
         created = true;
-        return [
-          ...prev,
-          {
-            id: newAssistantId,
-            role: "assistant",
-            content: "Processing...",
-            timestamp: Date.now(),
-            model: activePreset?.model,
-            provider: activePreset?.provider,
-          },
-        ];
+
+        const base = [...prev];
+        base.splice(targetIdx + 1, 0, {
+          id: newAssistantId,
+          role: "assistant",
+          content: "Processing...",
+          timestamp: Date.now(),
+          model: activePreset?.model,
+          provider: activePreset?.provider,
+        });
+        return base;
       });
       if (!created) return false;
       piMessageIdRef.current = newAssistantId;
@@ -3862,32 +3845,62 @@ export function StandaloneChat({
             // processing the followUp turn.
           }
 
-          // The user message tied to this turn just left the queue and is
-          // now in-flight — clear the `queued` flag so the bubble drops
-          // its muted treatment. We match on content text since pi-mono
-          // doesn't echo our optimistic message id back.
-          {
-            const text = (() => {
-              const c = data.message?.content;
-              if (typeof c === "string") return c;
-              if (Array.isArray(c)) {
-                return c
-                  .filter((p: any) => p?.type === "text" && typeof p.text === "string")
-                  .map((p: any) => p.text)
-                  .join("");
-              }
-              return "";
-            })();
-            if (text) {
-              setMessages((prev) => {
-                let cleared = false;
-                return prev.map((m) => {
-                  if (cleared || !m.queued || m.role !== "user" || m.content !== text) {
-                    return m;
-                  }
-                  cleared = true;
-                  return { ...m, queued: false };
-                });
+          const text = (() => {
+            const c = data.message?.content;
+            if (typeof c === "string") return c;
+            if (Array.isArray(c)) {
+              return c
+                .filter((p: any) => p?.type === "text" && typeof p.text === "string")
+                .map((p: any) => p.text)
+                .join("");
+            }
+            return "";
+          })();
+
+          if (text && !piMessageIdRef.current) {
+            const queuedTurnUserId = Date.now().toString();
+            const queuedTurnAssistantId = (Date.now() + 1).toString();
+            const startedUser: Message = {
+              id: queuedTurnUserId,
+              role: "user",
+              content: text,
+              timestamp: Date.now(),
+            };
+            const assistantPlaceholder: Message = {
+              id: queuedTurnAssistantId,
+              role: "assistant",
+              content: "Processing...",
+              timestamp: Date.now(),
+              model: activePreset?.model,
+              provider: activePreset?.provider,
+            };
+
+            setMessages((prev) => {
+              const rows = [...prev, startedUser, assistantPlaceholder];
+              void saveConversation(rows, {
+                refreshHistory: false,
+                syncActiveConversation: false,
+              });
+              return rows;
+            });
+
+            piMessageIdRef.current = queuedTurnAssistantId;
+            piStreamingTextRef.current = "";
+            piContentBlocksRef.current = [];
+            setIsLoading(true);
+            setIsStreaming(true);
+
+            const sidNow = piSessionIdRef.current;
+            if (sidNow) {
+              const storeState = useChatStore.getState();
+              storeState.actions.appendMessage(sidNow, startedUser as any);
+              storeState.actions.appendMessage(sidNow, assistantPlaceholder as any);
+              storeState.actions.setStreaming(sidNow, {
+                streamingMessageId: queuedTurnAssistantId,
+                streamingText: "",
+                contentBlocks: [],
+                isStreaming: true,
+                isLoading: true,
               });
             }
           }
@@ -4053,6 +4066,7 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
+            forceQueueModeRef.current = false;
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
@@ -4321,18 +4335,46 @@ export function StandaloneChat({
     // session this panel is bound to. Single source of truth lives in
     // `pi_command_queue.rs`; this listener just mirrors it into local state.
     let unlistenQueue: UnlistenFn | undefined;
-    listen<{ sessionId?: string; session_id?: string; queued?: PiQueuedPrompt[] }>("pi-queue-changed", (event) => {
+    listen<{
+      sessionId?: string;
+      session_id?: string;
+      queued?: PiQueuedPrompt[];
+    }>("pi-queue-changed", (event) => {
       if (!mounted) return;
       const { sessionId, queued } = normalizeQueueEventPayload(event.payload);
-      if (sessionId !== piSessionIdRef.current) return;
-      setQueuedPrompts(queued);
+      if (!sessionId) return;
+      setQueuedPromptsBySession((prev) => {
+        const existing = prev[sessionId] ?? [];
+        if (queuedSnapshotsEqual(existing, queued)) return prev;
+        return { ...prev, [sessionId]: queued };
+      });
+      setQueuedPayloadBySession((prev) => {
+        const current = prev[sessionId];
+        if (!current) return prev;
+        const queuedIds = new Set(queued.map((p) => p.id));
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([id]) => queuedIds.has(id))
+        );
+        if (Object.keys(next).length === Object.keys(current).length) return prev;
+        return { ...prev, [sessionId]: next };
+      });
     }).then(fn => { unlistenQueue = fn; });
 
     // Initial fetch — closes the gap between component mount and first event.
     (async () => {
+      const sidAtFetch = piSessionIdRef.current;
       try {
-        const res = await commands.piPending(piSessionIdRef.current);
-        if (mounted && res.status === "ok") setQueuedPrompts(res.data);
+        const res = await commands.piPending(sidAtFetch);
+        if (!mounted) return;
+        const nextQueue = res.status === "ok" ? res.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sidAtFetch] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sidAtFetch]: nextQueue,
+          };
+        });
       } catch { /* ignore — queue may not be initialized yet */ }
     })();
 
@@ -4642,61 +4684,16 @@ export function StandaloneChat({
       return sendPiMessage(userMessage, displayLabel);
     }
 
-    // Local optimistic message + chat-store mirror. Skips assistant placeholder
-    // entirely; the new turn's `agent_start` (downstream from the rust queue
-    // dequeue) will create one through the existing event flow.
-    // Mark queued=true so the bubble renders with a muted/lighter treatment
-    // until Pi actually starts streaming this turn (cleared in handleAgentStart).
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: userMessage,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(pastedImages.length > 0 ? { images: [...pastedImages] } : {}),
-      timestamp: Date.now(),
-      queued: true,
-    };
-    setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
-
-    posthog.capture("chat_message_enqueued", {
-      provider: activePreset?.provider,
-      model: activePreset?.model,
-      pending_count: queuedPrompts.length + 1,
-    });
-
     // Convert any data-URL pastes to the Pi image-content shape (same format
     // used by the normal send path further down in this file).
     const piImages = imageDataUrlsToPiImages(pastedImages);
-    if (pastedImages.length > 0) setPastedImages([]);
+    const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
+    const prevInput = input;
+    const hadPastedImages = pastedImages.length > 0;
+
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    if (hadPastedImages) setPastedImages([]);
 
     try {
       const result = await commands.piPrompt(
@@ -4705,9 +4702,35 @@ export function StandaloneChat({
         piImages.length > 0 ? piImages : null,
       );
       if (result.status !== "ok") {
+        setInput(prevInput);
+        if (hadPastedImages) setPastedImages(queuedImageDataUrls);
         toast({ title: "failed to queue message", description: result.error, variant: "destructive" });
+        return;
       }
+
+      const sid = piSessionIdRef.current;
+      if (sid && result.data) {
+        setQueuedPayloadBySession((prev) => ({
+          ...prev,
+          [sid]: {
+            ...(prev[sid] ?? {}),
+            [result.data]: {
+              content: userMessage,
+              displayContent: displayLabel,
+              images: queuedImageDataUrls,
+            },
+          },
+        }));
+      }
+
+      posthog.capture("chat_message_enqueued", {
+        provider: activePreset?.provider,
+        model: activePreset?.model,
+        pending_count: queuedPrompts.length + 1,
+      });
     } catch (e) {
+      setInput(prevInput);
+      if (hadPastedImages) setPastedImages(queuedImageDataUrls);
       console.warn("[Pi] failed to enqueue follow-up:", e);
     }
   }
@@ -4717,6 +4740,7 @@ export function StandaloneChat({
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
+    forceQueueModeRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
   }
@@ -4805,6 +4829,7 @@ export function StandaloneChat({
     }
 
     await interruptActivePiTurn();
+    forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
@@ -5056,6 +5081,7 @@ export function StandaloneChat({
               : m
           )
         );
+        forceQueueModeRef.current = false;
         setIsLoading(false);
         setIsStreaming(false);
       }
@@ -5069,6 +5095,7 @@ export function StandaloneChat({
             : m
         )
       );
+      forceQueueModeRef.current = false;
       setIsLoading(false);
       setIsStreaming(false);
     }
@@ -5160,18 +5187,23 @@ export function StandaloneChat({
 
   async function sendMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
+    const trimmed = userMessage.trim();
+    if (!trimmed && pastedImages.length === 0) return;
 
-    // If Pi is mid-reply, route based on the queueing toggle:
-    // - enabled: keep as follow-up queue
-    // - disabled: steer current reply
-    if (isLoading || isStreaming) {
-      return queueingEnabled
-        ? enqueuePiMessage(userMessage, displayLabel)
-        : steerMessage(userMessage, displayLabel);
+    // Guard the tiny gap between submit and React's loading state update.
+    // During this window, rapid Enter presses must queue (not start a second
+    // normal turn), otherwise user bubbles can drift.
+    if (forceQueueModeRef.current || sendDispatchInFlightRef.current || !!piMessageIdRef.current || isLoading || isStreaming) {
+      return enqueuePiMessage(trimmed, displayLabel);
     }
 
-    // All providers route through Pi agent
-    return sendPiMessage(userMessage, displayLabel);
+    sendDispatchInFlightRef.current = true;
+    try {
+      // All providers route through Pi agent
+      return await sendPiMessage(trimmed, displayLabel);
+    } finally {
+      sendDispatchInFlightRef.current = false;
+    }
   }
 
   async function queueFollowUpMessage(userMessage: string, displayLabel?: string) {
@@ -5179,222 +5211,52 @@ export function StandaloneChat({
     return enqueuePiMessage(userMessage, displayLabel);
   }
 
+  // Queue UI is session-scoped. On chat switch, hydrate pending items for the
+  // active session key without mutating other session queues.
   useEffect(() => {
-    const incomingIds = queuedPrompts.map((p) => p.id);
-    setQueuedUiOrder((prev) => {
-      const prevStillPresent = prev.filter((id) => incomingIds.includes(id));
-      const newlyAdded = incomingIds.filter((id) => !prevStillPresent.includes(id));
-      return [...prevStillPresent, ...newlyAdded];
-    });
-    setQueuedDraftById((prev) => {
-      const next: Record<string, string> = {};
-      for (const p of queuedPrompts) {
-        next[p.id] = prev[p.id] ?? p.preview ?? "";
-      }
-      return next;
-    });
-  }, [queuedPrompts]);
+    const sid = currentQueueSessionId;
+    if (!sid) {
+      return;
+    }
 
-  const orderedQueuedPrompts = useMemo(() => {
-    const byId = new Map(queuedPrompts.map((p) => [p.id, p]));
-    const ordered = queuedUiOrder
-      .map((id) => byId.get(id))
-      .filter((p): p is PiQueuedPrompt => Boolean(p));
-    const remaining = queuedPrompts.filter((p) => !queuedUiOrder.includes(p.id));
-    return [...ordered, ...remaining];
-  }, [queuedPrompts, queuedUiOrder]);
+    let cancelled = false;
+    setQueuedActionPromptId(null);
 
-  const usingInteractiveDummyQueue =
-    QUEUE_DEBUG_INTERACTIVE_DUMMY && queuedPrompts.length === 0;
-  const displayedQueuedPrompts = useMemo(() => {
-    if (usingInteractiveDummyQueue) return dummyQueuedPrompts;
-    if (queuedPrompts.length > 0) return orderedQueuedPrompts;
-    if (STEER_CONTAINER_UI_PREVIEW) return STATIC_PREVIEW_QUEUED_PROMPTS;
-    return [];
-  }, [usingInteractiveDummyQueue, dummyQueuedPrompts, queuedPrompts.length, orderedQueuedPrompts]);
-
-  const reorderQueuedRows = useCallback(
-    (fromId: string, toId: string) => {
-      if (!fromId || fromId === toId) return;
-      if (usingInteractiveDummyQueue) {
-        setDummyQueuedPrompts((prev) => {
-          const base = [...prev];
-          const from = base.findIndex((q) => q.id === fromId);
-          const to = base.findIndex((q) => q.id === toId);
-          if (from === -1 || to === -1) return base;
-          const [moved] = base.splice(from, 1);
-          base.splice(to, 0, moved);
-          return base;
+    (async () => {
+      try {
+        const queuedRes = await commands.piPending(sid);
+        if (cancelled) return;
+        const nextQueue = queuedRes.status === "ok" ? queuedRes.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sid] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sid]: nextQueue,
+          };
         });
-        return;
-      }
-      setQueuedUiOrder((prev) => {
-        const base = prev.length > 0 ? [...prev] : orderedQueuedPrompts.map((q) => q.id);
-        const from = base.indexOf(fromId);
-        const to = base.indexOf(toId);
-        if (from === -1 || to === -1) return base;
-        const [moved] = base.splice(from, 1);
-        base.splice(to, 0, moved);
-        return base;
-      });
-    },
-    [usingInteractiveDummyQueue, orderedQueuedPrompts]
-  );
-
-  useEffect(() => {
-    const clearPointerDrag = () => {
-      pointerDraggedQueuedIdRef.current = null;
-      setPointerDraggedQueuedId(null);
-      queueDragPointerYRef.current = null;
-      if (queueDragAutoScrollRafRef.current !== null) {
-        window.cancelAnimationFrame(queueDragAutoScrollRafRef.current);
-        queueDragAutoScrollRafRef.current = null;
-      }
-    };
-    window.addEventListener("mouseup", clearPointerDrag);
-    window.addEventListener("mouseleave", clearPointerDrag);
-    return () => {
-      window.removeEventListener("mouseup", clearPointerDrag);
-      window.removeEventListener("mouseleave", clearPointerDrag);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!pointerDraggedQueuedId) return;
-
-    const tick = () => {
-      const activeDraggedId = pointerDraggedQueuedIdRef.current;
-      const scrollEl = queuedScrollRef.current;
-      const pointerY = queueDragPointerYRef.current;
-      if (!activeDraggedId || !scrollEl) {
-        queueDragAutoScrollRafRef.current = null;
-        return;
-      }
-      if (pointerY == null) {
-        queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
-        return;
-      }
-
-      const rect = scrollEl.getBoundingClientRect();
-      const edgeThreshold = 24;
-      let delta = 0;
-
-      if (pointerY < rect.top + edgeThreshold) {
-        const proximity = rect.top + edgeThreshold - pointerY;
-        delta = -Math.min(16, Math.max(3, Math.ceil(proximity / 2)));
-      } else if (pointerY > rect.bottom - edgeThreshold) {
-        const proximity = pointerY - (rect.bottom - edgeThreshold);
-        delta = Math.min(16, Math.max(3, Math.ceil(proximity / 2)));
-      }
-
-      if (delta !== 0) {
-        scrollEl.scrollTop += delta;
-      }
-
-      queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
-    };
-
-    const onMouseMove = (e: MouseEvent) => {
-      queueDragPointerYRef.current = e.clientY;
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    if (queueDragAutoScrollRafRef.current === null) {
-      queueDragAutoScrollRafRef.current = window.requestAnimationFrame(tick);
-    }
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      queueDragPointerYRef.current = null;
-      if (queueDragAutoScrollRafRef.current !== null) {
-        window.cancelAnimationFrame(queueDragAutoScrollRafRef.current);
-        queueDragAutoScrollRafRef.current = null;
-      }
-    };
-  }, [pointerDraggedQueuedId]);
-
-  useEffect(() => {
-    if (!QUEUE_DEBUG_RESEED_ON_LOAD) return;
-    if (!usingInteractiveDummyQueue) return;
-    if (dummyReseededRef.current) return;
-    setDummyQueuedPrompts(STATIC_PREVIEW_QUEUED_PROMPTS);
-    setQueuedDraftById((prev) => {
-      const next = { ...prev };
-      for (const p of STATIC_PREVIEW_QUEUED_PROMPTS) {
-        next[p.id] = p.preview ?? "";
-      }
-      return next;
-    });
-    dummyReseededRef.current = true;
-  }, [usingInteractiveDummyQueue]);
-
-  function findLocalQueuedMessage(prompt: PiQueuedPrompt): Message | undefined {
-    return messages.find(
-      (message) =>
-        message.role === "user" &&
-        message.queued &&
-        queuedPreviewMatchesText(prompt.preview, message.content),
-    );
-  }
-
-  function removeLocalQueuedMessage(prompt: PiQueuedPrompt) {
-    const matchesPrompt = (message: unknown) => {
-      if (!message || typeof message !== "object") return false;
-      const candidate = message as { role?: unknown; queued?: unknown; content?: unknown };
-      return (
-        candidate.role === "user" &&
-        candidate.queued === true &&
-        typeof candidate.content === "string" &&
-        queuedPreviewMatchesText(prompt.preview, candidate.content)
-      );
-    };
-
-    setMessages((prev) => {
-      let removed = false;
-      const next = prev.filter((message) => {
-        if (!removed && matchesPrompt(message)) {
-          removed = true;
-          return false;
+      } catch {
+        if (!cancelled) {
+          setQueuedPromptsBySession((prev) => {
+            const existing = prev[sid] ?? [];
+            if (existing.length === 0) return prev;
+            return {
+              ...prev,
+              [sid]: [],
+            };
+          });
         }
-        return true;
-      });
-      if (!removed) return prev;
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-
-    const sid = piSessionIdRef.current;
-    if (!sid) return;
-    const storeState = useChatStore.getState();
-    const sessionMessages = storeState.sessions[sid]?.messages;
-    if (!sessionMessages?.length) return;
-
-    let removed = false;
-    const nextMessages = sessionMessages.filter((message) => {
-      if (!removed && matchesPrompt(message)) {
-        removed = true;
-        return false;
       }
-      return true;
-    });
-    if (removed) {
-      storeState.actions.setMessages(sid, nextMessages);
-    }
-  }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentQueueSessionId]);
+
+  const displayedQueuedPrompts = queuedPrompts;
 
   async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
-    if (usingInteractiveDummyQueue && prompt.id.startsWith("preview-queued-")) {
-      setDummyQueuedPrompts((prev) => prev.filter((queued) => queued.id !== prompt.id));
-      setQueuedDraftById((prev) => {
-        const next = { ...prev };
-        delete next[prompt.id];
-        return next;
-      });
-      return true;
-    }
-
     setQueuedActionPromptId(prompt.id);
     try {
       const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
@@ -5413,8 +5275,23 @@ export function StandaloneChat({
         }
         return false;
       }
-      setQueuedPrompts((prev) => prev.filter((queued) => queued.id !== prompt.id));
-      removeLocalQueuedMessage(prompt);
+      if (currentQueueSessionId) {
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+        setQueuedPayloadBySession((prev) => {
+          const current = prev[currentQueueSessionId] ?? {};
+          if (!(prompt.id in current)) return prev;
+          const { [prompt.id]: _removed, ...rest } = current;
+          return {
+            ...prev,
+            [currentQueueSessionId]: rest,
+          };
+        });
+      }
       return true;
     } catch (e) {
       if (!options.silent) {
@@ -5521,19 +5398,7 @@ export function StandaloneChat({
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    if (usingInteractiveDummyQueue) {
-      setDummyQueuedPrompts((prev) => prev.filter((q) => q.id !== prompt.id));
-      toast({ title: "dummy steer applied (local only)" });
-      return;
-    }
-    const queuedMessage = findLocalQueuedMessage(prompt);
-    if (!queuedMessage && (!prompt.preview || prompt.preview.length >= 200)) {
-      toast({
-        title: "full queued prompt unavailable",
-        description: "Cancel it or let it run next; ScreenPipe only has a preview for this item.",
-      });
-      return;
-    }
+    const queuedPayload = queuedPayloadBySession[currentQueueSessionId]?.[prompt.id];
 
     const cancelled = await cancelQueuedPrompt(prompt, { silent: true });
     if (!cancelled) {
@@ -5545,9 +5410,9 @@ export function StandaloneChat({
     }
 
     await steerMessage(
-      queuedMessage?.content ?? prompt.preview,
-      queuedMessage?.displayContent,
-      queuedMessage?.images ?? [],
+      queuedPayload?.content ?? prompt.preview,
+      queuedPayload?.displayContent,
+      queuedPayload?.images ?? [],
     );
   }
 
@@ -6036,11 +5901,7 @@ export function StandaloneChat({
                   message.role === "user"
                     ? "bg-muted/60 text-foreground"
                     : "bg-background text-foreground",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
-                  // Queued user messages — visually de-emphasised so the eye stays on
-                  // the active turn. Cleared when pi-mono fires message_start for
-                  // this turn (see handler above).
-                  message.queued && "bg-muted/35 text-muted-foreground opacity-80"
+                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text"
                 )}
               >
                 {editingMessageId === message.id ? (
@@ -6263,10 +6124,8 @@ export function StandaloneChat({
               <TooltipProvider delayDuration={150}>
                 <div ref={queuedScrollRef} className="max-h-[112px] overflow-y-auto scrollbar-minimal">
                   {displayedQueuedPrompts.map((p, i) => {
-                    const isPreview = p.id.startsWith("preview-queued-");
-                    const isReadOnlyPreview = isPreview && !usingInteractiveDummyQueue;
                     const isBusy = queuedActionPromptId === p.id;
-                    const label = (queuedDraftById[p.id] ?? p.preview) || "image follow-up";
+                    const label = p.preview || "image follow-up";
                     return (
                       <motion.div
                         key={p.id}
@@ -6275,16 +6134,10 @@ export function StandaloneChat({
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, x: 8, scale: 0.98 }}
                         transition={{ duration: 0.16 }}
-                        onMouseEnter={() => {
-                          if (isReadOnlyPreview || isBusy) return;
-                          const activePointerDraggedId = pointerDraggedQueuedIdRef.current;
-                          if (!activePointerDraggedId || activePointerDraggedId === p.id) return;
-                          reorderQueuedRows(activePointerDraggedId, p.id);
-                        }}
                         tabIndex={0}
                         role="listitem"
                         onKeyDown={(e) => {
-                          if (isBusy || isReadOnlyPreview) return;
+                          if (isBusy) return;
                           if (isQueuedItemSteerShortcut(e, isMac)) {
                             e.preventDefault();
                             steerQueuedPrompt(p);
@@ -6296,48 +6149,16 @@ export function StandaloneChat({
                         className="group/qcard select-none flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
                         title={label.length > 90 ? label : undefined}
                       >
-                        <span
-                          onMouseDown={(e) => {
-                            if (isReadOnlyPreview || isBusy) return;
-                            e.preventDefault();
-                            queueDragPointerYRef.current = e.clientY;
-                            pointerDraggedQueuedIdRef.current = p.id;
-                            setPointerDraggedQueuedId(p.id);
-                          }}
-                          className={cn(
-                            "shrink-0 text-muted-foreground/70 cursor-grab active:cursor-grabbing",
-                            pointerDraggedQueuedId === p.id && "text-foreground"
-                          )}
-                        >
-                          <GripVertical className="h-3.5 w-3.5" />
+                        <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[12px]">
+                          {label}
                         </span>
-                        {editingQueuedId === p.id ? (
-                          <input
-                            autoFocus
-                            value={queuedDraftById[p.id] ?? p.preview ?? ""}
-                            onChange={(e) =>
-                              setQueuedDraftById((prev) => ({ ...prev, [p.id]: e.target.value }))
-                            }
-                            onBlur={() => setEditingQueuedId(null)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === "Escape") {
-                                e.preventDefault();
-                                setEditingQueuedId(null);
-                              }
-                            }}
-                            className="flex-1 min-w-0 bg-transparent border border-border px-2 py-0.5 text-[12px] font-mono"
-                          />
-                        ) : (
-                          <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[12px]">
-                            {label}
-                          </span>
-                        )}
                         <div className="flex items-center gap-1 shrink-0">
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              disabled={isBusy || isReadOnlyPreview}
+                              disabled={isBusy}
                               onClick={() => steerQueuedPrompt(p)}
                               className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
                               aria-label={`steer queued message ${i + 1}`}
@@ -6360,7 +6181,7 @@ export function StandaloneChat({
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              disabled={isBusy || isReadOnlyPreview}
+                              disabled={isBusy}
                               onClick={() => cancelQueuedPrompt(p)}
                               className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
                               aria-label={`remove queued message ${i + 1}`}
@@ -6370,37 +6191,6 @@ export function StandaloneChat({
                           </TooltipTrigger>
                           <TooltipContent side="top">Remove queued message</TooltipContent>
                         </Tooltip>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <button
-                              type="button"
-                              disabled={isBusy || isReadOnlyPreview}
-                              className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
-                              aria-label={`more queued actions ${i + 1}`}
-                            >
-                              <MoreHorizontal className="h-3 w-3" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-44 p-1" align="end" side="top">
-                            <button
-                              type="button"
-                              disabled={isReadOnlyPreview}
-                              onClick={() => {
-                                setEditingQueuedId(p.id);
-                              }}
-                              className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setQueueingEnabled((v) => !v)}
-                              className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted"
-                            >
-                              {queueingEnabled ? "Turn off queueing" : "Turn on queueing"}
-                            </button>
-                          </PopoverContent>
-                        </Popover>
                         </div>
                       </motion.div>
                     );
@@ -6901,7 +6691,7 @@ export function StandaloneChat({
                   disabledReason
                     ? disabledReason
                     : isLoading || isStreaming
-                      ? "Steer current reply..."
+                      ? "Queue follow-up..."
                       : "Ask about your screen... (type @ for filters, paste images)"
                 }
                 disabled={!canChat}
@@ -7058,7 +6848,7 @@ export function StandaloneChat({
                 const isStopMode = primaryAction === "stop";
                 return (
                   <>
-                    {isSteerMode && queueingEnabled && (
+                    {isSteerMode && (
                       <TooltipProvider delayDuration={150}>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -7073,9 +6863,9 @@ export function StandaloneChat({
                               title="queue follow-up after current reply"
                             >
                               <Clock className="h-3.5 w-3.5" />
-                              {orderedQueuedPrompts.length > 0 && (
+                              {displayedQueuedPrompts.length > 0 && (
                                 <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-muted text-foreground text-[9px] font-mono font-semibold flex items-center justify-center border border-background">
-                                  {orderedQueuedPrompts.length}
+                                  {displayedQueuedPrompts.length}
                                 </span>
                               )}
                             </Button>
@@ -7099,25 +6889,21 @@ export function StandaloneChat({
                         isStopMode
                           ? "stop"
                           : isSteerMode
-                            ? queueingEnabled
-                              ? "queue follow-up"
-                              : "steer current reply"
+                            ? "queue follow-up"
                             : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
                           : isSteerMode
-                            ? queueingEnabled
-                              ? "queue follow-up"
-                              : "steer current reply"
+                            ? "queue follow-up"
                             : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
                       ) : isSteerMode ? (
-                        queueingEnabled ? <Clock className="h-4 w-4" /> : <CornerDownRight className="h-4 w-4" />
+                        <Clock className="h-4 w-4" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}

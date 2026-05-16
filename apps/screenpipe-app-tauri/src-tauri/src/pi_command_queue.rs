@@ -200,6 +200,29 @@ impl PiQueueState {
         });
     }
 
+    fn dequeue_first_matching_preview(&self, text: &str) -> bool {
+        let preview: String = text.chars().take(200).collect();
+        let mut removed = false;
+        self.queued.send_modify(|v| {
+            if let Some(pos) = v.iter().position(|p| p.preview == preview) {
+                v.remove(pos);
+                removed = true;
+            }
+        });
+        removed
+    }
+
+    fn dequeue_next_fifo(&self) -> bool {
+        let mut removed = false;
+        self.queued.send_modify(|v| {
+            if !v.is_empty() {
+                v.remove(0);
+                removed = true;
+            }
+        });
+        removed
+    }
+
     /// Remove the first queued entry whose preview matches the given user
     /// message text. Called by the stdout reader when pi-mono fires
     /// `message_start` with a user message — that's the moment a prompt
@@ -213,15 +236,13 @@ impl PiQueueState {
     /// first message_start dequeues the first entry, the second dequeues the
     /// second.
     pub fn dequeue_first_matching_text(&self, text: &str) -> bool {
-        let preview: String = text.chars().take(200).collect();
-        let mut removed = false;
-        self.queued.send_modify(|v| {
-            if let Some(pos) = v.iter().position(|p| p.preview == preview) {
-                v.remove(pos);
-                removed = true;
-            }
-        });
-        removed
+        if self.dequeue_first_matching_preview(text) {
+            return true;
+        }
+        // Fallback: if pi-mono transforms/normalizes the prompt text (or
+        // it's image-heavy and text extraction differs), advance queue in
+        // strict FIFO so UI timing stays aligned with message_start.
+        self.dequeue_next_fifo()
     }
 
     /// Mark a prompt id as cancelled so the drain loop drops it on dequeue
@@ -384,6 +405,7 @@ pub fn spawn_queue(
             match msg {
                 QueueMessage::Command(cmd) => {
                     let prompt_id = cmd.prompt_meta.as_ref().map(|m| m.id.clone());
+                    let is_prompt = prompt_id.is_some();
 
                     // Tombstone check — if the user cancelled this prompt
                     // while it was sitting in the channel, drop it without
@@ -411,6 +433,23 @@ pub fn spawn_queue(
                         .unwrap_or("?")
                         .to_string();
 
+                    // Prompt commands must be serialized against the currently
+                    // active agent turn. We cannot rely on response ACK order:
+                    // ACK can arrive before pi-mono actually starts streaming.
+                    if is_prompt && state.is_agent_active() {
+                        let ok =
+                            wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
+                        if !ok {
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
+                            let _ = cmd
+                                .reply
+                                .send(Err("Pi process died while processing".to_string()));
+                            continue;
+                        }
+                    }
+
                     // Write to stdin
                     let write_result = {
                         let mut stdin_guard = stdin.lock().await;
@@ -434,6 +473,13 @@ pub fn spawn_queue(
                         }
                         let _ = cmd.reply.send(Err(format!("stdin write failed: {}", e)));
                         continue;
+                    }
+
+                    // `agent_start` can arrive a little later than the write.
+                    // Mark active optimistically for prompt commands so the
+                    // next queued prompt cannot slip through this tiny window.
+                    if is_prompt {
+                        state.mark_agent_active();
                     }
 
                     match cmd.wait_mode {

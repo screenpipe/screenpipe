@@ -1768,7 +1768,7 @@ pub async fn pi_prompt(
     session_id: Option<String>,
     message: String,
     images: Option<Vec<PiImageContent>>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     let queue = {
         let mut pool = state.0.lock().await;
@@ -1806,7 +1806,7 @@ pub async fn pi_prompt(
     // prompt. Combined with `streamingBehavior: "followUp"` on the command,
     // this avoids the "already processing" race that fires when the agent
     // momentarily idles between auto-retries.
-    let (_queue_id, rx) = queue
+    let (queue_id, rx) = queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::WriteOnly,
@@ -1814,7 +1814,8 @@ pub async fn pi_prompt(
         )
         .await?;
     rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())?
+        .map_err(|_| "Pi command queue dropped".to_string())??;
+    Ok(queue_id)
 }
 
 /// Steer the active Pi reply using Pi's native steering command.
