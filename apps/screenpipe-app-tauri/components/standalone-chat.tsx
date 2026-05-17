@@ -2102,6 +2102,7 @@ export function StandaloneChat({
   const sessionActivityLastSigRef = useRef<Record<string, string>>({});
   const piStoppedIntentionallyRef = useRef(false);
   const piIntentionallyStoppedPidsRef = useRef<Set<number>>(new Set());
+  const piActiveStopRequestedRef = useRef(false);
   const piPresetSwitchPromiseRef = useRef<Promise<void> | null>(null);
   const piCrashCountRef = useRef(0);
   const piLastCrashRef = useRef(0);
@@ -3220,8 +3221,9 @@ export function StandaloneChat({
       if (e.key === "Escape" && !showMentionDropdown) {
         if (isLoading || isStreaming) {
           // Stop the agent
+          piActiveStopRequestedRef.current = true;
           try {
-            await commands.piAbort(piSessionIdRef.current);
+            await commands.piAbortActive(piSessionIdRef.current);
           } catch (err) {
             console.warn("[Pi] Failed to abort on Escape:", err);
           }
@@ -4025,6 +4027,7 @@ export function StandaloneChat({
             // functional updater until after the refs are cleared below.
             const blocksSnapshot = [...piContentBlocksRef.current];
             const streamedText = piStreamingTextRef.current;
+            const wasStoppedByUser = piActiveStopRequestedRef.current;
 
             // Check if content was already set by error handlers above
             setMessages((prev) => {
@@ -4046,6 +4049,9 @@ export function StandaloneChat({
                 return prev;
               }
               const contentBlocks = [...blocksSnapshot];
+              if (wasStoppedByUser && !content && contentBlocks.length === 0) {
+                return prev.filter((m) => m.id !== msgId);
+              }
               // If no text content but we have tool/thinking blocks, don't show "no response"
               const hasNonTextBlocks = contentBlocks.some((b) => b.type === "tool" || b.type === "thinking");
               let emptyResponseRetryPrompt: string | undefined;
@@ -4100,6 +4106,7 @@ export function StandaloneChat({
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
             piLastErrorRef.current = null;
+            piActiveStopRequestedRef.current = false;
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
             forceQueueModeRef.current = false;
@@ -5624,8 +5631,9 @@ export function StandaloneChat({
   };
 
   const handleStop = async () => {
+    piActiveStopRequestedRef.current = true;
     try {
-      await commands.piAbort(piSessionIdRef.current);
+      await commands.piAbortActive(piSessionIdRef.current);
     } catch (e) {
       console.warn("[Pi] Failed to abort:", e);
     }

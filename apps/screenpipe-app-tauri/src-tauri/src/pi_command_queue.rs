@@ -151,7 +151,7 @@ impl PiQueueState {
 
     /// Called by the stdout reader when a `done` event is received.
     pub fn signal_done(&self) {
-        self.done_notify.notify_one();
+        self.done_notify.notify_waiters();
     }
 
     /// Called by the stdout reader on `agent_start` (a prompt has begun streaming).
@@ -372,6 +372,35 @@ impl PiQueueHandle {
         writeln!(*stdin_guard, "{}", cmd_str)
             .and_then(|_| stdin_guard.flush())
             .map_err(|e| format!("stdin write failed: {}", e))
+    }
+
+    /// Abort only the active Pi turn. Unlike `abort`, this does not drain or
+    /// clear queued follow-ups, so the queue can continue after the active
+    /// reply stops.
+    pub async fn abort_active_only(&self) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or("Pi stdin is not available".to_string())?;
+        let mut alive_rx = self.state.alive.subscribe();
+        let req_id = format!("req_{}", uuid::Uuid::new_v4().simple());
+        let abort_cmd = json!({"type": "abort", "id": &req_id});
+        let cmd_str = serde_json::to_string(&abort_cmd).map_err(|e| e.to_string())?;
+
+        self.state.mark_agent_idle();
+        {
+            let mut stdin_guard = stdin.lock().await;
+            info!("pi_command_queue: writing active-only abort ({})", req_id);
+            writeln!(*stdin_guard, "{}", cmd_str)
+                .and_then(|_| stdin_guard.flush())
+                .map_err(|e| format!("abort write failed: {}", e))?;
+        }
+
+        if wait_for_done_or_terminated(&self.state, &mut alive_rx, "abort").await {
+            Ok(())
+        } else {
+            Err("Pi process died during abort".to_string())
+        }
     }
 
     /// Cancel a single queued prompt by its id. Returns `true` if the prompt

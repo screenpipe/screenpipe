@@ -1972,6 +1972,28 @@ pub async fn pi_abort(state: State<'_, PiState>, session_id: Option<String>) -> 
     queue.abort().await
 }
 
+/// Abort only the active Pi operation. Pending queued follow-ups remain queued.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_abort_active(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("Pi is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+    queue.abort_active_only().await
+}
+
 /// Start a new Pi session (clears conversation history).
 /// Serialized through the queue — waits for any in-flight work to complete,
 /// then sends new_session and waits for the SDK's done event before returning.

@@ -970,6 +970,17 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Abort only the active Pi operation. Pending queued follow-ups remain queued.
+ */
+async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
  * then sends new_session and waits for the SDK's done event before returning.
