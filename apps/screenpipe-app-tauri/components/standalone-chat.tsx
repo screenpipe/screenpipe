@@ -6267,7 +6267,7 @@ export function StandaloneChat({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.18 }}
-            className="relative z-20 mx-auto w-[80%] max-w-4xl px-3 pb-2"
+            className="relative z-20 mx-auto w-full max-w-4xl px-3 pb-2"
           >
             <div className="border border-border/60 bg-background/95 backdrop-blur-sm overflow-hidden">
               <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-border/50 bg-background">
