@@ -6848,7 +6848,7 @@ export function StandaloneChat({
                   disabledReason
                     ? disabledReason
                     : isLoading || isStreaming
-                      ? "Queue follow-up..."
+                      ? "Message will be queued..."
                       : "Ask about your screen... (type @ for filters, paste images)"
                 }
                 disabled={!canChat}
