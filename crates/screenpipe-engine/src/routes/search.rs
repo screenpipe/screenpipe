@@ -279,7 +279,7 @@ pub(crate) async fn search(
                 query.machine_id.as_deref(),
                 query.on_screen,
             ),
-            state.db.count_search_results(
+            state.db.count_search_results_filtered(
                 query_str,
                 content_type,
                 query.start_time,
@@ -293,6 +293,8 @@ pub(crate) async fn search(
                 query.browser_url.as_deref(),
                 query.focused,
                 query.speaker_name.as_deref(),
+                query.device_name.as_deref(),
+                query.machine_id.as_deref(),
                 query.on_screen,
             ),
         ),

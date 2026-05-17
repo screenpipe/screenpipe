@@ -840,6 +840,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_count_search_results_with_device_name_filter() {
+        let db = setup_test_db().await;
+
+        let _ = db
+            .insert_video_chunk("monitor_a.mp4", "monitor_a")
+            .await
+            .unwrap();
+        let frame_id_a = db
+            .insert_frame(
+                "monitor_a",
+                None,
+                None,
+                Some("app"),
+                Some("window"),
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        db.insert_ocr_text(
+            frame_id_a,
+            "visible on monitor a",
+            "",
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
+
+        let _ = db
+            .insert_video_chunk("monitor_b.mp4", "monitor_b")
+            .await
+            .unwrap();
+        let frame_id_b = db
+            .insert_frame(
+                "monitor_b",
+                None,
+                None,
+                Some("app"),
+                Some("window"),
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+        db.insert_ocr_text(
+            frame_id_b,
+            "visible on monitor b",
+            "",
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
+
+        let audio_a = db.insert_audio_chunk("audio_a.mp4", None).await.unwrap();
+        db.insert_audio_transcription(
+            audio_a,
+            "audio on monitor a",
+            0,
+            "",
+            &AudioDevice {
+                name: "monitor_a".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let audio_b = db.insert_audio_chunk("audio_b.mp4", None).await.unwrap();
+        db.insert_audio_transcription(
+            audio_b,
+            "audio on monitor b",
+            0,
+            "",
+            &AudioDevice {
+                name: "monitor_b".to_string(),
+                device_type: DeviceType::Output,
+            },
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let count = db
+            .count_search_results_filtered(
+                "",
+                ContentType::All,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("monitor_a"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let count = db
+            .count_search_results_filtered(
+                "",
+                ContentType::All,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("missing_monitor"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
     async fn test_insert_and_search_speaker() {
         let db = setup_test_db().await;
 

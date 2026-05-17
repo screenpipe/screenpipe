@@ -3895,8 +3895,10 @@ impl DatabaseManager {
         max_length: Option<usize>,
         has_speaker_id_filter: bool,
         speaker_name: Option<&str>,
+        device_name: Option<&str>,
+        machine_id: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
-        if has_speaker_id_filter {
+        if has_speaker_id_filter || machine_id.is_some() {
             return Ok(0);
         }
 
@@ -3910,6 +3912,7 @@ impl DatabaseManager {
               AND (?4 IS NULL OR LENGTH(transcript) >= ?4)
               AND (?5 IS NULL OR LENGTH(transcript) <= ?5)
               AND (?6 IS NULL OR speaker_name LIKE '%' || ?6 || '%' COLLATE NOCASE)
+              AND (?7 IS NULL OR device_name LIKE '%' || ?7 || '%' COLLATE NOCASE)
             "#,
         )
         .bind(query)
@@ -3918,6 +3921,7 @@ impl DatabaseManager {
         .bind(min_length.map(|v| v as i64))
         .bind(max_length.map(|v| v as i64))
         .bind(speaker_name)
+        .bind(device_name)
         .fetch_one(&self.pool)
         .await
     }
@@ -4096,8 +4100,46 @@ impl DatabaseManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub async fn count_search_results(
+        &self,
+        query: &str,
+        content_type: ContentType,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+        app_name: Option<&str>,
+        window_name: Option<&str>,
+        min_length: Option<usize>,
+        max_length: Option<usize>,
+        speaker_ids: Option<Vec<i64>>,
+        frame_name: Option<&str>,
+        browser_url: Option<&str>,
+        focused: Option<bool>,
+        speaker_name: Option<&str>,
+        on_screen: Option<bool>,
+    ) -> Result<usize, sqlx::Error> {
+        self.count_search_results_filtered(
+            query,
+            content_type,
+            start_time,
+            end_time,
+            app_name,
+            window_name,
+            min_length,
+            max_length,
+            speaker_ids,
+            frame_name,
+            browser_url,
+            focused,
+            speaker_name,
+            None,
+            None,
+            on_screen,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn count_search_results_filtered(
         &self,
         query: &str,
         mut content_type: ContentType,
@@ -4112,6 +4154,8 @@ impl DatabaseManager {
         browser_url: Option<&str>,
         focused: Option<bool>,
         speaker_name: Option<&str>,
+        device_name: Option<&str>,
+        machine_id: Option<&str>,
         // Mirror of `db::search`'s on_screen — must agree or pagination
         // breaks (`total` no longer matches the visible page). Issue #2436.
         on_screen: Option<bool>,
@@ -4151,7 +4195,7 @@ impl DatabaseManager {
                         end_time,
                     );
                     if app_name.is_none() && window_name.is_none() {
-                        let audio_future = Box::pin(self.count_search_results(
+                        let audio_future = Box::pin(self.count_search_results_filtered(
                             query,
                             ContentType::Audio,
                             start_time,
@@ -4165,6 +4209,8 @@ impl DatabaseManager {
                             None,
                             None,
                             speaker_name,
+                            device_name,
+                            machine_id,
                             None,
                         ));
                         let (ax, audio) = tokio::try_join!(ax_fut, audio_future)?;
@@ -4182,7 +4228,7 @@ impl DatabaseManager {
         if content_type == ContentType::All {
             // Since OCR and Accessibility now both query frames_fts,
             // count frames once (not separately) to avoid double-counting
-            let frames_future = Box::pin(self.count_search_results(
+            let frames_future = Box::pin(self.count_search_results_filtered(
                 query,
                 ContentType::OCR, // OCR branch now counts all frames via frames_fts
                 start_time,
@@ -4196,11 +4242,13 @@ impl DatabaseManager {
                 browser_url,
                 focused,
                 None,
+                device_name,
+                machine_id,
                 None,
             ));
 
             if app_name.is_none() && window_name.is_none() {
-                let audio_future = Box::pin(self.count_search_results(
+                let audio_future = Box::pin(self.count_search_results_filtered(
                     query,
                     ContentType::Audio,
                     start_time,
@@ -4214,6 +4262,8 @@ impl DatabaseManager {
                     None,
                     None,
                     speaker_name,
+                    device_name,
+                    machine_id,
                     None,
                 ));
 
@@ -4272,6 +4322,7 @@ impl DatabaseManager {
             ContentType::OCR | ContentType::Accessibility => format!(
                 r#"SELECT COUNT(DISTINCT frames.id)
                    FROM frames
+                   LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
                    {fts_join}
                    WHERE 1=1
                        {fts_condition}
@@ -4281,6 +4332,8 @@ impl DatabaseManager {
                        AND (?5 IS NULL OR LENGTH(COALESCE(frames.full_text, '')) <= ?5)
                        AND (?6 IS NULL OR frames.name LIKE '%' || ?6 || '%')
                        AND (?7 IS NULL OR frames.focused = ?7)
+                       AND (?8 IS NULL OR COALESCE(video_chunks.device_name, frames.device_name) LIKE '%' || ?8 || '%')
+                       AND (?9 IS NULL OR frames.machine_id = ?9)
                        {a11y_filter}"#,
                 fts_join = if has_fts {
                     "JOIN frames_fts ON frames.id = frames_fts.rowid"
@@ -4308,12 +4361,14 @@ impl DatabaseManager {
                        AND (?4 IS NULL OR COALESCE(audio_transcriptions.text_length, LENGTH(audio_transcriptions.transcription)) >= ?4)
                        AND (?5 IS NULL OR COALESCE(audio_transcriptions.text_length, LENGTH(audio_transcriptions.transcription)) <= ?5)
                        AND (json_array_length(?6) = 0 OR audio_transcriptions.speaker_id IN (SELECT value FROM json_each(?6)))
+                       AND (?7 IS NULL OR audio_transcriptions.device LIKE '%' || ?7 || '%' COLLATE NOCASE)
+                       AND (?8 IS NULL OR audio_chunks.machine_id = ?8)
                        {speaker_name_condition}
                 "#,
                 table = if query.is_empty() {
-                    "audio_transcriptions"
+                    "audio_transcriptions JOIN audio_chunks ON audio_transcriptions.audio_chunk_id = audio_chunks.id"
                 } else {
-                    "audio_transcriptions_fts JOIN audio_transcriptions ON audio_transcriptions.id = audio_transcriptions_fts.rowid"
+                    "audio_transcriptions_fts JOIN audio_transcriptions ON audio_transcriptions.id = audio_transcriptions_fts.rowid JOIN audio_chunks ON audio_transcriptions.audio_chunk_id = audio_chunks.id"
                 },
                 speaker_join = if speaker_name.is_some() {
                     "LEFT JOIN speakers ON audio_transcriptions.speaker_id = speakers.id"
@@ -4321,7 +4376,7 @@ impl DatabaseManager {
                     ""
                 },
                 speaker_name_condition = if speaker_name.is_some() {
-                    "AND speakers.name LIKE '%' || ?7 || '%' COLLATE NOCASE"
+                    "AND speakers.name LIKE '%' || ?9 || '%' COLLATE NOCASE"
                 } else {
                     ""
                 },
@@ -4408,6 +4463,8 @@ impl DatabaseManager {
                     .bind(max_length.map(|l| l as i64))
                     .bind(frame_name)
                     .bind(focused)
+                    .bind(device_name)
+                    .bind(machine_id)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -4423,7 +4480,9 @@ impl DatabaseManager {
                     .bind(end_time)
                     .bind(min_length.map(|l| l as i64))
                     .bind(max_length.map(|l| l as i64))
-                    .bind(&json_array);
+                    .bind(&json_array)
+                    .bind(device_name)
+                    .bind(machine_id);
                 if let Some(name) = speaker_name {
                     query_builder = query_builder.bind(name);
                 }
@@ -4437,6 +4496,8 @@ impl DatabaseManager {
                         max_length,
                         has_speaker_id_filter,
                         speaker_name,
+                        device_name,
+                        machine_id,
                     )
                     .await?;
                 background_count + live_count
