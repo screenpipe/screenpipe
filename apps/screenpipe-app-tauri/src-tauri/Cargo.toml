@@ -200,8 +200,11 @@ lazy_static = "1.5.0"
 image = "0.25.5"
 windows-icons = { git = "https://github.com/tribhuwan-kumar/windows-icons.git" }
 base64 = "0.22.1"
+aes-gcm = "0.10"
+rusqlite = { version = "0.29.0", features = ["bundled"] }
 raw-window-handle = "0.6"
 webview2-com = "=0.38.2"
+windows-core = "0.61.2"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security",

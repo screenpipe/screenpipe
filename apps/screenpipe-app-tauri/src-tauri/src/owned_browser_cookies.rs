@@ -20,8 +20,9 @@
 //!
 //! ## Currently supports
 //!
-//! - macOS only.
-//! - Chrome / Brave / Edge / Arc default profiles.
+//! - macOS and Windows.
+//! - macOS: Chrome / Brave / Edge / Arc default profiles.
+//! - Windows: Chrome / Edge / Brave / Chromium / Vivaldi / Opera default profiles.
 //! - Default profile only. Arc's Spaces / Chrome's profiles are picked
 //!   up the day a user reports they need a non-default one.
 //!
@@ -57,21 +58,20 @@
 
 // Cross-platform module shape: the `Cookie` struct and the public
 // `cookies_for_host` entry point compile on every OS. The actual
-// readers + decryption are gated to macOS for now; Windows / Linux
-// fall through to a stub that returns an empty Vec, so the rest of
+// readers + decryption are gated per platform; Linux still falls
+// through to a stub that returns an empty Vec, so the rest of
 // the codebase can call `cookies_for_host` unconditionally without
-// per-cfg branching at the call site. Adding Windows or Linux is a
-// matter of dropping in the platform-specific reader at the bottom
-// of this file — see the TODO comments there.
+// per-cfg branching at the call site. Adding Linux is a matter of
+// dropping in the platform-specific reader at the bottom of this file.
 
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::PathBuf;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::OnceLock;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -79,7 +79,7 @@ use tracing::{debug, info, warn};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 #[cfg(target_os = "macos")]
 use hmac::Hmac;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use rusqlite::OpenFlags;
 #[cfg(target_os = "macos")]
 use security_framework::passwords::get_generic_password;
@@ -109,6 +109,27 @@ pub struct Cookie {
     pub same_site: i32,
 }
 
+/// Windows-only diagnostic state for hosts whose matching real-browser
+/// cookies are present but protected by Chromium App-Bound Encryption (`v20`).
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+pub struct V20CookieBlock {
+    pub host: String,
+    pub rows: usize,
+    pub v20_count: usize,
+    pub sources: Vec<String>,
+}
+
+/// A browser whose Cookies SQLite file is locked (i.e. the browser is running
+/// and has an exclusive hold on the file). Different from v20 — the cookies
+/// exist and may be decryptable, but we can't open the database at all.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+pub struct LockedBrowserBlock {
+    pub host: String,
+    pub sources: Vec<String>,
+}
+
 /// Public entry: fetch every cookie that would be sent to `host`,
 /// merged across every browser source the platform supports. Returns
 /// an empty Vec on platforms where the source readers haven't been
@@ -130,21 +151,24 @@ pub async fn has_cookies_for_host(host: &str) -> bool {
     has_cookies_for_host_impl(host).await
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub async fn v20_cookie_block_for_host(host: &str) -> Option<V20CookieBlock> {
+    v20_cookie_blocks()
+        .lock()
+        .ok()
+        .and_then(|blocks| blocks.get(host).cloned())
+}
+
+#[cfg(target_os = "windows")]
+pub async fn locked_browser_block_for_host(host: &str) -> Option<LockedBrowserBlock> {
+    locked_browser_blocks()
+        .lock()
+        .ok()
+        .and_then(|blocks| blocks.get(host).cloned())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn cookies_for_host_impl(_host: &str) -> Vec<Cookie> {
-    // Windows TODO: Chromium-on-Windows stores cookies at
-    //   %LOCALAPPDATA%\<browser>\User Data\Default\Network\Cookies
-    // The encrypted_value uses AES-256-GCM (NOT 128-CBC like macOS); the
-    // 32-byte AES key is itself DPAPI-protected and lives base64'd in the
-    // sibling `Local State` JSON's `os_crypt.encrypted_key` field.
-    // Decrypt with `windows::Win32::Security::Cryptography::CryptUnprotectData`,
-    // strip the "DPAPI" prefix, then `aes-gcm` over the 12-byte nonce +
-    // ciphertext that follows the literal "v10"/"v11" prefix on each
-    // cookie value. WebView2 cookie injection is via
-    // `ICoreWebView2CookieManager.AddOrUpdateCookie` from the COM
-    // controller — Tauri exposes the underlying `WebView2` via
-    // `WebviewWindow::with_webview`.
-    //
     // Linux TODO: Chromium-on-Linux stores cookies at
     //   ~/.config/<browser>/Default/Cookies
     // Encrypted with the same AES-128-CBC scheme as macOS but the key
@@ -157,9 +181,148 @@ async fn cookies_for_host_impl(_host: &str) -> Vec<Cookie> {
     Vec::new()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn has_cookies_for_host_impl(_host: &str) -> bool {
     false
+}
+
+#[cfg(target_os = "windows")]
+async fn cookies_for_host_impl(host: &str) -> Vec<Cookie> {
+    {
+        let cache = cache().lock().await;
+        if let Some((fetched_at, cookies)) = cache.get(host) {
+            if fetched_at.elapsed() < CACHE_TTL {
+                debug!(
+                    host,
+                    count = cookies.len(),
+                    "owned-browser cookies: cache hit"
+                );
+                return cookies.clone();
+            }
+        }
+    }
+
+    let host_owned = host.to_string();
+    let cookies = tokio::task::spawn_blocking(move || {
+        clear_v20_cookie_block(&host_owned);
+        let mut out: Vec<Cookie> = Vec::new();
+        for source in WIN_SOURCES {
+            match read_cookies_windows(source, &host_owned) {
+                Ok(mut result) => {
+                    if !result.cookies.is_empty() {
+                        info!(
+                            source = source.name,
+                            count = result.cookies.len(),
+                            "owned-browser cookies: read"
+                        );
+                    }
+                    if result.rows > 0
+                        && result.cookies.is_empty()
+                        && result.v20_count == result.rows
+                    {
+                        record_v20_cookie_block(
+                            &host_owned,
+                            source.name,
+                            result.rows,
+                            result.v20_count,
+                        );
+                    }
+                    out.append(&mut result.cookies);
+                }
+                Err(e) => {
+                    info!(source = source.name, "owned-browser cookies: skip — {e}");
+                }
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_else(|e| {
+        warn!("owned-browser cookies: spawn_blocking join failed: {e}");
+        Vec::new()
+    });
+
+    {
+        let mut cache = cache().lock().await;
+        cache.insert(host.to_string(), (Instant::now(), cookies.clone()));
+    }
+
+    debug!(
+        host,
+        count = cookies.len(),
+        "owned-browser cookies: cache miss → read"
+    );
+    cookies
+}
+
+#[cfg(target_os = "windows")]
+async fn has_cookies_for_host_impl(host: &str) -> bool {
+    let host_owned = host.to_string();
+    tokio::task::spawn_blocking(move || {
+        // Collect locked sources locally first — don't touch the shared map
+        // until the entire scan is done. This avoids a race where a concurrent
+        // call clears the block that was just recorded by another call.
+        let mut found = false;
+        let mut locked_sources: Vec<&'static str> = Vec::new();
+        for source in WIN_SOURCES {
+            match has_cookie_rows_windows(source, &host_owned) {
+                Ok(true) => {
+                    info!(
+                        source = source.name,
+                        host = host_owned.as_str(),
+                        "owned-browser cookies: row preflight found cookies"
+                    );
+                    found = true;
+                }
+                Ok(false) => {}
+                Err(ref e) if e.starts_with("sqlite open:") => {
+                    // Browser IS installed (file exists) but the DB is locked —
+                    // browser is running with an exclusive hold on the file.
+                    info!(
+                        source = source.name,
+                        host = host_owned.as_str(),
+                        "owned-browser cookies: row preflight skip — browser running, db locked ({e})"
+                    );
+                    locked_sources.push(source.name);
+                }
+                Err(e) => info!(
+                    source = source.name,
+                    host = host_owned.as_str(),
+                    "owned-browser cookies: row preflight skip — {e}"
+                ),
+            }
+        }
+        // Atomic write: replace the entire locked block for this host in one
+        // lock acquisition. If the DB opened for at least one source (browser
+        // closed or never running), clear any stale block. If any source is
+        // locked, store exactly those sources — no incremental accumulation
+        // across concurrent calls.
+        if locked_sources.is_empty() {
+            clear_locked_browser_block(&host_owned);
+        } else {
+            if let Ok(mut blocks) = locked_browser_blocks().lock() {
+                blocks.insert(
+                    host_owned.clone(),
+                    LockedBrowserBlock {
+                        host: host_owned.clone(),
+                        sources: locked_sources
+                            .into_iter()
+                            .map(|s| s.to_string())
+                            .collect(),
+                    },
+                );
+            }
+        }
+        if !found {
+            info!(
+                host = host_owned.as_str(),
+                "owned-browser cookies: row preflight found no matching cookies"
+            );
+        }
+        found
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -245,6 +408,383 @@ async fn has_cookies_for_host_impl(host: &str) -> bool {
     })
     .await
     .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Windows — Chromium-derived browsers (Chrome / Brave / Edge / Chromium /
+// Vivaldi / Opera)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+struct WindowsBrowserSource {
+    name: &'static str,
+    env_var: &'static str,
+    user_data_subpath: &'static str,
+    profile_subpath: &'static str,
+}
+
+#[cfg(target_os = "windows")]
+const WIN_SOURCES: &[WindowsBrowserSource] = &[
+    WindowsBrowserSource {
+        name: "Chrome",
+        env_var: "LOCALAPPDATA",
+        user_data_subpath: r"Google\Chrome\User Data",
+        profile_subpath: "Default",
+    },
+    WindowsBrowserSource {
+        name: "Edge",
+        env_var: "LOCALAPPDATA",
+        user_data_subpath: r"Microsoft\Edge\User Data",
+        profile_subpath: "Default",
+    },
+    WindowsBrowserSource {
+        name: "Brave",
+        env_var: "LOCALAPPDATA",
+        user_data_subpath: r"BraveSoftware\Brave-Browser\User Data",
+        profile_subpath: "Default",
+    },
+    WindowsBrowserSource {
+        name: "Chromium",
+        env_var: "LOCALAPPDATA",
+        user_data_subpath: r"Chromium\User Data",
+        profile_subpath: "Default",
+    },
+    WindowsBrowserSource {
+        name: "Vivaldi",
+        env_var: "LOCALAPPDATA",
+        user_data_subpath: r"Vivaldi\User Data",
+        profile_subpath: "Default",
+    },
+    WindowsBrowserSource {
+        name: "Opera",
+        env_var: "APPDATA",
+        user_data_subpath: r"Opera Software\Opera Stable",
+        profile_subpath: "",
+    },
+];
+
+#[cfg(target_os = "windows")]
+static CACHE: OnceLock<Mutex<std::collections::HashMap<String, (Instant, Vec<Cookie>)>>> =
+    OnceLock::new();
+#[cfg(target_os = "windows")]
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+#[cfg(target_os = "windows")]
+fn cache() -> &'static Mutex<std::collections::HashMap<String, (Instant, Vec<Cookie>)>> {
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+static KEY_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, [u8; 32]>>> =
+    OnceLock::new();
+
+#[cfg(target_os = "windows")]
+static V20_COOKIE_BLOCKS: OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, V20CookieBlock>>,
+> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn v20_cookie_blocks(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, V20CookieBlock>> {
+    V20_COOKIE_BLOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn clear_v20_cookie_block(host: &str) {
+    if let Ok(mut blocks) = v20_cookie_blocks().lock() {
+        blocks.remove(host);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn record_v20_cookie_block(host: &str, source: &'static str, rows: usize, v20_count: usize) {
+    if let Ok(mut blocks) = v20_cookie_blocks().lock() {
+        let entry = blocks
+            .entry(host.to_string())
+            .or_insert_with(|| V20CookieBlock {
+                host: host.to_string(),
+                rows: 0,
+                v20_count: 0,
+                sources: Vec::new(),
+            });
+        entry.rows += rows;
+        entry.v20_count += v20_count;
+        if !entry.sources.iter().any(|s| s == source) {
+            entry.sources.push(source.to_string());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Locked-browser block registry — parallel to the v20 registry
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+static LOCKED_BROWSER_BLOCKS: OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, LockedBrowserBlock>>,
+> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn locked_browser_blocks(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, LockedBrowserBlock>> {
+    LOCKED_BROWSER_BLOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn clear_locked_browser_block(host: &str) {
+    if let Ok(mut blocks) = locked_browser_blocks().lock() {
+        blocks.remove(host);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_user_data_dir(source: &WindowsBrowserSource) -> Result<PathBuf, String> {
+    let root = std::env::var_os(source.env_var).ok_or_else(|| format!("no ${}", source.env_var))?;
+    Ok(PathBuf::from(root).join(source.user_data_subpath))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_profile_dir(source: &WindowsBrowserSource) -> Result<PathBuf, String> {
+    let user_data = windows_user_data_dir(source)?;
+    if source.profile_subpath.is_empty() {
+        Ok(user_data)
+    } else {
+        Ok(user_data.join(source.profile_subpath))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_key(source: &WindowsBrowserSource) -> Result<[u8; 32], String> {
+    let cache = KEY_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(k) = cache.lock().ok().and_then(|c| c.get(source.name).copied()) {
+        return Ok(k);
+    }
+
+    let user_data_dir = windows_user_data_dir(source)?;
+    let key = load_dpapi_key(&user_data_dir)?;
+    if let Ok(mut c) = cache.lock() {
+        c.insert(source.name, key);
+    }
+    Ok(key)
+}
+
+#[cfg(target_os = "windows")]
+fn load_dpapi_key(user_data_dir: &std::path::Path) -> Result<[u8; 32], String> {
+    use base64::Engine;
+
+    let local_state = user_data_dir.join("Local State");
+    let text =
+        std::fs::read_to_string(&local_state).map_err(|e| format!("read Local State: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse Local State: {e}"))?;
+    let b64 = json
+        .get("os_crypt")
+        .and_then(|v| v.get("encrypted_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "no os_crypt.encrypted_key".to_string())?;
+    let mut encrypted = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 encrypted_key: {e}"))?;
+    if encrypted.starts_with(b"DPAPI") {
+        encrypted.drain(0..5);
+    }
+    let key = dpapi_decrypt(&encrypted)?;
+    key.try_into()
+        .map_err(|_| "decrypted key is not 32 bytes".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_decrypt(blob: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: blob
+            .len()
+            .try_into()
+            .map_err(|_| "DPAPI blob too large".to_string())?,
+        pbData: blob.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptUnprotectData(&input, None, None, None, None, 0, &mut output)
+            .map_err(|e| format!("CryptUnprotectData: {e}"))?;
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(HLOCAL(output.pbData as *mut core::ffi::c_void));
+        Ok(bytes)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_cookie_db_windows(source: &WindowsBrowserSource) -> Result<rusqlite::Connection, String> {
+    let profile = windows_profile_dir(source)?;
+    let new_loc = profile.join("Network").join("Cookies");
+    let old_loc = profile.join("Cookies");
+    let cookies_path = if new_loc.exists() {
+        new_loc
+    } else if old_loc.exists() {
+        old_loc
+    } else {
+        return Err(format!("{} not installed (no Cookies file)", source.name));
+    };
+
+    let uri = format!("file:{}?mode=ro&immutable=1", cookies_path.display());
+    rusqlite::Connection::open_with_flags(
+        &uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("sqlite open: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn has_cookie_rows_windows(source: &WindowsBrowserSource, host: &str) -> Result<bool, String> {
+    let conn = open_cookie_db_windows(source)?;
+    let host_filters = host_match_clauses(host);
+    let where_clause = host_where_clause(&host_filters);
+    let sql = format!("SELECT 1 FROM cookies WHERE {where_clause} LIMIT 1");
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params_from_iter(host_filters.iter()))
+        .map_err(|e| format!("query: {e}"))?;
+    rows.next()
+        .map(|row| row.is_some())
+        .map_err(|e| format!("row: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsReadResult {
+    cookies: Vec<Cookie>,
+    rows: usize,
+    v20_count: usize,
+}
+
+#[cfg(target_os = "windows")]
+fn read_cookies_windows(
+    source: &WindowsBrowserSource,
+    host: &str,
+) -> Result<WindowsReadResult, String> {
+    let conn = open_cookie_db_windows(source)?;
+    let host_filters = host_match_clauses(host);
+    let where_clause = host_where_clause(&host_filters);
+    let sql = format!(
+        "SELECT name, value, encrypted_value, host_key, path, \
+                is_secure, is_httponly, expires_utc, samesite \
+         FROM cookies WHERE {where_clause}"
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
+    let params = rusqlite::params_from_iter(host_filters.iter());
+    let rows = stmt
+        .query_map(params, |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i32>(5)?,
+                r.get::<_, i32>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i32>(8)?,
+            ))
+        })
+        .map_err(|e| format!("query: {e}"))?;
+
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))?;
+    if rows.is_empty() {
+        return Ok(WindowsReadResult {
+            cookies: Vec::new(),
+            rows: 0,
+            v20_count: 0,
+        });
+    }
+
+    let key = windows_key(source)?;
+    let mut cookies = Vec::new();
+    let mut row_count = 0usize;
+    let mut decrypt_failed = 0usize;
+    let mut v20_count = 0usize;
+    let mut sample_enc_prefix: Option<String> = None;
+    for (name, plain_val, enc_val, host_key, path, secure, http_only, expires_utc, ss) in rows {
+        row_count += 1;
+        let value = if enc_val.is_empty() {
+            plain_val
+        } else {
+            if sample_enc_prefix.is_none() {
+                let n = enc_val.len().min(3);
+                sample_enc_prefix = Some(
+                    enc_val[..n]
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>(),
+                );
+            }
+            if enc_val.starts_with(b"v20") {
+                v20_count += 1;
+            }
+            match decrypt_windows_cookie(&enc_val, &key) {
+                Some(v) => v,
+                None => {
+                    decrypt_failed += 1;
+                    continue;
+                }
+            }
+        };
+        cookies.push(Cookie {
+            name,
+            value,
+            domain: host_key,
+            path,
+            secure: secure != 0,
+            http_only: http_only != 0,
+            expires_at: chromium_micros_to_unix_secs(expires_utc),
+            same_site: ss,
+        });
+    }
+    info!(
+        source = source.name,
+        host,
+        rows = row_count,
+        decrypted = cookies.len(),
+        decrypt_failed,
+        v20_count,
+        first_enc_prefix = sample_enc_prefix.as_deref().unwrap_or("none"),
+        "owned-browser cookies: source done"
+    );
+    Ok(WindowsReadResult {
+        cookies,
+        rows: row_count,
+        v20_count,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn decrypt_windows_cookie(encrypted: &[u8], key: &[u8; 32]) -> Option<String> {
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Nonce};
+
+    if encrypted.len() < 15 {
+        return None;
+    }
+    match &encrypted[..3] {
+        b"v10" | b"v11" => {}
+        b"v20" => return None,
+        _ => return None,
+    }
+
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+    let nonce = Nonce::from_slice(&encrypted[3..15]);
+    let plain = cipher.decrypt(nonce, &encrypted[15..]).ok()?;
+    let value_bytes = if plain.len() >= 32 {
+        &plain[32..]
+    } else {
+        &plain[..]
+    };
+    String::from_utf8(value_bytes.to_vec()).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +916,7 @@ fn open_cookie_db(source: &KeychainEntry) -> Result<rusqlite::Connection, String
     .map_err(|e| format!("sqlite open: {e}"))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn host_where_clause(filters: &[String]) -> String {
     filters
         .iter()
@@ -515,7 +1055,7 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
 /// `.com` is etld so cookies aren't actually allowed there, but Arc /
 /// Chrome don't enforce that themselves; we return whatever's stored
 /// and let WKWebView's own cookie policy filter at request time).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn host_match_clauses(host: &str) -> Vec<String> {
     let mut out = vec![host.to_string(), format!(".{host}")];
     let mut rest = host;
@@ -532,7 +1072,7 @@ fn host_match_clauses(host: &str) -> Vec<String> {
 /// Chromium stores `expires_utc` in microseconds since 1601-01-01 UTC
 /// (the Windows FILETIME epoch — yes, even in macOS Chrome). `0` means
 /// "session cookie". Convert to seconds since 1970-01-01 for NSDate.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn chromium_micros_to_unix_secs(micros: i64) -> Option<i64> {
     if micros == 0 {
         return None;

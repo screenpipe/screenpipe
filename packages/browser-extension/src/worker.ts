@@ -15,7 +15,7 @@
  * and cross-origin cookies are blocked).
  */
 
-import type { IncomingMessage, EvalResponse, HelloMessage } from "./types";
+import type { BrowserCookie, IncomingMessage, EvalResponse, HelloMessage } from "./types";
 import {
   DEFAULT_BASE_URL,
   STORAGE_KEY_TOKEN,
@@ -190,6 +190,17 @@ async function connect(): Promise<void> {
         const tabId = await findTab(url);
         const result = await evalInTab(tabId, code);
         send({ id, ok: true, result } satisfies EvalResponse);
+      } catch (err: any) {
+        send({ id, ok: false, error: err?.message ?? String(err) } satisfies EvalResponse);
+      }
+      return;
+    }
+
+    if (msg.action === "get_cookies") {
+      const { id, host } = msg;
+      try {
+        const cookies = await getCookiesForHost(host);
+        send({ id, ok: true, result: { cookies } } satisfies EvalResponse);
       } catch (err: any) {
         send({ id, ok: false, error: err?.message ?? String(err) } satisfies EvalResponse);
       }
@@ -372,6 +383,60 @@ async function evalInTab(tabId: number, code: string): Promise<unknown> {
     throw new Error(desc);
   }
   return evalResult?.result?.value ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Cookie access
+// ---------------------------------------------------------------------------
+
+function normalizeHost(host: string): string {
+  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
+  if (!normalized || normalized.includes("/") || normalized.includes(":")) {
+    throw new Error("invalid cookie host");
+  }
+  return normalized;
+}
+
+function sameSiteValue(value: chrome.cookies.SameSiteStatus | undefined): BrowserCookie["sameSite"] {
+  if (value === "no_restriction" || value === "lax" || value === "strict") return value;
+  return "unspecified";
+}
+
+async function getCookiesForHost(host: string): Promise<BrowserCookie[]> {
+  if (!chrome.cookies?.getAll) {
+    throw new Error("extension does not have cookies permission");
+  }
+
+  const normalized = normalizeHost(host);
+  const hosts = new Set<string>();
+  const parts = normalized.split(".");
+  for (let i = 0; i <= Math.max(0, parts.length - 2); i += 1) {
+    hosts.add(parts.slice(i).join("."));
+  }
+
+  const byKey = new Map<string, BrowserCookie>();
+  for (const domain of hosts) {
+    const cookies = await chrome.cookies.getAll({ domain });
+    for (const c of cookies) {
+      const bareDomain = c.domain.replace(/^\./, "").toLowerCase();
+      if (normalized !== bareDomain && !normalized.endsWith(`.${bareDomain}`)) continue;
+      const item: BrowserCookie = {
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || "/",
+        secure: Boolean(c.secure),
+        httpOnly: Boolean(c.httpOnly),
+        sameSite: sameSiteValue(c.sameSite),
+      };
+      if (typeof c.expirationDate === "number") {
+        item.expiresAt = Math.trunc(c.expirationDate);
+      }
+      byKey.set(`${item.name}\n${item.domain}\n${item.path}`, item);
+    }
+  }
+
+  return [...byKey.values()];
 }
 
 // ---------------------------------------------------------------------------

@@ -103,6 +103,73 @@
       #status-bar[data-state="auth_required"],
       #status-bar[data-state="server_down"],
       #status-bar[data-state="error"]         { color: var(--red); }
+
+      /* ── Action section ── */
+      #action-section {
+        padding: 0 14px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #action-section[hidden] { display: none; }
+      .action-btn {
+        width: 100%;
+        padding: 7px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        text-align: center;
+        letter-spacing: 0.01em;
+        transition: background 0.1s;
+      }
+      .action-btn:hover { background: var(--border); }
+      .action-btn.primary {
+        background: var(--accent-bg);
+        color: var(--accent-fg);
+        border-color: var(--accent-bg);
+      }
+      .action-btn.primary:hover { opacity: 0.88; }
+      #action-hint {
+        font-size: 11px;
+        color: var(--muted);
+        text-align: center;
+        line-height: 1.4;
+      }
+      /* ── Connected tagline ── */
+      #connected-tagline {
+        padding: 0 14px 14px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      #connected-tagline[hidden] { display: none; }
+      #pair-info[hidden] { display: none; }
+      #pair-code-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 7px 10px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        margin-bottom: 4px;
+      }
+      .pair-label {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      #pair-code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        color: var(--text);
+      }
     </style>
   </head>
   <body>
@@ -114,6 +181,29 @@
     <div id="status-bar" data-state="checking">
       <span id="status-dot"></span>
       <span id="status-text">checking…</span>
+    </div>
+
+    <div id="action-section" hidden>
+      <button id="connect-btn" class="action-btn primary" type="button" hidden>
+        Connect
+      </button>
+      <button id="open-btn" class="action-btn primary" type="button" hidden>
+        Open Screenpipe
+      </button>
+
+      <!-- shown during active pairing -->
+      <div id="pair-info" hidden>
+        <div id="pair-code-row">
+          <span class="pair-label">match code</span>
+          <span id="pair-code"></span>
+        </div>
+      </div>
+
+      <span id="action-hint"></span>
+    </div>
+
+    <div id="connected-tagline" hidden>
+      Screenpipe can use your browser sessions when opening sites in the sidebar.
     </div>
 
     <script src="popup.js" type="module"></script>
