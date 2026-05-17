@@ -68,6 +68,92 @@ describe("source citations", () => {
     expect(citations[0].subtitle).toContain("query: pricing");
   });
 
+  it("names connector calls instead of collapsing them to generic screenpipe api", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: {
+              command:
+                'curl -s -X POST "http://localhost:3030/connections/perplexity/proxy/chat/completions"',
+            },
+            result: '{"choices":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]).toMatchObject({
+      kind: "connector",
+      title: "Perplexity search",
+      subtitle: "external web context via Screenpipe connection",
+    });
+  });
+
+  it("labels screenpipe memory endpoint citations as memory", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: {
+              command:
+                'curl -s "http://localhost:3030/memories?q=Jill%20Benaglio&limit=5"',
+            },
+            result: '{"data":[]}',
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]).toMatchObject({
+      kind: "memory",
+      title: "Screenpipe memories",
+      subtitle: "memory query: Jill Benaglio",
+    });
+  });
+
+  it("pulls structured result links out of bash tool output", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "bash",
+            args: {
+              command:
+                'curl -s "http://localhost:3030/connections/perplexity/proxy/chat/completions"',
+            },
+            result: JSON.stringify({
+              search_results: [
+                { title: "Screenpipe docs", url: "https://docs.screenpi.pe/chat" },
+              ],
+            }),
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(2);
+    expect(citations[0]).toMatchObject({
+      kind: "connector",
+      title: "Perplexity search",
+    });
+    expect(citations[1]).toMatchObject({
+      kind: "web",
+      title: "Screenpipe docs",
+      href: "https://docs.screenpi.pe/chat",
+    });
+  });
+
   it("derives file and memory citations from read calls", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [
@@ -95,6 +181,28 @@ describe("source citations", () => {
     expect(citations.map((citation) => citation.kind)).toEqual(["memory", "file"]);
     expect(citations[0].title).toBe("MEMORY.md");
     expect(citations[1].title).toBe("Read: standalone-chat.tsx");
+  });
+
+  it("normalizes pi tool namespaces before deriving citations", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "tool_functions.read",
+            args: { path: "/Users/louisbeaumont/.screenpipe/pipes/lead-radar/pipe.ts" },
+            result: "code",
+            isRunning: false,
+          },
+        },
+      ],
+    });
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]).toMatchObject({
+      kind: "pipe",
+      title: "Read: pipe.ts",
+    });
   });
 
   it("does not treat sed ranges as file citations", () => {

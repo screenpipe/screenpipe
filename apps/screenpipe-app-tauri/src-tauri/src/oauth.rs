@@ -197,14 +197,12 @@ pub async fn oauth_connect(
         if let Some(id_token) = token_data["id_token"].as_str() {
             if extract_tid_from_jwt(id_token).as_deref() == Some(MSA_PERSONAL_TENANT_ID) {
                 // No token gets written — we bail out before the write below.
-                return Err(
-                    "Microsoft Teams requires a work or school account. \
+                return Err("Microsoft Teams requires a work or school account. \
                      You're signed in with a personal Microsoft account, \
                      which doesn't have access to Teams. Sign in with an \
                      Azure AD (organizational) account that has a Teams \
                      license and try again."
-                        .to_string(),
-                );
+                    .to_string());
             }
         }
     }
@@ -478,7 +476,12 @@ pub async fn oauth_disconnect(
         // Sweep all instances so the fallback path finds nothing.
         let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
         for inst in instances {
-            let _ = oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, inst.as_deref()).await;
+            let _ = oauth::delete_oauth_token_instance(
+                store.as_ref(),
+                &integration_id,
+                inst.as_deref(),
+            )
+            .await;
         }
         // Also delete the None-key in case it exists alongside named ones.
         let _ = oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, None).await;
@@ -676,7 +679,10 @@ async fn fetch_supabase_project_credentials(
         .ok_or_else(|| "project missing `ref`".to_string())?;
     let project_name = first["name"].as_str().unwrap_or(project_ref);
 
-    let keys_url = format!("https://api.supabase.com/v1/projects/{}/api-keys", project_ref);
+    let keys_url = format!(
+        "https://api.supabase.com/v1/projects/{}/api-keys",
+        project_ref
+    );
     let api_keys: serde_json::Value = client
         .get(&keys_url)
         .bearer_auth(access_token)
@@ -694,7 +700,8 @@ async fn fetch_supabase_project_credentials(
         .and_then(|arr| {
             arr.iter().find_map(|k| {
                 let name = k["name"].as_str().unwrap_or_default().to_lowercase();
-                let is_service_role = name.contains("service_role") || name.contains("service role");
+                let is_service_role =
+                    name.contains("service_role") || name.contains("service role");
                 if is_service_role {
                     k["api_key"].as_str().map(str::to_string)
                 } else {

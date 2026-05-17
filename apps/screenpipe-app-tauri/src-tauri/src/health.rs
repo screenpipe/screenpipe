@@ -7,7 +7,7 @@ use anyhow::Result;
 use dark_light::Mode;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::sync::RwLock;
+use std::sync::{atomic::Ordering, RwLock};
 use std::time::Instant;
 use tauri::{path::BaseDirectory, Emitter, Manager};
 use tokio::time::{interval, Duration};
@@ -92,8 +92,11 @@ pub fn set_boot_phase(phase: &str, message: Option<&str>) {
     guard.phase = phase.to_string();
     guard.message = message.map(String::from);
     guard.error = None;
-    info!("boot phase → {}{}", phase,
-        message.map(|m| format!(" ({})", m)).unwrap_or_default());
+    info!(
+        "boot phase → {}{}",
+        phase,
+        message.map(|m| format!(" ({})", m)).unwrap_or_default()
+    );
 }
 
 pub fn set_boot_error(err: &str) {
@@ -105,10 +108,7 @@ pub fn set_boot_error(err: &str) {
 }
 
 pub fn get_boot_phase_snapshot() -> BootPhaseSnapshot {
-    BOOT_PHASE
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    BOOT_PHASE.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 // Shared recording status that can be read by the tray menu
@@ -328,6 +328,30 @@ fn decide_status(
     }
 }
 
+fn apply_capture_session_status(
+    base_status: RecordingStatus,
+    server_responding: bool,
+    capture_running: Option<bool>,
+    start_in_progress: bool,
+) -> RecordingStatus {
+    if !server_responding {
+        return base_status;
+    }
+
+    if capture_running == Some(true) {
+        return base_status;
+    }
+
+    if start_in_progress {
+        return RecordingStatus::Starting;
+    }
+
+    match capture_running {
+        Some(false) => RecordingStatus::Paused,
+        _ => base_status,
+    }
+}
+
 /// Map RecordingStatus to tray icon status string
 fn status_to_icon_key(status: RecordingStatus) -> &'static str {
     match status {
@@ -486,6 +510,28 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 consecutive_unhealthy,
                 CONSECUTIVE_UNHEALTHY_THRESHOLD,
                 current_status,
+            );
+
+            let (capture_running, start_in_progress) = if let Some(recording_state) =
+                app.try_state::<crate::recording::RecordingState>()
+            {
+                let start_in_progress = recording_state.is_starting.load(Ordering::SeqCst)
+                    || recording_state.is_starting_capture.load(Ordering::SeqCst);
+                let capture_running = recording_state
+                    .capture
+                    .try_lock()
+                    .ok()
+                    .map(|capture| capture.is_some());
+                (capture_running, start_in_progress)
+            } else {
+                (None, false)
+            };
+
+            let status = apply_capture_session_status(
+                status,
+                health_result.is_ok(),
+                capture_running,
+                start_in_progress,
             );
 
             // NOTE: Runtime permission-loss detection has moved to
@@ -1141,6 +1187,41 @@ mod tests {
             CONSECUTIVE_UNHEALTHY_THRESHOLD,
             RecordingStatus::Recording,
         );
+        assert_eq!(status, RecordingStatus::Recording);
+    }
+
+    #[test]
+    fn test_capture_absent_with_live_server_is_paused() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), false);
+        assert_eq!(status, RecordingStatus::Paused);
+    }
+
+    #[test]
+    fn test_capture_absent_while_starting_stays_starting() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(false), true);
+        assert_eq!(status, RecordingStatus::Starting);
+    }
+
+    #[test]
+    fn test_capture_status_does_not_mask_connection_error() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Stopped, false, Some(false), false);
+        assert_eq!(status, RecordingStatus::Stopped);
+    }
+
+    #[test]
+    fn test_running_capture_keeps_recording_status() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), false);
+        assert_eq!(status, RecordingStatus::Recording);
+    }
+
+    #[test]
+    fn test_running_capture_wins_over_stale_starting_flag() {
+        let status =
+            apply_capture_session_status(RecordingStatus::Recording, true, Some(true), true);
         assert_eq!(status, RecordingStatus::Recording);
     }
 

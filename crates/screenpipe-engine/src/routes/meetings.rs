@@ -493,7 +493,7 @@ pub(crate) async fn start_meeting_handler(
         let mut lock = state.manual_meeting.write().await;
         *lock = Some(id);
     }
-    if let Some(detector) = state.audio_manager.meeting_detector() {
+    if let Some(detector) = state.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(true);
     }
 
@@ -581,7 +581,7 @@ pub(crate) async fn stop_meeting_handler(
             *lock = None;
         }
     }
-    if let Some(detector) = state.audio_manager.meeting_detector() {
+    if let Some(detector) = state.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(false);
     }
 

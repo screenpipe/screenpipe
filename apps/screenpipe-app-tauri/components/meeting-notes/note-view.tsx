@@ -1039,8 +1039,8 @@ function AudioHealthButton({
             level={outputLevel}
           />
 
-          <div className="mt-3 grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5 text-[11px] leading-tight">
-            <span className="text-muted-foreground">live notes</span>
+          <div className="mt-3 grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px] leading-tight">
+            <span className="text-muted-foreground">transcription engine</span>
             <span className="truncate">
               {liveEnabled
                 ? providerLabel(

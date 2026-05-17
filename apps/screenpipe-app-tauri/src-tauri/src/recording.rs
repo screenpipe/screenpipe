@@ -353,7 +353,7 @@ async fn restore_interrupted_meeting_for_capture_restart(
         let mut manual = server.manual_meeting.write().await;
         *manual = Some(interrupted.id);
     }
-    if let Some(detector) = server.audio_manager.meeting_detector() {
+    if let Some(detector) = server.audio_manager.meeting_detector().await {
         detector.set_v2_in_meeting(true);
     }
 
@@ -805,19 +805,10 @@ pub async fn spawn_screenpipe(
         recording_config.data_dir.clone(),
         owned_browser.clone(),
     );
+    let pipe_agent_events = crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
     let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
         std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-            let inner = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                parsed
-            } else {
-                serde_json::json!({ "type": "raw_line", "text": line })
-            };
-            let unified = serde_json::json!({
-                "source": "pipe",
-                "sessionId": format!("pipe:{}:{}", pipe_name, exec_id),
-                "event": inner,
-            });
-            let _ = app_for_pipe.emit("agent_event", &unified);
+            pipe_agent_events.emit_line(pipe_name, exec_id, line);
         }),
     );
 

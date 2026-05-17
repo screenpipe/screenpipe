@@ -258,18 +258,18 @@ async isEnterpriseBuildCmd() : Promise<boolean> {
 /**
  * Toggle the "Cloud audio + video + image analysis" capability
  * in the screenpipe-api skill that Pi installs on every run.
- * 
+ *
  * Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
  * `~/.screenpipe/cloud_media_analysis.disabled` at install time and
  * conditionally appends the Gemma 4 E4B confidential-enclave section
  * to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
  * marker) = enabled. This command just creates or removes the marker.
- * 
+ *
  * Why a marker file instead of editing the rendered skill: Pi rewrites
  * the rendered skill from a compiled-in template on every run, so any
  * post-install edits get overwritten on the next pipe execution. The
  * only stable seam is at install time.
- * 
+ *
  * Idempotent. Effect takes hold on the next Pi run (next pipe
  * execution or new pi-chat session).
  */
@@ -361,14 +361,14 @@ async showWindow(window: ShowRewindWindow) : Promise<Result<null, string>> {
  * Like `show_window` but forces macOS app activation first, so the target
  * window actually comes to the foreground when the caller is a
  * `NSNonactivatingPanelMask` panel (notifications, tray, etc.).
- * 
+ *
  * Without this, clicking "Open" in the notification panel on macOS often
  * appears to do nothing: the non-activating panel style prevents the app
  * from becoming active, and overlay/fullscreen main modes rely on an
  * activate-aware `show_panel_visible(activate_app=true)` path that only
  * fires for `overlay_mode == "window"`. The window technically shows but
  * stays behind whatever app the user was in.
- * 
+ *
  * Callers that represent explicit user intent (clicking Open on a
  * notification) should use this variant. Passive show-surface callers
  * should keep using `show_window` to avoid stealing focus unnecessarily.
@@ -913,22 +913,9 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Queue a follow-up prompt for the current session. Unlike `pi_prompt`, this
- * returns as soon as Rust owns the queued item; the prompt is written only
- * after the active turn finishes.
- */
-async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -942,19 +929,6 @@ async piQueuePrompt(sessionId: string | null, message: string, images: PiImageCo
 async piSteer(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_steer", { sessionId, message, images }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Promote a queued follow-up into Pi's native steer path. The prompt is
- * removed from the Rust queue first, so it cannot later run as a normal
- * follow-up.
- */
-async piSteerQueued(sessionId: string | null, promptId: string) : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_steer_queued", { sessionId, promptId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -999,17 +973,6 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
- * Abort only the active Pi operation. Pending queued follow-ups remain queued.
- */
-async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
  * then sends new_session and waits for the SDK's done event before returning.
@@ -1027,7 +990,7 @@ async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
  * full conversation state in-place — the user can switch haiku ↔ sonnet ↔ opus
  * mid-session and the new model sees the real threaded history, not a
  * glued-transcript workaround.
- * 
+ *
  * Pi's RPC `set_model` is the right path for provider+model changes only. If
  * other preset fields change (url, apiKey, maxTokens, systemPrompt) the
  * caller should fall back to `pi_update_config` which does a full restart
@@ -1044,7 +1007,7 @@ async piSetModel(sessionId: string | null, providerConfig: PiProviderConfig) : P
 /**
  * Update Pi config and restart the chat session so the new model takes effect.
  * Without restart, Pi keeps using the provider/model from its original CLI args.
- * 
+ *
  * Prefer `pi_set_model` when only provider+model changed — it preserves the
  * conversation state instead of killing the subprocess.
  */
@@ -1219,18 +1182,18 @@ async calendarAuthorize() : Promise<Result<string, string>> {
 },
 /**
  * Reset TCC (privacy) permission for Calendars on this app's bundle ID.
- * 
+ *
  * Why: users (Mike, Jarad, Ruark, Louis's own Mac mini) clicked
  * "Fix Calendar Permission" → macOS opened the Calendars privacy pane
  * with an EMPTY app list, so they had no way to grant access. Root cause
  * is a stale TCC record (dev-build → prod-build reinstall, OS update,
  * user previously revoked etc.) where macOS silently refuses to re-add
  * the app on subsequent requestFullAccessToEventsWithCompletion calls.
- * 
+ *
  * `tccutil reset Calendars <bundle_id>` clears that stale record. Next
  * call to requestFullAccessToEventsWithCompletion then shows the native
  * consent popup again and registers the app in Privacy → Calendars.
- * 
+ *
  * Bundle ID is read at runtime from the running app (not hard-coded), so
  * this works for both `screenpi.pe` (prod) and `screenpi.pe.dev` (dev).
  * No sudo required — tccutil's per-app user scope is user-writable.
@@ -1385,20 +1348,20 @@ async reencryptStore() : Promise<Result<null, string>> {
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
-export type BootPhaseSnapshot = { 
+export type BootPhaseSnapshot = {
 /**
  * One of: idle | starting | migrating_database | building_audio |
  * starting_pipes | ready | error
  */
-phase: string; 
+phase: string;
 /**
  * Human-readable detail to show the user (may be long-running hint)
  */
-message: string | null; 
+message: string | null;
 /**
  * Present only when phase == "error"
  */
-error: string | null; 
+error: string | null;
 /**
  * Unix epoch seconds when the current phase was entered. Lets the UI
  * show "X minutes" on slow migrations.
@@ -1412,23 +1375,23 @@ export type BrowserAutomationStatus = { name: string; status: string; running: b
 export type BrowserLogEntry = { level: string; message: string }
 export type CacheFile = { path: string; label: string; size_bytes: bigint }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
-export type CalendarEventItem = { id: string; title: string; 
+export type CalendarEventItem = { id: string; title: string;
 /**
  * RFC3339 in UTC — for meeting detection / comparisons.
  */
-start: string; 
+start: string;
 /**
  * RFC3339 in UTC — for meeting detection / comparisons.
  */
-end: string; 
+end: string;
 /**
  * Pre-formatted local time, e.g. "3:30 PM" — for display.
  */
-startDisplay: string; 
+startDisplay: string;
 /**
  * Pre-formatted local time, e.g. "5:00 PM" — for display.
  */
-endDisplay: string; attendees: string[]; location: string | null; meetingUrl: string | null; calendarName: string; isAllDay: boolean; 
+endDisplay: string; attendees: string[]; location: string | null; meetingUrl: string | null; calendarName: string; isAllDay: boolean;
 /**
  * Source identifier: "native" for OS calendar, "ics" for ICS feeds.
  * Used by meeting detector to merge events from multiple publishers.
@@ -1450,7 +1413,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
-export type OnboardingStore = { isCompleted: boolean; completedAt: string | null; 
+export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
 /**
  * Current step in onboarding flow (login, intro, usecases, status)
  * Used to resume after app restart (e.g., after granting permissions)
@@ -1465,27 +1428,27 @@ export type PiInfo = { running: boolean; projectDir: string | null; pid: number 
 /**
  * Configuration for which AI provider Pi should use
  */
-export type PiProviderConfig = { 
+export type PiProviderConfig = {
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
-provider: string; 
+provider: string;
 /**
  * Base URL for the provider API
  */
-url: string; 
+url: string;
 /**
  * Model ID to use
  */
-model: string; 
+model: string;
 /**
  * Optional API key for the provider
  */
-apiKey: string | null; 
+apiKey: string | null;
 /**
  * Max output tokens (default 4096)
  */
-maxTokens?: number; 
+maxTokens?: number;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
@@ -1496,17 +1459,17 @@ systemPrompt?: string | null }
  * prompt is still streaming. Once the queue's drain loop pulls a prompt and
  * writes it to stdin, the entry is removed (it's now in-flight, not queued).
  */
-export type PiQueuedPrompt = { 
+export type PiQueuedPrompt = {
 /**
  * Stable id assigned at enqueue time. Used to remove the entry on
  * dequeue / abort / write-failure.
  */
-id: string; 
+id: string;
 /**
  * First ~200 chars of the user message — enough for the UI to show a
  * readable preview without round-tripping the full prompt over IPC.
  */
-preview: string; 
+preview: string;
 /**
  * Unix epoch milliseconds for "queued at" — drives the relative-time
  * label in the UI ("queued 4s ago").
@@ -1516,63 +1479,63 @@ export type PipeSuggestionsSettings = { enabled: boolean; frequencyHours: number
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
-export type ScheduleRule = { 
+export type ScheduleRule = {
 /**
  * Day of week: 0 = Monday, 6 = Sunday
  */
-dayOfWeek: number; 
+dayOfWeek: number;
 /**
  * Start time in "HH:MM" (24h format, local time)
  */
-startTime: string; 
+startTime: string;
 /**
  * End time in "HH:MM" (24h format, local time)
  */
-endTime: string; 
+endTime: string;
 /**
  * What to record: "all", "audio_only", "screen_only"
  */
 recordMode: string }
-export type SettingsStore = 
+export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
  * is unchanged — `disableAudio`, `port`, `fps`, etc. stay at the top level.
  */
-({ 
+({
 /**
  * Disable all audio capture and transcription.
  */
-disableAudio: boolean; 
+disableAudio: boolean;
 /**
  * Audio transcription engine identifier.
  * Values: "whisper-large-v3-turbo", "whisper-large-v3-turbo-quantized",
  * "deepgram", "screenpipe-cloud", etc.
  */
-audioTranscriptionEngine: string; 
+audioTranscriptionEngine: string;
 /**
  * Transcription mode: "realtime" or "batch".
  * Previously stored in SettingsStore.extra["transcriptionMode"].
  */
-transcriptionMode: string; 
+transcriptionMode: string;
 /**
  * Stream live notes only while a meeting is active. This is separate
  * from 24/7 background transcription: the recorder still writes durable
  * chunks, while this powers the low-latency meeting note UI.
  */
-meetingLiveTranscriptionEnabled: boolean; 
+meetingLiveTranscriptionEnabled: boolean;
 /**
  * Provider for meeting-only live notes. Defaults to the selected audio
  * transcription engine so local/custom engines work without Cloud.
  */
-meetingLiveTranscriptionProvider: string; 
+meetingLiveTranscriptionProvider: string;
 /**
  * Audio device names/IDs to capture from.
  */
-audioDevices: string[]; 
+audioDevices: string[];
 /**
  * Automatically follow the system default audio devices.
  */
-useSystemDefaultAudio: boolean; 
+useSystemDefaultAudio: boolean;
 /**
  * Experimental: capture System Audio via the CoreAudio Process Tap API
  * (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
@@ -1581,13 +1544,13 @@ useSystemDefaultAudio: boolean;
  * routed to a Bluetooth headset via HFP (which SCK can't see; see
  * Ruark Ferreira's 2026-04-24 Zoom call where AirPods-as-input
  * silently routed output away from the SCK-visible mixer).
- * 
+ *
  * Default `true`: if tap creation fails for any reason (permission,
  * macOS <14.4, OS quirk), stream.rs falls back to the SCK path
  * automatically — so flipping the default on can't regress anyone.
  * Ignored on non-macOS platforms.
  */
-experimentalCoreaudioSystemAudio?: boolean; 
+experimentalCoreaudioSystemAudio?: boolean;
 /**
  * Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
@@ -1597,57 +1560,57 @@ windowsInputAecEnabled?: boolean;
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
  */
-audioChunkDuration: number; 
+audioChunkDuration: number;
 /**
  * Deepgram API key for cloud transcription.
  * Empty string or "default" means not configured.
  * Kept as String (not Option) to match existing store.bin schema.
  */
-deepgramApiKey: string; 
+deepgramApiKey: string;
 /**
  * Filter music-dominant audio before transcription using spectral analysis.
  */
-filterMusic: boolean; 
+filterMusic: boolean;
 /**
  * Maximum batch duration in seconds for batch transcription.
  * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
  * Also controls the max deferral cap during active meetings.
  */
-batchMaxDurationSecs?: bigint | null; 
+batchMaxDurationSecs?: bigint | null;
 /**
  * Custom vocabulary for transcription biasing and word replacement.
  * Previously stored in SettingsStore.extra["vocabularyWords"].
  */
-vocabularyWords?: VocabEntry[]; 
+vocabularyWords?: VocabEntry[];
 /**
  * Disable all screen capture.
  */
-disableVision: boolean; 
+disableVision: boolean;
 /**
  * Specific monitor IDs to capture.
  */
-monitorIds: string[]; 
+monitorIds: string[];
 /**
  * Capture from all connected monitors.
  */
-useAllMonitors: boolean; 
+useAllMonitors: boolean;
 /**
  * Video quality preset: "low", "balanced", "high", "max".
  */
-videoQuality: string; 
+videoQuality: string;
 /**
  * Maximum width for stored snapshots. Images wider than this are downscaled
  * (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
  * native resolution). Default: 1920.
  */
-maxSnapshotWidth?: number; 
+maxSnapshotWidth?: number;
 /**
  * Skip the background JPEG->MP4 snapshot compaction worker.
  * Use when the MP4 timeline UI is not used, e.g. task-mining tools
  * that consume accessibility_text / ui_events only.
  * Side effect: JPEGs are not compacted, so disk usage depends on retention.
  */
-disableSnapshotCompaction?: boolean; 
+disableSnapshotCompaction?: boolean;
 /**
  * Skip the v2 meeting detector watcher (5s-interval process / AX scan).
  * Use when meeting detection is not consumed (task-mining, headless analysis,
@@ -1656,23 +1619,23 @@ disableSnapshotCompaction?: boolean;
  * Side effect: meeting-related DB rows are not generated; the audio pipeline's
  * in_meeting override flag stays false.
  */
-disableMeetingDetector?: boolean; 
+disableMeetingDetector?: boolean;
 /**
  * Window titles to exclude from capture.
  */
-ignoredWindows: string[]; 
+ignoredWindows: string[];
 /**
  * Window titles to exclusively capture (empty = capture all).
  */
-includedWindows: string[]; 
+includedWindows: string[];
 /**
  * URLs to exclude from capture.
  */
-ignoredUrls?: string[]; 
+ignoredUrls?: string[];
 /**
  * Automatically detect and skip incognito / private browsing windows.
  */
-ignoreIncognitoWindows: boolean; 
+ignoreIncognitoWindows: boolean;
 /**
  * Experimental: pause screen capture when a DRM-protected streaming app
  * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
@@ -1680,27 +1643,27 @@ ignoreIncognitoWindows: boolean;
  * recording is active.
  * Off by default; engine-only pause (no full app shutdown).
  */
-pauseOnDrmContent?: boolean; 
+pauseOnDrmContent?: boolean;
 /**
  * Skip clipboard capture in the UI recorder. Off by default; recommended
  * when piping ~/.screenpipe data into a remote LLM or sharing it,
  * since passwords / API keys / private keys often pass through the
  * clipboard.
  */
-disableClipboardCapture?: boolean; 
+disableClipboardCapture?: boolean;
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).
  */
-recordWhileLocked?: boolean; 
+recordWhileLocked?: boolean;
 /**
  * Languages for transcription (ISO 639-1 codes).
  */
-languages: string[]; 
+languages: string[];
 /**
  * Redact personally identifiable information from transcriptions.
  */
-usePiiRemoval: boolean; 
+usePiiRemoval: boolean;
 /**
  * Enable the async PII reconciliation worker. When `true`, a
  * background task runs after capture and OVERWRITES PII in the
@@ -1711,7 +1674,7 @@ usePiiRemoval: boolean;
  * Off by default; capture path is unaffected either way. See
  * `screenpipe-redact` for the full design.
  */
-asyncPiiRedaction?: boolean; 
+asyncPiiRedaction?: boolean;
 /**
  * Enable image-PII redaction on captured screen frames. When
  * `true`, the `screenpipe_redact::image::worker` runs alongside
@@ -1723,12 +1686,12 @@ asyncPiiRedaction?: boolean;
  * crate to be built with one of the `onnx-*` cargo features and
  * the `rfdetr_v8.onnx` model present at `~/.screenpipe/models/`.
  */
-asyncImagePiiRedaction?: boolean; 
+asyncImagePiiRedaction?: boolean;
 /**
  * Where the AI PII redaction actually runs. One switch flips
  * BOTH modalities (text + image) because the user-facing
  * "AI PII removal" toggle is one knob.
- * 
+ *
  * - `"local"` (default): on-device ONNX models. Privacy by
  * construction — pixels and text never leave the box. Slower,
  * especially on weak hardware (~1-3 s per text row, ~60-180 ms
@@ -1739,178 +1702,178 @@ asyncImagePiiRedaction?: boolean;
  * into an attested confidential-compute enclave that even
  * Tinfoil ops can't read into. Requires network +
  * `SCREENPIPE_PRIVACY_FILTER_API_KEY` (or the cloud auth key).
- * 
+ *
  * Note on attestation: the proper attested-transport client
  * (Tinfoil's secure-client SDK) is Go/Python/JS-only at time of
  * writing. The Rust adapter currently uses plain HTTPS — which
  * gives confidentiality vs. the network but NOT vs. a malicious
  * Tinfoil operator. Tracked separately; structured for swap-in.
  */
-piiBackend?: string; 
+piiBackend?: string;
 /**
  * Screenpipe cloud user ID. Empty string means not logged in.
  * Kept as String (not Option) to match existing store.bin schema.
  */
-userId: string; 
+userId: string;
 /**
  * Display name for speaker identification.
  * Fallback chain: this field → cloud auth name → cloud auth email.
  * Previously stored in SettingsStore.extra["userName"].
  */
-userName?: string | null; 
+userName?: string | null;
 /**
  * OpenAI-compatible transcription endpoint URL.
  * Previously stored in SettingsStore.extra["openaiCompatibleEndpoint"].
  */
-openaiCompatibleEndpoint?: string | null; 
+openaiCompatibleEndpoint?: string | null;
 /**
  * OpenAI-compatible transcription API key.
  * Previously stored in SettingsStore.extra["openaiCompatibleApiKey"].
  */
-openaiCompatibleApiKey?: string | null; 
+openaiCompatibleApiKey?: string | null;
 /**
  * OpenAI-compatible transcription model name.
  * Previously stored in SettingsStore.extra["openaiCompatibleModel"].
  */
-openaiCompatibleModel?: string | null; 
+openaiCompatibleModel?: string | null;
 /**
  * Custom HTTP headers for OpenAI-compatible transcription requests.
  * JSON object, e.g. {"X-Custom-Header": "value"}.
  */
-openaiCompatibleHeaders?: { [key in string]: string } | null; 
+openaiCompatibleHeaders?: { [key in string]: string } | null;
 /**
  * Send raw WAV audio instead of MP3 to OpenAI-compatible endpoint.
  * Some ASR providers prefer uncompressed audio for better accuracy.
  */
-openaiCompatibleRawAudio?: boolean; 
+openaiCompatibleRawAudio?: boolean;
 /**
  * HTTP server port for the screenpipe API.
  */
-port: number; 
+port: number;
 /**
  * Power mode preference: "auto", "performance", "battery_saver".
  * Previously stored in SettingsStore.extra["powerMode"].
  */
-powerMode?: string | null; 
+powerMode?: string | null;
 /**
  * Use Chinese mirror for Hugging Face model downloads.
  */
-useChineseMirror: boolean; 
+useChineseMirror: boolean;
 /**
  * Enable anonymous analytics (PostHog).
  */
-analyticsEnabled: boolean; 
+analyticsEnabled: boolean;
 /**
  * Persistent analytics ID (UUID, stable across sessions).
  */
-analyticsId: string; 
+analyticsId: string;
 /**
  * Enable AI workflow event detection (cloud feature, requires subscription).
  * When enabled, classifies desktop activity and triggers event-based pipes.
  */
-enableWorkflowEvents?: boolean; 
+enableWorkflowEvents?: boolean;
 /**
  * Detected hardware tier ("high", "mid", "low").
  * Set once on first launch; `None` for existing installs (treated as High).
  */
-deviceTier?: string | null; 
+deviceTier?: string | null;
 /**
  * Enable work-hours schedule (when false, records 24/7 as usual)
  */
-scheduleEnabled?: boolean; 
+scheduleEnabled?: boolean;
 /**
  * Per-day schedule rules (only used when schedule_enabled is true)
  */
-scheduleRules?: ScheduleRule[]; 
+scheduleRules?: ScheduleRule[];
 /**
  * Require authentication for remote (non-localhost) API access.
  */
-apiAuth?: boolean; 
+apiAuth?: boolean;
 /**
  * Custom API key for remote authentication. If empty, a key is auto-generated.
  */
-apiKey?: string; 
+apiKey?: string;
 /**
  * When true, the HTTP server binds to `0.0.0.0` so other devices on the
  * LAN can reach the screenpipe API. Off by default — the server binds
  * `127.0.0.1` (localhost only) which is the safe choice.
- * 
+ *
  * `api_auth` is force-enabled whenever this is true; [`RecordingConfig::from_settings`]
  * overrides it, so a user can't accidentally expose the API unauthenticated on their network.
  */
-listenOnLan?: boolean }) & 
+listenOnLan?: boolean }) &
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; 
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
  * When true, screen capture continues but OCR text extraction is skipped.
  * Reduces CPU usage significantly while still recording video.
  */
-disableOcr?: boolean; showShortcutOverlay?: boolean; 
+disableOcr?: boolean; showShortcutOverlay?: boolean;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
-shortcutOverlaySize?: string; 
+shortcutOverlaySize?: string;
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
-deviceId?: string; 
+deviceId?: string;
 /**
  * Auto-install updates and restart when a new version is available.
  * When disabled, users must click "update now" in the tray menu.
  */
-autoUpdate?: boolean; 
+autoUpdate?: boolean;
 /**
  * Auto-update store-installed pipes that haven't been locally modified.
  */
-autoUpdatePipes?: boolean; 
+autoUpdatePipes?: boolean;
 /**
  * Use screenpipe cloud for AI-powered features like suggestions.
  * Better quality but sends activity context to the cloud (zero data retention).
  */
-enhancedAI?: boolean; 
+enhancedAI?: boolean;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).
  */
-overlayMode?: string; 
+overlayMode?: string;
 /**
  * Allow screen recording apps to capture the overlay.
  * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
  */
-showOverlayInScreenRecording?: boolean; 
+showOverlayInScreenRecording?: boolean;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */
-chatAlwaysOnTop?: boolean; 
+chatAlwaysOnTop?: boolean;
 /**
  * Show restart notifications when audio/vision capture stalls.
  * Disabled by default for now until the stall detector is more reliable.
  */
-showRestartNotifications?: boolean; 
+showRestartNotifications?: boolean;
 /**
  * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
  */
-translucentSidebar?: boolean; 
+translucentSidebar?: boolean;
 /**
  * When true (default), hide model "thinking" reasoning blocks in the chat
  * transcript. The model still emits them server-side; we just don't
  * render the collapsible block in the UI.
  */
-hideThinkingBlocks?: boolean; 
+hideThinkingBlocks?: boolean;
 /**
  * UI theme: "light", "dark", or "system".
  */
 uiTheme?: string }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
-export type Suggestion = { text: string; 
+export type Suggestion = { text: string;
 /**
  * Short preview with real data (e.g. "1h20m in VS Code — auth.rs, api.rs")
  */
-preview?: string | null; 
+preview?: string | null;
 /**
  * Priority: 1 = hero card (most relevant), 2+ = supporting cards
  */
@@ -1928,7 +1891,7 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: bigint | null; storageLimit: bigint | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null }
-export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: bigint } | { kind: "image"; data_url: string; name: string; path: string } | 
+export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: bigint } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
  * Non-text, non-image file (random binary). The UI surfaces a
  * polite "open in default app" prompt instead of rendering bytes
@@ -1938,11 +1901,11 @@ export type ViewerContent = { kind: "text"; text: string; name: string; path: st
 /**
  * Custom vocabulary entry for transcription biasing and word replacement.
  */
-export type VocabEntry = { 
+export type VocabEntry = {
 /**
  * The word or phrase to bias toward during transcription.
  */
-word: string; 
+word: string;
 /**
  * Optional replacement — if set, the transcribed `word` is replaced with this.
  */

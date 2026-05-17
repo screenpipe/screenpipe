@@ -140,4 +140,46 @@ describe('OpenAI API accounting and routing', () => {
 		expect(params['max_completion_tokens']).toBe(32);
 		expect(params['max_tokens']).toBeUndefined();
 	});
+
+	it('omits temperature for GPT-5 chat completions', async () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		let capturedParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			capturedParams = params;
+			return { choices: [{ message: { content: 'ok' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'gpt-5.5',
+			messages: [{ role: 'user', content: 'hi' }],
+			temperature: 0.7,
+			max_tokens: 32,
+		});
+
+		expect(capturedParams).not.toBeNull();
+		const params = capturedParams as Record<string, unknown>;
+		expect(params['temperature']).toBeUndefined();
+		expect(params['max_completion_tokens']).toBe(32);
+	});
+
+	it('keeps temperature for non GPT-5 chat completions', async () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		let capturedParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			capturedParams = params;
+			return { choices: [{ message: { content: 'ok' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'gpt-4.1',
+			messages: [{ role: 'user', content: 'hi' }],
+			temperature: 0.7,
+			max_tokens: 32,
+		});
+
+		expect(capturedParams).not.toBeNull();
+		const params = capturedParams as Record<string, unknown>;
+		expect(params['temperature']).toBe(0.7);
+		expect(params['max_tokens']).toBe(32);
+	});
 });

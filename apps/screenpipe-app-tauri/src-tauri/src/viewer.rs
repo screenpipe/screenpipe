@@ -42,22 +42,15 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
         return Ok(());
     }
 
-    let url = format!(
-        "/viewer?path={}",
-        urlencoding::encode(&path)
-    );
+    let url = format!("/viewer?path={}", urlencoding::encode(&path));
 
-    let mut builder = WebviewWindowBuilder::new(
-        &app,
-        &label,
-        WebviewUrl::App(PathBuf::from(url)),
-    )
-    .title(viewer_title(&path))
-    .inner_size(720.0, 600.0)
-    .min_inner_size(400.0, 300.0)
-    .accept_first_mouse(true)
-    .resizable(true)
-    .focused(true);
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(PathBuf::from(url)))
+        .title(viewer_title(&path))
+        .inner_size(720.0, 600.0)
+        .min_inner_size(400.0, 300.0)
+        .accept_first_mouse(true)
+        .resizable(true)
+        .focused(true);
 
     #[cfg(target_os = "macos")]
     {
@@ -124,9 +117,9 @@ pub enum ViewerContent {
 #[specta::specta]
 pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
     let p = Path::new(&path);
-    let metadata = tokio::fs::metadata(p).await.map_err(|e| {
-        format!("cannot read {}: {}", path, e)
-    })?;
+    let metadata = tokio::fs::metadata(p)
+        .await
+        .map_err(|e| format!("cannot read {}: {}", path, e))?;
 
     if !metadata.is_file() {
         return Ok(ViewerContent::Error {
@@ -176,7 +169,11 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
         };
         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
         let data_url = format!("data:{};base64,{}", mime, encoded);
-        return Ok(ViewerContent::Image { data_url, name, path });
+        return Ok(ViewerContent::Image {
+            data_url,
+            name,
+            path,
+        });
     }
 
     // Text-like path. Read up to the cap, then sniff the first 4 KiB
@@ -189,7 +186,11 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
     let slice = &raw[..raw.len().min(cap)];
 
     if looks_binary(slice) {
-        return Ok(ViewerContent::Binary { name, path, total_bytes });
+        return Ok(ViewerContent::Binary {
+            name,
+            path,
+            total_bytes,
+        });
     }
 
     let text = String::from_utf8_lossy(slice).into_owned();
@@ -275,7 +276,9 @@ mod tests {
     fn label_matches_tauri_charset() {
         let label = label_for_path("/Users/louis/log file.md");
         assert!(label.starts_with(VIEWER_LABEL_PREFIX));
-        assert!(label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

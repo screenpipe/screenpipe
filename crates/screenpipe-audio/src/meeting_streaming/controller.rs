@@ -711,6 +711,7 @@ fn emit_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcription::deepgram::DeepgramTranscriptionConfig;
 
     fn test_session(now: Instant, live: bool) -> ActiveMeetingStream {
         ActiveMeetingStream {
@@ -862,7 +863,9 @@ mod tests {
     async fn selected_deepgram_uses_cloud_live_when_token_available() {
         let engine = TranscriptionEngine::new(
             Arc::new(AudioTranscriptionEngine::Deepgram),
-            Some("unused-personal-key".to_string()),
+            Some(DeepgramTranscriptionConfig::direct(
+                "unused-personal-key".to_string(),
+            )),
             None,
             Vec::new(),
             Vec::new(),
@@ -894,7 +897,9 @@ mod tests {
     async fn selected_deepgram_without_live_credentials_stays_selected_engine() {
         let engine = TranscriptionEngine::new(
             Arc::new(AudioTranscriptionEngine::Deepgram),
-            Some("unused-personal-key".to_string()),
+            Some(DeepgramTranscriptionConfig::direct(
+                "unused-personal-key".to_string(),
+            )),
             None,
             Vec::new(),
             Vec::new(),

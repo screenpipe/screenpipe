@@ -219,6 +219,20 @@ const getAudioFallbackMessage = (reason: AudioEngineFallbackReason) => {
   }
 };
 
+const SERVER_RESTART_SETTINGS = new Set<keyof SettingsStore>([
+  "port",
+  "dataDir",
+  "apiAuth",
+  "apiKey",
+  "listenOnLan",
+  "encryptStore",
+  "asyncPiiRedaction",
+  "asyncImagePiiRedaction",
+  "piiBackend",
+  "useChineseMirror",
+  "enableWorkflowEvents",
+]);
+
 type AudioPipelineSnapshot = {
   transcription_mode?: string;
   segments_deferred?: number;
@@ -1772,14 +1786,21 @@ export function RecordingSettings() {
         }
       }
 
-      await commands.stopCapture();
+      const needsServerRestart = Object.keys(pendingChanges).some((key) =>
+        SERVER_RESTART_SETTINGS.has(key as keyof SettingsStore)
+      );
+
+      await (needsServerRestart ? commands.stopScreenpipe() : commands.stopCapture());
       await new Promise((resolve) => setTimeout(resolve, 500));
-      await commands.startCapture();
+      await (needsServerRestart ? commands.spawnScreenpipe(null) : commands.startCapture());
       await new Promise((resolve) => setTimeout(resolve, 1000));
+      setPendingChanges({});
 
       toast({
         title: "Settings updated successfully",
-        description: "Recording restarted with new settings",
+        description: needsServerRestart
+          ? "Screenpipe server restarted with new settings"
+          : "Recording restarted with new settings",
       });
     } catch (error) {
       console.error("Failed to update settings:", error);

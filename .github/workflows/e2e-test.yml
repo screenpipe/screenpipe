@@ -554,10 +554,13 @@ jobs:
           apps/screenpipe-app-tauri/src-tauri/ffmpeg-aarch64-apple-darwin
           apps/screenpipe-app-tauri/src-tauri/ffprobe-aarch64-apple-darwin
           apps/screenpipe-app-tauri/src-tauri/bun-aarch64-apple-darwin
-          apps/screenpipe-app-tauri/src-tauri/bun-x86_64-apple-darwin
         key: macOS-e2e-artifacts-v2-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
         restore-keys: |
           macOS-e2e-artifacts-v2-
+
+    - name: Install macOS media sidecars
+      shell: bash
+      run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
 
     - name: Install frontend dependencies
       working-directory: apps/screenpipe-app-tauri
@@ -574,6 +577,8 @@ jobs:
 
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
+      env:
+        SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
       with:
         args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"

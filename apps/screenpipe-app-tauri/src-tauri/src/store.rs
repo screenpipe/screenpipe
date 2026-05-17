@@ -1,5 +1,6 @@
 use super::get_base_dir;
 use super::secrets;
+use screenpipe_secrets::keychain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
@@ -8,7 +9,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::{error, warn};
-use screenpipe_secrets::keychain;
 
 /// Process-lifetime cache for the resolved API auth key.
 ///
@@ -1608,7 +1608,8 @@ mod tests {
 
     #[test]
     fn store_json_has_presets_recognises_healthy() {
-        let healthy = serde_json::to_vec(&json!({"settings": {"aiPresets": presets_n(3)}})).unwrap();
+        let healthy =
+            serde_json::to_vec(&json!({"settings": {"aiPresets": presets_n(3)}})).unwrap();
         assert!(store_json_has_presets(&healthy));
     }
 
@@ -1662,7 +1663,10 @@ mod tests {
         assert!(restored, "should report a restore happened");
 
         let now = std::fs::read(&store_path).unwrap();
-        assert!(store_json_has_presets(&now), "store must be healthy after restore");
+        assert!(
+            store_json_has_presets(&now),
+            "store must be healthy after restore"
+        );
 
         // Forensic copy of the wiped file must exist
         let entries: Vec<_> = std::fs::read_dir(tmp.path())
@@ -1671,7 +1675,11 @@ mod tests {
             .map(|e| e.file_name().into_string().unwrap_or_default())
             .filter(|n| n.contains("pre-restore-"))
             .collect();
-        assert_eq!(entries.len(), 1, "expected 1 pre-restore backup, got {entries:?}");
+        assert_eq!(
+            entries.len(),
+            1,
+            "expected 1 pre-restore backup, got {entries:?}"
+        );
     }
 
     #[test]
@@ -1692,7 +1700,12 @@ mod tests {
 
         // Confirm the current file wasn't replaced by .last-good's 99 presets
         let now: Value = serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
-        let n = now.pointer("/settings/aiPresets").unwrap().as_array().unwrap().len();
+        let n = now
+            .pointer("/settings/aiPresets")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len();
         assert_eq!(n, 3);
     }
 
@@ -1731,7 +1744,10 @@ mod tests {
         );
 
         let restored = auto_restore_if_wiped(&store_path);
-        assert!(!restored, "encrypted file must be left for the decrypt path");
+        assert!(
+            !restored,
+            "encrypted file must be left for the decrypt path"
+        );
         // And the file must be unchanged
         assert_eq!(std::fs::read(&store_path).unwrap(), blob);
     }

@@ -28,6 +28,7 @@ import { openHomeWindow, waitForAppReady, t } from '../helpers/test-utils.js';
 
 const SESSION_A = '11111111-1111-1111-1111-111111111111';
 const SESSION_B = '22222222-2222-2222-2222-222222222222';
+const SESSION_MARKDOWN = '44444444-4444-4444-4444-444444444444';
 
 /** Emit a Tauri event from the webview. The frontend's `listen()` calls
  *  pick it up the same as a Rust-emitted event. */
@@ -159,6 +160,14 @@ async function readAssistantMessages(): Promise<string[]> {
   return texts;
 }
 
+async function hasLiveMarkdownElements(): Promise<boolean> {
+  return (await browser.execute(() => {
+    const assistant = document.querySelector('[data-testid="chat-message-assistant"]');
+    if (!assistant) return false;
+    return Boolean(assistant.querySelector('h2') && assistant.querySelector('li'));
+  })) as boolean;
+}
+
 describe('Parallel chat — Louis repro', function () {
   // Switching + faking three turns is fast, but on CI the WebDriver
   // round-trip dominates; budget generously.
@@ -248,5 +257,34 @@ describe('Parallel chat — Louis repro', function () {
     }
 
     expect(orderAfter).toEqual(orderBefore);
+  });
+
+  it('renders markdown while an assistant message is still streaming', async () => {
+    await openHomeWindow();
+    const home = await $('[data-testid="section-home"]');
+    await home.waitForExist({ timeout: t(15_000) });
+
+    await switchToSession(SESSION_MARKDOWN);
+    await seedUserMessage(SESSION_MARKDOWN, '(e2e) prompt for live markdown');
+
+    await emitAgentEvent(SESSION_MARKDOWN, {
+      type: 'message_start',
+      message: { role: 'assistant' },
+    });
+    await emitAgentEvent(SESSION_MARKDOWN, {
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: '## Summary\n\n- live markdown renders before agent_end\n',
+      },
+    });
+
+    await browser.waitUntil(hasLiveMarkdownElements, {
+      timeout: t(5_000),
+      interval: 100,
+      timeoutMsg: 'streaming assistant markdown did not render before agent_end',
+    });
+
+    await emitAgentEvent(SESSION_MARKDOWN, { type: 'agent_end' });
   });
 });

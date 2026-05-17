@@ -96,7 +96,11 @@ async fn write_tokens_to_store(tokens: &OAuthTokens) -> Result<(), String> {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     last_err = format!("failed to save token: {}", e);
-                    warn!("write_tokens_to_store attempt {}: {}", attempt + 1, last_err);
+                    warn!(
+                        "write_tokens_to_store attempt {}: {}",
+                        attempt + 1,
+                        last_err
+                    );
                 }
             },
             Err(e) => {
@@ -391,12 +395,7 @@ pub async fn chatgpt_oauth_status() -> Result<ChatGptOAuthStatus, String> {
     // Only check token existence — no network refresh here.
     // Refresh happens lazily in chatgpt_oauth_get_token when actually needed.
     // 3-second timeout guards against a locked/slow SQLite DB.
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        read_tokens_from_store(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(3), read_tokens_from_store()).await {
         Ok(Some(_)) => Ok(ChatGptOAuthStatus { logged_in: true }),
         Ok(None) | Err(_) => Ok(ChatGptOAuthStatus { logged_in: false }),
     }

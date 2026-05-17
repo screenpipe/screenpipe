@@ -329,7 +329,6 @@ export function ChatMessage({ message, ...props }: ChatMessageProps) {
 
 							return (
 								<LazyCodeBlock
-									key={Math.random()}
 									language={language}
 									value={content}
 								/>

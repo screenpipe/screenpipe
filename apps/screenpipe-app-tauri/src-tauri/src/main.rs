@@ -39,6 +39,7 @@ mod analytics;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;
+mod agent_event_emitter;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -746,6 +747,8 @@ async fn main() {
                 commands::show_window_activated,
                 commands::show_main_window,
                 commands::hide_main_window,
+                commands::e2e_emit_agent_stream,
+                commands::e2e_emit_pipe_stream,
                 commands::open_login_window,
                 commands::open_google_calendar_auth_window,
                 commands::ensure_webview_focus,
@@ -1042,6 +1045,8 @@ async fn main() {
             commands::show_window_activated,
             commands::show_main_window,
             commands::hide_main_window,
+            commands::e2e_emit_agent_stream,
+            commands::e2e_emit_pipe_stream,
             commands::open_login_window,
             commands::ensure_webview_focus,
             commands::close_window,
@@ -1657,19 +1662,11 @@ async fn main() {
                 // move, so we need a distinct handle that survives into
                 // the server thread.
                 let app_for_owned = app_handle.clone();
+                let pipe_agent_events =
+                    crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
                     std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-                        let inner = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                            parsed
-                        } else {
-                            serde_json::json!({ "type": "raw_line", "text": line })
-                        };
-                        let unified = serde_json::json!({
-                            "source": "pipe",
-                            "sessionId": format!("pipe:{}:{}", pipe_name, exec_id),
-                            "event": inner,
-                        });
-                        let _ = app_for_pipe.emit("agent_event", &unified);
+                        pipe_agent_events.emit_line(pipe_name, exec_id, line);
                     }),
                 );
 

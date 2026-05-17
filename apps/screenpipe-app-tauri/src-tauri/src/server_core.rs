@@ -16,7 +16,6 @@ use screenpipe_audio::core::device::{
     default_input_device, default_output_device, parse_audio_device,
 };
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
 };
@@ -36,7 +35,6 @@ pub struct ServerCore {
     pub hot_frame_cache: Arc<HotFrameCache>,
     pub vision_metrics: Arc<screenpipe_screen::PipelineMetrics>,
     pub power_manager: Arc<PowerManagerHandle>,
-    pub meeting_detector: Option<Arc<MeetingDetector>>,
     pub pipe_manager: Arc<tokio::sync::Mutex<screenpipe_core::pipes::PipeManager>>,
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
     pub data_dir: PathBuf,
@@ -81,22 +79,10 @@ impl ServerCore {
             info!("Using Chinese HuggingFace mirror");
         }
 
-        // Deepgram proxy setup
-        if config.audio_transcription_engine == AudioTranscriptionEngine::Deepgram {
-            let has_personal_key = config
-                .deepgram_api_key
-                .as_ref()
-                .map_or(false, |k| !k.is_empty() && k != "default");
-            if has_personal_key {
-                std::env::remove_var("DEEPGRAM_API_URL");
-                std::env::remove_var("CUSTOM_DEEPGRAM_API_TOKEN");
-                info!("Using personal Deepgram API key for audio transcription");
-            } else if let Some(ref user_id) = config.user_id {
-                std::env::set_var("DEEPGRAM_API_URL", "https://api.screenpi.pe/v1/listen");
-                std::env::set_var("CUSTOM_DEEPGRAM_API_TOKEN", user_id);
-                info!("Using screenpipe cloud for audio transcription");
-            }
-        }
+        // Audio transcription provider config is passed directly into
+        // AudioManagerOptions. Do not use process env here: Deepgram used to
+        // read env via lazy_static, which made capture-level engine changes
+        // impossible after the first read.
 
         // --- Database ---
         let local_data_dir = config.data_dir.clone();
@@ -219,15 +205,6 @@ impl ServerCore {
             }
         }
 
-        let meeting_detector: Option<Arc<MeetingDetector>> = if config.disable_audio {
-            info!("meeting detector disabled because audio capture is disabled");
-            None
-        } else {
-            let detector = Arc::new(MeetingDetector::new());
-            info!("meeting detector enabled");
-            Some(detector)
-        };
-
         let openai_compatible_config =
             if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
                 Some(OpenAICompatibleConfig {
@@ -254,10 +231,6 @@ impl ServerCore {
             .to_audio_manager_builder(data_path.clone(), audio_devices)
             .transcription_mode(config.transcription_mode.clone())
             .openai_compatible_config(openai_compatible_config);
-
-        if let Some(ref detector) = meeting_detector {
-            audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
-        }
 
         crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
         let mut audio_manager = audio_manager_builder.build(db.clone()).await.map_err(|e| {
@@ -577,8 +550,7 @@ impl ServerCore {
                         tables: ALL_TARGET_TABLES.to_vec(),
                         ..Default::default()
                     };
-                    let _ = Worker::new(pool, pipeline_arc, cfg)
-                        .spawn_with_shutdown(shutdown);
+                    let _ = Worker::new(pool, pipeline_arc, cfg).spawn_with_shutdown(shutdown);
                 });
             }
         }
@@ -592,8 +564,7 @@ impl ServerCore {
             let pool = db.pool.clone();
             if use_tinfoil {
                 info!("starting async image-PII worker (backend=tinfoil)");
-                let detector =
-                    Arc::new(TinfoilImageRedactor::from_env()) as Arc<dyn ImageRedactor>;
+                let detector = Arc::new(TinfoilImageRedactor::from_env()) as Arc<dyn ImageRedactor>;
                 let _ = ImageWorker::new(pool, detector, ImageWorkerConfig::default())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {
@@ -605,14 +576,10 @@ impl ServerCore {
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
                             info!("starting async image-PII worker (backend=local)");
-                            let detector_arc =
-                                Arc::new(detector) as Arc<dyn ImageRedactor>;
-                            let _ = ImageWorker::new(
-                                pool,
-                                detector_arc,
-                                ImageWorkerConfig::default(),
-                            )
-                            .spawn_with_shutdown(shutdown);
+                            let detector_arc = Arc::new(detector) as Arc<dyn ImageRedactor>;
+                            let _ =
+                                ImageWorker::new(pool, detector_arc, ImageWorkerConfig::default())
+                                    .spawn_with_shutdown(shutdown);
                         }
                         Err(e) => {
                             warn!(
@@ -632,7 +599,6 @@ impl ServerCore {
             hot_frame_cache,
             vision_metrics,
             power_manager,
-            meeting_detector,
             pipe_manager: shared_pipe_manager,
             manual_meeting,
             data_dir: local_data_dir,

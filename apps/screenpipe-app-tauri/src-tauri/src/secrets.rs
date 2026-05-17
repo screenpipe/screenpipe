@@ -24,4 +24,3 @@ pub fn get_key_if_encryption_enabled() -> KeyResult {
     }
     get_key()
 }
-

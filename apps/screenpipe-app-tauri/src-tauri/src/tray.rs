@@ -16,6 +16,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use tauri::async_runtime::JoinHandle;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
@@ -25,7 +26,6 @@ use tauri::{
     },
     AppHandle, Manager, Wry,
 };
-use tauri::async_runtime::JoinHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
 
@@ -176,7 +176,11 @@ fn format_remaining(d: std::time::Duration) -> String {
     if secs >= 3600 {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
-        if m == 0 { format!("{}h", h) } else { format!("{}h {}m", h, m) }
+        if m == 0 {
+            format!("{}h", h)
+        } else {
+            format!("{}h {}m", h, m)
+        }
     } else if secs >= 60 {
         format!("{}m", (secs + 59) / 60) // round up
     } else {
@@ -778,7 +782,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             // who paused for 30 min and then resumed early would get re-paused
             // when the original timer fires.
             cancel_pause_timer();
-            let status = get_recording_status();
+            let status = get_effective_recording_status();
             let is_recording = status == RecordingStatus::Recording;
             let (optimistic, event) = if is_recording {
                 (RecordingStatus::Paused, "shortcut-stop-recording")
@@ -798,7 +802,10 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             });
         }
         id if id.starts_with("pause_") => {
-            let mins: u64 = id.strip_prefix("pause_").and_then(|s| s.parse().ok()).unwrap_or(15);
+            let mins: u64 = id
+                .strip_prefix("pause_")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(15);
             let total = std::time::Duration::from_secs(mins * 60);
             // Cancel any in-flight pause timer before scheduling a new one.
             cancel_pause_timer();
@@ -814,10 +821,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let handle = tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(total).await;
                 let _ = app_for_resume.emit("shortcut-start-recording", ());
-                send_notify(
-                    "Recording resumed",
-                    "screenpipe is recording again.",
-                );
+                send_notify("Recording resumed", "screenpipe is recording again.");
             });
             *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(PauseTimer {
                 handle,
@@ -829,7 +833,11 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             // no glance-level signal otherwise).
             let pretty = if mins >= 60 {
                 let h = mins / 60;
-                if h == 1 { "1 hour".to_string() } else { format!("{} hours", h) }
+                if h == 1 {
+                    "1 hour".to_string()
+                } else {
+                    format!("{} hours", h)
+                }
             } else {
                 format!("{} minutes", mins)
             };

@@ -13,6 +13,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import {
+  callDeepgram,
   pickProvider,
   getWhisperTrafficPct,
   getDualSendPct,
@@ -162,5 +163,47 @@ describe('extractTranscript', () => {
       },
     };
     expect(extractTranscript(data)).toBe('');
+  });
+});
+
+describe('callDeepgram', () => {
+  it('requests Deepgram diarization and utterance speaker turns', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      expect((init?.headers as Record<string, string>).Authorization).toBe('Token dg-test-key');
+      expect((init?.headers as Record<string, string>)['Content-Type']).toBe('audio/mpeg');
+      return new Response(
+        JSON.stringify({
+          results: {
+            channels: [{
+              alternatives: [{ transcript: 'hello world', confidence: 0.9 }],
+            }],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await callDeepgram(
+        {
+          audioBuffer: new Uint8Array([1, 2, 3]).buffer,
+          contentType: 'audio/mpeg',
+          sampleRate: '16000',
+          languages: [],
+        },
+        { DEEPGRAM_API_KEY: 'dg-test-key' } as any,
+      );
+
+      expect(result.ok).toBe(true);
+      const url = new URL(urls[0]);
+      expect(url.searchParams.get('diarize')).toBe('true');
+      expect(url.searchParams.get('utterances')).toBe('true');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

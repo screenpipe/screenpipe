@@ -85,6 +85,10 @@ pub struct AudioContent {
     pub device_name: String,
     pub device_type: DeviceType,
     pub speaker: Option<Speaker>,
+    pub speaker_label: Option<String>,
+    pub speaker_source: Option<String>,
+    pub speaker_confidence: Option<f64>,
+    pub speaker_provisional: bool,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -20,9 +20,16 @@ import type {
 } from "@/lib/hooks/use-settings";
 
 let _chatsDir: string | null = null;
+let _orderedEntriesCacheDir: string | null = null;
+let _orderedEntriesCache: ConversationEntry[] | null = null;
 
 export const CHAT_HISTORY_INITIAL_LIMIT = 50;
 export const CHAT_SEARCH_RESULT_LIMIT = 50;
+
+export function __resetChatStorageCachesForTests(): void {
+  _chatsDir = null;
+  clearConversationEntryCache();
+}
 
 export interface ConversationListOptions {
   /** Max visible rows to return. Undefined preserves the old "all rows" behavior. */
@@ -84,6 +91,10 @@ export async function saveConversationFile(
   await writeTextFile(tmpPath, body);
   try {
     await rename(tmpPath, filePath);
+    rememberConversationEntry(dir, {
+      name: conversationFilename(conv.id),
+      path: filePath,
+    });
   } catch (e) {
     // Best-effort cleanup so a stale .tmp doesn't accumulate on the rare
     // path where rename fails (cross-device, permission). Re-throw so
@@ -109,14 +120,29 @@ export async function loadConversationFile(
 
 export async function deleteConversationFile(id: string): Promise<void> {
   const dir = await getChatsDir();
-  const filePath = `${dir}/${conversationFilename(id)}`;
+  const filename = conversationFilename(id);
+  const filePath = `${dir}/${filename}`;
   try {
     if (await exists(filePath)) {
       await remove(filePath);
+      forgetConversationEntry(dir, filename);
     }
   } catch {
     // ignore
   }
+}
+
+export async function markConversationFileChanged(id: string): Promise<void> {
+  const dir = await getChatsDir();
+  const filename = conversationFilename(id);
+  rememberConversationEntry(dir, {
+    name: filename,
+    path: `${dir}/${filename}`,
+  });
+}
+
+export function invalidateConversationListCache(): void {
+  clearConversationEntryCache();
 }
 
 export interface ConversationMeta {
@@ -158,6 +184,24 @@ async function listConversationEntries(dir: string): Promise<ConversationEntry[]
     }));
 }
 
+function clearConversationEntryCache(): void {
+  _orderedEntriesCacheDir = null;
+  _orderedEntriesCache = null;
+}
+
+function rememberConversationEntry(dir: string, entry: ConversationEntry): void {
+  if (_orderedEntriesCacheDir !== dir || !_orderedEntriesCache) return;
+  _orderedEntriesCache = [
+    entry,
+    ..._orderedEntriesCache.filter((cached) => cached.name !== entry.name),
+  ];
+}
+
+function forgetConversationEntry(dir: string, name: string): void {
+  if (_orderedEntriesCacheDir !== dir || !_orderedEntriesCache) return;
+  _orderedEntriesCache = _orderedEntriesCache.filter((entry) => entry.name !== name);
+}
+
 function timeToMs(value: unknown): number {
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
@@ -192,6 +236,17 @@ async function orderEntriesByMtime(
   return withTimes
     .sort((a, b) => b.sortTime - a.sortTime || b.name.localeCompare(a.name))
     .map(({ sortTime: _sortTime, ...entry }) => entry);
+}
+
+async function orderedConversationEntries(dir: string): Promise<ConversationEntry[]> {
+  if (_orderedEntriesCacheDir === dir && _orderedEntriesCache) {
+    return _orderedEntriesCache;
+  }
+
+  const ordered = await orderEntriesByMtime(await listConversationEntries(dir));
+  _orderedEntriesCacheDir = dir;
+  _orderedEntriesCache = ordered;
+  return ordered;
 }
 
 function conversationMetaFromJson(conv: any): ConversationMeta | null {
@@ -249,9 +304,10 @@ export async function listConversations(
   const limit = normalizeLimit(options.limit);
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   if (limit === 0) return [];
-  const entries = await listConversationEntries(dir);
   const orderedEntries =
-    limit == null && offset === 0 ? entries : await orderEntriesByMtime(entries);
+    limit == null && offset === 0
+      ? await listConversationEntries(dir)
+      : await orderedConversationEntries(dir);
   const metas: ConversationMeta[] = [];
   let skipped = 0;
 
@@ -298,7 +354,7 @@ export async function searchConversations(
   const limit = normalizeLimit(options.limit ?? CHAT_SEARCH_RESULT_LIMIT);
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   if (limit === 0) return [];
-  const entries = await orderEntriesByMtime(await listConversationEntries(dir));
+  const entries = await orderedConversationEntries(dir);
   const metas: ConversationMeta[] = [];
   let skipped = 0;
 
@@ -354,9 +410,10 @@ export async function loadAllConversations(
   const limit = normalizeLimit(options.limit);
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   if (limit === 0) return [];
-  const entries = await listConversationEntries(dir);
   const orderedEntries =
-    limit == null && offset === 0 ? entries : await orderEntriesByMtime(entries);
+    limit == null && offset === 0
+      ? await listConversationEntries(dir)
+      : await orderedConversationEntries(dir);
   const convs: ChatConversation[] = [];
   let skipped = 0;
 

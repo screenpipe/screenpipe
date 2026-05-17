@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, { text: string; mtime: number }>(),
   reads: [] as string[],
+  stats: [] as string[],
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -33,13 +34,17 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   writeTextFile: vi.fn(async () => undefined),
   remove: vi.fn(async () => undefined),
   rename: vi.fn(async () => undefined),
-  stat: vi.fn(async (path: string) => ({
-    mtime: new Date(fsMock.files.get(path)?.mtime ?? 0),
-  })),
+  stat: vi.fn(async (path: string) => {
+    fsMock.stats.push(path);
+    return {
+      mtime: new Date(fsMock.files.get(path)?.mtime ?? 0),
+    };
+  }),
 }));
 
 import {
   CHAT_HISTORY_INITIAL_LIMIT,
+  __resetChatStorageCachesForTests,
   listConversations,
   searchConversations,
 } from "../chat-storage";
@@ -82,6 +87,8 @@ describe("chat-storage bounded history", () => {
   beforeEach(() => {
     fsMock.files.clear();
     fsMock.reads.length = 0;
+    fsMock.stats.length = 0;
+    __resetChatStorageCachesForTests();
   });
 
   it("loads only the newest 50 conversation files for the default history view", async () => {
@@ -96,6 +103,24 @@ describe("chat-storage bounded history", () => {
     expect(rows.at(-1)?.id).toBe("chat-10");
     expect(fsMock.reads).toHaveLength(50);
     expect(fsMock.reads.some((path) => path.endsWith("/chat-0.json"))).toBe(false);
+  });
+
+  it("reuses the ordered file cache for repeated bounded history refreshes", async () => {
+    for (let i = 0; i < 60; i += 1) {
+      putConversation(`chat-${i}`, { updatedAt: i + 1 });
+    }
+
+    await listConversations({ limit: CHAT_HISTORY_INITIAL_LIMIT });
+    expect(fsMock.stats).toHaveLength(60);
+
+    fsMock.reads.length = 0;
+    fsMock.stats.length = 0;
+    const rows = await listConversations({ limit: CHAT_HISTORY_INITIAL_LIMIT });
+
+    expect(rows).toHaveLength(50);
+    expect(rows[0].id).toBe("chat-59");
+    expect(fsMock.stats).toHaveLength(0);
+    expect(fsMock.reads).toHaveLength(50);
   });
 
   it("still searches older chats outside the initial 50", async () => {

@@ -346,6 +346,48 @@ then retry sync, pipe run, search, or MCP setup.
 
 ---
 
+## privacy & PII
+
+### how is personal data protected?
+
+screenpipe does not automatically redact personal information from storage by default. instead, you have these options:
+
+| feature | what it does | where |
+| --- | --- | --- |
+| local AI PII removal | redacts sensitive data before selected AI workflows see it | settings → privacy → AI PII removal |
+| privacy filter (enclave mode) | uses a confidential enclave to redact text for cloud AI | settings → privacy → privacy filter mode |
+| ignored windows | prevents screenpipe from recording specific apps (password managers, banking) | settings → recording → ignored windows |
+
+the safest setup: enable **AI PII removal**, ignore your password manager window, and use local Ollama or disabled cloud media.
+
+### enable local PII redaction
+
+1. go to **settings → privacy**.
+2. toggle **AI PII removal** on.
+3. choose a redaction policy: default is `credentials-only` (catches API keys, tokens, SSNs, credit cards). you can also choose `strict` to redact names, emails, and phone numbers.
+4. for image protection: toggle **image PII removal** separately if you want screenshots redacted before image workflows.
+5. restart screenpipe if you changed settings.
+
+the local model runs on your machine — no data leaves your computer. the first run may be slow as the model loads; subsequent searches are faster.
+
+### what does PII redaction remove?
+
+- **credentials-only mode** (default): API keys (OpenAI, Anthropic, Stripe, etc.), SSNs, credit card numbers, tokens, private keys, database connection strings with passwords
+- **strict mode**: all of above plus names, emails, phone numbers, IP addresses, URLs with credentials
+
+it does NOT redact:
+- general text (even if it sounds like it might be sensitive)
+- partial matches (e.g., an email-like pattern without valid formatting)
+- structured data in code or config files that isn't in a recognized credential format
+
+### PII redaction is optional, not automatic
+
+PII stays in your local `~/.screenpipe/` database and timeline by default. PII redaction only affects what you send to AI models when you enable it.
+
+if you are syncing data to the cloud, archive, or a team, PII removal does not automatically apply — you must toggle it in settings, and it only affects AI workflows, not storage.
+
+---
+
 ## still stuck?
 
 1. check the [FAQ](/faq) for quick answers

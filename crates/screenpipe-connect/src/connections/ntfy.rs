@@ -19,7 +19,7 @@ static DEF: IntegrationDef = IntegrationDef {
         label: "Topic URL",
         secret: false,
         placeholder: "https://ntfy.sh/your-topic",
-        help_url: "https://docs.ntfy.sh/",
+        help_url: "https://docs.ntfy.sh/publish/",
     }],
 };
 

@@ -283,6 +283,30 @@ describe("parsePipeNdjsonToMessages", () => {
     expect(msgs[3].content).toBe("No real meetings detected. Just ambient audio.");
   });
 
+  it("hides Codex-style function return messages from agent_end", () => {
+    const stdout = [
+      '{"type":"agent_end","messages":[' +
+        '{"role":"user","content":[{"type":"text","text":"Analyze my screen"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"Let me search."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"curl localhost:3030/search"}}]},' +
+        '{"role":"user","content":[{"type":"text","text":"Return of functions.bash:0\\n{\\"data\\":[{\\"content\\":{\\"chunk_type\\":\\"refined\\"}}]}"}]},' +
+        '{"role":"assistant","content":[{"type":"text","text":"I found usable screen data."}]}' +
+      ']}',
+    ].join("\n");
+
+    const msgs = parsePipeNdjsonToMessages(stdout);
+
+    expect(msgs.map((m) => m.content)).toEqual([
+      "Analyze my screen",
+      "Let me search.",
+      "I found usable screen data.",
+    ]);
+    expect(
+      msgs.some((m) => String(m.content).includes("Return of functions.bash")),
+    ).toBe(false);
+    const toolBlock = msgs[1].contentBlocks?.find((b: any) => b.type === "tool");
+    expect(toolBlock?.toolCall.result).toContain('"data"');
+  });
+
   it("parses agent_end when text_delta was filtered (no streaming text)", () => {
     // This simulates what happens after filter_ndjson_stdout removes text_delta
     const stdout = [

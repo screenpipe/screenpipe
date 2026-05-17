@@ -17,7 +17,7 @@ use crate::{
     meeting_detector::MeetingDetector,
     meeting_streaming::MeetingStreamingConfig,
     transcription::{
-        deepgram::CUSTOM_DEEPGRAM_API_TOKEN, stt::OpenAICompatibleConfig, VocabularyEntry,
+        deepgram::DeepgramTranscriptionConfig, stt::OpenAICompatibleConfig, VocabularyEntry,
     },
     vad::VadEngineEnum,
 };
@@ -43,6 +43,7 @@ pub struct AudioManagerOptions {
     pub vad_engine: VadEngineEnum,
     pub languages: Vec<Language>,
     pub deepgram_api_key: Option<String>,
+    pub deepgram_config: Option<DeepgramTranscriptionConfig>,
     /// Configuration for OpenAI Compatible transcription engine
     pub openai_compatible_config: Option<OpenAICompatibleConfig>,
     pub enable_diarization: bool,
@@ -89,13 +90,15 @@ pub struct AudioManagerOptions {
 impl Default for AudioManagerOptions {
     fn default() -> Self {
         let deepgram_api_key = env::var("DEEPGRAM_API_KEY").ok();
-        let deepgram_url = env::var("DEEPGRAM_API_URL").ok();
         let enabled_devices = HashSet::new();
         Self {
             output_path: None,
             transcription_engine: Arc::new(AudioTranscriptionEngine::default()),
             vad_engine: VadEngineEnum::Silero,
             languages: vec![],
+            deepgram_config: deepgram_api_key
+                .clone()
+                .map(DeepgramTranscriptionConfig::direct),
             deepgram_api_key,
             openai_compatible_config: None,
             enable_diarization: true,
@@ -104,7 +107,7 @@ impl Default for AudioManagerOptions {
             enabled_devices,
             use_all_devices: false,
             db_path: None,
-            deepgram_url,
+            deepgram_url: None,
             use_pii_removal: false,
             filter_music: false,
             use_system_default_audio: true,
@@ -150,6 +153,12 @@ impl AudioManagerBuilder {
 
     pub fn deepgram_api_key(mut self, deepgram_api_key: Option<String>) -> Self {
         self.options.deepgram_api_key = deepgram_api_key;
+        self
+    }
+
+    pub fn deepgram_config(mut self, config: Option<DeepgramTranscriptionConfig>) -> Self {
+        self.options.deepgram_api_key = config.as_ref().map(|c| c.auth_token.clone());
+        self.options.deepgram_config = config;
         self
     }
 
@@ -244,7 +253,7 @@ impl AudioManagerBuilder {
         self
     }
 
-    pub async fn build(&mut self, db: Arc<DatabaseManager>) -> Result<AudioManager> {
+    pub async fn build_options(&mut self) -> Result<AudioManagerOptions> {
         self.validate_options()?;
         let options = &mut self.options;
 
@@ -266,7 +275,12 @@ impl AudioManagerBuilder {
             options.enabled_devices = HashSet::from_iter(devices);
         }
 
-        AudioManager::new(options.clone(), db).await
+        Ok(options.clone())
+    }
+
+    pub async fn build(&mut self, db: Arc<DatabaseManager>) -> Result<AudioManager> {
+        let options = self.build_options().await?;
+        AudioManager::new(options, db).await
     }
 
     pub fn is_disabled(mut self, is_disabled: bool) -> Self {
@@ -282,7 +296,11 @@ impl AudioManagerBuilder {
     // TODO: Make sure the custom urls work
     pub fn validate_options(&self) -> Result<()> {
         if self.options.transcription_engine == Arc::new(AudioTranscriptionEngine::Deepgram)
-            && (self.options.deepgram_api_key.is_none() && CUSTOM_DEEPGRAM_API_TOKEN.is_empty())
+            && !self
+                .options
+                .deepgram_config
+                .as_ref()
+                .is_some_and(DeepgramTranscriptionConfig::is_ready)
         {
             return Err(anyhow::anyhow!(
                 "Deepgram API key is required for Deepgram transcription engine"

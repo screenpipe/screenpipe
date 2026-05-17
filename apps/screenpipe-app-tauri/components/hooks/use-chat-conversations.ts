@@ -18,8 +18,11 @@ import { ChatConversation } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
+  loadConversationFile,
   deleteConversationFile,
+  invalidateConversationListCache,
   listConversations,
+  markConversationFileChanged,
   searchConversations,
   migrateFromStoreBin,
   CHAT_HISTORY_INITIAL_LIMIT,
@@ -76,6 +79,7 @@ interface UseChatConversationsOpts {
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
   settings: any;
+  inlineHistoryEnabled?: boolean;
 }
 
 interface SaveConversationOptions {
@@ -103,6 +107,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsStreaming,
     setPastedImages,
     settings,
+    inlineHistoryEnabled = true,
   } = opts;
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
@@ -133,133 +138,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     return q ? searchConversations(q, options) : listConversations(options);
   }, []);
 
-  useEffect(() => {
-    if (migrationDoneRef.current) return;
-    migrationDoneRef.current = true;
-    (async () => {
-      try {
-        await migrateFromStoreBin();
-        const convs = await loadConversationMetas("");
-        setFileConversations(convs);
-        lastHistoryQueryRef.current = "";
-      } catch {
-        setFileConversations([]);
-        lastHistoryQueryRef.current = "";
-      } finally {
-        setHistoryReady(true);
-      }
-    })();
-  }, [loadConversationMetas]);
-
-  useEffect(() => {
-    if (!historyReady) return;
-    const q = historySearch.trim();
-    if (lastHistoryQueryRef.current === q) return;
-    const requestId = ++historyRequestRef.current;
-    const timer = setTimeout(() => {
-      loadConversationMetas(q)
-        .then((convs) => {
-          if (historyRequestRef.current === requestId) {
-            setFileConversations(convs);
-            lastHistoryQueryRef.current = q;
-          }
-        })
-        .catch(() => {
-          if (historyRequestRef.current === requestId) {
-            setFileConversations([]);
-          }
-        });
-    }, q ? 200 : 0);
-
-    return () => clearTimeout(timer);
-  }, [historyReady, historySearch, loadConversationMetas]);
-
-  const refreshFileConversations = useCallback(async () => {
-    const q = historySearch.trim();
-    const convs = await loadConversationMetas(q);
-    setFileConversations(convs);
-    lastHistoryQueryRef.current = q;
-  }, [historySearch, loadConversationMetas]);
-
-  const scheduleHistoryRefresh = useCallback((delayMs = 80) => {
-    if (historyRefreshTimerRef.current) {
-      clearTimeout(historyRefreshTimerRef.current);
-    }
-    historyRefreshTimerRef.current = setTimeout(() => {
-      historyRefreshTimerRef.current = null;
-      void refreshFileConversations().catch(() => {});
-    }, delayMs);
-  }, [refreshFileConversations]);
-
-  useEffect(() => {
-    return () => {
-      if (historyRefreshTimerRef.current) {
-        clearTimeout(historyRefreshTimerRef.current);
-        historyRefreshTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  // Cross-window history sync. The overlay and home windows keep separate
-  // React states, so sidebar archive/delete actions in one window won't
-  // update the other's file-backed history list unless we listen for the
-  // broadcast events and refresh locally.
-  useEffect(() => {
-    let cancelled = false;
-    const unlistenFns: Array<() => void> = [];
-
-    (async () => {
-      const unlistenDeleted = await listen<{ id: string }>(
-        "chat-deleted",
-        (event) => {
-          if (cancelled) return;
-          const id = event.payload?.id;
-          if (!id) return;
-          setFileConversations((prev) => prev.filter((c) => c.id !== id));
-          if (conversationId === id) {
-            setMessages([]);
-            setConversationId(null);
-          }
-          scheduleHistoryRefresh();
-        },
-      );
-      unlistenFns.push(unlistenDeleted);
-
-      const unlistenVisibility = await listen<{ id: string; hidden: boolean }>(
-        "chat-visibility-changed",
-        (event) => {
-          if (cancelled) return;
-          const { id, hidden } = event.payload ?? {};
-          if (!id) return;
-          if (hidden) {
-            setFileConversations((prev) => prev.filter((c) => c.id !== id));
-          }
-          scheduleHistoryRefresh();
-        },
-      );
-      unlistenFns.push(unlistenVisibility);
-
-      const unlistenSaved = await listen<{ id: string; title?: string }>(
-        "chat-conversation-saved",
-        (event) => {
-          if (cancelled) return;
-          const { id } = event.payload ?? {};
-          if (!id) return;
-          scheduleHistoryRefresh();
-        },
-      );
-      unlistenFns.push(unlistenSaved);
-    })().catch(() => {
-      // ignore: chat still works without cross-window sync listeners
-    });
-
-    return () => {
-      cancelled = true;
-      for (const unlisten of unlistenFns) unlisten();
-    };
-  }, [conversationId, scheduleHistoryRefresh, setConversationId, setMessages]);
-
-  const upsertFileConversationMeta = (conversation: ChatConversation) => {
+  const upsertFileConversationMeta = useCallback((conversation: ChatConversation) => {
     if (historySearch.trim()) return;
 
     const msgs = Array.isArray(conversation.messages) ? conversation.messages : [];
@@ -299,7 +178,161 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         .slice(0, CHAT_HISTORY_INITIAL_LIMIT);
     });
     lastHistoryQueryRef.current = "";
-  };
+  }, [historySearch]);
+
+  useEffect(() => {
+    if (!inlineHistoryEnabled || !showHistory) {
+      setHistoryReady(false);
+      return;
+    }
+
+    if (migrationDoneRef.current) {
+      setHistoryReady(true);
+      return;
+    }
+    migrationDoneRef.current = true;
+    (async () => {
+      try {
+        await migrateFromStoreBin();
+        const convs = await loadConversationMetas("");
+        setFileConversations(convs);
+        lastHistoryQueryRef.current = "";
+      } catch {
+        setFileConversations([]);
+        lastHistoryQueryRef.current = "";
+      } finally {
+        setHistoryReady(true);
+      }
+    })();
+  }, [inlineHistoryEnabled, loadConversationMetas, showHistory]);
+
+  useEffect(() => {
+    if (!inlineHistoryEnabled || !showHistory) return;
+    if (!historyReady) return;
+    const q = historySearch.trim();
+    if (lastHistoryQueryRef.current === q) return;
+    const requestId = ++historyRequestRef.current;
+    const timer = setTimeout(() => {
+      loadConversationMetas(q)
+        .then((convs) => {
+          if (historyRequestRef.current === requestId) {
+            setFileConversations(convs);
+            lastHistoryQueryRef.current = q;
+          }
+        })
+        .catch(() => {
+          if (historyRequestRef.current === requestId) {
+            setFileConversations([]);
+          }
+        });
+    }, q ? 200 : 0);
+
+    return () => clearTimeout(timer);
+  }, [historyReady, historySearch, inlineHistoryEnabled, loadConversationMetas, showHistory]);
+
+  const refreshFileConversations = useCallback(async () => {
+    if (!inlineHistoryEnabled || !showHistory) return;
+    const q = historySearch.trim();
+    const convs = await loadConversationMetas(q);
+    setFileConversations(convs);
+    lastHistoryQueryRef.current = q;
+  }, [historySearch, inlineHistoryEnabled, loadConversationMetas, showHistory]);
+
+  const scheduleHistoryRefresh = useCallback((delayMs = 80) => {
+    if (historyRefreshTimerRef.current) {
+      clearTimeout(historyRefreshTimerRef.current);
+    }
+    historyRefreshTimerRef.current = setTimeout(() => {
+      historyRefreshTimerRef.current = null;
+      void refreshFileConversations().catch(() => {});
+    }, delayMs);
+  }, [refreshFileConversations]);
+
+  useEffect(() => {
+    return () => {
+      if (historyRefreshTimerRef.current) {
+        clearTimeout(historyRefreshTimerRef.current);
+        historyRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Cross-window history sync. The overlay and home windows keep separate
+  // React states, so sidebar archive/delete actions in one window won't
+  // update the other's file-backed history list unless we listen for the
+  // broadcast events and refresh locally.
+  useEffect(() => {
+    let cancelled = false;
+    const unlistenFns: Array<() => void> = [];
+
+    (async () => {
+      const unlistenDeleted = await listen<{ id: string }>(
+        "chat-deleted",
+        (event) => {
+          if (cancelled) return;
+          const id = event.payload?.id;
+          if (!id) return;
+          invalidateConversationListCache();
+          setFileConversations((prev) => prev.filter((c) => c.id !== id));
+          if (conversationId === id) {
+            setMessages([]);
+            setConversationId(null);
+          }
+          scheduleHistoryRefresh();
+        },
+      );
+      unlistenFns.push(unlistenDeleted);
+
+      const unlistenVisibility = await listen<{ id: string; hidden: boolean }>(
+        "chat-visibility-changed",
+        (event) => {
+          if (cancelled) return;
+          const { id, hidden } = event.payload ?? {};
+          if (!id) return;
+          invalidateConversationListCache();
+          if (hidden) {
+            setFileConversations((prev) => prev.filter((c) => c.id !== id));
+          }
+          scheduleHistoryRefresh();
+        },
+      );
+      unlistenFns.push(unlistenVisibility);
+
+      const unlistenSaved = await listen<{ id: string; title?: string }>(
+        "chat-conversation-saved",
+        async (event) => {
+          if (cancelled) return;
+          const { id } = event.payload ?? {};
+          if (!id) return;
+          if (id === conversationId || id === piSessionIdRef.current) return;
+          try {
+            await markConversationFileChanged(id);
+            const conv = await loadConversationFile(id);
+            if (!cancelled && conv) {
+              upsertFileConversationMeta(conv);
+            }
+          } catch {
+            // ignore: a later explicit history refresh can repair the list
+          }
+        },
+      );
+      unlistenFns.push(unlistenSaved);
+    })().catch(() => {
+      // ignore: chat still works without cross-window sync listeners
+    });
+
+    return () => {
+      cancelled = true;
+      for (const unlisten of unlistenFns) unlisten();
+    };
+  }, [
+    conversationId,
+    piSessionIdRef,
+    scheduleHistoryRefresh,
+    setConversationId,
+    setMessages,
+    upsertFileConversationMeta,
+  ]);
 
   // ---- saveConversation ----
   const saveConversation = async (

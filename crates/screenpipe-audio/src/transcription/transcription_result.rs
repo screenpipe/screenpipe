@@ -6,12 +6,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use screenpipe_core::pii_removal::remove_pii;
-use screenpipe_db::{DatabaseManager, Speaker};
+use screenpipe_db::{DatabaseManager, NewDiarizationSegment, Speaker};
 use tracing::{debug, error, warn};
 
 use crate::core::engine::AudioTranscriptionEngine;
 
-use super::{text_utils::longest_common_word_substring, AudioInput};
+use super::{
+    text_utils::longest_common_word_substring, AudioInput, TranscriptionDiarizationSegment,
+};
 
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
@@ -23,6 +25,8 @@ pub struct TranscriptionResult {
     pub error: Option<String>,
     pub start_time: f64,
     pub end_time: f64,
+    pub diarization_provider: Option<String>,
+    pub diarization_segments: Vec<TranscriptionDiarizationSegment>,
 }
 
 impl TranscriptionResult {
@@ -65,6 +69,7 @@ pub async fn process_transcription_result(
     db: &DatabaseManager,
     result: TranscriptionResult,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
+    diarization_mode: &str,
     previous_transcript: Option<String>,
     previous_transcript_id: Option<i64>,
     use_pii_removal: bool,
@@ -86,7 +91,7 @@ pub async fn process_transcription_result(
         Some(speaker.id)
     };
 
-    let raw_transcription = result.transcription.unwrap();
+    let raw_transcription = result.transcription.clone().unwrap();
     // Apply PII removal if enabled
     let transcription = if use_pii_removal {
         remove_pii(&raw_transcription)
@@ -154,6 +159,30 @@ pub async fn process_transcription_result(
                     "Inserted audio chunk+transcription for device {} using {}",
                     result.input.device, transcription_engine
                 );
+                let segments = diarization_segments_for_insert(&result, speaker_id);
+                let provider = result.diarization_provider.as_deref().unwrap_or(
+                    if result.speaker_embedding.is_empty() {
+                        "none"
+                    } else {
+                        "local"
+                    },
+                );
+                if let Err(e) = db
+                    .insert_diarization_run_with_segments(
+                        audio_chunk_id,
+                        diarization_mode,
+                        provider,
+                        Some(&transcription_engine),
+                        None,
+                        &segments,
+                    )
+                    .await
+                {
+                    warn!(
+                        "failed to insert diarization segments for audio chunk {}: {}",
+                        audio_chunk_id, e
+                    );
+                }
                 chunk_id = Some(audio_chunk_id);
                 break;
             }
@@ -181,6 +210,50 @@ pub async fn process_transcription_result(
         audio_chunk_id: id,
         speaker_id,
     }))
+}
+
+fn diarization_segments_for_insert(
+    result: &TranscriptionResult,
+    speaker_id: Option<i64>,
+) -> Vec<NewDiarizationSegment> {
+    if !result.diarization_segments.is_empty() {
+        return result
+            .diarization_segments
+            .iter()
+            .map(|segment| NewDiarizationSegment {
+                provider_speaker_label: segment.provider_speaker_label.clone(),
+                speaker_id: None,
+                source: "provider".to_string(),
+                start_time: segment.start_time,
+                end_time: segment.end_time,
+                confidence: segment.confidence,
+                overlap: segment.overlap,
+                metadata: Some(
+                    serde_json::json!({
+                        "text": segment.transcription,
+                    })
+                    .to_string(),
+                ),
+            })
+            .collect();
+    }
+
+    let (provider_speaker_label, source) = if let Some(id) = speaker_id {
+        (format!("speaker:{id}"), "local_embedding")
+    } else {
+        ("unknown".to_string(), "none")
+    };
+
+    vec![NewDiarizationSegment {
+        provider_speaker_label,
+        speaker_id,
+        source: source.to_string(),
+        start_time: result.start_time,
+        end_time: result.end_time,
+        confidence: None,
+        overlap: false,
+        metadata: None,
+    }]
 }
 
 pub async fn get_or_create_speaker_from_embedding(
@@ -384,12 +457,15 @@ mod tests {
             error: None,
             start_time: 0.0,
             end_time: 1.0,
+            diarization_provider: None,
+            diarization_segments: Vec::new(),
         };
 
         let insert_result = process_transcription_result(
             &db,
             result,
             Arc::new(AudioTranscriptionEngine::WhisperLargeV3Turbo),
+            "background",
             None,
             None,
             false,

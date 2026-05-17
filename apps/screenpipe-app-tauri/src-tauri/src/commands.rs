@@ -823,6 +823,171 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+#[derive(serde::Serialize, specta::Type)]
+pub struct E2eAgentStreamResult {
+    pub emitted_deltas: u32,
+    pub emit_ms: u64,
+}
+
+const E2E_AGENT_STREAM_BATCH_DELTAS: u32 = 10;
+const E2E_AGENT_STREAM_BATCH_DELAY_MS: u64 = 40;
+
+/// E2E helper: emit a deterministic chat stream from the Rust side.
+///
+/// This keeps chat performance tests close to production's Pi stdout path:
+/// one backend command starts the stream, then the app emits `agent_event`
+/// envelopes into the WebView. Tests avoid the extra WebView→Rust→WebView
+/// bridge hop that would come from calling `plugin:event|emit` for every token.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_emit_agent_stream(
+    app_handle: tauri::AppHandle,
+    session_id: String,
+    delta_count: u32,
+) -> Result<E2eAgentStreamResult, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("e2e_emit_agent_stream is only available in e2e builds".to_string());
+    }
+
+    let start = std::time::Instant::now();
+    let emit_event = |event: serde_json::Value| -> Result<(), String> {
+        app_handle
+            .emit(
+                "agent_event",
+                serde_json::json!({
+                    "source": "pi",
+                    "sessionId": &session_id,
+                    "event": event,
+                }),
+            )
+            .map_err(|e| e.to_string())
+    };
+
+    emit_event(serde_json::json!({
+        "type": "message_start",
+        "message": { "role": "assistant" },
+    }))?;
+
+    let mut pending_delta = String::new();
+    for i in 0..delta_count {
+        pending_delta.push_str(&format!("token-{} ", i));
+        if (i + 1) % E2E_AGENT_STREAM_BATCH_DELTAS == 0 || i + 1 == delta_count {
+            let delta = std::mem::take(&mut pending_delta);
+            emit_event(serde_json::json!({
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "delta": delta,
+                },
+            }))?;
+            if i + 1 < delta_count {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    E2E_AGENT_STREAM_BATCH_DELAY_MS,
+                ))
+                .await;
+            } else {
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+
+    emit_event(serde_json::json!({ "type": "agent_end" }))?;
+
+    Ok(E2eAgentStreamResult {
+        emitted_deltas: delta_count,
+        emit_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+    })
+}
+
+/// E2E helper for the scheduled-pipe path: feed synthetic pipe stdout
+/// through the same Rust-side callback adapter production uses, then let the
+/// frontend's default pipe handlers record it as a completed pipe run.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_emit_pipe_stream(
+    app_handle: tauri::AppHandle,
+    pipe_name: String,
+    execution_id: i64,
+    delta_count: u32,
+) -> Result<E2eAgentStreamResult, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("e2e_emit_pipe_stream is only available in e2e builds".to_string());
+    }
+
+    let pipe_name = if pipe_name.trim().is_empty() {
+        "e2e-pipe".to_string()
+    } else {
+        pipe_name
+    };
+    let start = std::time::Instant::now();
+    let emitter = crate::agent_event_emitter::PipeAgentEventEmitter::new(app_handle);
+    tokio::spawn(async move {
+        let emit_line = |event: serde_json::Value| -> Result<(), String> {
+            let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+            emitter.emit_line(&pipe_name, execution_id, &line);
+            Ok(())
+        };
+
+        if let Err(e) = emit_line(serde_json::json!({
+            "type": "message_start",
+            "message": { "role": "assistant" },
+        })) {
+            warn!("e2e pipe stream failed to emit message_start: {}", e);
+            return;
+        }
+
+        let mut full_text = String::new();
+        for i in 0..delta_count {
+            let token = format!("pipe-token-{} ", i);
+            full_text.push_str(&token);
+            if let Err(e) = emit_line(serde_json::json!({
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "delta": token,
+                },
+            })) {
+                warn!("e2e pipe stream failed to emit text_delta: {}", e);
+                return;
+            }
+            if (i + 1) % 40 == 0 && i + 1 < delta_count {
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            }
+        }
+
+        if let Err(e) = emit_line(serde_json::json!({
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Time range: 2026-01-01T00:00:00Z to 2026-01-01T00:05:00Z\nExecute the pipe now."
+                        }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": full_text
+                        }
+                    ]
+                }
+            ]
+        })) {
+            warn!("e2e pipe stream failed to emit agent_end: {}", e);
+        }
+    });
+
+    Ok(E2eAgentStreamResult {
+        emitted_deltas: delta_count,
+        emit_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+    })
+}
+
 /// Enable click-through mode on the main overlay window (Windows only)
 /// When enabled, mouse events pass through to windows below
 #[tauri::command]

@@ -325,7 +325,7 @@ pub async fn retranscribe_handler(
         audio_manager.transcription_engine().await
     };
 
-    let deepgram_api_key = audio_manager.deepgram_api_key().await;
+    let deepgram_config = audio_manager.deepgram_config().await;
     let openai_compatible_config = audio_manager.openai_compatible_config().await;
     let languages = audio_manager.languages().await;
 
@@ -346,7 +346,7 @@ pub async fn retranscribe_handler(
     // 3. Build unified TranscriptionEngine for this retranscription request
     let transcription_engine = match TranscriptionEngine::new(
         engine.clone(),
-        deepgram_api_key,
+        deepgram_config,
         openai_compatible_config,
         languages,
         effective_vocabulary,
@@ -549,12 +549,12 @@ pub async fn retranscribe_meeting_handler(
         request.prompt,
     );
 
-    let deepgram_api_key = state.audio_manager.deepgram_api_key().await;
+    let deepgram_config = state.audio_manager.deepgram_config().await;
     let openai_compatible_config = state.audio_manager.openai_compatible_config().await;
     let languages = state.audio_manager.languages().await;
     let transcription_engine = match TranscriptionEngine::new(
         engine.clone(),
-        deepgram_api_key,
+        deepgram_config,
         openai_compatible_config,
         languages,
         vocabulary,

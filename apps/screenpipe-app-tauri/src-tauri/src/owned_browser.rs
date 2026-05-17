@@ -702,12 +702,7 @@ async fn prepare_navigation(app: &AppHandle, state: &OwnedBrowserState, parsed: 
     // Provisional omnibox URL while a top-level navigation is in flight
     // (agent or sidebar initiated). Committed URL comes from `webview.url()`
     // on main-document load finish / title change.
-    emit_state_event(
-        app,
-        Some(parsed.as_str().to_string()),
-        None,
-        Some(true),
-    );
+    emit_state_event(app, Some(parsed.as_str().to_string()), None, Some(true));
     let _ = app.emit(NAVIGATE_EVENT, parsed.as_str());
     state.store_pending_url(parsed.clone()).await;
 }
@@ -903,7 +898,10 @@ async fn browser_session_decision_for_url(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    session_access_in_flight().lock().await.insert(host_key.clone());
+    session_access_in_flight()
+        .lock()
+        .await
+        .insert(host_key.clone());
 
     let state = browser_state();
     if let Some(active) = state.active().await {

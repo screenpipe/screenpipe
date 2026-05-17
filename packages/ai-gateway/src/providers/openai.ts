@@ -48,6 +48,12 @@ export class OpenAIProvider implements AIProvider {
 		return lower.startsWith('gpt-5') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
 	}
 
+	private applyGenerationOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
+		if (body.temperature === undefined) return;
+		if (this.usesMaxCompletionTokens(body.model)) return;
+		params.temperature = body.temperature;
+	}
+
 	private applyTokenLimit(params: ChatCompletionCreateParams, body: RequestBody): void {
 		const maxTokens = body.max_completion_tokens ?? body.max_tokens;
 		if (maxTokens === undefined) return;
@@ -66,13 +72,13 @@ export class OpenAIProvider implements AIProvider {
 		const params: ChatCompletionCreateParams = {
 			model: body.model,
 			messages,
-			temperature: body.temperature,
 			stream: false,
 			response_format: responseFormat,
 			tools: body.tools as ChatCompletionCreateParams['tools'],
 			tool_choice: body.tool_choice as ChatCompletionCreateParams['tool_choice'],
 		};
 
+		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 
 		const response = await this.client.chat.completions.create(params);
@@ -85,12 +91,12 @@ export class OpenAIProvider implements AIProvider {
 		const params: ChatCompletionCreateParams = {
 			model: body.model,
 			messages: this.formatMessages(body.messages),
-			temperature: body.temperature,
 			stream: true,
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
 		};
 
+		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 
 		const stream = await this.client.chat.completions.create(params);

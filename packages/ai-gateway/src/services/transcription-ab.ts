@@ -133,7 +133,7 @@ export async function callDeepgram(
 ): Promise<TranscriptionResult> {
   const start = Date.now();
   const url =
-    'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&sample_rate=' +
+    'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&diarize=true&utterances=true&sample_rate=' +
     req.sampleRate +
     (req.languages.length > 0
       ? '&' + req.languages.map((l) => `detect_language=${l}`).join('&')

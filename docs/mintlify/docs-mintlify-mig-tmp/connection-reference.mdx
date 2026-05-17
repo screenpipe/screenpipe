@@ -13,12 +13,23 @@ connections give pipes and AI agents structured context from the source system, 
 
 <img src="https://docs.screenpi.pe/public/app-screenshots/settings-privacy.png" alt="screenpipe privacy settings" width="1200" />
 
+## finding credentials
+
+when setting up connections that require API keys, credentials, or URLs, screenpipe provides **direct help links** in the settings UI:
+
+- look for the **?** icon next to each field (API Key, Webhook URL, etc.)
+- hover or click to see "Learn how to find your X for this integration"
+- select **Open guide →** to jump to that service's settings or API docs page
+- no more hunting through documentation
+
+this works for all API key, webhook, and custom credential fields.
+
 ## auth patterns
 
 | pattern | examples | notes |
 | --- | --- | --- |
-| OAuth | Gmail, Google Calendar, Google Docs, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom | best user experience; tokens are stored locally |
-| API key | Linear, HubSpot, PostHog, Sentry, Stripe, Toggl, Pipedrive, Glean | simple and reliable; rotate keys if a device is lost |
+| OAuth | Gmail, Google Calendar, Google Docs, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom | best user experience; tokens are stored locally; no API key needed |
+| API key | Linear, HubSpot, PostHog, Sentry, Stripe, Toggl, Pipedrive, Glean | simple and reliable; help links guide you to API settings pages; rotate keys if a device is lost |
 | webhook URL | n8n, Make, Zapier, Pushover, ntfy, Resend | best for one-way notifications or workflow triggers |
 | local path | Obsidian, Logseq | keeps notes local |
 | custom/private CA | Bee | screenpipe includes the required trust configuration for the provider |

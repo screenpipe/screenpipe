@@ -352,9 +352,21 @@ async fn handle_auth(
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!(
         "received auth data: token={}, email={}, user_id={}",
-        if payload.token.is_some() { "present" } else { "absent" },
-        if payload.email.is_some() { "present" } else { "absent" },
-        if payload.user_id.is_some() { "present" } else { "absent" },
+        if payload.token.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        if payload.email.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        if payload.user_id.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
     );
 
     let store = get_store(&state.app_handle, None).unwrap();

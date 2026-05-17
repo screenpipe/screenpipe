@@ -219,30 +219,37 @@ async fn get_audio_reconciliation_backlog(
     {
         let cache = AUDIO_RECONCILIATION_BACKLOG_CACHE.read().await;
         if now.timestamp().saturating_sub(cache.0) < AUDIO_RECONCILIATION_BACKLOG_CACHE_TTL_SECS {
-            return cache.1.clone();
+            return cache.1;
         }
     }
 
     let since = now - chrono::Duration::hours(AUDIO_RECONCILIATION_LOOKBACK_HOURS);
     let older_than = now - chrono::Duration::seconds(AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS);
-    let result = match state
-        .db
-        .get_reconciliation_backlog_summary(since, older_than)
-        .await
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_millis(750),
+        state
+            .db
+            .get_reconciliation_backlog_summary(since, older_than),
+    )
+    .await
     {
-        Ok((count, oldest)) => Some((count.max(0) as u64, oldest)),
-        Err(err) => {
+        Ok(Ok((count, oldest))) => Some((count.max(0) as u64, oldest)),
+        Ok(Err(err)) => {
             warn!(
                 "health_check: failed to query audio transcription backlog: {}",
                 err
             );
             None
         }
+        Err(_) => {
+            warn!("health_check: audio transcription backlog query timed out");
+            None
+        }
     };
 
     {
         let mut cache = AUDIO_RECONCILIATION_BACKLOG_CACHE.write().await;
-        *cache = (now.timestamp(), result.clone());
+        *cache = (now.timestamp(), result);
     }
 
     result
@@ -729,7 +736,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             // Query meeting detector state — timeout the RwLock read so it
             // can't stall the health check if writes are contended.
             let (meeting_detected, meeting_app) =
-                if let Some(detector) = state.audio_manager.meeting_detector() {
+                if let Some(detector) = state.audio_manager.meeting_detector().await {
                     let in_meeting = detector.is_in_meeting();
                     // v2 detection reports meeting state via AtomicBool flag;
                     // the specific app name is tracked in the v2 detection loop,

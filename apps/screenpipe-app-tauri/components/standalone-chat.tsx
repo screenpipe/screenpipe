@@ -58,7 +58,7 @@ import {
   normalizeAppTag,
   formatShortcutDisplay,
 } from "@/lib/chat-utils";
-import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
+import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
@@ -110,6 +110,282 @@ interface MentionSuggestion {
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
+const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
+const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
+const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
+const CONNECTION_SUGGESTION_LIMIT = 3;
+const VISIBLE_SUGGESTION_LIMIT = 2;
+
+type ConnectedIntegration = {
+  id: string;
+  name: string;
+  icon?: string;
+  category?: string;
+  description?: string;
+};
+
+type PreviewCalendarEvent = {
+  title?: string;
+  start?: string;
+  attendees?: string[];
+  isAllDay?: boolean;
+  is_all_day?: boolean;
+};
+
+const CONNECTION_READ_HINTS = [
+  "read",
+  "query",
+  "search",
+  "access",
+  "list",
+  "fetch",
+  "get ",
+  "events",
+  "notes",
+  "transcripts",
+  "tickets",
+  "issues",
+  "contacts",
+  "deals",
+  "recordings",
+];
+
+function connectionCanSupportReadSuggestion(connection: ConnectedIntegration): boolean {
+  const haystack = `${connection.id} ${connection.name} ${connection.category ?? ""} ${connection.description ?? ""}`.toLowerCase();
+  if (connection.category?.toLowerCase() === "browser") return true;
+  if (haystack.includes("calendar")) return true;
+  return CONNECTION_READ_HINTS.some((hint) => haystack.includes(hint));
+}
+
+function compactSuggestionPart(text: string, max = 48): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 3).trim()}...`;
+}
+
+function personNameFromAttendee(attendee: string): string | null {
+  const raw = attendee.split("<")[0].trim() || attendee.split("@")[0].trim();
+  const local = raw.includes("@") ? raw.split("@")[0] : raw;
+  const parts = local
+    .replace(/[._-]+/g, " ")
+    .split(/\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .filter((p) => !["me", "you", "no-reply", "noreply", "calendar"].includes(p.toLowerCase()));
+  if (parts.length === 0) return null;
+  return parts
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+function uniqueCompactList(items: string[], maxItems = 4): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function isTomorrow(date: Date): boolean {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return (
+    date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate()
+  );
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+async function fetchCalendarPreviewSuggestion(connection: ConnectedIntegration): Promise<Suggestion | null> {
+  const lower = `${connection.id} ${connection.name}`.toLowerCase();
+  const endpoint = lower.includes("google")
+    ? "/connections/google-calendar/events?hours_back=0&hours_ahead=48"
+    : "/connections/calendar/events?hours_back=0&hours_ahead=48";
+
+  try {
+    const res = await localFetch(endpoint);
+    if (!res.ok) return null;
+    const body = await res.json();
+    const rawEvents: PreviewCalendarEvent[] = Array.isArray(body) ? body : body.data ?? [];
+    const events = rawEvents
+      .filter((event) => event.start && !(event.isAllDay ?? event.is_all_day))
+      .map((event) => ({ ...event, startDate: new Date(event.start as string) }))
+      .filter((event) => Number.isFinite(event.startDate.getTime()) && event.startDate.getTime() >= Date.now() - 30 * 60 * 1000)
+      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+    if (events.length === 0) return null;
+
+    const tomorrowEvents = events.filter((event) => isTomorrow(event.startDate));
+    const chosen = (tomorrowEvents.length > 0 ? tomorrowEvents : events).slice(0, 3);
+    const names = uniqueCompactList(
+      chosen.flatMap((event) => (event.attendees ?? []).map(personNameFromAttendee).filter((name): name is string => Boolean(name))),
+      4
+    );
+    const titles = uniqueCompactList(
+      chosen.map((event) => event.title?.trim()).filter((title): title is string => Boolean(title && title !== "(No title)")),
+      2
+    );
+    const descriptor = names.length >= 2
+      ? `${joinNames(names)} call briefs`
+      : titles.length > 0
+        ? `${compactSuggestionPart(titles[0], 42)} brief`
+        : "meeting briefs";
+    const day = tomorrowEvents.length > 0 ? "tomorrow's" : "upcoming";
+
+    return {
+      text: `Prep ${day} ${descriptor} from ${connection.name}`,
+      preview: titles.length > 0 ? titles.join(", ") : `uses ${connection.name}`,
+      priority: 1,
+      connectionIcon: connection.icon || connection.id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function cleanEmailSubject(subject: string): string {
+  return compactSuggestionPart(
+    subject
+      .replace(/^\s*(re|fwd?):\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    48
+  );
+}
+
+async function fetchGmailPreviewSuggestion(connection: ConnectedIntegration): Promise<Suggestion | null> {
+  try {
+    const query = encodeURIComponent("newer_than:14d (invite OR kickoff OR prep OR meeting)");
+    const listRes = await localFetch(`/connections/gmail/messages?maxResults=3&q=${query}`);
+    if (!listRes.ok) return null;
+    const listBody = await listRes.json();
+    const firstId = listBody?.data?.messages?.[0]?.id;
+    if (!firstId) return null;
+
+    const detailRes = await localFetch(`/connections/gmail/messages/${encodeURIComponent(firstId)}`);
+    if (!detailRes.ok) return null;
+    const detailBody = await detailRes.json();
+    const subject = detailBody?.data?.subject || detailBody?.data?.snippet;
+    if (!subject) return null;
+
+    return {
+      text: `Turn "${cleanEmailSubject(String(subject))}" into concrete prep notes`,
+      preview: `from ${connection.name}`,
+      priority: 2,
+      connectionIcon: connection.icon || connection.id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchConnectionPreviewSuggestions(connections: ConnectedIntegration[]): Promise<Suggestion[]> {
+  const tasks = connections.map((connection) => {
+    const lower = `${connection.id} ${connection.name}`.toLowerCase();
+    if (lower.includes("calendar")) return fetchCalendarPreviewSuggestion(connection);
+    if (lower.includes("gmail")) return fetchGmailPreviewSuggestion(connection);
+    return Promise.resolve(null);
+  });
+  const suggestions = await Promise.all(tasks);
+  return suggestions.filter((suggestion): suggestion is Suggestion => Boolean(suggestion));
+}
+
+function suggestionForConnection(connection: ConnectedIntegration): Suggestion | null {
+  if (!connectionCanSupportReadSuggestion(connection)) return null;
+
+  const id = normalizeAppKey(connection.id);
+  const name = connection.name || connection.id;
+  const lower = `${id} ${name}`.toLowerCase();
+  const base: Pick<Suggestion, "connectionIcon" | "preview" | "priority"> = {
+    connectionIcon: connection.icon || connection.id,
+    preview: `uses ${name}`,
+    priority: 2,
+  };
+
+  if (lower.includes("calendar")) {
+    return { ...base, text: `Prep upcoming meeting briefs from ${name}`, priority: 1 };
+  }
+  if (lower.includes("gmail") || lower.includes("email") || lower.includes("outlook") || lower.includes("microsoft365") || lower.includes("microsoft 365")) {
+    return { ...base, text: `Turn recent ${name} invites into concrete prep notes` };
+  }
+  if (lower.includes("docs") || lower.includes("sheets") || lower.includes("notion") || lower.includes("obsidian") || lower.includes("logseq")) {
+    return { ...base, text: `Turn recent ${name} files into a prep sheet` };
+  }
+  if (lower.includes("linear") || lower.includes("github") || lower.includes("jira") || lower.includes("trello") || lower.includes("asana") || lower.includes("clickup") || lower.includes("monday")) {
+    return { ...base, text: `Find open tasks tied to this work in ${name}` };
+  }
+  if (lower.includes("sentry")) {
+    return { ...base, text: `Find the issue driving recent ${name} events` };
+  }
+  if (lower.includes("posthog")) {
+    return { ...base, text: `Find the trend behind recent ${name} activity` };
+  }
+  if (lower.includes("hubspot") || lower.includes("salesforce") || lower.includes("intercom") || lower.includes("zendesk") || lower.includes("pipedrive")) {
+    return { ...base, text: `Prep customer call briefs from ${name}` };
+  }
+  if (lower.includes("zoom") || lower.includes("granola") || lower.includes("fireflies") || lower.includes("otter") || lower.includes("bee") || lower.includes("limitless")) {
+    return { ...base, text: `Pull recent meeting briefs from ${name}` };
+  }
+  if (connection.category?.toLowerCase() === "browser" || lower.includes("browser")) {
+    return { ...base, text: `Read the current page with ${name}` };
+  }
+  if (lower.includes("stripe") || lower.includes("quickbooks") || lower.includes("brex")) {
+    return { ...base, text: `Summarize recent ${name} data for this work` };
+  }
+
+  return { ...base, text: `Search ${name} for context on this work` };
+}
+
+function mergeConnectionSuggestions(
+  autoSuggestions: Suggestion[],
+  connections: ConnectedIntegration[],
+  previewSuggestions: Suggestion[] = [],
+  rotationSeed = 0
+): Suggestion[] {
+  const rotateVisible = (suggestions: Suggestion[]) => {
+    if (suggestions.length <= VISIBLE_SUGGESTION_LIMIT || rotationSeed <= 0) {
+      return suggestions.slice(0, VISIBLE_SUGGESTION_LIMIT);
+    }
+
+    const offset = rotationSeed % suggestions.length;
+    const rotated = [...suggestions.slice(offset), ...suggestions.slice(0, offset)];
+    return rotated.slice(0, VISIBLE_SUGGESTION_LIMIT);
+  };
+
+  const previewIcons = new Set(previewSuggestions.map((s) => s.connectionIcon).filter(Boolean));
+  const connectionSuggestions = connections
+    .filter((connection) => !previewIcons.has(connection.icon || connection.id))
+    .map(suggestionForConnection)
+    .filter((s): s is Suggestion => Boolean(s))
+    .slice(0, CONNECTION_SUGGESTION_LIMIT);
+
+  const combinedConnectionSuggestions = [...previewSuggestions, ...connectionSuggestions].slice(0, CONNECTION_SUGGESTION_LIMIT);
+  if (combinedConnectionSuggestions.length === 0) return rotateVisible(autoSuggestions);
+
+  const [first, ...rest] = autoSuggestions;
+  const merged = first
+    ? [first, ...combinedConnectionSuggestions, ...rest]
+    : combinedConnectionSuggestions;
+  const seen = new Set<string>();
+  const deduped = merged.filter((suggestion) => {
+    const key = suggestion.text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return rotateVisible(deduped);
+}
 
 interface Speaker {
   id: number;
@@ -834,6 +1110,253 @@ function friendlyToolLabel(toolCall: ToolCall): string {
   }
 }
 
+interface ToolDetailField {
+  label: string;
+  value: string;
+}
+
+interface BashToolDetailsPresentation {
+  title: string;
+  eyebrow: string;
+  fields: ToolDetailField[];
+  resultSummary?: string;
+  rawCommand: string;
+  rawResult?: string;
+}
+
+function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresentation | null {
+  const command = String(toolCall.args.command ?? "");
+  if (!command) return null;
+
+  const classified = classifyCurl(command);
+  const method = curlMethod(command);
+  const localUrl = urlsInCommand(command).find(isLocalScreenpipeUrl);
+  const fields: ToolDetailField[] = [];
+
+  if (!localUrl) {
+    const target = firstExternalWebTarget(command, "fetch");
+    if (!target || !classified) return null;
+    fields.push({ label: "domain", value: target.domain });
+    fields.push({ label: "method", value: method });
+    return {
+      title: classified.label,
+      eyebrow: "Web request",
+      fields,
+      resultSummary: summarizeToolResult(toolCall.result, "web"),
+      rawCommand: command,
+      rawResult: toolCall.result,
+    };
+  }
+
+  const path = localUrl.pathname.replace(/\/$/, "") || "/";
+  fields.push({ label: "endpoint", value: path });
+  fields.push({ label: "method", value: method });
+
+  const sp = localUrl.searchParams;
+  const addParam = (label: string, key: string) => {
+    const value = sp.get(key);
+    if (value) fields.push({ label, value: trunc(value, 80) });
+  };
+
+  addParam("query", "q");
+  addParam("content", "content_type");
+  addParam("app", "app_name");
+  addParam("window", "window_name");
+  addParam("limit", "limit");
+
+  const body = curlBodyJson(command);
+  if (path === "/raw_sql" && body && typeof body.query === "string") {
+    const tables = sqlTables(body.query);
+    if (tables.length > 0) fields.push({ label: "tables", value: tables.join(", ") });
+  }
+
+  if (path.startsWith("/connections/")) {
+    const connection = path.split("/")[2];
+    if (connection) fields.push({ label: "connection", value: connection });
+  }
+
+  return {
+    title: classified?.label ?? `${method} ${path}`,
+    eyebrow: endpointFamily(path),
+    fields,
+    resultSummary: summarizeToolResult(toolCall.result, path),
+    rawCommand: command,
+    rawResult: toolCall.result,
+  };
+}
+
+function endpointFamily(path: string): string {
+  if (path === "/memories" || path.startsWith("/memories/")) return "Memory";
+  if (path === "/search") return "Screen search";
+  if (path === "/activity-summary") return "Activity";
+  if (path === "/raw_sql") return "Database";
+  if (path.startsWith("/connections/")) return "Connection";
+  if (path.startsWith("/meetings")) return "Meetings";
+  if (path.startsWith("/speakers")) return "Speakers";
+  if (path.startsWith("/pipes")) return "Pipes";
+  return "Screenpipe";
+}
+
+function parseToolResultJson(result: string | undefined): any | null {
+  if (!result?.trim()) return null;
+  try {
+    return JSON.parse(result);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolResult(result: string | undefined, family: string): string | undefined {
+  const json = parseToolResultJson(result);
+  if (!json) return result?.trim() ? trunc(result.trim().replace(/\s+/g, " "), 120) : undefined;
+
+  const noun = family === "/memories" ? "memories"
+    : family === "/search" ? "results"
+    : family.startsWith("/meetings") ? "meetings"
+    : family.startsWith("/connections") ? "items"
+    : "items";
+
+  if (Array.isArray(json)) return json.length === 0 ? `No ${noun} returned` : `${json.length} ${noun} returned`;
+  if (Array.isArray(json.data)) {
+    const total = typeof json.pagination?.total === "number" ? json.pagination.total : json.data.length;
+    return total === 0 ? `No ${noun} found` : `${total} ${noun} found`;
+  }
+  if (Array.isArray(json.search_results)) {
+    return json.search_results.length === 0 ? "No web sources returned" : `${json.search_results.length} web sources returned`;
+  }
+  if (Array.isArray(json.choices)) return `${json.choices.length} response${json.choices.length === 1 ? "" : "s"} returned`;
+  if (typeof json.success === "boolean") return json.success ? "Request succeeded" : "Request did not succeed";
+  if (typeof json.status === "string") return `Status: ${json.status}`;
+  return "JSON response returned";
+}
+
+function formatToolResult(result: string | undefined): string | undefined {
+  if (!result) return undefined;
+  const json = parseToolResultJson(result);
+  if (!json) return result;
+  return JSON.stringify(json, null, 2);
+}
+
+function sanitizeCommand(command: string): string {
+  return command
+    .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+[^'"]+['"]/g, " -H \"Authorization: Bearer …\"")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
+  const details = bashToolDetailsPresentation(toolCall);
+  if (!details) {
+    return (
+      <div className="py-1.5">
+        <ToolCodeBlock code={sanitizeCommand(String(toolCall.args.command ?? ""))} language="shell" />
+      </div>
+    );
+  }
+
+  const formattedResult = formatToolResult(details.rawResult);
+
+  return (
+    <div className="py-1.5 space-y-2">
+      <div className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2">
+        <div className="mb-1 flex min-w-0 items-center gap-1.5">
+          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono uppercase leading-none text-muted-foreground">
+            {details.eyebrow}
+          </span>
+          {details.resultSummary && (
+            <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+              {details.resultSummary}
+            </span>
+          )}
+        </div>
+        <div className="text-sm font-medium text-foreground/85">{details.title}</div>
+        {details.fields.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {details.fields.map((field) => (
+              <span
+                key={`${field.label}:${field.value}`}
+                className="max-w-full rounded border border-border/40 bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+              >
+                <span className="text-muted-foreground/60">{field.label}</span>{" "}
+                <span className="text-foreground/70">{field.value}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <details className="group rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
+        <summary className="cursor-pointer select-none text-[10px] font-mono uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
+          technical details
+        </summary>
+        <div className="mt-2 space-y-2">
+          <ToolCodeBlock label="command" code={sanitizeCommand(details.rawCommand)} language="shell" />
+          {formattedResult && <ToolCodeBlock label="response" code={formattedResult} language="json" />}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function ToolCodeBlock({
+  code,
+  language,
+  label,
+}: {
+  code: string;
+  language: "shell" | "json";
+  label?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      {label && <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground/50">{label}</div>}
+      <pre className="max-h-[220px] max-w-full overflow-auto rounded border border-border/30 bg-muted/20 p-2 text-xs leading-relaxed">
+        <code className="font-mono">
+          {language === "json" ? <HighlightedJson code={code} /> : <HighlightedShell code={code} />}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
+function HighlightedShell({ code }: { code: string }) {
+  const parts = code.split(/(\s+|https?:\/\/[^\s"']+|-[A-Za-z-]+|\$[A-Z0-9_]+)/g).filter(Boolean);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const className = /^https?:\/\//.test(part)
+          ? "text-cyan-700 dark:text-cyan-300"
+          : /^-[A-Za-z-]+$/.test(part)
+            ? "text-purple-700 dark:text-purple-300"
+            : /^\$[A-Z0-9_]+$/.test(part)
+              ? "text-amber-700 dark:text-amber-300"
+              : part === "curl"
+                ? "text-foreground"
+                : "text-muted-foreground";
+        return <span key={`${part}-${index}`} className={className}>{part}</span>;
+      })}
+    </>
+  );
+}
+
+function HighlightedJson({ code }: { code: string }) {
+  const parts = code.split(/("(?:\\.|[^"\\])*"\s*:|"(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?)/g).filter(Boolean);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const className = /^".*"\s*:$/s.test(part)
+          ? "text-purple-700 dark:text-purple-300"
+          : /^"/s.test(part)
+            ? "text-emerald-700 dark:text-emerald-300"
+            : /^(true|false|null|-?\d)/.test(part)
+              ? "text-amber-700 dark:text-amber-300"
+              : "text-muted-foreground";
+        return <span key={`${part}-${index}`} className={className}>{part}</span>;
+      })}
+    </>
+  );
+}
+
 // Render friendly expanded details instead of raw JSON
 function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.toolName === "edit" && toolCall.args.old_string && toolCall.args.new_string) {
@@ -849,13 +1372,7 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
     );
   }
   if (toolCall.toolName === "bash" && toolCall.args.command) {
-    return (
-      <div className="py-1.5">
-        <pre className="whitespace-pre-wrap break-words text-foreground/70 text-xs font-mono max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full">
-          {toolCall.args.command}
-        </pre>
-      </div>
-    );
+    return <BashToolDetails toolCall={toolCall} />;
   }
   const entries = Object.entries(toolCall.args).filter(([k]) => k !== "path" && k !== "command");
   if (entries.length === 0) return null;
@@ -942,7 +1459,7 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
             >
               <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
                 <FriendlyToolDetails toolCall={toolCall} />
-                {toolCall.result !== undefined && (
+                {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
                       "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono",
@@ -1072,6 +1589,7 @@ const STATIC_APP_ICONS: Record<string, string> = {
   bee: "/images/bee.png",
   airtable: "/images/airtable.png",
   apple: "/images/apple.svg",
+  "apple-calendar": "/images/apple.svg",
   "apple intelligence": "/images/apple-intelligence.png",
   screenpipe: "/images/screenpipe.png",
 };
@@ -1402,7 +1920,8 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
 type GroupedBlock =
   | { type: "text"; text: string; key: number }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
-  | { type: "tool-group"; toolCalls: ToolCall[]; key: number };
+  | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
+  | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
 function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   const result: GroupedBlock[] = [];
@@ -1430,6 +1949,63 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   return result;
 }
 
+function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
+  if (!hideThinkingBlocks) return grouped;
+
+  const out: GroupedBlock[] = [];
+  let pendingToolCalls: ToolCall[] = [];
+  let pendingDurationMs = 0;
+  let pendingToolGroupCount = 0;
+  let pendingKey: number | null = null;
+
+  const flushPending = () => {
+    if (pendingToolCalls.length === 0) {
+      pendingDurationMs = 0;
+      pendingToolGroupCount = 0;
+      pendingKey = null;
+      return;
+    }
+
+    const key = pendingKey ?? out.length;
+    if (pendingToolGroupCount > 1 || pendingToolCalls.length >= 3) {
+      out.push({
+        type: "work-group",
+        toolCalls: [...pendingToolCalls],
+        durationMs: pendingDurationMs,
+        key,
+      });
+    } else {
+      out.push({ type: "tool-group", toolCalls: [...pendingToolCalls], key });
+    }
+
+    pendingToolCalls = [];
+    pendingDurationMs = 0;
+    pendingToolGroupCount = 0;
+    pendingKey = null;
+  };
+
+  for (const group of grouped) {
+    if (group.type === "tool-group") {
+      pendingKey ??= group.key;
+      pendingToolCalls.push(...group.toolCalls);
+      pendingToolGroupCount++;
+      continue;
+    }
+
+    if (group.type === "thinking") {
+      pendingDurationMs += group.durationMs ?? 0;
+      pendingKey ??= group.key;
+      continue;
+    }
+
+    flushPending();
+    out.push(group);
+  }
+
+  flushPending();
+  return out;
+}
+
 // Build natural-language summary of completed tool calls
 function buildToolSummary(toolCalls: ToolCall[]): string {
   const counts: Record<string, number> = {};
@@ -1448,7 +2024,29 @@ function buildToolSummary(toolCalls: ToolCall[]): string {
   return parts.join(", ");
 }
 
-function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: ToolCall[]; defaultExpanded?: boolean }) {
+function formatWorkDuration(durationMs: number): string {
+  if (!durationMs || durationMs <= 0) return "Worked";
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return "Worked for <1 min";
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+}
+
+function toolCallRenderKey(toolCall: ToolCall, index: number): string {
+  return `${toolCall.id || toolCall.toolName || "tool"}:${index}`;
+}
+
+function ToolCallGroup({
+  toolCalls,
+  defaultExpanded = false,
+  summaryOverride,
+  hideCount = false,
+}: {
+  toolCalls: ToolCall[];
+  defaultExpanded?: boolean;
+  summaryOverride?: string;
+  hideCount?: boolean;
+}) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
 
   const hasRunning = toolCalls.some((tc) => tc.isRunning);
@@ -1456,7 +2054,7 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
   const allDone = !hasRunning;
   const doneCount = toolCalls.filter((tc) => !tc.isRunning).length;
   const total = toolCalls.length;
-  const summary = allDone ? buildToolSummary(toolCalls) : "";
+  const summary = allDone ? (summaryOverride || buildToolSummary(toolCalls)) : "";
 
   // Auto-expand while running, auto-collapse when done (user can override).
   // `defaultExpanded` keeps the group open even when done — used for
@@ -1472,19 +2070,21 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
         className="w-full flex items-center gap-2 py-1 text-left min-w-0 group"
       >
         {/* Status indicator */}
-        <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
-          {hasRunning ? (
-            <motion.span
-              className="inline-block"
-              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
-              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
-            >
-              [{doneCount}/{total}]
-            </motion.span>
-          ) : (
-            <span>[{total}]</span>
-          )}
-        </span>
+        {!hideCount && (
+          <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
+            {hasRunning ? (
+              <motion.span
+                className="inline-block"
+                animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+                transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+              >
+                [{doneCount}/{total}]
+              </motion.span>
+            ) : (
+              <span>[{total}]</span>
+            )}
+          </span>
+        )}
 
         {/* Summary text */}
         <span className="truncate flex-1 text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
@@ -1516,7 +2116,7 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
             <div className="pl-1 pt-1">
               {toolCalls.map((tc, i) => (
                 <motion.div
-                  key={tc.id}
+                  key={toolCallRenderKey(tc, i)}
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.15, delay: i * 0.03 }}
@@ -1536,7 +2136,15 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
 }
 
 // Renders message content with interleaved text and tool call blocks
-function MessageContent({ message, onImageClick, onRetry }: { message: Message; onImageClick?: (images: string[], index: number) => void; onRetry?: (prompt: string) => void }) {
+function MessageContent({
+  message,
+  onImageClick,
+  onRetry,
+}: {
+  message: Message;
+  onImageClick?: (images: string[], index: number) => void;
+  onRetry?: (prompt: string) => void;
+}) {
   const isUser = message.role === "user";
   const { settings } = useSettings();
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
@@ -1564,6 +2172,7 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
+    const displayGroups = collapseHiddenWorkGroups(grouped, hideThinkingBlocks);
     // When the message has no rendered prose (no text block — common for
     // pipe-run executions whose entire output is thinking + tool calls),
     // expand thinking blocks by default. Otherwise the collapsed
@@ -1573,7 +2182,7 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
     const hasText = grouped.some((g) => g.type === "text");
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
-        {grouped.map((group) => {
+        {displayGroups.map((group) => {
           if (group.type === "text") {
             return <MarkdownBlock key={`text-${group.key}`} text={group.text} isUser={isUser} />;
           }
@@ -1588,6 +2197,17 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
           }
           if (group.type === "tool-group") {
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
+          }
+          if (group.type === "work-group") {
+            return (
+              <ToolCallGroup
+                key={`work-${group.key}`}
+                toolCalls={group.toolCalls}
+                defaultExpanded={!hasText}
+                summaryOverride={formatWorkDuration(group.durationMs)}
+                hideCount={hasText}
+              />
+            );
           }
           return null;
         })}
@@ -1888,9 +2508,24 @@ export function StandaloneChat({
   // Connected integrations (gmail, google-sheets, slack, etc.) surfaced in the
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
-  const [connections, setConnections] = useState<
-    Array<{ id: string; name: string; category?: string; description?: string }>
-  >([]);
+  const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
+  const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
+  const visibleSuggestionSignature = React.useMemo(
+    () =>
+      [...autoSuggestions, ...connectionPreviewSuggestions]
+        .map((s) => `${s.text}|${s.preview ?? ""}|${s.connectionIcon ?? ""}|${s.priority ?? ""}`)
+        .join("\n"),
+    [autoSuggestions, connectionPreviewSuggestions]
+  );
+  const connectionAwareSuggestions = React.useMemo(
+    () => mergeConnectionSuggestions(autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed),
+    [autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed]
+  );
+
+  useEffect(() => {
+    setSuggestionRefreshSeed(0);
+  }, [visibleSuggestionSignature]);
   // Watch the input section's width so suggestion chips can collapse into
   // a popover on narrow chat columns.
   useEffect(() => {
@@ -1910,11 +2545,11 @@ export function StandaloneChat({
         const res = await localFetch("/connections");
         if (!res.ok) return;
         const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; connected: boolean; category?: string; description?: string }>;
+          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
         };
         const list = (json.data ?? [])
           .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, category: c.category, description: c.description }));
+          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
         if (!cancelled) setConnections(list);
       } catch {
         // silent — filter just won't surface connections, no UI regression
@@ -1933,11 +2568,11 @@ export function StandaloneChat({
         const res = await localFetch("/connections");
         if (!res.ok) return;
         const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; connected: boolean; category?: string; description?: string }>;
+          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
         };
         const list = (json.data ?? [])
           .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, category: c.category, description: c.description }));
+          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
         setConnections(list);
       } catch { /* silent */ }
     };
@@ -1947,6 +2582,34 @@ export function StandaloneChat({
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (connections.length === 0) {
+      setConnectionPreviewSuggestions([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    fetchConnectionPreviewSuggestions(connections).then((suggestions) => {
+      if (!cancelled) setConnectionPreviewSuggestions(suggestions);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connections]);
+
+  const refreshVisibleSuggestions = useCallback(() => {
+    setSuggestionRefreshSeed((seed) => seed + 1);
+    void refreshSuggestions();
+
+    if (connections.length === 0) return;
+    void fetchConnectionPreviewSuggestions(connections).then((suggestions) => {
+      setConnectionPreviewSuggestions(suggestions);
+    });
+  }, [connections, refreshSuggestions]);
 
   // Custom summary templates (persisted in settings)
   const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
@@ -2270,6 +2933,7 @@ export function StandaloneChat({
     setIsStreaming,
     setPastedImages,
     settings,
+    inlineHistoryEnabled: !hideInlineHistory,
   });
 
   // Read an image file by path and append it to pastedImages (base64 data URL)
@@ -2970,6 +3634,19 @@ export function StandaloneChat({
     activeFilters.contentType ||
     activeFilters.appName ||
     activeFilters.speakerName;
+  const activeFilterCount = (activeFilters.timeRanges.length > 0 ? 1 : 0) +
+    (activeFilters.contentType ? 1 : 0) +
+    (activeFilters.appName ? 1 : 0) +
+    (activeFilters.speakerName ? 1 : 0);
+  const activeFilterLabels = React.useMemo(
+    () => [
+      ...activeFilters.timeRanges.map((range) => range.label),
+      activeFilters.contentType,
+      activeFilters.appName,
+      activeFilters.speakerName,
+    ].filter((label): label is string => Boolean(label)),
+    [activeFilters]
+  );
 
   // Remove a specific @mention from input
   const removeFilter = (filterType: "time" | "content" | "app" | "speaker", label?: string) => {
@@ -3242,9 +3919,18 @@ export function StandaloneChat({
   // If user scrolled up to read, don't interrupt them.
   useEffect(() => {
     if (!isUserScrolledUp) {
+      if (isStreaming || isLoading) {
+        const container = scrollContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+        } else {
+          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+        }
+        return;
+      }
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, isUserScrolledUp]);
+  }, [messages, isUserScrolledUp, isLoading, isStreaming]);
 
   const handleMessagesScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -3683,17 +4369,6 @@ export function StandaloneChat({
 
             scheduleStreamingMessageRender();
 
-            // Trigger follow-up generation after enough content
-            if (
-              piStreamingTextRef.current.length > 500 &&
-              !followUpFiredRef.current
-            ) {
-              followUpFiredRef.current = true;
-              generateFollowUps(
-                lastUserMessageRef.current,
-                piStreamingTextRef.current
-              );
-            }
           } else if (evt.type === "thinking_start") {
             if (!ensureAssistantPlaceholder()) return;
             piThinkingStartRef.current = Date.now();
@@ -4091,14 +4766,30 @@ export function StandaloneChat({
                 ? { ...m, content, contentBlocks, ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}) }
                 : m);
             });
-
             if (!isPipeWatch) {
-              posthog.capture("chat_response_received", {
+              const analyticsPayload = {
                 provider: activePreset?.provider,
                 model: activePreset?.model,
                 has_tool_use: blocksSnapshot.some((b) => b.type === "tool"),
                 response_length: streamedText?.length ?? 0,
-              });
+              };
+              setTimeout(() => {
+                posthog.capture("chat_response_received", analyticsPayload);
+              }, POST_STREAM_SIDE_EFFECT_DELAY_MS);
+
+              const followUpText = streamedText || content || "";
+              if (followUpText.length > 500 && !followUpFiredRef.current) {
+                const followUpTurnId = msgId;
+                const followUpSessionId = piSessionIdRef.current;
+                const userPromptForFollowUps = lastUserMessageRef.current;
+                followUpFiredRef.current = true;
+                setTimeout(() => {
+                  if (!mountedRef.current) return;
+                  if (piSessionIdRef.current !== followUpSessionId) return;
+                  if (piMessageIdRef.current && piMessageIdRef.current !== followUpTurnId) return;
+                  generateFollowUps(userPromptForFollowUps, followUpText);
+                }, FOLLOW_UP_GENERATION_DELAY_MS);
+              }
             }
           }
           if (!isPipeWatch) {
@@ -5647,6 +6338,266 @@ export function StandaloneChat({
     setIsStreaming(false);
   };
 
+  const renderComposerUtilityMenu = () => {
+    const isPro = settings.user?.cloud_subscribed === true;
+    const privacyOn = isPro && settings.piPrivacyFilter === true;
+    const timeLabels: Record<string, string> = {
+      "today's activity": "today",
+      "yesterday": "yesterday",
+      "past 7 days": "last week",
+      "past hour": "last hour",
+      "this morning": "this morning",
+    };
+
+    return (
+      <>
+        <div className="p-1 border-b border-border/50">
+          <button
+            type="button"
+            disabled={!canChat}
+            onClick={async () => {
+              setAppFilterOpen(false);
+              await handleFilePicker();
+            }}
+            className="w-full flex items-center gap-2 px-2 py-2 text-left text-sm rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none transition-colors"
+          >
+            <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span>add photos & files</span>
+          </button>
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => {
+                    if (!isPro) {
+                      setAppFilterOpen(false);
+                      openUrl("https://screenpi.pe/onboarding");
+                      return;
+                    }
+                    updateSettings({ piPrivacyFilter: !privacyOn });
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-2 text-left text-sm rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {privacyOn ? (
+                    <ShieldCheck className="h-4 w-4 text-foreground shrink-0" />
+                  ) : (
+                    <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )}
+                  <span className="flex-1 min-w-0">privacy filter</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {!isPro ? "pro" : privacyOn ? "on" : "off"}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="right"
+                align="start"
+                className="max-w-[320px] p-3 space-y-2 text-xs leading-relaxed"
+              >
+                <div className="font-medium text-sm">
+                  {!isPro
+                    ? "Privacy filter — Pro"
+                    : privacyOn
+                      ? "Privacy filter: ON"
+                      : "Privacy filter: OFF"}
+                </div>
+                <div className="text-muted-foreground">
+                  {!isPro
+                    ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Adds ~1-2s per search. Click to upgrade."
+                    : privacyOn
+                      ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Adds ~1-2s per search. Click to turn off."
+                      : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it. Adds ~1-2s per search."}
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    openUrl("https://docs.screenpi.pe/privacy-filter");
+                  }}
+                  className="text-[11px] underline text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  How it works →
+                </button>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 flex items-center gap-1.5">
+          <Filter className="h-3 w-3" />
+          <span>filters</span>
+          {activeFilterCount > 0 && (
+            <span className="ml-auto text-foreground">{activeFilterCount}</span>
+          )}
+        </div>
+
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
+          time
+        </div>
+        {STATIC_MENTION_SUGGESTIONS.filter((s) => s.category === "time").map((s) => {
+          const isActive = activeFilters.timeRanges.some((r) => r.label === timeLabels[s.description]);
+          return (
+            <button
+              key={s.tag}
+              type="button"
+              onClick={() => {
+                if (isActive) {
+                  removeFilter("time", timeLabels[s.description]);
+                } else {
+                  removeFilter("time");
+                  setTimeout(() => {
+                    setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                  }, 0);
+                }
+                setAppFilterOpen(false);
+              }}
+              className={cn(
+                "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                isActive && "bg-muted"
+              )}
+            >
+              <span>{s.tag}</span>
+              <span className="text-[10px] text-muted-foreground">{s.description}</span>
+            </button>
+          );
+        })}
+
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+          content type
+        </div>
+        {STATIC_MENTION_SUGGESTIONS.filter((s) => s.category === "content").map((s) => {
+          const contentTypeMap: Record<string, string> = { screen: "screen", audio: "audio", input: "input" };
+          const tagName = s.tag.slice(1);
+          const isActive = activeFilters.contentType === (contentTypeMap[tagName] || tagName);
+          return (
+            <button
+              key={s.tag}
+              type="button"
+              onClick={() => {
+                if (isActive) {
+                  removeFilter("content");
+                } else {
+                  removeFilter("content");
+                  setTimeout(() => {
+                    setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                  }, 0);
+                }
+                setAppFilterOpen(false);
+              }}
+              className={cn(
+                "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                isActive && "bg-muted"
+              )}
+            >
+              <span>{s.tag}</span>
+              <span className="text-[10px] text-muted-foreground">{s.description}</span>
+            </button>
+          );
+        })}
+
+        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+          apps
+        </div>
+        {appMentionSuggestions.length === 0 ? (
+          <div className="px-3 py-2 text-[10px] text-muted-foreground">no apps detected yet</div>
+        ) : (
+          appMentionSuggestions.map((suggestion) => {
+            const isActive = activeFilters.appName === suggestion.appName;
+            return (
+              <button
+                key={`app-${suggestion.tag}`}
+                type="button"
+                onClick={() => {
+                  if (isActive) {
+                    removeFilter("app");
+                  } else {
+                    if (activeFilters.appName) removeFilter("app");
+                    setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+                  }
+                  setAppFilterOpen(false);
+                }}
+                className={cn(
+                  "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                  isActive && "bg-muted"
+                )}
+              >
+                <span>{suggestion.tag}</span>
+                <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
+              </button>
+            );
+          })
+        )}
+
+        {connections.length > 0 && (
+          <>
+            <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+              connections
+            </div>
+            {connections.map((c) => {
+              const tag = `@${c.id}`;
+              return (
+                <button
+                  key={`conn-${c.id}`}
+                  type="button"
+                  onClick={() => {
+                    setInput((prev) => `${tag} ${prev.trim()}`.trim() + " ");
+                    setAppFilterOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2"
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <ConnectionToolIcon name={c.icon || c.id} />
+                    <span className="truncate">{tag}</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground truncate">
+                    {c.name}
+                  </span>
+                </button>
+              );
+            })}
+          </>
+        )}
+
+        {recentSpeakers.length > 0 && (
+          <>
+            <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+              speakers
+            </div>
+            {recentSpeakers.map((s) => {
+              const speakerName = s.tag.startsWith('@"') ? s.tag.slice(2, -1) : s.tag.slice(1);
+              const isActive = activeFilters.speakerName === speakerName;
+              return (
+                <button
+                  key={`speaker-${s.tag}`}
+                  type="button"
+                  onClick={() => {
+                    if (isActive) {
+                      removeFilter("speaker");
+                    } else {
+                      if (activeFilters.speakerName) removeFilter("speaker");
+                      setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
+                    }
+                    setAppFilterOpen(false);
+                  }}
+                  className={cn(
+                    "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
+                    isActive && "bg-muted"
+                  )}
+                >
+                  <span>{s.tag}</span>
+                  <span className="text-[10px] text-muted-foreground">speaker</span>
+                </button>
+              );
+            })}
+          </>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       {/* Header - draggable only in standalone mode */}
@@ -5915,7 +6866,7 @@ export function StandaloneChat({
             setTimeout(() => document.addEventListener("mousedown", remove), 0);
           }}
         >
-        <div className="max-w-4xl mx-auto w-full p-4 space-y-4">
+        <div className={cn(CHAT_RAIL_CLASS, "px-5 sm:px-6 py-4 space-y-4")}>
         {/* Pipe-watch banner — shown when the user clicked through from
             a running pipe execution. Replaces the prior synthetic
             "Watching pipe: X" user-bubble sentinel. */}
@@ -5969,9 +6920,9 @@ export function StandaloneChat({
         {messages.length === 0 && !isPreparingPrefill && hasPresets && hasValidModel && (
           <SummaryCards
             onSendMessage={sendMessage}
-            autoSuggestions={autoSuggestions}
+            autoSuggestions={connectionAwareSuggestions}
             suggestionsRefreshing={suggestionsRefreshing}
-            onRefreshSuggestions={refreshSuggestions}
+            onRefreshSuggestions={refreshVisibleSuggestions}
             customTemplates={customTemplates}
             onSaveCustomTemplate={saveCustomTemplate}
             onDeleteCustomTemplate={deleteCustomTemplate}
@@ -6053,11 +7004,15 @@ export function StandaloneChat({
                   setEditingMessageId(message.id);
                 }}
                 className={cn(
-                  "relative rounded-xl px-4 py-3 text-sm overflow-hidden max-w-full transition-all",
+                  "relative rounded-xl text-sm overflow-hidden max-w-full transition-all",
                   message.role === "user"
-                    ? "bg-muted/60 text-foreground"
-                    : "bg-background text-foreground",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text"
+                    ? "bg-muted/60 text-foreground px-4 py-3"
+                    : "bg-background text-foreground py-1",
+                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
+                  // Queued user messages — visually de-emphasised so the eye stays on
+                  // the active turn. Cleared when pi-mono fires message_start for
+                  // this turn (see handler above).
+                  message.queued && "bg-muted/35 text-muted-foreground opacity-80"
                 )}
               >
                 {editingMessageId === message.id ? (
@@ -6097,7 +7052,11 @@ export function StandaloneChat({
                     className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none"
                   />
                 ) : (
-                  <MessageContent message={message} onImageClick={(images, index) => setImageViewer({ images, index })} onRetry={(prompt) => sendMessage(prompt)} />
+                  <MessageContent
+                    message={message}
+                    onImageClick={(images, index) => setImageViewer({ images, index })}
+                    onRetry={(prompt) => sendMessage(prompt)}
+                  />
                 )}
               </div>
                 {/* Action buttons - appear on hover, outside the message box */}
@@ -6351,12 +7310,11 @@ export function StandaloneChat({
 
       {/* Input */}
       <div ref={inputSectionRef} className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
-        <div className="max-w-4xl mx-auto w-full">
-
+        <div className={CHAT_RAIL_CLASS}>
         {/* Prefill, filters, suggestions first; then attached images in gap; then agent bar; then form */}
         {/* Prefill context indicator from search */}
         {(prefillContext || prefillFrameId) && (
-          <div className="px-3 py-2 border-b border-border/30 bg-muted/30">
+          <div className="px-5 sm:px-6 py-2 border-b border-border/30 bg-muted/30">
             <div className="flex items-start justify-between gap-2">
               {prefillFrameId && (
                 <div className="flex-shrink-0">
@@ -6401,57 +7359,6 @@ export function StandaloneChat({
           </div>
         )}
 
-        {/* Active filters chips */}
-        {hasActiveFilters && (
-          <div className="px-3 py-2 border-b border-border/30 flex flex-wrap gap-1.5">
-            {activeFilters.timeRanges.map((range, idx) => (
-              <button
-                key={`time-${idx}`}
-                type="button"
-                onClick={() => removeFilter("time", range.label)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 rounded-full hover:bg-blue-500/20 transition-colors"
-              >
-                <span>🕐</span>
-                <span>{range.label}</span>
-                <X className="w-2.5 h-2.5 ml-0.5" />
-              </button>
-            ))}
-            {activeFilters.contentType && (
-              <button
-                type="button"
-                onClick={() => removeFilter("content")}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 rounded-full hover:bg-purple-500/20 transition-colors"
-              >
-                <span>{activeFilters.contentType === "audio" ? "🎤" : "🖥️"}</span>
-                <span>{activeFilters.contentType}</span>
-                <X className="w-2.5 h-2.5 ml-0.5" />
-              </button>
-            )}
-            {activeFilters.appName && (
-              <button
-                type="button"
-                onClick={() => removeFilter("app")}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 rounded-full hover:bg-green-500/20 transition-colors"
-              >
-                <span>📱</span>
-                <span>{activeFilters.appName}</span>
-                <X className="w-2.5 h-2.5 ml-0.5" />
-              </button>
-            )}
-            {activeFilters.speakerName && (
-              <button
-                type="button"
-                onClick={() => removeFilter("speaker")}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20 rounded-full hover:bg-orange-500/20 transition-colors"
-              >
-                <span>👤</span>
-                <span>{activeFilters.speakerName}</span>
-                <X className="w-2.5 h-2.5 ml-0.5" />
-              </button>
-            )}
-          </div>
-        )}
-
         {/* Follow-up suggestions (TikTok-style) */}
         <AnimatePresence>
           {!isLoading && followUpSuggestions.length > 0 && messages.length > 0 && (
@@ -6460,7 +7367,7 @@ export function StandaloneChat({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: 0.2 }}
-              className="px-3 pt-2 flex flex-col gap-1"
+              className="px-5 sm:px-6 pt-2 flex flex-col gap-1"
             >
               <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">follow up</span>
               <div className="flex flex-wrap gap-1.5">
@@ -6482,24 +7389,25 @@ export function StandaloneChat({
         {/* Persistent auto-suggestions above input. Inline chips when the
             input is wide enough; collapses to a single trigger button that
             opens a popover when narrow (e.g. BrowserSidebar squeezed the
-            chat column). 520px is the rough threshold below which 4 chips
+            chat column). 520px is the rough threshold below which 3 chips
             wrap to multiple rows and eat too much vertical space. */}
-        {messages.length > 0 && !isLoading && autoSuggestions.length > 0 && (
+        {messages.length > 0 && !isLoading && connectionAwareSuggestions.length > 0 && (
           inputSectionWidth >= 520 ? (
-            <div className="px-3 pt-2 flex flex-wrap gap-1.5 items-center">
-              {autoSuggestions.slice(0, 4).map((s, i) => (
+            <div className="px-5 sm:px-6 pt-2 flex flex-wrap gap-1.5 items-center">
+              {connectionAwareSuggestions.slice(0, 3).map((s, i) => (
                 <button
                   key={i}
                   type="button"
                   onClick={() => sendMessage(s.text)}
-                  className="px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px] truncate"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px]"
                   title={s.preview ? `${s.text} — ${s.preview}` : s.text}
                 >
-                  {s.text}
+                  {s.connectionIcon && <ConnectionToolIcon name={s.connectionIcon} />}
+                  <span className="truncate">{s.text}</span>
                 </button>
               ))}
               <button
-                onClick={refreshSuggestions}
+                onClick={refreshVisibleSuggestions}
                 disabled={suggestionsRefreshing}
                 className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
                 title="refresh suggestions"
@@ -6508,7 +7416,7 @@ export function StandaloneChat({
               </button>
             </div>
           ) : (
-            <div className="px-3 pt-2 flex items-center gap-1.5">
+            <div className="px-5 sm:px-6 pt-2 flex items-center gap-1.5">
               <Popover>
                 <PopoverTrigger asChild>
                   <button
@@ -6528,22 +7436,23 @@ export function StandaloneChat({
                   sideOffset={6}
                 >
                   <div className="flex flex-col gap-0.5">
-                    {autoSuggestions.slice(0, 4).map((s, i) => (
+                    {connectionAwareSuggestions.slice(0, 3).map((s, i) => (
                       <button
                         key={i}
                         type="button"
                         onClick={() => sendMessage(s.text)}
-                        className="text-left px-2 py-1.5 text-[11px] font-mono rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors line-clamp-2"
+                        className="text-left px-2 py-1.5 text-[11px] font-mono rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-start gap-1.5"
                         title={s.preview ? `${s.text} — ${s.preview}` : s.text}
                       >
-                        {s.text}
+                        {s.connectionIcon && <ConnectionToolIcon name={s.connectionIcon} />}
+                        <span className="line-clamp-2">{s.text}</span>
                       </button>
                     ))}
                   </div>
                 </PopoverContent>
               </Popover>
               <button
-                onClick={refreshSuggestions}
+                onClick={refreshVisibleSuggestions}
                 disabled={suggestionsRefreshing}
                 className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
                 title="refresh suggestions"
@@ -6556,7 +7465,7 @@ export function StandaloneChat({
 
         {/* Attached images in the gap (above agent bar, like reference); click to open full-screen viewer */}
         {pastedImages.length > 0 && (
-          <div className="px-3 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
+          <div className="px-5 sm:px-6 py-2 border-b border-border/30 flex flex-wrap items-center gap-2">
             {pastedImages.map((img, i) => (
               <div key={i} className="relative group shrink-0">
                 <button
@@ -6583,219 +7492,9 @@ export function StandaloneChat({
           </div>
         )}
 
-        <div className="p-2 border-b border-border/30 flex items-center gap-2">
-          <Popover open={appFilterOpen} onOpenChange={setAppFilterOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  "shrink-0 flex items-center gap-1 px-2 h-10 text-[11px] font-mono border rounded-md transition-colors",
-                  hasActiveFilters
-                    ? "border-foreground text-foreground"
-                    : "border-border text-muted-foreground hover:text-foreground hover:border-foreground"
-                )}
-                title="Search filters"
-              >
-                <Filter className="w-3 h-3" />
-                <span>filter</span>
-                {hasActiveFilters && (
-                  <span className="text-[10px] text-muted-foreground">
-                    ({(activeFilters.timeRanges.length > 0 ? 1 : 0) +
-                      (activeFilters.contentType ? 1 : 0) +
-                      (activeFilters.appName ? 1 : 0) +
-                      (activeFilters.speakerName ? 1 : 0)})
-                  </span>
-                )}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-64 p-0 max-h-[360px] overflow-y-auto" align="start">
-              {/* Time filters */}
-              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
-                time
-              </div>
-              {STATIC_MENTION_SUGGESTIONS.filter((s) => s.category === "time").map((s) => {
-                const timeLabels: Record<string, string> = {
-                  "today's activity": "today",
-                  "yesterday": "yesterday",
-                  "past 7 days": "last week",
-                  "past hour": "last hour",
-                  "this morning": "this morning",
-                };
-                const isActive = activeFilters.timeRanges.some((r) => r.label === timeLabels[s.description]);
-                return (
-                  <button
-                    key={s.tag}
-                    type="button"
-                    onClick={() => {
-                      if (isActive) {
-                        removeFilter("time", timeLabels[s.description]);
-                      } else {
-                        removeFilter("time");
-                        setTimeout(() => {
-                          setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
-                        }, 0);
-                      }
-                      setAppFilterOpen(false);
-                    }}
-                    className={cn(
-                      "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
-                      isActive && "bg-muted"
-                    )}
-                  >
-                    <span>{s.tag}</span>
-                    <span className="text-[10px] text-muted-foreground">{s.description}</span>
-                  </button>
-                );
-              })}
-
-              {/* Content type filters */}
-              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
-                content type
-              </div>
-              {STATIC_MENTION_SUGGESTIONS.filter((s) => s.category === "content").map((s) => {
-                const contentTypeMap: Record<string, string> = { screen: "screen", audio: "audio", input: "input" };
-                const tagName = s.tag.slice(1);
-                const isActive = activeFilters.contentType === (contentTypeMap[tagName] || tagName);
-                return (
-                  <button
-                    key={s.tag}
-                    type="button"
-                    onClick={() => {
-                      if (isActive) {
-                        removeFilter("content");
-                      } else {
-                        removeFilter("content");
-                        setTimeout(() => {
-                          setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
-                        }, 0);
-                      }
-                      setAppFilterOpen(false);
-                    }}
-                    className={cn(
-                      "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
-                      isActive && "bg-muted"
-                    )}
-                  >
-                    <span>{s.tag}</span>
-                    <span className="text-[10px] text-muted-foreground">{s.description}</span>
-                  </button>
-                );
-              })}
-
-              {/* App filters */}
-              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
-                apps
-              </div>
-              {appMentionSuggestions.length === 0 ? (
-                <div className="px-3 py-2 text-[10px] text-muted-foreground">no apps detected yet</div>
-              ) : (
-                appMentionSuggestions.map((suggestion) => {
-                  const isActive = activeFilters.appName === suggestion.appName;
-                  return (
-                    <button
-                      key={`app-${suggestion.tag}`}
-                      type="button"
-                      onClick={() => {
-                        if (isActive) {
-                          removeFilter("app");
-                        } else {
-                          if (activeFilters.appName) removeFilter("app");
-                          setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
-                        }
-                        setAppFilterOpen(false);
-                      }}
-                      className={cn(
-                        "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
-                        isActive && "bg-muted"
-                      )}
-                    >
-                      <span>{suggestion.tag}</span>
-                      <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
-                    </button>
-                  );
-                })
-              )}
-
-              {/* Connections — lets users mention their own integrations (gmail, slack, etc.) */}
-              {connections.length > 0 && (
-                <>
-                  <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
-                    connections
-                  </div>
-                  {connections.map((c) => {
-                    const tag = `@${c.id}`;
-                    return (
-                      <button
-                        key={`conn-${c.id}`}
-                        type="button"
-                        onClick={() => {
-                          setInput((prev) => `${tag} ${prev.trim()}`.trim() + " ");
-                          setAppFilterOpen(false);
-                        }}
-                        className="w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2"
-                      >
-                        <span>{tag}</span>
-                        <span className="text-[10px] text-muted-foreground truncate">
-                          {c.name}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </>
-              )}
-
-              {/* Speakers */}
-              {recentSpeakers.length > 0 && (
-                <>
-                  <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
-                    speakers
-                  </div>
-                  {recentSpeakers.map((s) => {
-                    const speakerName = s.tag.startsWith('@"') ? s.tag.slice(2, -1) : s.tag.slice(1);
-                    const isActive = activeFilters.speakerName === speakerName;
-                    return (
-                      <button
-                        key={`speaker-${s.tag}`}
-                        type="button"
-                        onClick={() => {
-                          if (isActive) {
-                            removeFilter("speaker");
-                          } else {
-                            if (activeFilters.speakerName) removeFilter("speaker");
-                            setInput((prev) => `${s.tag} ${prev.trim()}`.trim() + " ");
-                          }
-                          setAppFilterOpen(false);
-                        }}
-                        className={cn(
-                          "w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2",
-                          isActive && "bg-muted"
-                        )}
-                      >
-                        <span>{s.tag}</span>
-                        <span className="text-[10px] text-muted-foreground">speaker</span>
-                      </button>
-                    );
-                  })}
-                </>
-              )}
-            </PopoverContent>
-          </Popover>
-          <div className="flex-1 min-w-0">
-            <AIPresetsSelector
-              onPresetChange={setActivePreset}
-              onPresetSaved={handlePiRestart}
-              controlledPresetId={activePipeExecution ? activePreset?.id : undefined}
-              onControlledSelect={activePipeExecution ? (id) => {
-                const match = settings.aiPresets?.find((p) => p.id === id);
-                if (match) setActivePreset(match);
-              } : undefined}
-            />
-          </div>
-        </div>
-
         <form
           onSubmit={handleSubmit}
-          className="p-3 relative"
+          className="px-5 sm:px-6 pb-4 pt-3 relative"
           onPaste={handlePaste}
         >
           {/* Drop zone overlay — only shown in embedded (non-overlay) chat */}
@@ -6900,94 +7599,70 @@ export function StandaloneChat({
               </AnimatePresence>
             </div>
             {/* Buttons row below textarea so scrollbar is above and full width is typeable */}
-            <div className="flex items-center justify-end gap-0.5 shrink-0 px-2 pb-2 pt-1">
-              {(() => {
-                // Privacy filter: removes personal info (names, emails, phones,
-                // addresses, account numbers) from screenpipe API responses
-                // before the AI sees them. Pro-only; non-pro click opens upsell.
-                const isPro = settings.user?.cloud_subscribed === true;
-                const privacyOn = isPro && settings.piPrivacyFilter === true;
-                return (
-                  <TooltipProvider delayDuration={150}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => {
-                            if (!isPro) {
-                              openUrl("https://screenpi.pe/onboarding");
-                              return;
-                            }
-                            updateSettings({ piPrivacyFilter: !privacyOn });
-                          }}
-                          disabled={isLoading}
-                          className={cn(
-                            "h-8 w-8 hover:bg-muted/50",
-                            privacyOn
-                              ? "text-foreground hover:text-foreground"
-                              : "text-muted-foreground hover:text-foreground"
-                          )}
-                          aria-label={
-                            privacyOn
-                              ? "Disable privacy filter"
-                              : "Enable privacy filter"
-                          }
-                        >
-                          {privacyOn ? (
-                            <ShieldCheck className="h-4 w-4" />
-                          ) : (
-                            <Shield className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent
-                        side="top"
-                        align="center"
-                        className="max-w-[320px] p-3 space-y-2 text-xs leading-relaxed"
-                      >
-                        <div className="font-medium text-sm">
-                          {!isPro
-                            ? "Privacy filter — Pro"
-                            : privacyOn
-                              ? "Privacy filter: ON"
-                              : "Privacy filter: OFF"}
-                        </div>
-                        <div className="text-muted-foreground">
-                          {!isPro
-                            ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Adds ~1–2s per search. Click the shield to upgrade."
-                            : privacyOn
-                              ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Adds ~1–2s per search. Click the shield to turn off."
-                              : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it. Adds ~1–2s per search."}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            openUrl("https://docs.screenpi.pe/privacy-filter");
-                          }}
-                          className="text-[11px] underline text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          How it works →
-                        </button>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                );
-              })()}
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={handleFilePicker}
-                disabled={!canChat}
-                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                title="Attach image"
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
+            <div className="flex items-center gap-1.5 shrink-0 px-2 pb-2 pt-1">
+              <Popover open={appFilterOpen} onOpenChange={setAppFilterOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className={cn(
+                      "h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
+                      hasActiveFilters && "text-foreground bg-muted/50"
+                    )}
+                    title="Add attachments and filters"
+                    aria-label="Add attachments and filters"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {activeFilterCount > 0 && (
+                      <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full bg-foreground text-background text-[9px] font-mono font-semibold flex items-center justify-center">
+                        {activeFilterCount}
+                      </span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-72 p-0 max-h-[420px] overflow-y-auto"
+                  align="start"
+                  side="top"
+                  sideOffset={6}
+                >
+                  {renderComposerUtilityMenu()}
+                </PopoverContent>
+              </Popover>
+              <div className="flex-1 min-w-0">
+                {hasActiveFilters && (
+                <div className="hidden sm:flex min-w-0 items-center gap-1 overflow-hidden">
+                  {activeFilterLabels.slice(0, 2).map((label, idx) => (
+                    <span
+                      key={`${label}-${idx}`}
+                      className="inline-flex h-6 max-w-[140px] items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground truncate"
+                      title={label}
+                    >
+                      {label}
+                    </span>
+                  ))}
+                  {activeFilterLabels.length > 2 && (
+                    <span className="inline-flex h-6 items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground shrink-0">
+                      +{activeFilterLabels.length - 2}
+                    </span>
+                  )}
+                </div>
+                )}
+              </div>
+              <AIPresetsSelector
+                compact
+                showModelOnly
+                containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
+                triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
+                onPresetChange={setActivePreset}
+                onPresetSaved={handlePiRestart}
+                controlledPresetId={activePipeExecution ? activePreset?.id : undefined}
+                onControlledSelect={activePipeExecution ? (id) => {
+                  const match = settings.aiPresets?.find((p) => p.id === id);
+                  if (match) setActivePreset(match);
+                } : undefined}
+              />
               {(() => {
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0;
                 const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);

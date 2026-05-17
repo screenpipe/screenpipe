@@ -7813,9 +7813,12 @@ name = "screenpipe-audio-eval"
 version = "0.3.335"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "hound",
  "screenpipe-audio",
+ "screenpipe-core",
+ "screenpipe-db",
  "serde",
  "serde_json",
  "tempfile",
