@@ -5284,7 +5284,7 @@ export function StandaloneChat({
     // Guard the tiny gap between submit and React's loading state update.
     // During this window, rapid Enter presses must queue (not start a second
     // normal turn), otherwise user bubbles can drift.
-    if (forceQueueModeRef.current || sendDispatchInFlightRef.current || !!piMessageIdRef.current || isLoading || isStreaming) {
+    if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
       return enqueuePiMessage(trimmed, displayLabel);
     }
 
