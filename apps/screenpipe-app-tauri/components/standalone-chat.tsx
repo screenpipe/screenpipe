@@ -6267,7 +6267,7 @@ export function StandaloneChat({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.18 }}
-            className="relative z-20 mx-auto w-full max-w-4xl px-3 pb-2"
+            className="relative z-20 mx-auto w-[80%] max-w-4xl px-3 pb-2"
           >
             <div className="border border-border/60 bg-background/95 backdrop-blur-sm overflow-hidden">
               <div className="flex items-center gap-1.5 px-2.5 py-1 border-b border-border/50 bg-background">
@@ -6311,43 +6311,33 @@ export function StandaloneChat({
                           {label}
                         </span>
                         <div className="flex items-center gap-1 shrink-0">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => steerQueuedPrompt(p)}
-                              className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
-                              aria-label={`steer queued message ${i + 1}`}
-                            >
-                              {isBusy ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <>
-                                  <CornerDownRight className="h-2.5 w-2.5" />
-                                  <span className="text-[10px] font-medium">Steer</span>
-                                </>
-                              )}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">
-                            Steer current reply with this message ({formatSteerShortcut(isMac)})
-                          </TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => cancelQueuedPrompt(p)}
-                              className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
-                              aria-label={`remove queued message ${i + 1}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">Remove queued message</TooltipContent>
-                        </Tooltip>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => steerQueuedPrompt(p)}
+                          className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
+                          aria-label={`steer queued message ${i + 1}`}
+                          title={`Steer current reply with this message (${formatSteerShortcut(isMac)})`}
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <>
+                              <CornerDownRight className="h-2.5 w-2.5" />
+                              <span className="text-[10px] font-medium">Steer</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => cancelQueuedPrompt(p)}
+                          className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
+                          aria-label={`remove queued message ${i + 1}`}
+                          title="Remove queued message"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
                         </div>
                       </motion.div>
                     );
@@ -6992,7 +6982,7 @@ export function StandaloneChat({
                 size="icon"
                 variant="ghost"
                 onClick={handleFilePicker}
-                disabled={isLoading || !canChat}
+                disabled={!canChat}
                 className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 title="Attach image"
               >
