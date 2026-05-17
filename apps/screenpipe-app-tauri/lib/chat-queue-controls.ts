@@ -90,8 +90,3 @@ export function getComposerPrimaryAction(
   if (!isBusy) return "send";
   return hasInput ? "steer" : "stop";
 }
-
-export function queuedPreviewMatchesText(preview: string, text: string): boolean {
-  if (!preview) return text.length === 0;
-  return text.startsWith(preview);
-}

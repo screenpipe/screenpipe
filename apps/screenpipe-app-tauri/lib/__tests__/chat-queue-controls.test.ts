@@ -10,7 +10,6 @@ import {
   isQueuedItemCancelShortcut,
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
-  queuedPreviewMatchesText,
 } from "../chat-queue-controls";
 
 describe("chat queue controls", () => {
@@ -59,13 +58,6 @@ describe("chat queue controls", () => {
     expect(isQueuedItemCancelShortcut({ key: "Delete" })).toBe(true);
     expect(isQueuedItemCancelShortcut({ key: "Backspace" })).toBe(true);
     expect(isQueuedItemCancelShortcut({ key: "Backspace", metaKey: true })).toBe(false);
-  });
-
-  it("matches queued previews against the local full user prompt", () => {
-    expect(queuedPreviewMatchesText("first 200 chars", "first 200 chars plus the rest")).toBe(true);
-    expect(queuedPreviewMatchesText("different", "first 200 chars plus the rest")).toBe(false);
-    expect(queuedPreviewMatchesText("", "")).toBe(true);
-    expect(queuedPreviewMatchesText("", "non-empty text")).toBe(false);
   });
 
   it("formats steer shortcuts without platform-specific glyph assumptions", () => {

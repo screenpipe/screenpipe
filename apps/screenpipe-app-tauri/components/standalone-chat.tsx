@@ -356,6 +356,7 @@ interface Message {
   role: "user" | "assistant";
   content: string; // full text for copy/history
   displayContent?: string; // short label shown in chat (e.g. template name)
+  intent?: "steer";
   images?: string[]; // base64 data URLs of attached images
   timestamp: number;
   contentBlocks?: ContentBlock[];
@@ -363,7 +364,15 @@ interface Message {
   model?: string;
   provider?: string;
   retryPrompt?: string; // when set, renders a retry CTA on error messages
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
 }
+
+type QueuedDisplayPayload = {
+  preview: string;
+  images: string[];
+  displayContent?: string;
+};
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -1625,6 +1634,19 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
   );
 }
 
+function getMessageIntentLabel(message: Message): string | null {
+  if (message.role === "user" && message.intent === "steer") {
+    return "Steered";
+  }
+  if (message.role === "assistant" && message.steeredResponse) {
+    return "Reply redirected";
+  }
+  if (message.role === "assistant" && message.interruptedBySteer) {
+    return "Interrupted by steer";
+  }
+  return null;
+}
+
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -1962,7 +1984,7 @@ export function StandaloneChat({
   // truth lives in `pi_command_queue.rs`. Cleared as soon as the drain loop
   // pulls a queued item and writes it to stdin (it's then in-flight).
   const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, PiQueuedPrompt[]>>({});
-  const [queuedPayloadBySession, setQueuedPayloadBySession] = useState<Record<string, Record<string, { content: string; displayContent?: string; images: string[] }>>>({});
+  const queuedDisplayBySessionRef = useRef<Record<string, Record<string, QueuedDisplayPayload>>>({});
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
   const queuedScrollRef = useRef<HTMLDivElement | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -2065,6 +2087,8 @@ export function StandaloneChat({
   const piStreamingTextRef = useRef<string>("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
+  const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
+  const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
@@ -3818,14 +3842,10 @@ export function StandaloneChat({
             }
           }
         } else if (data.type === "message_start" && data.message?.role === "user") {
-          // pi-mono fires `message_start` for a user message at the start of
-          // every turn that introduces one — i.e. (a) the original prompt
-          // and (b) each queued followUp processed inside the SAME agent run
-          // (only one `agent_end` fires for the whole run, after all
-          // followUps drain). If we relied on `agent_end` to close out the
-          // current assistant message, the followUp's text_delta would land
-          // on the previous turn's assistant bubble (the user saw responses
-          // mashed together: "...Which?Hey. What do you need?").
+          // Pi fires `message_start` for each user turn. When a queued
+          // follow-up starts, close the previous streaming target here so the
+          // next text_delta creates a fresh assistant bubble instead of
+          // appending to the prior reply.
           //
           // Clear the streaming refs here so the next text_delta lazily
           // creates a fresh assistant placeholder via `ensureAssistantPlaceholder`.
@@ -3856,20 +3876,37 @@ export function StandaloneChat({
             }
             return "";
           })();
+          const eventImages = imageDataUrlsFromPiContent(data.message?.content);
 
-          if (text && !piMessageIdRef.current) {
+          if (!piMessageIdRef.current) {
+            const sidForStartedUser = piSessionIdRef.current;
+            const pendingDisplay = pendingNextPiUserDisplayRef.current;
+            const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
+            const queuedImages = queuedDisplay?.images.length ? queuedDisplay.images : eventImages;
+            if (pendingDisplay) {
+              pendingNextPiUserDisplayRef.current = null;
+            }
+            if (!text && !queuedImages.length && !queuedDisplay?.displayContent) {
+              return;
+            }
+            const nextUserIntent = pendingNextPiUserIntentRef.current;
+            pendingNextPiUserIntentRef.current = null;
             const queuedTurnUserId = Date.now().toString();
             const queuedTurnAssistantId = (Date.now() + 1).toString();
             const startedUser: Message = {
               id: queuedTurnUserId,
               role: "user",
               content: text,
+              ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+              ...(queuedImages.length ? { images: [...queuedImages] } : {}),
+              ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
               timestamp: Date.now(),
             };
             const assistantPlaceholder: Message = {
               id: queuedTurnAssistantId,
               role: "assistant",
               content: "Processing...",
+              ...(nextUserIntent === "steer" ? { steeredResponse: true } : {}),
               timestamp: Date.now(),
               model: activePreset?.model,
               provider: activePreset?.provider,
@@ -3890,12 +3927,11 @@ export function StandaloneChat({
             setIsLoading(true);
             setIsStreaming(true);
 
-            const sidNow = piSessionIdRef.current;
-            if (sidNow) {
+            if (sidForStartedUser) {
               const storeState = useChatStore.getState();
-              storeState.actions.appendMessage(sidNow, startedUser as any);
-              storeState.actions.appendMessage(sidNow, assistantPlaceholder as any);
-              storeState.actions.setStreaming(sidNow, {
+              storeState.actions.appendMessage(sidForStartedUser, startedUser as any);
+              storeState.actions.appendMessage(sidForStartedUser, assistantPlaceholder as any);
+              storeState.actions.setStreaming(sidForStartedUser, {
                 streamingMessageId: queuedTurnAssistantId,
                 streamingText: "",
                 contentBlocks: [],
@@ -4348,16 +4384,6 @@ export function StandaloneChat({
         if (queuedSnapshotsEqual(existing, queued)) return prev;
         return { ...prev, [sessionId]: queued };
       });
-      setQueuedPayloadBySession((prev) => {
-        const current = prev[sessionId];
-        if (!current) return prev;
-        const queuedIds = new Set(queued.map((p) => p.id));
-        const next = Object.fromEntries(
-          Object.entries(current).filter(([id]) => queuedIds.has(id))
-        );
-        if (Object.keys(next).length === Object.keys(current).length) return prev;
-        return { ...prev, [sessionId]: next };
-      });
     }).then(fn => { unlistenQueue = fn; });
 
     // Initial fetch — closes the gap between component mount and first event.
@@ -4678,6 +4704,73 @@ export function StandaloneChat({
     return piImages;
   }
 
+  function imageDataUrlsFromPiContent(content: unknown) {
+    if (!Array.isArray(content)) return [];
+    const images: string[] = [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const item = part as { type?: unknown; mimeType?: unknown; mime_type?: unknown; data?: unknown };
+      if (item.type !== "image" || typeof item.data !== "string") continue;
+      if (item.data.startsWith("data:image/")) {
+        images.push(item.data);
+        continue;
+      }
+      const mime = typeof item.mimeType === "string"
+        ? item.mimeType
+        : typeof item.mime_type === "string"
+          ? item.mime_type
+          : "image/png";
+      images.push(`data:${mime};base64,${item.data}`);
+    }
+    return images;
+  }
+
+  function queuedPreviewForText(text: string) {
+    return Array.from(text).slice(0, 200).join("");
+  }
+
+  function shouldKeepQueuedDisplay(payload: QueuedDisplayPayload) {
+    return payload.images.length > 0 || !!payload.displayContent;
+  }
+
+  function restoreQueuedDisplay(sessionId: string | null, promptId: string, payload: QueuedDisplayPayload | null) {
+    if (!sessionId || !payload || !shouldKeepQueuedDisplay(payload)) return;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: {
+        ...(queuedDisplayBySessionRef.current[sessionId] ?? {}),
+        [promptId]: payload,
+      },
+    };
+  }
+
+  function takeQueuedDisplayById(sessionId: string | null, promptId: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const current = queuedDisplayBySessionRef.current[sessionId];
+    const payload = current?.[promptId] ?? null;
+    if (!payload) return null;
+    const { [promptId]: _removed, ...rest } = current;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: rest,
+    };
+    return payload;
+  }
+
+  function payloadMatchesText(payload: QueuedDisplayPayload, text: string) {
+    const preview = queuedPreviewForText(text);
+    if (!payload.preview) return !preview;
+    return preview === payload.preview || text.startsWith(payload.preview);
+  }
+
+  function consumeQueuedDisplayForStartedMessage(sessionId: string | null, text: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const queued = queuedDisplayBySessionRef.current[sessionId] ?? {};
+    const match = Object.entries(queued).find(([, payload]) => payloadMatchesText(payload, text));
+    if (!match) return null;
+    return takeQueuedDisplayById(sessionId, match[0]);
+  }
+
   async function enqueuePiMessage(userMessage: string, displayLabel?: string) {
     if (!piInfo?.running) {
       // No Pi running → fall back to the normal start-and-send path.
@@ -4696,7 +4789,7 @@ export function StandaloneChat({
     if (hadPastedImages) setPastedImages([]);
 
     try {
-      const result = await commands.piPrompt(
+      const result = await commands.piQueuePrompt(
         piSessionIdRef.current,
         userMessage,
         piImages.length > 0 ? piImages : null,
@@ -4708,20 +4801,11 @@ export function StandaloneChat({
         return;
       }
 
-      const sid = piSessionIdRef.current;
-      if (sid && result.data) {
-        setQueuedPayloadBySession((prev) => ({
-          ...prev,
-          [sid]: {
-            ...(prev[sid] ?? {}),
-            [result.data]: {
-              content: userMessage,
-              displayContent: displayLabel,
-              images: queuedImageDataUrls,
-            },
-          },
-        }));
-      }
+      restoreQueuedDisplay(piSessionIdRef.current, result.data, {
+        preview: queuedPreviewForText(userMessage),
+        images: queuedImageDataUrls,
+        ...(displayLabel ? { displayContent: displayLabel } : {}),
+      });
 
       posthog.capture("chat_message_enqueued", {
         provider: activePreset?.provider,
@@ -5276,21 +5360,13 @@ export function StandaloneChat({
         return false;
       }
       if (currentQueueSessionId) {
+        takeQueuedDisplayById(currentQueueSessionId, prompt.id);
         setQueuedPromptsBySession((prev) => ({
           ...prev,
           [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
             (queued) => queued.id !== prompt.id,
           ),
         }));
-        setQueuedPayloadBySession((prev) => {
-          const current = prev[currentQueueSessionId] ?? {};
-          if (!(prompt.id in current)) return prev;
-          const { [prompt.id]: _removed, ...rest } = current;
-          return {
-            ...prev,
-            [currentQueueSessionId]: rest,
-          };
-        });
       }
       return true;
     } catch (e) {
@@ -5305,6 +5381,60 @@ export function StandaloneChat({
     } finally {
       setQueuedActionPromptId((current) => current === prompt.id ? null : current);
     }
+  }
+
+  function markCurrentAssistantInterrupted() {
+    const activeAssistantId = piMessageIdRef.current;
+    if (!activeAssistantId) return;
+
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.id !== activeAssistantId || message.role !== "assistant" || message.interruptedBySteer) {
+          return message;
+        }
+        changed = true;
+        return { ...message, interruptedBySteer: true };
+      });
+      if (changed) {
+        void saveConversation(next, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, next as any);
+        }
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  function clearCurrentAssistantInterrupted() {
+    const activeAssistantId = piMessageIdRef.current;
+    if (!activeAssistantId) return;
+
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.id !== activeAssistantId || message.role !== "assistant" || !message.interruptedBySteer) {
+          return message;
+        }
+        changed = true;
+        return { ...message, interruptedBySteer: false };
+      });
+      if (changed) {
+        void saveConversation(next, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, next as any);
+        }
+      }
+      return changed ? next : prev;
+    });
   }
 
   async function steerMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
@@ -5327,15 +5457,6 @@ export function StandaloneChat({
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
 
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: trimmed,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
-      timestamp: Date.now(),
-    };
-
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
     if (followUpAbortRef.current) {
@@ -5343,37 +5464,15 @@ export function StandaloneChat({
       followUpAbortRef.current = null;
     }
     lastUserMessageRef.current = trimmed;
-
-    setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
+    pendingNextPiUserIntentRef.current = "steer";
+    pendingNextPiUserDisplayRef.current = {
+      preview: queuedPreviewForText(trimmed),
+      images: [...outgoingImages],
+      ...(displayLabel ? { displayContent: displayLabel } : {}),
+    };
+    markCurrentAssistantInterrupted();
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
-
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
 
     const piImages = imageDataUrlsToPiImages(outgoingImages);
     if (shouldClearPastedImages) setPastedImages([]);
@@ -5385,9 +5484,15 @@ export function StandaloneChat({
         piImages.length > 0 ? piImages : null,
       );
       if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        clearCurrentAssistantInterrupted();
         toast({ title: "failed to steer message", description: result.error, variant: "destructive" });
       }
     } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      clearCurrentAssistantInterrupted();
       console.warn("[Pi] failed to steer message:", e);
       toast({
         title: "failed to steer message",
@@ -5398,22 +5503,53 @@ export function StandaloneChat({
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    const queuedPayload = queuedPayloadBySession[currentQueueSessionId]?.[prompt.id];
-
-    const cancelled = await cancelQueuedPrompt(prompt, { silent: true });
-    if (!cancelled) {
+    setQueuedActionPromptId(prompt.id);
+    const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+    try {
+      pendingNextPiUserIntentRef.current = "steer";
+      pendingNextPiUserDisplayRef.current = queuedDisplay;
+      markCurrentAssistantInterrupted();
+      const result = await commands.piSteerQueued(piSessionIdRef.current, prompt.id);
+      if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
+        return;
+      }
+      if (!result.data) {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({
+          title: "message already started",
+          description: "That follow-up has moved out of the queue.",
+        });
+        return;
+      }
+      if (currentQueueSessionId) {
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+      }
+    } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+      clearCurrentAssistantInterrupted();
       toast({
-        title: "message already started",
-        description: "That follow-up has moved out of the queue.",
+        title: "failed to steer queued message",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
       });
-      return;
+    } finally {
+      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
     }
-
-    await steerMessage(
-      queuedPayload?.content ?? prompt.preview,
-      queuedPayload?.displayContent,
-      queuedPayload?.images ?? [],
-    );
   }
 
   // Keep ref in sync so useEffect callbacks can call sendMessage
@@ -5846,7 +5982,9 @@ export function StandaloneChat({
               if (!m.content && !m.contentBlocks?.length) return false;
               return true;
             })
-            .map((message) => (
+            .map((message) => {
+              const intentLabel = getMessageIntentLabel(message);
+              return (
             <motion.div
               key={message.id}
               initial={{ opacity: 0, y: 10 }}
@@ -5868,6 +6006,16 @@ export function StandaloneChat({
                     : "items-start w-full"
                 )}
               >
+              {intentLabel ? (
+                <div
+                  className={cn(
+                    "mb-1 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80",
+                    message.role === "user" ? "text-right" : "text-left"
+                  )}
+                >
+                  {intentLabel}
+                </div>
+              ) : null}
               <div
                 onMouseDown={(e) => {
                   if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
@@ -6039,7 +6187,8 @@ export function StandaloneChat({
                 </div>
               </div>
             </motion.div>
-          ))}
+              );
+            })}
         </AnimatePresence>
         <AnimatePresence>
           {isLoading && (() => {

@@ -893,6 +893,19 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
 }
 },
 /**
+ * Queue a follow-up prompt for the current session. Unlike `pi_prompt`, this
+ * returns as soon as Rust owns the queued item; the prompt is written only
+ * after the active turn finishes.
+ */
+async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Steer the active Pi reply using Pi's native steering command.
  * Unlike `pi_prompt`, this is intentionally not added to the follow-up queue:
  * Pi interrupts the current stream and resumes with the steering instruction.
@@ -900,6 +913,19 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
 async piSteer(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_steer", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Promote a queued follow-up into Pi's native steer path. The prompt is
+ * removed from the Rust queue first, so it cannot later run as a normal
+ * follow-up.
+ */
+async piSteerQueued(sessionId: string | null, promptId: string) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_steer_queued", { sessionId, promptId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
