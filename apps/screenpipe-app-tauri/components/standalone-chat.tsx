@@ -7001,38 +7001,9 @@ export function StandaloneChat({
               {(() => {
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0;
                 const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
-                const isSteerMode = primaryAction === "steer";
                 const isStopMode = primaryAction === "stop";
                 return (
                   <>
-                    {isSteerMode && (
-                      <TooltipProvider delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              disabled={!canChat}
-                              onClick={() => queueFollowUpMessage(input.trim())}
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/60 relative"
-                              aria-label="queue follow-up after current reply"
-                              title="queue follow-up after current reply"
-                            >
-                              <Clock className="h-3.5 w-3.5" />
-                              {displayedQueuedPrompts.length > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-muted text-foreground text-[9px] font-mono font-semibold flex items-center justify-center border border-background">
-                                  {displayedQueuedPrompts.length}
-                                </span>
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">
-                            Queue follow-up after current reply
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                     <Button
                       type={isStopMode ? "button" : "submit"}
                       size="icon"
@@ -7045,22 +7016,16 @@ export function StandaloneChat({
                       title={
                         isStopMode
                           ? "stop"
-                          : isSteerMode
-                            ? "queue follow-up"
-                            : "send"
+                          : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
-                          : isSteerMode
-                            ? "queue follow-up"
-                            : "send message"
+                          : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
-                      ) : isSteerMode ? (
-                        <Clock className="h-4 w-4" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}
