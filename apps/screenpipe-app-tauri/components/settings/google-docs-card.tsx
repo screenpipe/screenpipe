@@ -10,6 +10,7 @@ import { Loader2, RefreshCw, LogOut, ExternalLink, FileText, Lock } from "lucide
 import { commands } from "@/lib/utils/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
@@ -82,6 +83,7 @@ export function GoogleDocsCard() {
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_docs_connected");
         await fetchStatus();
+        notifyConnectionsUpdated();
       }
     } catch (e) {
       console.error("google docs oauth failed:", e);
@@ -97,6 +99,7 @@ export function GoogleDocsCard() {
       setEmail(null);
       setRecentDocs([]);
       posthog.capture("google_docs_disconnected");
+      notifyConnectionsUpdated();
     } catch (e) {
       console.error("failed to disconnect google docs:", e);
     }

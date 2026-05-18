@@ -16,6 +16,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
@@ -181,6 +182,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
         try {
           localStorage?.setItem("google-calendar-enabled", "true");
         } catch {}
+        notifyConnectionsUpdated();
         onConnected?.();
       }
     } catch (e) {
@@ -199,6 +201,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
       setAccounts(remainingAccounts);
       await fetchStatus();
       posthog.capture("google_calendar_disconnected");
+      notifyConnectionsUpdated();
       if (remainingAccounts.length === 0) {
         onDisconnected?.();
       } else {

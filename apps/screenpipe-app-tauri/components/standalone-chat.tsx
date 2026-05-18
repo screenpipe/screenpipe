@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
+import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
@@ -59,10 +59,11 @@ import {
   formatShortcutDisplay,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
-import { SummaryCards } from "@/components/chat/summary-cards";
+import { SummaryCards, type ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
 import {
   formatSourceCitationsMarkdown,
   sourceCitationsFromMessage,
@@ -123,6 +124,25 @@ type ConnectedIntegration = {
   category?: string;
   description?: string;
 };
+
+type ConnectionListItem = ConnectedIntegration & { connected: boolean };
+type ActivityAppItem = { name: string; count: number; app_name?: string };
+
+function normalizeConnectionForPlatform<T extends ConnectedIntegration>(connection: T, isWindows: boolean): T {
+  if (isWindows && connection.id === "apple-calendar") {
+    return {
+      ...connection,
+      name: "Windows Calendar",
+      icon: "windows-calendar",
+    };
+  }
+  return connection;
+}
+
+function connectionMentionTag(connection: ConnectedIntegration, isWindows: boolean) {
+  if (isWindows && connection.id === "apple-calendar") return "@windows-calendar";
+  return `@${connection.id}`;
+}
 
 type PreviewCalendarEvent = {
   title?: string;
@@ -385,6 +405,95 @@ function mergeConnectionSuggestions(
   });
 
   return rotateVisible(deduped);
+}
+
+function setupDescriptionForConnection(connection: ConnectionListItem): string {
+  const lower = `${connection.id} ${connection.name} ${connection.category ?? ""}`.toLowerCase();
+  if (lower.includes("gmail") || lower.includes("email")) return "Bring email into chat";
+  if (lower.includes("slack")) return "Search team threads";
+  if (lower.includes("github")) return "Use repos and issues";
+  if (lower.includes("linear") || lower.includes("jira")) return "Track project work";
+  if (lower.includes("calendar")) return "Prep from events";
+  if (lower.includes("notion") || lower.includes("docs") || lower.includes("obsidian")) return "Search your docs";
+  if (lower.includes("browser")) return "Read current pages";
+  return connection.description ? compactSuggestionPart(connection.description, 34) : "Add more context";
+}
+
+function buildConnectionSetupSuggestions(
+  connections: ConnectionListItem[],
+  appItems: ActivityAppItem[]
+): ConnectionSetupSuggestion[] {
+  const fallbackConnectionOrder = [
+    "gmail",
+    "slack",
+    "github",
+    "github-issues",
+    "linear",
+    "google-calendar",
+    "notion",
+    "google-docs",
+    "obsidian",
+    "jira",
+    "google-sheets",
+  ];
+
+  const fallbackRank = (connection: ConnectionListItem) => {
+    const keys = [connection.id, connection.icon, connection.name]
+      .filter((key): key is string => Boolean(key))
+      .map((key) => key.toLowerCase());
+    const index = fallbackConnectionOrder.findIndex((preferred) =>
+      keys.some((key) => key === preferred || key.includes(preferred))
+    );
+    return index === -1 ? fallbackConnectionOrder.length : index;
+  };
+
+  const activityAffinity = (connection: ConnectionListItem) => {
+    const connectionText = `${connection.id} ${connection.name} ${connection.category ?? ""}`.toLowerCase();
+    const connectionParts = connectionText.split(/[\s_-]+/).filter((part) => part.length > 3);
+
+    return appItems.reduce(
+      (match, item, index) => {
+        const appText = `${item.name} ${item.app_name ?? ""}`.toLowerCase();
+        if (!appText) return match;
+
+        const isMatch =
+          appText.includes(connection.id.toLowerCase()) ||
+          appText.includes(connection.name.toLowerCase()) ||
+          connectionParts.some((part) => appText.includes(part));
+
+        if (!isMatch) return match;
+
+        return {
+          count: match.count + item.count,
+          firstSeenIndex: Math.min(match.firstSeenIndex, index),
+        };
+      },
+      { count: 0, firstSeenIndex: Number.MAX_SAFE_INTEGER }
+    );
+  };
+
+  return connections
+    .filter((connection) => !connection.connected && connection.id !== "owned-default")
+    .map((connection) => {
+      return {
+        suggestion: {
+          id: connection.id,
+          title: `Connect ${connection.name || connection.id}`,
+          description: setupDescriptionForConnection(connection),
+          icon: connection.icon || connection.id,
+        },
+        activity: activityAffinity(connection),
+        fallbackRank: fallbackRank(connection),
+      };
+    })
+    .sort((a, b) =>
+      b.activity.count - a.activity.count ||
+      a.activity.firstSeenIndex - b.activity.firstSeenIndex ||
+      a.fallbackRank - b.fallbackRank ||
+      a.suggestion.title.localeCompare(b.suggestion.title)
+    )
+    .slice(0, 2)
+    .map((entry) => entry.suggestion);
 }
 
 interface Speaker {
@@ -1653,6 +1762,9 @@ function ConnectionToolIcon({ name }: { name: string }) {
   if (key === "connections") {
     return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="connections" />;
   }
+  if (key === "windows-calendar") {
+    return <Calendar className="w-3.5 h-3.5 text-muted-foreground" aria-label="Windows Calendar" />;
+  }
   if (key === "gmail") {
     return (
       <svg viewBox="0 0 999.517 749.831" className="w-3.5 h-3.5" aria-label="Gmail">
@@ -2471,7 +2583,7 @@ export function StandaloneChat({
   hideInlineHistory?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
-  const { isMac } = usePlatform();
+  const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   // Drop the macOS traffic-light reservation when the window is fullscreen
   // (the buttons hide). Only relevant in standalone mode (no parent
   // className) — the embedded variant is below the host's chrome anyway.
@@ -2483,8 +2595,38 @@ export function StandaloneChat({
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
+  const [allConnectionItems, setAllConnectionItems] = useState<ConnectionListItem[]>([]);
   const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
   const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
+  const connectionSetupSuggestions = React.useMemo(
+    () => buildConnectionSetupSuggestions(allConnectionItems, appItems),
+    [allConnectionItems, appItems]
+  );
+  const refreshConnectionState = React.useCallback(async () => {
+    if (isPlatformLoading) return;
+    try {
+      const res = await localFetch("/connections");
+      if (!res.ok) return;
+      const json = (await res.json()) as { data?: ConnectionListItem[] };
+      const allConnections = (json.data ?? []).map((connection) =>
+        normalizeConnectionForPlatform(connection, isWindows)
+      );
+      const connectedConnections = allConnections
+        .filter((connection) => connection.connected)
+        .map((connection) => ({
+          id: connection.id,
+          name: connection.name,
+          icon: connection.icon,
+          category: connection.category,
+          description: connection.description,
+        }));
+
+      setAllConnectionItems(allConnections);
+      setConnections(connectedConnections);
+    } catch {
+      // silent — connection-aware UI simply won't surface stale data
+    }
+  }, [isPlatformLoading, isWindows]);
   const visibleSuggestionSignature = React.useMemo(
     () =>
       [...autoSuggestions, ...connectionPreviewSuggestions]
@@ -2513,49 +2655,25 @@ export function StandaloneChat({
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await localFetch("/connections");
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
-        };
-        const list = (json.data ?? [])
-          .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
-        if (!cancelled) setConnections(list);
-      } catch {
-        // silent — filter just won't surface connections, no UI regression
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void refreshConnectionState();
+  }, [refreshConnectionState]);
 
   // Re-fetch connections whenever the window becomes visible — picks up any
   // integrations connected in Settings while the chat was open.
   useEffect(() => {
-    const fetchConnections = async () => {
-      try {
-        const res = await localFetch("/connections");
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          data?: Array<{ id: string; name: string; icon?: string; connected: boolean; category?: string; description?: string }>;
-        };
-        const list = (json.data ?? [])
-          .filter((c) => c.connected)
-          .map((c) => ({ id: c.id, name: c.name, icon: c.icon, category: c.category, description: c.description }));
-        setConnections(list);
-      } catch { /* silent */ }
-    };
     const onVisible = () => {
-      if (document.visibilityState === "visible") fetchConnections();
+      if (document.visibilityState === "visible") void refreshConnectionState();
     };
+    const onFocus = () => void refreshConnectionState();
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, []);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener(CONNECTIONS_UPDATED_EVENT, onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(CONNECTIONS_UPDATED_EVENT, onFocus);
+    };
+  }, [refreshConnectionState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2795,6 +2913,10 @@ export function StandaloneChat({
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
   );
+
+  useEffect(() => {
+    void refreshConnectionState();
+  }, [conversationId, refreshConnectionState]);
 
   const cancelStreamingMessageRender = useCallback(() => {
     if (streamRenderTimerRef.current) {
@@ -6335,7 +6457,7 @@ export function StandaloneChat({
               connections
             </div>
             {connections.map((c) => {
-              const tag = `@${c.id}`;
+              const tag = connectionMentionTag(c, isWindows);
               return (
                 <button
                   key={`conn-${c.id}`}
@@ -6719,6 +6841,7 @@ export function StandaloneChat({
           <SummaryCards
             onSendMessage={sendMessage}
             onOpenConnection={openConnectionSetup}
+            connectionSetupSuggestions={connectionSetupSuggestions}
             autoSuggestions={connectionAwareSuggestions}
             suggestionsRefreshing={suggestionsRefreshing}
             onRefreshSuggestions={refreshVisibleSuggestions}
