@@ -4933,9 +4933,9 @@ impl DatabaseManager {
     pub async fn delete_speaker(&self, id: i64) -> Result<(), sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
 
-        // Collect orphaned chunk IDs before deleting transcriptions (FK: transcriptions -> chunks)
-        let orphan_chunk_ids: Vec<(i64,)> = sqlx::query_as(
-            "SELECT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ? AND start_time IS NULL"
+        // Collect candidate chunk IDs before deleting transcriptions
+        let candidate_chunk_ids: Vec<(i64,)> = sqlx::query_as(
+            "SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ?",
         )
         .bind(id)
         .fetch_all(&mut **tx.conn())
@@ -4965,12 +4965,16 @@ impl DatabaseManager {
             debug!("Successfully deleted {} for speaker {}", operation, id);
         }
 
-        // Now delete orphaned chunks (no longer referenced by transcriptions)
-        for (chunk_id,) in &orphan_chunk_ids {
-            if let Err(e) = sqlx::query("DELETE FROM audio_chunks WHERE id = ?")
-                .bind(chunk_id)
-                .execute(&mut **tx.conn())
-                .await
+        // Delete only orphaned chunks (not referenced by any remaining transcription)
+        for (chunk_id,) in &candidate_chunk_ids {
+            if let Err(e) = sqlx::query(
+                "DELETE FROM audio_chunks WHERE id = ? \
+                 AND NOT EXISTS (SELECT 1 FROM audio_transcriptions WHERE audio_chunk_id = ?)",
+            )
+            .bind(chunk_id)
+            .bind(chunk_id)
+            .execute(&mut **tx.conn())
+            .await
             {
                 error!("Failed to delete audio chunk {} for speaker {}: {}", chunk_id, id, e);
                 return Err(e);
