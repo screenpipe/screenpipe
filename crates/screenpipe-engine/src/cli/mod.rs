@@ -428,6 +428,28 @@ pub struct RecordArgs {
     #[arg(long)]
     pub min_capture_interval_ms: Option<u64>,
 
+    /// Prioritize mouse/keyboard input latency over a11y event metadata completeness.
+    /// When enabled, three opt-in optimizations are activated together:
+    ///   1. mouse/keyboard hook locks switch to try_lock (contended → app_name/window=None)
+    ///   2. a11y extraction threads self-deprioritize via SetThreadPriority
+    ///   3. UIA tree captures are skipped within N ms after the most recent input
+    /// Fine-tune via --extraction-thread-priority and --pause-extraction-on-input-ms.
+    #[arg(long, default_value_t = false)]
+    pub prioritize_input_latency: bool,
+
+    /// OS thread priority for a11y extraction threads when --prioritize-input-latency is set.
+    /// Lower values yield CPU more aggressively to user input threads. Ignored otherwise.
+    /// Values: "normal" / "below_normal" / "lowest" / "idle".
+    #[arg(long, default_value = "below_normal")]
+    pub extraction_thread_priority: String,
+
+    /// Skip UIA tree captures within this many ms after the most recent mouse/keyboard input.
+    /// 0 disables. Ignored when --prioritize-input-latency is off.
+    /// Captures immediately after input are likely to be stale (next input is imminent),
+    /// so skipping costs little data and frees CPU for input responsiveness.
+    #[arg(long, default_value_t = 150)]
+    pub pause_extraction_on_input_ms: u64,
+
     /// Enable cloud sync
     #[arg(long, default_value_t = false)]
     pub enable_sync: bool,
@@ -701,6 +723,9 @@ impl RecordArgs {
             visual_check_interval_ms: self.visual_check_interval_ms,
             visual_change_threshold: self.visual_change_threshold,
             min_capture_interval_ms: self.min_capture_interval_ms,
+            prioritize_input_latency: self.prioritize_input_latency,
+            extraction_thread_priority: self.extraction_thread_priority.clone(),
+            pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,

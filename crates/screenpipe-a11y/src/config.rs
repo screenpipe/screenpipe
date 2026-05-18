@@ -110,6 +110,61 @@ pub struct UiCaptureConfig {
     /// How often to walk the AX tree
     #[serde(skip)]
     pub tree_walk_interval: Duration,
+
+    /// Prioritize input latency over event metadata completeness. Opt-in master switch
+    /// for three coordinated optimizations (all active only when this is true):
+    ///   1. `mouse_hook_proc` / `keyboard_hook_proc` blocking locks → `try_lock` (fall back to None on contention)
+    ///   2. UIA worker / app observer threads run at lower OS priority (see `extraction_thread_priority`)
+    ///   3. UIA worker skips tree captures during a short window after any input (see `pause_extraction_on_input_ms`)
+    /// Intended for environments where users perceive mouse/keyboard lag and prefer
+    /// responsiveness over event completeness.
+    pub prioritize_input_latency: bool,
+
+    /// OS thread priority applied to a11y extraction threads (UIA worker, app observer)
+    /// when `prioritize_input_latency` is true. Lower values let user input threads
+    /// preempt extraction more aggressively. Ignored when `prioritize_input_latency` is false.
+    pub extraction_thread_priority: ExtractionThreadPriority,
+
+    /// Skip UIA tree captures within this many milliseconds after the most recent
+    /// mouse/keyboard input. 0 disables the skip (default 150ms when
+    /// `prioritize_input_latency` is true). Ignored when `prioritize_input_latency` is false.
+    /// Captures right after input are typically stale within ms anyway, so skipping
+    /// costs little signal while yielding CPU to input threads.
+    pub pause_extraction_on_input_ms: u64,
+}
+
+/// OS thread priority for a11y extraction threads.
+/// Maps to Windows `SetThreadPriority` constants; on non-Windows platforms this
+/// is recorded but currently has no effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionThreadPriority {
+    Normal,
+    BelowNormal,
+    Lowest,
+    Idle,
+}
+
+impl Default for ExtractionThreadPriority {
+    fn default() -> Self {
+        Self::BelowNormal
+    }
+}
+
+impl std::str::FromStr for ExtractionThreadPriority {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "normal" => Ok(Self::Normal),
+            "below_normal" | "below-normal" | "belownormal" => Ok(Self::BelowNormal),
+            "lowest" => Ok(Self::Lowest),
+            "idle" => Ok(Self::Idle),
+            other => Err(format!(
+                "invalid extraction thread priority '{}': expected normal|below_normal|lowest|idle",
+                other
+            )),
+        }
+    }
 }
 
 impl Default for UiCaptureConfig {
@@ -167,6 +222,11 @@ impl Default for UiCaptureConfig {
             // Tree walker
             enable_tree_walker: true,
             tree_walk_interval: Duration::from_secs(3),
+
+            // Opt-in. Default false preserves existing behavior.
+            prioritize_input_latency: false,
+            extraction_thread_priority: ExtractionThreadPriority::BelowNormal,
+            pause_extraction_on_input_ms: 150,
         }
     }
 }

@@ -152,6 +152,14 @@ pub struct RecordingConfig {
     pub visual_change_threshold: Option<f64>,
     pub min_capture_interval_ms: Option<u64>,
 
+    /// Prioritize input latency over a11y event completeness.
+    /// See `RecordingSettings.prioritize_input_latency` for details.
+    pub prioritize_input_latency: bool,
+    /// A11y extraction thread priority ("normal"/"below_normal"/"lowest"/"idle").
+    pub extraction_thread_priority: String,
+    /// Skip UIA tree captures within this many ms after the most recent input.
+    pub pause_extraction_on_input_ms: u64,
+
     /// Require authentication for remote (non-localhost) API access.
     /// When true, requests from other devices must include
     /// `Authorization: Bearer <SCREENPIPE_API_KEY>`.
@@ -295,6 +303,9 @@ impl RecordingConfig {
             visual_check_interval_ms: settings.visual_check_interval_ms,
             visual_change_threshold: settings.visual_change_threshold,
             min_capture_interval_ms: settings.min_capture_interval_ms,
+            prioritize_input_latency: settings.prioritize_input_latency,
+            extraction_thread_priority: settings.extraction_thread_priority.clone(),
+            pause_extraction_on_input_ms: settings.pause_extraction_on_input_ms,
             // LAN exposure is opt-in. We force `api_auth` on whenever
             // `listen_on_lan` is true so a user can never accidentally
             // publish an unauthenticated API on their local network. The
@@ -323,6 +334,11 @@ impl RecordingConfig {
             included_windows: self.included_windows.clone(),
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
+            // Input-latency tuning. `extraction_thread_priority` is parsed from its
+            // string form; an unrecognized value falls back to the enum default.
+            prioritize_input_latency: self.prioritize_input_latency,
+            extraction_thread_priority: self.extraction_thread_priority.parse().unwrap_or_default(),
+            pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             ..Default::default()
         }
     }

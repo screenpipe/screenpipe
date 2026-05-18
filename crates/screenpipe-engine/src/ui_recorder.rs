@@ -7,7 +7,7 @@
 //! Integrates screenpipe-a11y capture with the server's recording loop.
 
 use anyhow::Result;
-use screenpipe_a11y::{UiCaptureConfig, UiRecorder};
+use screenpipe_a11y::{ExtractionThreadPriority, UiCaptureConfig, UiRecorder};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -58,6 +58,15 @@ pub struct UiRecorderConfig {
     pub tree_walk_interval_ms: u64,
     /// Record input events to DB (false = still capture for wake signal but don't write)
     pub record_input_events: bool,
+    /// Prioritize input latency over event metadata completeness.
+    /// Maps to `UiCaptureConfig.prioritize_input_latency`. See that field for details.
+    pub prioritize_input_latency: bool,
+    /// OS thread priority for a11y extraction threads (UIA worker, app observer)
+    /// when `prioritize_input_latency` is true. Ignored otherwise.
+    pub extraction_thread_priority: ExtractionThreadPriority,
+    /// Skip UIA tree captures within this many ms after the most recent
+    /// mouse/keyboard input. 0 disables. Ignored when `prioritize_input_latency` is false.
+    pub pause_extraction_on_input_ms: u64,
 }
 
 impl Default for UiRecorderConfig {
@@ -83,6 +92,9 @@ impl Default for UiRecorderConfig {
             enable_tree_walker: true,
             tree_walk_interval_ms: 3000,
             record_input_events: true,
+            prioritize_input_latency: false,
+            extraction_thread_priority: ExtractionThreadPriority::BelowNormal,
+            pause_extraction_on_input_ms: 150,
         }
     }
 }
@@ -102,6 +114,9 @@ impl UiRecorderConfig {
         config.capture_window_focus = self.capture_window_focus;
         config.capture_scroll = self.capture_scroll;
         config.capture_context = self.capture_context;
+        config.prioritize_input_latency = self.prioritize_input_latency;
+        config.extraction_thread_priority = self.extraction_thread_priority;
+        config.pause_extraction_on_input_ms = self.pause_extraction_on_input_ms;
 
         // Add excluded apps
         for app in &self.excluded_apps {
