@@ -825,7 +825,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                       onClick={() => setV20CookieBlock(null)}
                       className="w-full"
                     >
-                      Dismiss
+                      Continue without signing in
                     </Button>
                   </div>
                 </div>

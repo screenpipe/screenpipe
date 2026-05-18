@@ -1110,6 +1110,16 @@ async fn browser_session_decision_for_url(
         return BrowserSessionDecision::UseBrowserSession;
     }
 
+    // On Windows there is no OS-level permission dialog (unlike macOS Keychain),
+    // so we don't need an explicit consent step. DPAPI cookies inject silently;
+    // if they are v20-encrypted inject_cookies_for_url will show the single
+    // "Browser login is protected" card which already acts as consent + setup.
+    // SESSION_ACCESS_ALLOWED is a macOS-only concept (remembers "user clicked
+    // allow" to skip the Keychain consent dialog next time) — we don't store
+    // anything on Windows because there is no dialog to skip.
+    #[cfg(target_os = "windows")]
+    return BrowserSessionDecision::UseBrowserSession;
+
     // Agent may navigate the same host repeatedly while the first prompt is open.
     let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
     loop {
