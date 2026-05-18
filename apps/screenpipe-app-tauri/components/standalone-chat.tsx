@@ -2639,13 +2639,13 @@ export function StandaloneChat({
   // select (let the browser select text — don't swallow it).
   const pendingEditDownXYRef = useRef<{ x: number; y: number } | null>(null);
 
-  const enterEditMode = useCallback((message: Message, caretPos?: number) => {
+  const enterEditMode = (message: Message, caretPos?: number) => {
     setEditDraft(message.content);
     pendingCaretRef.current = caretPos ?? message.content.length;
     setEditingMessageId(message.id);
-  }, []);
+  };
 
-  const commitEditedMessage = useCallback((message: Message, draft: string) => {
+  const commitEditedMessage = (message: Message, draft: string) => {
     const trimmed = draft.trim();
     setEditingMessageId(null);
     pendingCaretRef.current = null;
@@ -2654,7 +2654,7 @@ export function StandaloneChat({
     if (idx === -1) return;
     setMessages((prev) => prev.slice(0, idx));
     sendMessage(trimmed, message.displayContent);
-  }, [messages, sendMessage]);
+  };
 
   // Given a click on a rendered message bubble, compute the character offset
   // into `content` that corresponds to where the user clicked. Falls back to
