@@ -5824,6 +5824,17 @@ export function StandaloneChat({
     return sendPiMessage(userMessage, displayLabel);
   }
 
+  const openConnectionSetup = useCallback((connectionId: string) => {
+    window.dispatchEvent(
+      new CustomEvent("open-settings", {
+        detail: {
+          section: "connections",
+          connectionId: connectionId === "connections" ? null : connectionId,
+        },
+      }),
+    );
+  }, []);
+
   async function queueFollowUpMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
     return enqueuePiMessage(userMessage, displayLabel);
@@ -6707,6 +6718,7 @@ export function StandaloneChat({
         {messages.length === 0 && !isPreparingPrefill && hasPresets && hasValidModel && (
           <SummaryCards
             onSendMessage={sendMessage}
+            onOpenConnection={openConnectionSetup}
             autoSuggestions={connectionAwareSuggestions}
             suggestionsRefreshing={suggestionsRefreshing}
             onRefreshSuggestions={refreshVisibleSuggestions}

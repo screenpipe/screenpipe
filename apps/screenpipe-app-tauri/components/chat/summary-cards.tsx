@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw, X } from "lucide-react";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { FALLBACK_TEMPLATES, type CustomTemplate } from "@/lib/summary-templates";
@@ -14,6 +14,7 @@ import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
+  onOpenConnection?: (connectionId: string) => void;
   autoSuggestions: Suggestion[];
   suggestionsRefreshing?: boolean;
   onRefreshSuggestions?: () => void;
@@ -156,6 +157,17 @@ function ConnectionSuggestionIcon({ name }: { name: string }) {
     );
   }
 
+  if (key === "slack") {
+    return (
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 flex-shrink-0" aria-hidden>
+        <path fill="#36C5F0" d="M8.8 14.2a2.2 2.2 0 1 1-2.2-2.2h2.2v2.2zM9.9 14.2a2.2 2.2 0 0 1 4.4 0v5.5a2.2 2.2 0 1 1-4.4 0v-5.5z" />
+        <path fill="#2EB67D" d="M9.9 8.8a2.2 2.2 0 1 1 2.2 2.2H9.9V8.8zM9.9 7.7a2.2 2.2 0 0 1 0-4.4h5.5a2.2 2.2 0 1 1 0 4.4H9.9z" />
+        <path fill="#ECB22E" d="M15.2 7.7a2.2 2.2 0 1 1 2.2 2.2h-2.2V7.7zM14.1 7.7a2.2 2.2 0 0 1-4.4 0V2.2a2.2 2.2 0 1 1 4.4 0v5.5z" />
+        <path fill="#E01E5A" d="M14.1 13.1a2.2 2.2 0 1 1-2.2-2.2h2.2v2.2zM14.1 14.2a2.2 2.2 0 0 1 4.4 0v5.5a2.2 2.2 0 1 1-4.4 0v-5.5z" />
+      </svg>
+    );
+  }
+
   if (path) {
     return <img src={path} alt="" className="w-3.5 h-3.5 flex-shrink-0 object-contain" />;
   }
@@ -173,6 +185,7 @@ function ConnectionSuggestionIcon({ name }: { name: string }) {
 
 export function SummaryCards({
   onSendMessage,
+  onOpenConnection,
   autoSuggestions,
   suggestionsRefreshing = false,
   onRefreshSuggestions,
@@ -185,6 +198,7 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [dismissedConnectionSuggestionIds, setDismissedConnectionSuggestionIds] = useState<string[]>([]);
 
   const templates = templatePipes.length > 0 ? templatePipes : FALLBACK_TEMPLATES;
   const featured = templates.filter((t) => t.featured);
@@ -196,6 +210,21 @@ export function SummaryCards({
 
   const handleCustomTemplateClick = (template: CustomTemplate) => {
     onSendMessage(template.prompt, `\u{1F4CC} ${template.title}`);
+  };
+
+  const connectionSetupSuggestions = [
+    { id: "gmail", label: "Connect Gmail", icon: "gmail" },
+    { id: "slack", label: "Connect Slack", icon: "slack" },
+    { id: "connections", label: "Connect your favorite apps to screenpipe", icon: "connections" },
+  ];
+  const visibleConnectionSetupSuggestions = connectionSetupSuggestions.filter(
+    (suggestion) => !dismissedConnectionSuggestionIds.includes(suggestion.id),
+  );
+
+  const dismissConnectionSuggestion = (id: string) => {
+    setDismissedConnectionSuggestionIds((prev) => (
+      prev.includes(id) ? prev : [...prev, id]
+    ));
   };
 
   return (
@@ -327,6 +356,40 @@ export function SummaryCards({
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {onOpenConnection && visibleConnectionSetupSuggestions.length > 0 && (
+        <div className="w-full max-w-lg mb-3">
+          {visibleConnectionSetupSuggestions.map((connection, index) => (
+            <div
+              key={connection.id}
+              className={`group flex min-h-[38px] items-center ${index < visibleConnectionSetupSuggestions.length - 1 ? "border-b border-border/45" : ""}`}
+            >
+              <button
+                type="button"
+                onClick={() => onOpenConnection(connection.id)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left font-mono text-muted-foreground transition-colors duration-150 group-hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+              >
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                  {connection.icon === "connections"
+                    ? <Plug className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
+                    : <ConnectionSuggestionIcon name={connection.icon} />}
+                </span>
+                <span className="min-w-0 flex-1 text-xs leading-tight transition-[font-weight] duration-150 group-hover:font-medium group-focus-within:font-medium">
+                  {connection.label}
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label={`dismiss ${connection.label}`}
+                onClick={() => dismissConnectionSuggestion(connection.id)}
+                className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground/70 opacity-0 transition-all duration-150 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+              >
+                <X className="h-3.5 w-3.5" strokeWidth={1.6} aria-hidden />
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

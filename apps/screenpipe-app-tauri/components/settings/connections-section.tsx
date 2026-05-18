@@ -1875,7 +1875,12 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 // Main connections section
 // ---------------------------------------------------------------------------
 
-export function ConnectionsSection() {
+interface ConnectionsSectionProps {
+  focusConnectionId?: string | null;
+  focusRequestId?: number;
+}
+
+export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
@@ -1889,6 +1894,11 @@ export function ConnectionsSection() {
     sessionStorage.removeItem("openConnection");
     setSelected(pending);
   }, []);
+
+  useEffect(() => {
+    if (!focusRequestId) return;
+    setSelected(focusConnectionId || null);
+  }, [focusConnectionId, focusRequestId]);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
