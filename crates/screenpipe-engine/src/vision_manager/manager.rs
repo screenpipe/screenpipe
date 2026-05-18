@@ -524,6 +524,10 @@ mod tests {
             pause_on_drm_content: false,
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),
+            idle_capture_interval_ms: None,
+            visual_check_interval_ms: None,
+            visual_change_threshold: None,
+            min_capture_interval_ms: None,
         };
         VisionManager::new(config, db, Handle::current())
     }
