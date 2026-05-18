@@ -5753,10 +5753,8 @@ dependencies = [
  "screenpipe-a11y",
  "screenpipe-core",
  "screenpipe-screen",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

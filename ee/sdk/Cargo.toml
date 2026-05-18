@@ -13,10 +13,8 @@ crate-type = ["cdylib"]
 napi = { version = "2", default-features = false, features = ["napi4", "async"] }
 napi-derive = "2"
 anyhow = "1"
-thiserror = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # PNG encoding for frames before handing them to ffmpeg's image2pipe demuxer
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 

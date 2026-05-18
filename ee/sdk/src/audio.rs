@@ -75,35 +75,65 @@ fn build_and_run_stream(level_bits: &'static AtomicU32) -> Result<cpal::Stream> 
 
     let err_fn = |e| tracing::warn!("screenpipe-sdk mic stream err: {e}");
     let stream = match sample_format {
-        SampleFormat::F32 => device.build_input_stream(
+        SampleFormat::F32 => build_cpal_input_stream::<f32, _, _>(
+            &device,
             &stream_config,
             move |data: &[f32], _| push_rms(data, level_bits),
             err_fn,
-            None,
         ),
-        SampleFormat::I16 => device.build_input_stream(
+        SampleFormat::I16 => build_cpal_input_stream::<i16, _, _>(
+            &device,
             &stream_config,
             move |data: &[i16], _| {
                 let f: Vec<f32> = data.iter().map(|s| s.to_sample::<f32>()).collect();
                 push_rms(&f, level_bits);
             },
             err_fn,
-            None,
         ),
-        SampleFormat::U16 => device.build_input_stream(
+        SampleFormat::U16 => build_cpal_input_stream::<u16, _, _>(
+            &device,
             &stream_config,
             move |data: &[u16], _| {
                 let f: Vec<f32> = data.iter().map(|s| s.to_sample::<f32>()).collect();
                 push_rms(&f, level_bits);
             },
             err_fn,
-            None,
         ),
         other => return Err(anyhow!("unsupported sample format: {other:?}")),
     }
     .context("build_input_stream")?;
     stream.play().context("stream.play")?;
     Ok(stream)
+}
+
+#[cfg(target_os = "macos")]
+fn build_cpal_input_stream<T, D, E>(
+    device: &cpal::Device,
+    stream_config: &cpal::StreamConfig,
+    data_callback: D,
+    error_callback: E,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: cpal::SizedSample,
+    D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
+    E: FnMut(cpal::StreamError) + Send + 'static,
+{
+    device.build_input_stream(stream_config, data_callback, error_callback, None, None)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_cpal_input_stream<T, D, E>(
+    device: &cpal::Device,
+    stream_config: &cpal::StreamConfig,
+    data_callback: D,
+    error_callback: E,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: cpal::SizedSample,
+    D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
+    E: FnMut(cpal::StreamError) + Send + 'static,
+{
+    device.build_input_stream(stream_config, data_callback, error_callback, None)
 }
 
 fn push_rms(samples: &[f32], level_bits: &AtomicU32) {
@@ -179,10 +209,7 @@ mod tests {
         push_rms(&samples, &bits);
         let l = level(&bits);
         let expected = 0.7 * std::f32::consts::FRAC_1_SQRT_2;
-        assert!(
-            (l - expected).abs() < 0.02,
-            "got {l}, expected {expected}"
-        );
+        assert!((l - expected).abs() < 0.02, "got {l}, expected {expected}");
     }
 
     #[test]
@@ -230,7 +257,10 @@ mod tests {
             prev = now;
         }
         // After many iterations we should be very close to the true RMS (0.3).
-        assert!((prev - 0.3).abs() < 0.01, "converged to {prev}, expected ~0.3");
+        assert!(
+            (prev - 0.3).abs() < 0.01,
+            "converged to {prev}, expected ~0.3"
+        );
     }
 
     #[test]
@@ -245,4 +275,3 @@ mod tests {
         assert!(diff < 1e-4, "±dc produced different RMS: {diff}");
     }
 }
-
