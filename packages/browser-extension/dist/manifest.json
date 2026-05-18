@@ -14,7 +14,8 @@
     "tabs",
     "alarms",
     "storage",
-    "notifications"
+    "notifications",
+    "cookies"
   ],
   "host_permissions": [
     "<all_urls>"

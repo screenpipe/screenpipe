@@ -30,7 +30,7 @@
 //! back to "all Active" automatically via the Null tracker + Unknown event
 //! path — no opt-out needed.
 
-use crate::focus_tracker::{FocusEvent, FocusTracker};
+use crate::focus_tracker::{FocusEvent, FocusTracker, MonitorIdentity};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -62,13 +62,30 @@ const WARM_CUTOFF: Duration = Duration::from_millis(2_000);
 /// Time in Warm before dropping to Cold.
 const COLD_CUTOFF: Duration = Duration::from_millis(60_000);
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MonitorKey {
+    Stable(String),
+    RuntimeId(u32),
+}
+
+impl MonitorKey {
+    fn from_identity(identity: &MonitorIdentity) -> Self {
+        identity
+            .stable_id
+            .as_ref()
+            .filter(|stable_id| !stable_id.is_empty())
+            .map(|stable_id| Self::Stable(stable_id.clone()))
+            .unwrap_or(Self::RuntimeId(identity.id))
+    }
+}
+
 pub struct FocusAwareController {
     tracker: Arc<dyn FocusTracker>,
     /// When each monitor last held focus. `Instant` = the moment it *lost*
     /// focus. A monitor that's never been focused is absent from the map.
-    last_focus_time: Mutex<HashMap<u32, Instant>>,
-    /// Currently focused monitor id, or `None` if unknown.
-    current_focus: Mutex<Option<u32>>,
+    last_focus_time: Mutex<HashMap<MonitorKey, Instant>>,
+    /// Currently focused monitor identity, or `None` if unknown.
+    current_focus: Mutex<Option<MonitorIdentity>>,
     /// Wall-clock time the most recent focus/unknown event was received. If
     /// nothing arrives for `STALE_FOCUS_CUTOFF`, we treat the state as
     /// Unknown so all monitors stay Active (safe default).
@@ -114,8 +131,8 @@ impl FocusAwareController {
                     break;
                 }
                 match rx.recv().await {
-                    Ok(FocusEvent::Focused(id)) => {
-                        this.apply_focus(id);
+                    Ok(FocusEvent::Focused(identity)) => {
+                        this.apply_focus(identity);
                     }
                     Ok(FocusEvent::Unknown) => {
                         this.apply_unknown();
@@ -132,34 +149,34 @@ impl FocusAwareController {
         });
     }
 
-    fn apply_focus(&self, id: u32) {
+    fn apply_focus(&self, identity: MonitorIdentity) {
         let prev = {
             let mut current = self
                 .current_focus
                 .lock()
                 .expect("focus-aware current_focus mutex poisoned");
-            let prev = *current;
-            *current = Some(id);
+            let prev = current.clone();
+            *current = Some(identity.clone());
             prev
         };
 
         // Record the previous monitor's loss-of-focus instant.
-        if let Some(prev_id) = prev {
-            if prev_id != id {
+        if let Some(prev_identity) = prev {
+            if !prev_identity.matches(&identity) {
                 let mut times = self
                     .last_focus_time
                     .lock()
                     .expect("focus-aware last_focus_time mutex poisoned");
-                times.insert(prev_id, Instant::now());
+                times.insert(MonitorKey::from_identity(&prev_identity), Instant::now());
             }
         }
 
         self.touch_last_event();
 
-        // Wake the notify for the newly focused monitor so any Cold capture
-        // loop sleeping on it reactivates immediately.
-        let notify = self.notify_for(id);
-        notify.notify_waiters();
+        // A focused event may match a Cold loop by stable id even if the raw
+        // runtime id differs, so wake all monitor loops and let state() decide
+        // which one should become Active.
+        self.wake_all_monitors();
     }
 
     fn apply_unknown(&self) {
@@ -171,7 +188,7 @@ impl FocusAwareController {
             *current = None;
         }
         self.touch_last_event();
-        // No notify wake — all monitors fall back to Active anyway.
+        self.wake_all_monitors();
     }
 
     fn touch_last_event(&self) {
@@ -182,87 +199,73 @@ impl FocusAwareController {
 
     /// Query state for a monitor. Must be cheap — called on every capture
     /// loop iteration.
-    ///
-    /// **Currently short-circuited to always return `Active`.**
-    ///
-    /// Why: on fresh macOS installs (and likely other environments) the
-    /// classifier was keeping monitor 1 permanently in `Cold`, because the
-    /// Darwin focus tracker's reported monitor ids didn't always match the
-    /// `monitor_id` VisionManager uses. Result: the event-driven capture
-    /// loop blocked on the notify forever and no frames were ever written
-    /// to the DB — the UI sat on "building your memory…" indefinitely
-    /// (observed on v2.4.37 MBA fresh install: 3 frames in ~17 min of
-    /// runtime, zero after that session's restart).
-    ///
-    /// Disabling the pause-on-unfocused behavior via an early-return here
-    /// preserves all the focus-tracker scaffolding (subscribers, Darwin
-    /// observer, autorelease-pool fix in 8f8e1e819, etc.) without the
-    /// risk of a full revert touching multiple downstream commits. Once
-    /// the monitor-id mapping is properly reconciled between the focus
-    /// tracker and VisionManager, the body below can be reinstated.
-    ///
-    /// The rest of this function is kept intact (dead code) so the fix
-    /// can be reverted to "re-enable focus-aware" with a one-line diff.
-    pub fn state(&self, _monitor_id: u32) -> CaptureState {
-        return CaptureState::Active;
+    pub fn state_for_monitor(
+        &self,
+        monitor: &screenpipe_screen::monitor::SafeMonitor,
+    ) -> CaptureState {
+        self.state_for_identity(&MonitorIdentity::from_monitor(monitor))
+    }
 
-        #[allow(unreachable_code)]
-        {
-            let monitor_id = _monitor_id;
-            // Stale-focus safety: if no focus event has landed in 30s, assume
-            // the tracker stalled (native thread blocked, notifications dropped
-            // during sleep/wake, etc.) and treat everything as Active. Matches
-            // the Null-tracker all-Active fallback so a broken focus source
-            // never silently freezes capture on non-focused monitors.
-            let last_event_elapsed = self
-                .last_event_time
-                .lock()
-                .ok()
-                .map(|t| t.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0));
-            if last_event_elapsed >= STALE_FOCUS_CUTOFF {
-                return CaptureState::Active;
-            }
+    #[cfg(test)]
+    pub(crate) fn state(&self, monitor_id: u32) -> CaptureState {
+        self.state_for_identity(&MonitorIdentity::runtime_id(monitor_id))
+    }
 
-            // If focus is Unknown (no data yet), everything is Active — safest
-            // fallback. Preserves existing behaviour when the tracker can't
-            // resolve the cursor to a monitor.
-            let current = *self
-                .current_focus
-                .lock()
-                .expect("focus-aware current_focus mutex poisoned");
-            let Some(current_id) = current else {
-                return CaptureState::Active;
-            };
+    fn state_for_identity(&self, identity: &MonitorIdentity) -> CaptureState {
+        // Stale-focus safety: if no focus event has landed in 30s, assume
+        // the tracker stalled (native thread blocked, notifications dropped
+        // during sleep/wake, etc.) and treat everything as Active. Matches
+        // the Null-tracker all-Active fallback so a broken focus source
+        // never silently freezes capture on non-focused monitors.
+        let last_event_elapsed = self
+            .last_event_time
+            .lock()
+            .ok()
+            .map(|t| t.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+        if last_event_elapsed >= STALE_FOCUS_CUTOFF {
+            return CaptureState::Active;
+        }
 
-            if current_id == monitor_id {
-                return CaptureState::Active;
-            }
+        // If focus is Unknown (no data yet), everything is Active — safest
+        // fallback. Preserves existing behaviour when the tracker can't
+        // resolve the cursor to a monitor.
+        let current = self
+            .current_focus
+            .lock()
+            .expect("focus-aware current_focus mutex poisoned")
+            .clone();
+        let Some(current_identity) = current else {
+            return CaptureState::Active;
+        };
 
-            let last = self
-                .last_focus_time
-                .lock()
-                .expect("focus-aware last_focus_time mutex poisoned")
-                .get(&monitor_id)
-                .copied();
+        if current_identity.matches(identity) {
+            return CaptureState::Active;
+        }
 
-            match last {
-                // Never focused since controller start → Cold. The loop will
-                // block on the notify; once the cursor lands on this monitor
-                // (or focus becomes Unknown), state flips back to Active.
-                None => CaptureState::Cold,
-                Some(t) => {
-                    let elapsed = t.elapsed();
-                    if elapsed < WARM_CUTOFF {
-                        // Hysteresis: still feels "active" for a beat after
-                        // focus change to avoid stuttering during normal
-                        // window switching.
-                        CaptureState::Active
-                    } else if elapsed < COLD_CUTOFF {
-                        CaptureState::Warm
-                    } else {
-                        CaptureState::Cold
-                    }
+        let key = MonitorKey::from_identity(identity);
+        let last = self
+            .last_focus_time
+            .lock()
+            .expect("focus-aware last_focus_time mutex poisoned")
+            .get(&key)
+            .copied();
+
+        match last {
+            // Never focused since controller start → Cold. The loop will block
+            // on the notify; once focus lands on this monitor (or becomes
+            // Unknown), state flips back to Active.
+            None => CaptureState::Cold,
+            Some(t) => {
+                let elapsed = t.elapsed();
+                if elapsed < WARM_CUTOFF {
+                    // Hysteresis: still feels "active" for a beat after focus
+                    // change to avoid stuttering during normal window switching.
+                    CaptureState::Active
+                } else if elapsed < COLD_CUTOFF {
+                    CaptureState::Warm
+                } else {
+                    CaptureState::Cold
                 }
             }
         }
@@ -278,6 +281,14 @@ impl FocusAwareController {
         map.entry(monitor_id)
             .or_insert_with(|| Arc::new(Notify::new()))
             .clone()
+    }
+
+    fn wake_all_monitors(&self) {
+        if let Ok(map) = self.monitor_notifies.lock() {
+            for notify in map.values() {
+                notify.notify_waiters();
+            }
+        }
     }
 
     /// Shutdown. Stops the subscriber task and the underlying tracker.
@@ -299,7 +310,12 @@ impl FocusAwareController {
     // ── Test helpers ──────────────────────────────────────────────────
     #[cfg(test)]
     pub(crate) fn set_focus_for_test(&self, id: u32) {
-        self.apply_focus(id);
+        self.apply_focus(MonitorIdentity::runtime_id(id));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focus_identity_for_test(&self, identity: MonitorIdentity) {
+        self.apply_focus(identity);
     }
 
     #[cfg(test)]
@@ -311,11 +327,20 @@ impl FocusAwareController {
     /// Lets tests backdate state without blocking on wall-clock sleeps.
     #[cfg(test)]
     pub(crate) fn backdate_focus_for_test(&self, monitor_id: u32, lost_at: Instant) {
+        self.backdate_focus_identity_for_test(&MonitorIdentity::runtime_id(monitor_id), lost_at);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backdate_focus_identity_for_test(
+        &self,
+        identity: &MonitorIdentity,
+        lost_at: Instant,
+    ) {
         let mut times = self
             .last_focus_time
             .lock()
             .expect("focus-aware last_focus_time mutex poisoned");
-        times.insert(monitor_id, lost_at);
+        times.insert(MonitorKey::from_identity(identity), lost_at);
     }
 
     /// Force the last-event timestamp to simulate a stalled tracker.
@@ -336,10 +361,6 @@ impl Drop for FocusAwareController {
 }
 
 // Tests below exercise the Active/Warm/Cold classifier via state().
-// Since state() is currently short-circuited to always return Active
-// (see the function doc-comment for why), tests that expect Warm/Cold
-// have `#[ignore = "..."]` applied. Re-enable them the moment
-// state()'s early-return is removed.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,7 +379,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn focused_monitor_is_active_and_never_focused_is_cold() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -379,7 +399,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn transitions_to_warm_after_warm_cutoff() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -391,7 +410,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn transitions_to_cold_after_cold_cutoff() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -403,7 +421,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "state() short-circuited to Active — intermediate Cold assertions no longer hold"]
     async fn unknown_event_forces_all_active_fallback() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -425,7 +442,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "state() short-circuited to Active — intermediate Cold assertions no longer hold"]
     async fn stale_focus_falls_back_to_active() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -442,6 +458,54 @@ mod tests {
         ctrl.set_focus_for_test(1);
         assert_eq!(ctrl.state(1), CaptureState::Active);
         assert_eq!(ctrl.state(2), CaptureState::Cold);
+    }
+
+    #[tokio::test]
+    async fn stable_identity_matches_when_runtime_ids_differ() {
+        let ctrl = make_ctrl();
+        let focused = MonitorIdentity::new(100, Some("Dell_3840x2160_0,0".to_string()));
+        let same_display = MonitorIdentity::new(200, Some("Dell_3840x2160_0,0".to_string()));
+        let other_display = MonitorIdentity::new(300, Some("LG_1920x1080_3840,0".to_string()));
+
+        ctrl.set_focus_identity_for_test(focused);
+
+        assert_eq!(ctrl.state_for_identity(&same_display), CaptureState::Active);
+        assert_eq!(ctrl.state_for_identity(&other_display), CaptureState::Cold);
+    }
+
+    #[tokio::test]
+    async fn stable_identity_mismatch_wins_over_runtime_id_match() {
+        let ctrl = make_ctrl();
+        let focused = MonitorIdentity::new(100, Some("Dell_3840x2160_0,0".to_string()));
+        let different_display_with_same_runtime_id =
+            MonitorIdentity::new(100, Some("LG_1920x1080_3840,0".to_string()));
+
+        ctrl.set_focus_identity_for_test(focused);
+
+        assert_eq!(
+            ctrl.state_for_identity(&different_display_with_same_runtime_id),
+            CaptureState::Cold
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_event_wakes_cold_notify() {
+        let ctrl = make_ctrl();
+        let notify = ctrl.notify_for(2);
+        ctrl.set_focus_for_test(1);
+        assert_eq!(ctrl.state(2), CaptureState::Cold);
+
+        let join = tokio::spawn(async move {
+            notify.notified().await;
+        });
+        tokio::task::yield_now().await;
+
+        ctrl.set_unknown_for_test();
+
+        tokio::time::timeout(Duration::from_millis(500), join)
+            .await
+            .expect("unknown fallback should wake cold monitors within 500ms")
+            .expect("notified task finished");
     }
 
     #[tokio::test]

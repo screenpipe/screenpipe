@@ -75,13 +75,13 @@ fn build_and_run_stream(level_bits: &'static AtomicU32) -> Result<cpal::Stream> 
 
     let err_fn = |e| tracing::warn!("screenpipe-sdk mic stream err: {e}");
     let stream = match sample_format {
-        SampleFormat::F32 => build_cpal_input_stream::<f32, _, _>(
+        SampleFormat::F32 => build_level_input_stream::<f32, _, _>(
             &device,
             &stream_config,
             move |data: &[f32], _| push_rms(data, level_bits),
             err_fn,
         ),
-        SampleFormat::I16 => build_cpal_input_stream::<i16, _, _>(
+        SampleFormat::I16 => build_level_input_stream::<i16, _, _>(
             &device,
             &stream_config,
             move |data: &[i16], _| {
@@ -90,7 +90,7 @@ fn build_and_run_stream(level_bits: &'static AtomicU32) -> Result<cpal::Stream> 
             },
             err_fn,
         ),
-        SampleFormat::U16 => build_cpal_input_stream::<u16, _, _>(
+        SampleFormat::U16 => build_level_input_stream::<u16, _, _>(
             &device,
             &stream_config,
             move |data: &[u16], _| {
@@ -107,12 +107,12 @@ fn build_and_run_stream(level_bits: &'static AtomicU32) -> Result<cpal::Stream> 
 }
 
 #[cfg(target_os = "macos")]
-fn build_cpal_input_stream<T, D, E>(
+fn build_level_input_stream<T, D, E>(
     device: &cpal::Device,
     stream_config: &cpal::StreamConfig,
     data_callback: D,
     error_callback: E,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> std::result::Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample,
     D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
@@ -122,12 +122,12 @@ where
 }
 
 #[cfg(not(target_os = "macos"))]
-fn build_cpal_input_stream<T, D, E>(
+fn build_level_input_stream<T, D, E>(
     device: &cpal::Device,
     stream_config: &cpal::StreamConfig,
     data_callback: D,
     error_callback: E,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> std::result::Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample,
     D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,

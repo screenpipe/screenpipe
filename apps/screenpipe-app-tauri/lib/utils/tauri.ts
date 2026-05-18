@@ -913,9 +913,22 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Queue a follow-up prompt for the current session. Unlike `pi_prompt`, this
+ * returns as soon as Rust owns the queued item; the prompt is written only
+ * after the active turn finishes.
+ */
+async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -929,6 +942,19 @@ async piPrompt(sessionId: string | null, message: string, images: PiImageContent
 async piSteer(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_steer", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Promote a queued follow-up into Pi's native steer path. The prompt is
+ * removed from the Rust queue first, so it cannot later run as a normal
+ * follow-up.
+ */
+async piSteerQueued(sessionId: string | null, promptId: string) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_steer_queued", { sessionId, promptId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -967,6 +993,17 @@ async piCancelQueued(sessionId: string | null, promptId: string) : Promise<Resul
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_abort", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Abort only the active Pi operation. Pending queued follow-ups remain queued.
+ */
+async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

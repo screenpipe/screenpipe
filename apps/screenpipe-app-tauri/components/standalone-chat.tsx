@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   mountAgentEventBus,
@@ -76,7 +76,6 @@ import {
   isQueuedItemCancelShortcut,
   isQueuedItemSteerShortcut,
   normalizeQueueEventPayload,
-  queuedPreviewMatchesText,
 } from "@/lib/chat-queue-controls";
 
 const MermaidDiagram = React.lazy(() =>
@@ -110,6 +109,7 @@ interface MentionSuggestion {
 
 const APP_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
+const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
@@ -613,6 +613,15 @@ interface ToolCall {
   isRunning: boolean;
 }
 
+function queuedSnapshotsEqual(a: PiQueuedPrompt[], b: PiQueuedPrompt[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].preview !== b[i].preview) return false;
+  }
+  return true;
+}
+
 type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
@@ -623,6 +632,7 @@ interface Message {
   role: "user" | "assistant";
   content: string; // full text for copy/history
   displayContent?: string; // short label shown in chat (e.g. template name)
+  intent?: "steer";
   images?: string[]; // base64 data URLs of attached images
   timestamp: number;
   contentBlocks?: ContentBlock[];
@@ -630,12 +640,15 @@ interface Message {
   model?: string;
   provider?: string;
   retryPrompt?: string; // when set, renders a retry CTA on error messages
-  /** True between optimistic enqueue and the moment Pi's drain loop picks
-   *  the prompt up (`agent_start` for this turn). Drives a lighter visual
-   *  treatment so the user can tell at-a-glance which messages are still
-   *  waiting in line vs. already in-flight. Cleared by handleAgentStart. */
-  queued?: boolean;
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
 }
+
+type QueuedDisplayPayload = {
+  preview: string;
+  images: string[];
+  displayContent?: string;
+};
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -2243,6 +2256,19 @@ function MessageContent({
   );
 }
 
+function getMessageIntentLabel(message: Message): string | null {
+  if (message.role === "user" && message.intent === "steer") {
+    return "Steered";
+  }
+  if (message.role === "assistant" && message.steeredResponse) {
+    return "Reply redirected";
+  }
+  if (message.role === "assistant" && message.interruptedBySteer) {
+    return "Interrupted by steer";
+  }
+  return null;
+}
+
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -2622,8 +2648,10 @@ export function StandaloneChat({
   // Sourced from rust via the `pi-queue-changed` event — single source of
   // truth lives in `pi_command_queue.rs`. Cleared as soon as the drain loop
   // pulls a queued item and writes it to stdin (it's then in-flight).
-  const [queuedPrompts, setQueuedPrompts] = useState<PiQueuedPrompt[]>([]);
+  const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, PiQueuedPrompt[]>>({});
+  const queuedDisplayBySessionRef = useRef<Record<string, Record<string, QueuedDisplayPayload>>>({});
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
+  const queuedScrollRef = useRef<HTMLDivElement | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   // Cursor-style inline edit: click a sent user message to tweak and resend
@@ -2724,17 +2752,22 @@ export function StandaloneChat({
   const piStreamingTextRef = useRef<string>("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
+  const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
+  const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
   // no explicit stopReason=error on any message (some providers drop that flag).
   const piLastErrorRef = useRef<string | null>(null);
   const piStartInFlightRef = useRef(false);
+  const sendDispatchInFlightRef = useRef(false);
+  const forceQueueModeRef = useRef(false);
   const piFirstCallRetried = useRef(false);
   const sessionActivityLastEmitAtRef = useRef<Record<string, number>>({});
   const sessionActivityLastSigRef = useRef<Record<string, string>>({});
   const piStoppedIntentionallyRef = useRef(false);
   const piIntentionallyStoppedPidsRef = useRef<Set<number>>(new Set());
+  const piActiveStopRequestedRef = useRef(false);
   const piPresetSwitchPromiseRef = useRef<Promise<void> | null>(null);
   const piCrashCountRef = useRef(0);
   const piLastCrashRef = useRef(0);
@@ -2796,6 +2829,11 @@ export function StandaloneChat({
   // sessionId from message 0 — see comment above piSessionIdRef.
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
+  );
+  const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
+  const queuedPrompts = useMemo(
+    () => queuedPromptsBySession[currentQueueSessionId] ?? EMPTY_QUEUED_PROMPTS,
+    [queuedPromptsBySession, currentQueueSessionId]
   );
 
   const cancelStreamingMessageRender = useCallback(() => {
@@ -3866,8 +3904,9 @@ export function StandaloneChat({
       if (e.key === "Escape" && !showMentionDropdown) {
         if (isLoading || isStreaming) {
           // Stop the agent
+          piActiveStopRequestedRef.current = true;
           try {
-            await commands.piAbort(piSessionIdRef.current);
+            await commands.piAbortActive(piSessionIdRef.current);
           } catch (err) {
             console.warn("[Pi] Failed to abort on Escape:", err);
           }
@@ -4173,20 +4212,29 @@ export function StandaloneChat({
       const newAssistantId = (Date.now() + 1).toString();
       let created = false;
       setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "user") return prev;
+        let targetIdx = -1;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]?.role === "user") {
+            targetIdx = i;
+            break;
+          }
+        }
+        if (targetIdx === -1) return prev;
+
+        const target = prev[targetIdx];
+        if (!target || target.role !== "user") return prev;
         created = true;
-        return [
-          ...prev,
-          {
-            id: newAssistantId,
-            role: "assistant",
-            content: "Processing...",
-            timestamp: Date.now(),
-            model: activePreset?.model,
-            provider: activePreset?.provider,
-          },
-        ];
+
+        const base = [...prev];
+        base.splice(targetIdx + 1, 0, {
+          id: newAssistantId,
+          role: "assistant",
+          content: "Processing...",
+          timestamp: Date.now(),
+          model: activePreset?.model,
+          provider: activePreset?.provider,
+        });
+        return base;
       });
       if (!created) return false;
       piMessageIdRef.current = newAssistantId;
@@ -4477,14 +4525,10 @@ export function StandaloneChat({
             }
           }
         } else if (data.type === "message_start" && data.message?.role === "user") {
-          // pi-mono fires `message_start` for a user message at the start of
-          // every turn that introduces one — i.e. (a) the original prompt
-          // and (b) each queued followUp processed inside the SAME agent run
-          // (only one `agent_end` fires for the whole run, after all
-          // followUps drain). If we relied on `agent_end` to close out the
-          // current assistant message, the followUp's text_delta would land
-          // on the previous turn's assistant bubble (the user saw responses
-          // mashed together: "...Which?Hey. What do you need?").
+          // Pi fires `message_start` for each user turn. When a queued
+          // follow-up starts, close the previous streaming target here so the
+          // next text_delta creates a fresh assistant bubble instead of
+          // appending to the prior reply.
           //
           // Clear the streaming refs here so the next text_delta lazily
           // creates a fresh assistant placeholder via `ensureAssistantPlaceholder`.
@@ -4504,32 +4548,78 @@ export function StandaloneChat({
             // processing the followUp turn.
           }
 
-          // The user message tied to this turn just left the queue and is
-          // now in-flight — clear the `queued` flag so the bubble drops
-          // its muted treatment. We match on content text since pi-mono
-          // doesn't echo our optimistic message id back.
-          {
-            const text = (() => {
-              const c = data.message?.content;
-              if (typeof c === "string") return c;
-              if (Array.isArray(c)) {
-                return c
-                  .filter((p: any) => p?.type === "text" && typeof p.text === "string")
-                  .map((p: any) => p.text)
-                  .join("");
-              }
-              return "";
-            })();
-            if (text) {
-              setMessages((prev) => {
-                let cleared = false;
-                return prev.map((m) => {
-                  if (cleared || !m.queued || m.role !== "user" || m.content !== text) {
-                    return m;
-                  }
-                  cleared = true;
-                  return { ...m, queued: false };
-                });
+          const text = (() => {
+            const c = data.message?.content;
+            if (typeof c === "string") return c;
+            if (Array.isArray(c)) {
+              return c
+                .filter((p: any) => p?.type === "text" && typeof p.text === "string")
+                .map((p: any) => p.text)
+                .join("");
+            }
+            return "";
+          })();
+          const eventImages = imageDataUrlsFromPiContent(data.message?.content);
+
+          if (!piMessageIdRef.current) {
+            const sidForStartedUser = piSessionIdRef.current;
+            const pendingDisplay = pendingNextPiUserDisplayRef.current;
+            const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
+            const queuedImages = queuedDisplay?.images.length ? queuedDisplay.images : eventImages;
+            if (pendingDisplay) {
+              pendingNextPiUserDisplayRef.current = null;
+            }
+            if (!text && !queuedImages.length && !queuedDisplay?.displayContent) {
+              return;
+            }
+            const nextUserIntent = pendingNextPiUserIntentRef.current;
+            pendingNextPiUserIntentRef.current = null;
+            const queuedTurnUserId = Date.now().toString();
+            const queuedTurnAssistantId = (Date.now() + 1).toString();
+            const startedUser: Message = {
+              id: queuedTurnUserId,
+              role: "user",
+              content: text,
+              ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+              ...(queuedImages.length ? { images: [...queuedImages] } : {}),
+              ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
+              timestamp: Date.now(),
+            };
+            const assistantPlaceholder: Message = {
+              id: queuedTurnAssistantId,
+              role: "assistant",
+              content: "Processing...",
+              ...(nextUserIntent === "steer" ? { steeredResponse: true } : {}),
+              timestamp: Date.now(),
+              model: activePreset?.model,
+              provider: activePreset?.provider,
+            };
+
+            setMessages((prev) => {
+              const rows = [...prev, startedUser, assistantPlaceholder];
+              void saveConversation(rows, {
+                refreshHistory: false,
+                syncActiveConversation: false,
+              });
+              return rows;
+            });
+
+            piMessageIdRef.current = queuedTurnAssistantId;
+            piStreamingTextRef.current = "";
+            piContentBlocksRef.current = [];
+            setIsLoading(true);
+            setIsStreaming(true);
+
+            if (sidForStartedUser) {
+              const storeState = useChatStore.getState();
+              storeState.actions.appendMessage(sidForStartedUser, startedUser as any);
+              storeState.actions.appendMessage(sidForStartedUser, assistantPlaceholder as any);
+              storeState.actions.setStreaming(sidForStartedUser, {
+                streamingMessageId: queuedTurnAssistantId,
+                streamingText: "",
+                contentBlocks: [],
+                isStreaming: true,
+                isLoading: true,
               });
             }
           }
@@ -4618,6 +4708,7 @@ export function StandaloneChat({
             // functional updater until after the refs are cleared below.
             const blocksSnapshot = [...piContentBlocksRef.current];
             const streamedText = piStreamingTextRef.current;
+            const wasStoppedByUser = piActiveStopRequestedRef.current;
 
             // Check if content was already set by error handlers above
             setMessages((prev) => {
@@ -4639,6 +4730,9 @@ export function StandaloneChat({
                 return prev;
               }
               const contentBlocks = [...blocksSnapshot];
+              if (wasStoppedByUser && !content && contentBlocks.length === 0) {
+                return prev.filter((m) => m.id !== msgId);
+              }
               // If no text content but we have tool/thinking blocks, don't show "no response"
               const hasNonTextBlocks = contentBlocks.some((b) => b.type === "tool" || b.type === "thinking");
               let emptyResponseRetryPrompt: string | undefined;
@@ -4709,8 +4803,10 @@ export function StandaloneChat({
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
             piLastErrorRef.current = null;
+            piActiveStopRequestedRef.current = false;
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
+            forceQueueModeRef.current = false;
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
@@ -4979,18 +5075,36 @@ export function StandaloneChat({
     // session this panel is bound to. Single source of truth lives in
     // `pi_command_queue.rs`; this listener just mirrors it into local state.
     let unlistenQueue: UnlistenFn | undefined;
-    listen<{ sessionId?: string; session_id?: string; queued?: PiQueuedPrompt[] }>("pi-queue-changed", (event) => {
+    listen<{
+      sessionId?: string;
+      session_id?: string;
+      queued?: PiQueuedPrompt[];
+    }>("pi-queue-changed", (event) => {
       if (!mounted) return;
       const { sessionId, queued } = normalizeQueueEventPayload(event.payload);
-      if (sessionId !== piSessionIdRef.current) return;
-      setQueuedPrompts(queued);
+      if (!sessionId) return;
+      setQueuedPromptsBySession((prev) => {
+        const existing = prev[sessionId] ?? [];
+        if (queuedSnapshotsEqual(existing, queued)) return prev;
+        return { ...prev, [sessionId]: queued };
+      });
     }).then(fn => { unlistenQueue = fn; });
 
     // Initial fetch — closes the gap between component mount and first event.
     (async () => {
+      const sidAtFetch = piSessionIdRef.current;
       try {
-        const res = await commands.piPending(piSessionIdRef.current);
-        if (mounted && res.status === "ok") setQueuedPrompts(res.data);
+        const res = await commands.piPending(sidAtFetch);
+        if (!mounted) return;
+        const nextQueue = res.status === "ok" ? res.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sidAtFetch] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sidAtFetch]: nextQueue,
+          };
+        });
       } catch { /* ignore — queue may not be initialized yet */ }
     })();
 
@@ -5294,78 +5408,117 @@ export function StandaloneChat({
     return piImages;
   }
 
+  function imageDataUrlsFromPiContent(content: unknown) {
+    if (!Array.isArray(content)) return [];
+    const images: string[] = [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const item = part as { type?: unknown; mimeType?: unknown; mime_type?: unknown; data?: unknown };
+      if (item.type !== "image" || typeof item.data !== "string") continue;
+      if (item.data.startsWith("data:image/")) {
+        images.push(item.data);
+        continue;
+      }
+      const mime = typeof item.mimeType === "string"
+        ? item.mimeType
+        : typeof item.mime_type === "string"
+          ? item.mime_type
+          : "image/png";
+      images.push(`data:${mime};base64,${item.data}`);
+    }
+    return images;
+  }
+
+  function queuedPreviewForText(text: string) {
+    return Array.from(text).slice(0, 200).join("");
+  }
+
+  function shouldKeepQueuedDisplay(payload: QueuedDisplayPayload) {
+    return payload.images.length > 0 || !!payload.displayContent;
+  }
+
+  function restoreQueuedDisplay(sessionId: string | null, promptId: string, payload: QueuedDisplayPayload | null) {
+    if (!sessionId || !payload || !shouldKeepQueuedDisplay(payload)) return;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: {
+        ...(queuedDisplayBySessionRef.current[sessionId] ?? {}),
+        [promptId]: payload,
+      },
+    };
+  }
+
+  function takeQueuedDisplayById(sessionId: string | null, promptId: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const current = queuedDisplayBySessionRef.current[sessionId];
+    const payload = current?.[promptId] ?? null;
+    if (!payload) return null;
+    const { [promptId]: _removed, ...rest } = current;
+    queuedDisplayBySessionRef.current = {
+      ...queuedDisplayBySessionRef.current,
+      [sessionId]: rest,
+    };
+    return payload;
+  }
+
+  function payloadMatchesText(payload: QueuedDisplayPayload, text: string) {
+    const preview = queuedPreviewForText(text);
+    if (!payload.preview) return !preview;
+    return preview === payload.preview || text.startsWith(payload.preview);
+  }
+
+  function consumeQueuedDisplayForStartedMessage(sessionId: string | null, text: string): QueuedDisplayPayload | null {
+    if (!sessionId) return null;
+    const queued = queuedDisplayBySessionRef.current[sessionId] ?? {};
+    const match = Object.entries(queued).find(([, payload]) => payloadMatchesText(payload, text));
+    if (!match) return null;
+    return takeQueuedDisplayById(sessionId, match[0]);
+  }
+
   async function enqueuePiMessage(userMessage: string, displayLabel?: string) {
     if (!piInfo?.running) {
       // No Pi running → fall back to the normal start-and-send path.
       return sendPiMessage(userMessage, displayLabel);
     }
 
-    // Local optimistic message + chat-store mirror. Skips assistant placeholder
-    // entirely; the new turn's `agent_start` (downstream from the rust queue
-    // dequeue) will create one through the existing event flow.
-    // Mark queued=true so the bubble renders with a muted/lighter treatment
-    // until Pi actually starts streaming this turn (cleared in handleAgentStart).
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: userMessage,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(pastedImages.length > 0 ? { images: [...pastedImages] } : {}),
-      timestamp: Date.now(),
-      queued: true,
-    };
-    setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
-
-    posthog.capture("chat_message_enqueued", {
-      provider: activePreset?.provider,
-      model: activePreset?.model,
-      pending_count: queuedPrompts.length + 1,
-    });
-
     // Convert any data-URL pastes to the Pi image-content shape (same format
     // used by the normal send path further down in this file).
     const piImages = imageDataUrlsToPiImages(pastedImages);
-    if (pastedImages.length > 0) setPastedImages([]);
+    const queuedImageDataUrls = pastedImages.length > 0 ? [...pastedImages] : [];
+    const prevInput = input;
+    const hadPastedImages = pastedImages.length > 0;
+
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    if (hadPastedImages) setPastedImages([]);
 
     try {
-      const result = await commands.piPrompt(
+      const result = await commands.piQueuePrompt(
         piSessionIdRef.current,
         userMessage,
         piImages.length > 0 ? piImages : null,
       );
       if (result.status !== "ok") {
+        setInput(prevInput);
+        if (hadPastedImages) setPastedImages(queuedImageDataUrls);
         toast({ title: "failed to queue message", description: result.error, variant: "destructive" });
+        return;
       }
+
+      restoreQueuedDisplay(piSessionIdRef.current, result.data, {
+        preview: queuedPreviewForText(userMessage),
+        images: queuedImageDataUrls,
+        ...(displayLabel ? { displayContent: displayLabel } : {}),
+      });
+
+      posthog.capture("chat_message_enqueued", {
+        provider: activePreset?.provider,
+        model: activePreset?.model,
+        pending_count: queuedPrompts.length + 1,
+      });
     } catch (e) {
+      setInput(prevInput);
+      if (hadPastedImages) setPastedImages(queuedImageDataUrls);
       console.warn("[Pi] failed to enqueue follow-up:", e);
     }
   }
@@ -5375,6 +5528,7 @@ export function StandaloneChat({
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
+    forceQueueModeRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
   }
@@ -5463,6 +5617,7 @@ export function StandaloneChat({
     }
 
     await interruptActivePiTurn();
+    forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
@@ -5714,6 +5869,7 @@ export function StandaloneChat({
               : m
           )
         );
+        forceQueueModeRef.current = false;
         setIsLoading(false);
         setIsStreaming(false);
       }
@@ -5727,6 +5883,7 @@ export function StandaloneChat({
             : m
         )
       );
+      forceQueueModeRef.current = false;
       setIsLoading(false);
       setIsStreaming(false);
     }
@@ -5818,16 +5975,23 @@ export function StandaloneChat({
 
   async function sendMessage(userMessage: string, displayLabel?: string) {
     if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
+    const trimmed = userMessage.trim();
+    if (!trimmed && pastedImages.length === 0) return;
 
-    // If Pi is mid-reply, the default composer action is native steering:
-    // the new message should interrupt and redirect the current reply. Queued
-    // follow-up is still available through the clock button.
-    if (isLoading || isStreaming) {
-      return steerMessage(userMessage, displayLabel);
+    // Guard the tiny gap between submit and React's loading state update.
+    // During this window, rapid Enter presses must queue (not start a second
+    // normal turn), otherwise user bubbles can drift.
+    if (forceQueueModeRef.current || sendDispatchInFlightRef.current || piMessageIdRef.current || isLoading || isStreaming) {
+      return enqueuePiMessage(trimmed, displayLabel);
     }
 
-    // All providers route through Pi agent
-    return sendPiMessage(userMessage, displayLabel);
+    sendDispatchInFlightRef.current = true;
+    try {
+      // All providers route through Pi agent
+      return await sendPiMessage(trimmed, displayLabel);
+    } finally {
+      sendDispatchInFlightRef.current = false;
+    }
   }
 
   async function queueFollowUpMessage(userMessage: string, displayLabel?: string) {
@@ -5835,62 +5999,48 @@ export function StandaloneChat({
     return enqueuePiMessage(userMessage, displayLabel);
   }
 
-  function findLocalQueuedMessage(prompt: PiQueuedPrompt): Message | undefined {
-    return messages.find(
-      (message) =>
-        message.role === "user" &&
-        message.queued &&
-        queuedPreviewMatchesText(prompt.preview, message.content),
-    );
-  }
-
-  function removeLocalQueuedMessage(prompt: PiQueuedPrompt) {
-    const matchesPrompt = (message: unknown) => {
-      if (!message || typeof message !== "object") return false;
-      const candidate = message as { role?: unknown; queued?: unknown; content?: unknown };
-      return (
-        candidate.role === "user" &&
-        candidate.queued === true &&
-        typeof candidate.content === "string" &&
-        queuedPreviewMatchesText(prompt.preview, candidate.content)
-      );
-    };
-
-    setMessages((prev) => {
-      let removed = false;
-      const next = prev.filter((message) => {
-        if (!removed && matchesPrompt(message)) {
-          removed = true;
-          return false;
-        }
-        return true;
-      });
-      if (!removed) return prev;
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
-
-    const sid = piSessionIdRef.current;
-    if (!sid) return;
-    const storeState = useChatStore.getState();
-    const sessionMessages = storeState.sessions[sid]?.messages;
-    if (!sessionMessages?.length) return;
-
-    let removed = false;
-    const nextMessages = sessionMessages.filter((message) => {
-      if (!removed && matchesPrompt(message)) {
-        removed = true;
-        return false;
-      }
-      return true;
-    });
-    if (removed) {
-      storeState.actions.setMessages(sid, nextMessages);
+  // Queue UI is session-scoped. On chat switch, hydrate pending items for the
+  // active session key without mutating other session queues.
+  useEffect(() => {
+    const sid = currentQueueSessionId;
+    if (!sid) {
+      return;
     }
-  }
+
+    let cancelled = false;
+    setQueuedActionPromptId(null);
+
+    (async () => {
+      try {
+        const queuedRes = await commands.piPending(sid);
+        if (cancelled) return;
+        const nextQueue = queuedRes.status === "ok" ? queuedRes.data : [];
+        setQueuedPromptsBySession((prev) => {
+          const existing = prev[sid] ?? [];
+          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
+          return {
+            ...prev,
+            [sid]: nextQueue,
+          };
+        });
+      } catch {
+        if (!cancelled) {
+          setQueuedPromptsBySession((prev) => {
+            const existing = prev[sid] ?? [];
+            if (existing.length === 0) return prev;
+            return {
+              ...prev,
+              [sid]: [],
+            };
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentQueueSessionId]);
 
   async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
     setQueuedActionPromptId(prompt.id);
@@ -5911,8 +6061,15 @@ export function StandaloneChat({
         }
         return false;
       }
-      setQueuedPrompts((prev) => prev.filter((queued) => queued.id !== prompt.id));
-      removeLocalQueuedMessage(prompt);
+      if (currentQueueSessionId) {
+        takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+      }
       return true;
     } catch (e) {
       if (!options.silent) {
@@ -5926,6 +6083,60 @@ export function StandaloneChat({
     } finally {
       setQueuedActionPromptId((current) => current === prompt.id ? null : current);
     }
+  }
+
+  function markCurrentAssistantInterrupted() {
+    const activeAssistantId = piMessageIdRef.current;
+    if (!activeAssistantId) return;
+
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.id !== activeAssistantId || message.role !== "assistant" || message.interruptedBySteer) {
+          return message;
+        }
+        changed = true;
+        return { ...message, interruptedBySteer: true };
+      });
+      if (changed) {
+        void saveConversation(next, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, next as any);
+        }
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  function clearCurrentAssistantInterrupted() {
+    const activeAssistantId = piMessageIdRef.current;
+    if (!activeAssistantId) return;
+
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.id !== activeAssistantId || message.role !== "assistant" || !message.interruptedBySteer) {
+          return message;
+        }
+        changed = true;
+        return { ...message, interruptedBySteer: false };
+      });
+      if (changed) {
+        void saveConversation(next, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, next as any);
+        }
+      }
+      return changed ? next : prev;
+    });
   }
 
   async function steerMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
@@ -5948,15 +6159,6 @@ export function StandaloneChat({
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
 
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: trimmed,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
-      timestamp: Date.now(),
-    };
-
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
     if (followUpAbortRef.current) {
@@ -5964,37 +6166,15 @@ export function StandaloneChat({
       followUpAbortRef.current = null;
     }
     lastUserMessageRef.current = trimmed;
-
-    setMessages((prev) => {
-      const next = [...prev, newUserMessage];
-      void saveConversation(next, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-      return next;
-    });
+    pendingNextPiUserIntentRef.current = "steer";
+    pendingNextPiUserDisplayRef.current = {
+      preview: queuedPreviewForText(trimmed),
+      images: [...outgoingImages],
+      ...(displayLabel ? { displayContent: displayLabel } : {}),
+    };
+    markCurrentAssistantInterrupted();
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
-
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "new chat",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-    }
 
     const piImages = imageDataUrlsToPiImages(outgoingImages);
     if (shouldClearPastedImages) setPastedImages([]);
@@ -6006,9 +6186,15 @@ export function StandaloneChat({
         piImages.length > 0 ? piImages : null,
       );
       if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        clearCurrentAssistantInterrupted();
         toast({ title: "failed to steer message", description: result.error, variant: "destructive" });
       }
     } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      clearCurrentAssistantInterrupted();
       console.warn("[Pi] failed to steer message:", e);
       toast({
         title: "failed to steer message",
@@ -6019,29 +6205,53 @@ export function StandaloneChat({
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    const queuedMessage = findLocalQueuedMessage(prompt);
-    if (!queuedMessage && (!prompt.preview || prompt.preview.length >= 200)) {
+    setQueuedActionPromptId(prompt.id);
+    const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+    try {
+      pendingNextPiUserIntentRef.current = "steer";
+      pendingNextPiUserDisplayRef.current = queuedDisplay;
+      markCurrentAssistantInterrupted();
+      const result = await commands.piSteerQueued(piSessionIdRef.current, prompt.id);
+      if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
+        return;
+      }
+      if (!result.data) {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+        clearCurrentAssistantInterrupted();
+        toast({
+          title: "message already started",
+          description: "That follow-up has moved out of the queue.",
+        });
+        return;
+      }
+      if (currentQueueSessionId) {
+        setQueuedPromptsBySession((prev) => ({
+          ...prev,
+          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
+            (queued) => queued.id !== prompt.id,
+          ),
+        }));
+      }
+    } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
+      clearCurrentAssistantInterrupted();
       toast({
-        title: "full queued prompt unavailable",
-        description: "Cancel it or let it run next; ScreenPipe only has a preview for this item.",
+        title: "failed to steer queued message",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
       });
-      return;
+    } finally {
+      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
     }
-
-    const cancelled = await cancelQueuedPrompt(prompt, { silent: true });
-    if (!cancelled) {
-      toast({
-        title: "message already started",
-        description: "That follow-up has moved out of the queue.",
-      });
-      return;
-    }
-
-    await steerMessage(
-      queuedMessage?.content ?? prompt.preview,
-      queuedMessage?.displayContent,
-      queuedMessage?.images ?? [],
-    );
   }
 
   // Keep ref in sync so useEffect callbacks can call sendMessage
@@ -6116,8 +6326,9 @@ export function StandaloneChat({
   };
 
   const handleStop = async () => {
+    piActiveStopRequestedRef.current = true;
     try {
-      await commands.piAbort(piSessionIdRef.current);
+      await commands.piAbortActive(piSessionIdRef.current);
     } catch (e) {
       console.warn("[Pi] Failed to abort:", e);
     }
@@ -6147,7 +6358,7 @@ export function StandaloneChat({
         <div className="p-1 border-b border-border/50">
           <button
             type="button"
-            disabled={isLoading || !canChat}
+            disabled={!canChat}
             onClick={async () => {
               setAppFilterOpen(false);
               await handleFilePicker();
@@ -6739,7 +6950,9 @@ export function StandaloneChat({
               if (!m.content && !m.contentBlocks?.length) return false;
               return true;
             })
-            .map((message) => (
+            .map((message) => {
+              const intentLabel = getMessageIntentLabel(message);
+              return (
             <motion.div
               key={message.id}
               initial={{ opacity: 0, y: 10 }}
@@ -6761,6 +6974,16 @@ export function StandaloneChat({
                     : "items-start w-full"
                 )}
               >
+              {intentLabel ? (
+                <div
+                  className={cn(
+                    "mb-1 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80",
+                    message.role === "user" ? "text-right" : "text-left"
+                  )}
+                >
+                  {intentLabel}
+                </div>
+              ) : null}
               <div
                 onMouseDown={(e) => {
                   if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
@@ -6794,11 +7017,7 @@ export function StandaloneChat({
                   message.role === "user"
                     ? "bg-muted/60 text-foreground px-4 py-3"
                     : "bg-background text-foreground py-1",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
-                  // Queued user messages — visually de-emphasised so the eye stays on
-                  // the active turn. Cleared when pi-mono fires message_start for
-                  // this turn (see handler above).
-                  message.queued && "bg-muted/35 text-muted-foreground opacity-80"
+                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text"
                 )}
               >
                 {editingMessageId === message.id ? (
@@ -6941,7 +7160,8 @@ export function StandaloneChat({
                 </div>
               </div>
             </motion.div>
-          ))}
+              );
+            })}
         </AnimatePresence>
         <AnimatePresence>
           {isLoading && (() => {
@@ -7213,72 +7433,74 @@ export function StandaloneChat({
             </AnimatePresence>
           )}
 
-          <AnimatePresence>
-            {queuedPrompts.length > 0 && (
-              <motion.div
-                key="composer-queued-rail"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.18 }}
-                className="mb-2 rounded-lg border border-border/60 bg-background/95 shadow-sm overflow-hidden"
-              >
-                <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                      queued
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono text-muted-foreground/60">
-                    {queuedPrompts.length}
+          {queuedPrompts.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18 }}
+              className="mb-2 rounded-lg border border-border/60 bg-background/95 backdrop-blur-sm shadow-sm overflow-hidden"
+            >
+              <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50 bg-background">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                    Queued
                   </span>
                 </div>
-                <TooltipProvider delayDuration={150}>
-                  <div className="max-h-[156px] overflow-y-auto scrollbar-minimal">
-                    {queuedPrompts.map((p, i) => {
-                      const isBusy = queuedActionPromptId === p.id;
-                      const label = p.preview || "image follow-up";
-                      return (
-                        <motion.div
-                          key={p.id}
-                          layout
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 8, scale: 0.98 }}
-                          transition={{ duration: 0.16 }}
-                          tabIndex={0}
-                          role="listitem"
-                          onKeyDown={(e) => {
-                            if (isBusy) return;
-                            if (isQueuedItemSteerShortcut(e, isMac)) {
-                              e.preventDefault();
-                              steerQueuedPrompt(p);
-                            } else if (isQueuedItemCancelShortcut(e)) {
-                              e.preventDefault();
-                              cancelQueuedPrompt(p);
-                            }
-                          }}
-                          className="group/qcard flex items-center gap-2 px-3 py-2 border-b border-border/40 last:border-b-0 text-sm text-muted-foreground/90 focus-visible:outline-none focus-visible:bg-muted/40 hover:bg-muted/30 transition-colors"
-                          title={label.length > 90 ? label : undefined}
-                        >
-                          <span className="font-mono text-[10px] text-muted-foreground/50 shrink-0 w-4 text-right">
-                            {i + 1}
-                          </span>
-                          <span className="truncate flex-1 min-w-0">{label}</span>
+                <span className="text-[10px] font-mono text-muted-foreground/60">
+                  {queuedPrompts.length}
+                </span>
+              </div>
+              <TooltipProvider delayDuration={150}>
+                <div ref={queuedScrollRef} className="max-h-[112px] overflow-y-auto scrollbar-minimal">
+                  {queuedPrompts.map((p, i) => {
+                    const isBusy = queuedActionPromptId === p.id;
+                    const label = p.preview || "image follow-up";
+                    return (
+                      <motion.div
+                        key={p.id}
+                        layout
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.16 }}
+                        tabIndex={0}
+                        role="listitem"
+                        onKeyDown={(e) => {
+                          if (isBusy) return;
+                          if (isQueuedItemSteerShortcut(e, isMac)) {
+                            e.preventDefault();
+                            steerQueuedPrompt(p);
+                          } else if (isQueuedItemCancelShortcut(e)) {
+                            e.preventDefault();
+                            cancelQueuedPrompt(p);
+                          }
+                        }}
+                        className="group/qcard select-none flex min-h-[36px] items-center gap-2 px-2.5 py-1.5 border-b border-border/40 last:border-b-0 text-sm text-foreground/90 focus-visible:outline-none focus-visible:bg-muted/20 hover:bg-muted/15 transition-colors"
+                        title={label.length > 90 ? label : undefined}
+                      >
+                        <span className="w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground/50">
+                          {i + 1}
+                        </span>
+                        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[12px]">
+                          {label}
+                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => steerQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-foreground bg-muted/70 hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                                className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
                                 aria-label={`steer queued message ${i + 1}`}
                               >
                                 {isBusy ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
-                                  <CornerDownRight className="h-3 w-3" />
+                                  <>
+                                    <CornerDownRight className="h-2.5 w-2.5" />
+                                    <span className="text-[10px] font-medium">Steer</span>
+                                  </>
                                 )}
                               </button>
                             </TooltipTrigger>
@@ -7292,22 +7514,22 @@ export function StandaloneChat({
                                 type="button"
                                 disabled={isBusy}
                                 onClick={() => cancelQueuedPrompt(p)}
-                                className="h-7 w-7 rounded-md inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                                className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
                                 aria-label={`remove queued message ${i + 1}`}
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Trash2 className="h-3 w-3" />
                               </button>
                             </TooltipTrigger>
                             <TooltipContent side="top">Remove queued message</TooltipContent>
                           </Tooltip>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </TooltipProvider>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </TooltipProvider>
+            </motion.div>
+          )}
 
           <div
             className={cn(
@@ -7329,7 +7551,7 @@ export function StandaloneChat({
                   disabledReason
                     ? disabledReason
                     : isLoading || isStreaming
-                      ? "Steer current reply..."
+                      ? "Message will be queued..."
                       : "Ask about your screen... (type @ for filters, paste images)"
                 }
                 disabled={!canChat}
@@ -7458,38 +7680,9 @@ export function StandaloneChat({
               {(() => {
                 const hasInput = input.trim().length > 0 || pastedImages.length > 0;
                 const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
-                const isSteerMode = primaryAction === "steer";
                 const isStopMode = primaryAction === "stop";
                 return (
                   <>
-                    {isSteerMode && (
-                      <TooltipProvider delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              disabled={!canChat}
-                              onClick={() => queueFollowUpMessage(input.trim())}
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/60 relative"
-                              aria-label="queue follow-up after current reply"
-                              title="queue follow-up after current reply"
-                            >
-                              <Clock className="h-3.5 w-3.5" />
-                              {queuedPrompts.length > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-muted text-foreground text-[9px] font-mono font-semibold flex items-center justify-center border border-background">
-                                  {queuedPrompts.length}
-                                </span>
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">
-                            Queue follow-up after current reply
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                     <Button
                       type={isStopMode ? "button" : "submit"}
                       size="icon"
@@ -7502,22 +7695,16 @@ export function StandaloneChat({
                       title={
                         isStopMode
                           ? "stop"
-                          : isSteerMode
-                            ? "steer current reply"
-                            : "send"
+                          : "send"
                       }
                       aria-label={
                         isStopMode
                           ? "stop reply"
-                          : isSteerMode
-                            ? "steer current reply"
-                            : "send message"
+                          : "send message"
                       }
                     >
                       {isStopMode ? (
                         <Square className="h-4 w-4" />
-                      ) : isSteerMode ? (
-                        <CornerDownRight className="h-4 w-4" />
                       ) : (
                         <Send className="h-4 w-4" />
                       )}

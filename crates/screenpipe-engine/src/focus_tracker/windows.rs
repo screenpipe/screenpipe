@@ -23,9 +23,9 @@
 //! thread-local `Arc` pointer in the WinEvent callback to reach back to it
 //! without crossing the ABI boundary with non-ABI-safe types.
 
-use super::{FocusEvent, FocusTracker};
+use super::{FocusEvent, FocusTracker, MonitorIdentity};
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -34,9 +34,9 @@ use tracing::{debug, warn};
 
 /// Plain rect used for monitor resolution — the Win32 `RECT` type is not
 /// trivially shareable across Rust modules. We convert on the edge.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct MonitorRect {
-    id: u32,
+    identity: MonitorIdentity,
     x: i32,
     y: i32,
     w: u32,
@@ -45,10 +45,10 @@ struct MonitorRect {
 
 /// Find the monitor whose bounds contain the given point. Half-open on
 /// right/bottom so adjacent monitors don't overlap at the seam.
-fn pick_monitor(rects: &[MonitorRect], x: i32, y: i32) -> Option<u32> {
+fn pick_monitor(rects: &[MonitorRect], x: i32, y: i32) -> Option<MonitorIdentity> {
     rects.iter().find_map(|r| {
         if x >= r.x && x < r.x + r.w as i32 && y >= r.y && y < r.y + r.h as i32 {
-            Some(r.id)
+            Some(r.identity.clone())
         } else {
             None
         }
@@ -59,11 +59,11 @@ fn monitor_for_point(
     monitors: &[screenpipe_screen::monitor::SafeMonitor],
     x: i32,
     y: i32,
-) -> Option<u32> {
+) -> Option<MonitorIdentity> {
     let rects: Vec<MonitorRect> = monitors
         .iter()
         .map(|m| MonitorRect {
-            id: m.id(),
+            identity: MonitorIdentity::from_monitor(m),
             x: m.x(),
             y: m.y(),
             w: m.width(),
@@ -126,7 +126,7 @@ fn foreground_window_anchor() -> Option<(i32, i32)> {
 
 struct Inner {
     tx: broadcast::Sender<FocusEvent>,
-    current: AtomicU32,
+    current: Mutex<Option<MonitorIdentity>>,
     stop_flag: AtomicBool,
     unknown_emitted: Mutex<bool>,
     // Handle to the tokio runtime captured at start(). The WinEvent callback
@@ -150,12 +150,22 @@ impl Inner {
             .or_else(|| cursor_position().and_then(|(x, y)| monitor_for_point(monitors, x, y)));
 
         match resolved {
-            Some(id) => {
-                let prev = self.current.load(Ordering::Relaxed);
-                if prev != id {
-                    self.current.store(id, Ordering::Relaxed);
-                    let _ = self.tx.send(FocusEvent::Focused(id));
-                    debug!("win focus tracker: focused monitor -> {}", id);
+            Some(identity) => {
+                let changed = self
+                    .current
+                    .lock()
+                    .map(|mut current| {
+                        if current.as_ref() == Some(&identity) {
+                            false
+                        } else {
+                            *current = Some(identity.clone());
+                            true
+                        }
+                    })
+                    .unwrap_or(false);
+                if changed {
+                    let _ = self.tx.send(FocusEvent::Focused(identity.clone()));
+                    debug!("win focus tracker: focused monitor -> {:?}", identity);
                 }
                 if let Ok(mut u) = self.unknown_emitted.lock() {
                     *u = false;
@@ -175,7 +185,9 @@ impl Inner {
                 };
                 if emit {
                     let _ = self.tx.send(FocusEvent::Unknown);
-                    self.current.store(0, Ordering::Relaxed);
+                    if let Ok(mut current) = self.current.lock() {
+                        *current = None;
+                    }
                     debug!("win focus tracker: no monitor resolvable");
                 }
             }
@@ -222,7 +234,7 @@ impl WindowsFocusTracker {
         let (tx, _) = broadcast::channel::<FocusEvent>(16);
         let inner = Arc::new(Inner {
             tx,
-            current: AtomicU32::new(0),
+            current: Mutex::new(None),
             stop_flag: AtomicBool::new(false),
             unknown_emitted: Mutex::new(false),
             runtime: handle.clone(),
@@ -355,13 +367,8 @@ fn run_win_event_observer() {
 }
 
 impl FocusTracker for WindowsFocusTracker {
-    fn current(&self) -> Option<u32> {
-        let v = self.inner.current.load(Ordering::Relaxed);
-        if v == 0 {
-            None
-        } else {
-            Some(v)
-        }
+    fn current(&self) -> Option<MonitorIdentity> {
+        self.inner.current.lock().ok()?.clone()
     }
 
     fn subscribe(&self) -> broadcast::Receiver<FocusEvent> {
@@ -389,14 +396,14 @@ mod tests {
     fn pick_monitor_basic_bounds() {
         let monitors = vec![
             MonitorRect {
-                id: 1,
+                identity: MonitorIdentity::runtime_id(1),
                 x: 0,
                 y: 0,
                 w: 1920,
                 h: 1080,
             },
             MonitorRect {
-                id: 2,
+                identity: MonitorIdentity::runtime_id(2),
                 x: 1920,
                 y: 0,
                 w: 1920,
@@ -404,9 +411,18 @@ mod tests {
             },
         ];
 
-        assert_eq!(pick_monitor(&monitors, 100, 100), Some(1));
-        assert_eq!(pick_monitor(&monitors, 2000, 100), Some(2));
-        assert_eq!(pick_monitor(&monitors, 1920, 500), Some(2));
+        assert_eq!(
+            pick_monitor(&monitors, 100, 100),
+            Some(MonitorIdentity::runtime_id(1))
+        );
+        assert_eq!(
+            pick_monitor(&monitors, 2000, 100),
+            Some(MonitorIdentity::runtime_id(2))
+        );
+        assert_eq!(
+            pick_monitor(&monitors, 1920, 500),
+            Some(MonitorIdentity::runtime_id(2))
+        );
         assert_eq!(pick_monitor(&monitors, 500, 5000), None);
         assert_eq!(pick_monitor(&monitors, -5, -5), None);
     }

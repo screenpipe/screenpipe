@@ -28,19 +28,25 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { KeyRound, RotateCw, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { platform as getPlatform } from "@tauri-apps/plugin-os";
+import { ExternalLink, KeyRound, Loader2, RotateCw, PanelRightClose, PanelRightOpen } from "lucide-react";
 import {
   loadConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
 import { Button } from "@/components/ui/button";
+import { localFetch } from "@/lib/api";
 
 const NAVIGATE_EVENT = "owned-browser:navigate";
 const SESSION_ACCESS_REQUEST_EVENT = "owned-browser:session-access-request";
+const V20_COOKIE_BLOCK_EVENT = "owned-browser:v20-cookie-blocked";
 const STATE_EVENT = "owned-browser:state";
 const DEFAULT_WIDTH = 480;
 const MIN_WIDTH = 320;
 const MIN_CHAT_WIDTH = 360;
+const CHROME_WEBSTORE_URL =
+  "https://chromewebstore.google.com/search/screenpipe%20browser%20bridge";
 
 interface BrowserSidebarProps {
   conversationId: string | null;
@@ -57,6 +63,25 @@ interface ActiveSessionAccessRequest {
   requestId: string;
   url: string;
   host: string;
+}
+
+interface V20CookieBlockEvent {
+  url: string;
+  host: string;
+  rows: number;
+  v20Count?: number;
+  v20_count?: number;
+  sources?: string[];
+  reason?: string;
+}
+
+interface ActiveV20CookieBlock {
+  url: string;
+  host: string;
+  rows: number;
+  v20Count: number;
+  sources: string[];
+  reason: string;
 }
 
 interface OwnedBrowserStateEvent {
@@ -87,6 +112,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const [sessionAccessAnswer, setSessionAccessAnswer] = useState<
     "allow" | "deny" | null
   >(null);
+  const [v20CookieBlock, setV20CookieBlock] =
+    useState<ActiveV20CookieBlock | null>(null);
+  const [extensionConnected, setExtensionConnected] = useState(false);
+  const [isMac, setIsMac] = useState(false);
   const [requestedWidth, setRequestedWidth] = useState(DEFAULT_WIDTH);
   // `availableW` = the width of the panel's flex parent (the host marked
   // with data-browser-panel-host in standalone-chat.tsx). That's the real
@@ -108,6 +137,14 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
   const effectiveWidth = clampWidth(requestedWidth, availableW);
   const panelOpen = visible && !collapsed && effectiveWidth > 0;
+
+  useEffect(() => {
+    try {
+      setIsMac(getPlatform() === "macos");
+    } catch {
+      // plugin unavailable in web dev mode
+    }
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Persistence
@@ -239,6 +276,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       if (!url) return;
       setSessionAccessRequest(null);
       setSessionAccessAnswer(null);
+      setV20CookieBlock(null);
       setVisible(true);
       setCollapsed(false);
       setCurrentUrl(url);
@@ -265,6 +303,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         };
         setSessionAccessRequest(request);
         setSessionAccessAnswer(null);
+        setV20CookieBlock(null);
         setVisible(true);
         setCollapsed(false);
         setCurrentUrl(request.url);
@@ -280,13 +319,84 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   }, [persistState]);
 
   useEffect(() => {
-    sessionAccessActiveRef.current = sessionAccessRequest !== null;
-    if (sessionAccessRequest) {
+    const unlistenPromise = listen<V20CookieBlockEvent>(
+      V20_COOKIE_BLOCK_EVENT,
+      (e) => {
+        const payload = e.payload;
+        if (!payload?.url || !payload?.host) return;
+        const block = {
+          url: payload.url,
+          host: payload.host,
+          rows: payload.rows ?? 0,
+          v20Count: payload.v20Count ?? payload.v20_count ?? 0,
+          sources: payload.sources ?? [],
+          reason: payload.reason ?? "v20",
+        };
+        setSessionAccessRequest(null);
+        setSessionAccessAnswer(null);
+        setV20CookieBlock(block);
+        setVisible(true);
+        setCollapsed(false);
+        setCurrentUrl(block.url);
+        setCurrentTitle(null);
+        setLoading(false);
+        persistState({ url: block.url, collapsed: false });
+        invoke("owned_browser_hide").catch(() => {});
+      },
+    );
+    return () => {
+      unlistenPromise.then((fn) => fn()).catch(() => {});
+    };
+  }, [persistState]);
+
+  useEffect(() => {
+    sessionAccessActiveRef.current =
+      sessionAccessRequest !== null || v20CookieBlock !== null;
+    if (sessionAccessRequest || v20CookieBlock) {
       invoke("owned_browser_hide").catch(() => {});
     } else if (panelOpen) {
       schedulePushBounds();
     }
-  }, [sessionAccessRequest, panelOpen, schedulePushBounds]);
+  }, [sessionAccessRequest, v20CookieBlock, panelOpen, schedulePushBounds]);
+
+  // While the locked/v20 block card is visible, poll extension status every 2s.
+  // When the extension connects, auto-retry navigation and dismiss the card.
+  useEffect(() => {
+    if (!v20CookieBlock) {
+      setExtensionConnected(false);
+      return;
+    }
+    const retryUrl = v20CookieBlock.url;
+    let cancelled = false;
+
+    const check = async () => {
+      try {
+        const r = await localFetch("/connections/browser/status");
+        if (!r.ok || cancelled) return;
+        const data: { connected?: boolean } = await r.json();
+        if (data.connected) {
+          setExtensionConnected(true);
+          if (!cancelled) {
+            // Extension is now connected — retry the navigation, which will
+            // go through the extension cookie path.
+            setV20CookieBlock(null);
+            invoke("owned_browser_navigate", { url: retryUrl }).catch(() => {});
+          }
+        } else {
+          setExtensionConnected(false);
+        }
+      } catch {
+        // Server not reachable yet, ignore.
+      }
+    };
+
+    check();
+    const t = setInterval(check, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [v20CookieBlock]);
 
   useEffect(() => {
     const unlistenPromise = listen<OwnedBrowserStateEvent>(STATE_EVENT, (e) => {
@@ -327,6 +437,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       setLoading(false);
       setSessionAccessRequest(null);
       setSessionAccessAnswer(null);
+      setV20CookieBlock(null);
       setRequestedWidth(DEFAULT_WIDTH);
       invoke("owned_browser_hide").catch(() => {});
       return () => {
@@ -375,6 +486,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setCurrentUrl(null);
         setCurrentTitle(null);
         setLoading(false);
+        setV20CookieBlock(null);
         invoke("owned_browser_hide").catch(() => {});
       }
     })();
@@ -581,7 +693,9 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
           <div
             ref={placeholderRef}
             className="flex-1 bg-background relative"
-            aria-hidden={sessionAccessRequest ? true : undefined}
+            aria-hidden={
+              sessionAccessRequest || v20CookieBlock ? true : undefined
+            }
           />
           {sessionAccessRequest && (
             <div className="absolute inset-0 z-40 flex items-center justify-center bg-background p-4">
@@ -604,10 +718,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                     your browser so the agent opens this site already signed
                     in. It does not read saved passwords.
                   </p>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    If you allow it, macOS may ask for access to browser safe
-                    storage next.
-                  </p>
+                  {isMac && (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      If you allow it, macOS may ask for access to browser safe
+                      storage next.
+                    </p>
+                  )}
                   <div className="mt-4 flex flex-col gap-2">
                     <Button
                       size="sm"
@@ -616,7 +732,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                       className="w-full"
                     >
                       {sessionAccessAnswer === "allow"
-                        ? "Waiting for macOS"
+                        ? isMac ? "Waiting for macOS…" : "Applying…"
                         : "Use browser session"}
                     </Button>
                     <Button
@@ -627,6 +743,89 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                       className="w-full"
                     >
                       Continue logged out
+                    </Button>
+                  </div>
+                </div>
+            </div>
+          )}
+          {v20CookieBlock && (
+            <div className="absolute inset-0 z-40 flex items-center justify-center bg-background p-4">
+                <div className="w-full max-w-sm border border-border bg-card p-4 shadow-sm">
+                  <div className="mb-3 flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center border border-border bg-muted text-foreground">
+                      <KeyRound className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        Browser login is protected
+                      </div>
+                      <div className="mt-1 break-all text-xs text-muted-foreground">
+                        {v20CookieBlock.host}
+                      </div>
+                    </div>
+                  </div>
+                  {v20CookieBlock.reason === "locked" ? (
+                    <>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        {v20CookieBlock.sources.length > 0
+                          ? v20CookieBlock.sources.join(", ")
+                          : "Your browser"}{" "}
+                        is running and holds an exclusive lock on its cookie
+                        database. Screenpipe cannot read it while the browser is
+                        open.
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        Connect the Screenpipe Browser Bridge extension to share
+                        this login directly — no passwords, no closing your
+                        browser.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        Chrome or Edge has matching session cookies, but Windows
+                        app-bound encryption prevents Screenpipe from reusing
+                        them directly.
+                      </p>
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        Connect the Screenpipe Browser Bridge extension to reuse
+                        this login without sharing passwords.
+                      </p>
+                      <div className="mt-3 text-[11px] leading-4 text-muted-foreground">
+                        Found {v20CookieBlock.v20Count || v20CookieBlock.rows}{" "}
+                        protected cookies
+                        {v20CookieBlock.sources.length > 0
+                          ? ` in ${v20CookieBlock.sources.join(", ")}`
+                          : ""}
+                        .
+                      </div>
+                    </>
+                  )}
+                  <div className="mt-4 flex flex-col gap-2">
+                    {extensionConnected ? (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Extension connected — retrying…
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          openUrl(CHROME_WEBSTORE_URL).catch(() => {});
+                        }}
+                        className="w-full"
+                      >
+                        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                        Connect extension
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setV20CookieBlock(null)}
+                      className="w-full"
+                    >
+                      Continue without signing in
                     </Button>
                   </div>
                 </div>

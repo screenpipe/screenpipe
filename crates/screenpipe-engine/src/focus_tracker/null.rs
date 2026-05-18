@@ -5,7 +5,7 @@
 //! Null focus tracker: always reports Unknown, never emits events.
 //! Used on unsupported platforms or when the native impl fails to start.
 
-use super::{FocusEvent, FocusTracker};
+use super::{FocusEvent, FocusTracker, MonitorIdentity};
 use tokio::sync::broadcast;
 
 pub struct NullFocusTracker {
@@ -26,7 +26,7 @@ impl Default for NullFocusTracker {
 }
 
 impl FocusTracker for NullFocusTracker {
-    fn current(&self) -> Option<u32> {
+    fn current(&self) -> Option<MonitorIdentity> {
         None
     }
     fn subscribe(&self) -> broadcast::Receiver<FocusEvent> {

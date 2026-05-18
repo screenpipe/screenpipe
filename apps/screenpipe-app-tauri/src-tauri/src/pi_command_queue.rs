@@ -20,6 +20,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::ChildStdin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,15 +64,14 @@ pub struct PiCommand {
 /// How the queue waits after writing a command to stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitMode {
-    /// Write to stdin, reply Ok, advance immediately. Used for `prompt`
-    /// commands that include `streamingBehavior: "followUp"` — pi-mono owns
-    /// prompt serialization (its internal followUp queue handles back-to-back
-    /// prompts during streaming AND during auto-retry's mid-prompt agent_end
-    /// gap). The Rust queue must NOT block on `agent_end`, because pi-mono
-    /// fires that event mid-prompt during auto-retry and our drain loop would
-    /// race the still-running turn. The "queued" UI rail is cleared by the
-    /// stdout reader when pi-mono fires `message_start` for the user message.
+    /// Write to stdin, reply Ok, advance immediately. Used for commands that
+    /// are allowed to interrupt or redirect the current turn (for example
+    /// native `steer`).
     WriteOnly,
+    /// Write a prompt, acknowledge the write, then wait for the agent to
+    /// become idle before the next queued prompt is written. This keeps
+    /// follow-ups in Rust's cancellable queue until their actual turn starts.
+    Prompt,
     /// Write to stdin, wait for `done`, then reply and dequeue. Used for `new_session`
     /// and `abort` where the caller must know the SDK is fully idle before proceeding.
     WaitDone,
@@ -81,6 +81,7 @@ pub enum WaitMode {
 #[derive(Clone)]
 pub struct PiQueueHandle {
     tx: mpsc::Sender<QueueMessage>,
+    stdin: Option<Arc<Mutex<ChildStdin>>>,
     /// Shared with the drain loop and the stdout reader. We keep a reference
     /// here so `send_prompt` can publish the new entry to subscribers BEFORE
     /// awaiting the drain loop, giving the UI an instant "queued" hint.
@@ -117,7 +118,11 @@ pub struct PiQueueState {
     /// pulled them. The mpsc channel is FIFO and not introspectable, so we
     /// can't pluck a specific entry out of it — instead the drain loop
     /// checks this set when popping and skips the write.
-    cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
+    cancelled: std::sync::Mutex<HashSet<String>>,
+    /// Full queued command payloads by queue id. The UI only receives a small
+    /// preview, but backend actions like "Steer this queued row" need the
+    /// exact original prompt/images without trusting frontend shadow state.
+    queued_payloads: std::sync::Mutex<HashMap<String, Value>>,
     /// True between `agent_start` and `agent_end` — i.e. while the SDK is
     /// actively processing a `prompt`. Read by the stdout reader to suppress
     /// the `response → 500ms → signal_done` fallback on prompt ACKs (those
@@ -138,14 +143,15 @@ impl PiQueueState {
             terminated_notify: Notify::new(),
             alive: alive_tx,
             queued: queued_tx,
-            cancelled: std::sync::Mutex::new(std::collections::HashSet::new()),
+            cancelled: std::sync::Mutex::new(HashSet::new()),
+            queued_payloads: std::sync::Mutex::new(HashMap::new()),
             agent_active: AtomicBool::new(false),
         })
     }
 
     /// Called by the stdout reader when a `done` event is received.
     pub fn signal_done(&self) {
-        self.done_notify.notify_one();
+        self.done_notify.notify_waiters();
     }
 
     /// Called by the stdout reader on `agent_start` (a prompt has begun streaming).
@@ -172,6 +178,12 @@ impl PiQueueState {
         self.done_notify.notify_waiters();
         // Drop any queued prompts so subscribers stop showing them — Pi died.
         self.queued.send_modify(|v| v.clear());
+        if let Ok(mut payloads) = self.queued_payloads.lock() {
+            payloads.clear();
+        }
+        if let Ok(mut cancelled) = self.cancelled.lock() {
+            cancelled.clear();
+        }
         // Clear the agent-active flag so a future restart doesn't start out
         // in a stuck "active" state if the process died mid-stream.
         self.agent_active.store(false, Ordering::SeqCst);
@@ -188,7 +200,10 @@ impl PiQueueState {
         self.queued.borrow().clone()
     }
 
-    fn enqueue_prompt(&self, prompt: PiQueuedPrompt) {
+    fn enqueue_prompt(&self, prompt: PiQueuedPrompt, payload: Value) {
+        if let Ok(mut payloads) = self.queued_payloads.lock() {
+            payloads.insert(prompt.id.clone(), payload);
+        }
         self.queued.send_modify(|v| v.push(prompt));
     }
 
@@ -198,30 +213,9 @@ impl PiQueueState {
                 v.remove(pos);
             }
         });
-    }
-
-    /// Remove the first queued entry whose preview matches the given user
-    /// message text. Called by the stdout reader when pi-mono fires
-    /// `message_start` with a user message — that's the moment a prompt
-    /// transitions from "waiting in pi-mono's followUp queue" to "in-flight",
-    /// and is the right moment to clear the UI rail entry. Returns whether a
-    /// match was found and removed.
-    ///
-    /// Matching is by preview text (truncated to 200 chars at enqueue time).
-    /// Pi-mono uses the same FIFO match-by-text strategy in its own queue, so
-    /// this stays consistent: if the user enqueues two identical prompts, the
-    /// first message_start dequeues the first entry, the second dequeues the
-    /// second.
-    pub fn dequeue_first_matching_text(&self, text: &str) -> bool {
-        let preview: String = text.chars().take(200).collect();
-        let mut removed = false;
-        self.queued.send_modify(|v| {
-            if let Some(pos) = v.iter().position(|p| p.preview == preview) {
-                v.remove(pos);
-                removed = true;
-            }
-        });
-        removed
+        if let Ok(mut payloads) = self.queued_payloads.lock() {
+            payloads.remove(id);
+        }
     }
 
     /// Mark a prompt id as cancelled so the drain loop drops it on dequeue
@@ -237,6 +231,27 @@ impl PiQueueState {
         }
         self.dequeue_prompt(id);
         was_present
+    }
+
+    fn take_queued_payload(&self, id: &str) -> Option<Value> {
+        let was_visible = self.queued.borrow().iter().any(|p| p.id == id);
+        if !was_visible {
+            return None;
+        }
+        let payload = self
+            .queued_payloads
+            .lock()
+            .ok()
+            .and_then(|mut payloads| payloads.remove(id));
+        if let Ok(mut set) = self.cancelled.lock() {
+            set.insert(id.to_string());
+        }
+        self.queued.send_modify(|v| {
+            if let Some(pos) = v.iter().position(|p| p.id == id) {
+                v.remove(pos);
+            }
+        });
+        payload
     }
 
     fn take_cancelled(&self, id: &str) -> bool {
@@ -278,6 +293,7 @@ impl PiQueueHandle {
         payload: Value,
         wait_mode: WaitMode,
         preview: String,
+        force_visible_queue: bool,
     ) -> Result<(String, oneshot::Receiver<Result<(), String>>), String> {
         let id = format!("q_{}", uuid::Uuid::new_v4().simple());
         let queued_at_ms = std::time::SystemTime::now()
@@ -294,26 +310,97 @@ impl PiQueueHandle {
         };
 
         let (tx, rx) = oneshot::channel();
-        self.tx
+        let should_show_in_queue = force_visible_queue || self.state.is_agent_active();
+        let tracked_payload = payload.clone();
+
+        if should_show_in_queue {
+            self.state.enqueue_prompt(meta.clone(), tracked_payload);
+        }
+
+        if self
+            .tx
             .send(QueueMessage::Command(PiCommand {
                 payload,
                 wait_mode,
                 reply: tx,
-                prompt_meta: Some(meta.clone()),
+                prompt_meta: Some(meta),
             }))
             .await
-            .map_err(|_| "Pi command queue closed".to_string())?;
-
-        // Only surface in the "queued · waiting for current reply" UI rail
-        // when the agent is actually mid-stream. For a first prompt to an
-        // idle agent, pi-mono fires `message_start` within milliseconds and
-        // showing it as "queued" briefly is confusing — skip the rail entry.
-        // The stdout reader's `message_start` handler is a no-op when the
-        // entry isn't present (it dequeues by text match).
-        if self.state.is_agent_active() {
-            self.state.enqueue_prompt(meta);
+            .is_err()
+        {
+            if should_show_in_queue {
+                self.state.dequeue_prompt(&id);
+            }
+            return Err("Pi command queue closed".to_string());
         }
         Ok((id, rx))
+    }
+
+    /// Remove a queued prompt and return its original command payload. Used
+    /// for queue-row steering: the selected follow-up leaves the queue and is
+    /// sent through Pi's native steer path instead of later running as a
+    /// normal follow-up.
+    pub async fn take_queued_payload(&self, prompt_id: String) -> Result<Option<Value>, String> {
+        Ok(self.state.take_queued_payload(&prompt_id))
+    }
+
+    /// Write a command straight to Pi stdin. This is intentionally reserved
+    /// for native steer, which must redirect the active turn immediately
+    /// instead of waiting behind normal queued follow-ups.
+    pub async fn send_immediate(&self, mut payload: Value) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or("Pi stdin is not available".to_string())?;
+        let req_id = format!("req_{}", uuid::Uuid::new_v4().simple());
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("id".to_string(), json!(&req_id));
+        }
+        let cmd_type = payload
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let cmd_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+        let mut stdin_guard = stdin.lock().await;
+        info!(
+            "pi_command_queue: writing immediate {} ({}), {} bytes",
+            cmd_type,
+            req_id,
+            cmd_str.len()
+        );
+        writeln!(*stdin_guard, "{}", cmd_str)
+            .and_then(|_| stdin_guard.flush())
+            .map_err(|e| format!("stdin write failed: {}", e))
+    }
+
+    /// Abort only the active Pi turn. Unlike `abort`, this does not drain or
+    /// clear queued follow-ups, so the queue can continue after the active
+    /// reply stops.
+    pub async fn abort_active_only(&self) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or("Pi stdin is not available".to_string())?;
+        let mut alive_rx = self.state.alive.subscribe();
+        let req_id = format!("req_{}", uuid::Uuid::new_v4().simple());
+        let abort_cmd = json!({"type": "abort", "id": &req_id});
+        let cmd_str = serde_json::to_string(&abort_cmd).map_err(|e| e.to_string())?;
+
+        self.state.mark_agent_idle();
+        {
+            let mut stdin_guard = stdin.lock().await;
+            info!("pi_command_queue: writing active-only abort ({})", req_id);
+            writeln!(*stdin_guard, "{}", cmd_str)
+                .and_then(|_| stdin_guard.flush())
+                .map_err(|e| format!("abort write failed: {}", e))?;
+        }
+
+        if wait_for_done_or_terminated(&self.state, &mut alive_rx, "abort").await {
+            Ok(())
+        } else {
+            Err("Pi process died during abort".to_string())
+        }
     }
 
     /// Cancel a single queued prompt by its id. Returns `true` if the prompt
@@ -355,6 +442,7 @@ pub fn spawn_queue(
     let (tx, mut rx) = mpsc::channel::<QueueMessage>(32);
     let handle = PiQueueHandle {
         tx,
+        stdin: Some(stdin.clone()),
         state: state.clone(),
     };
 
@@ -384,6 +472,7 @@ pub fn spawn_queue(
             match msg {
                 QueueMessage::Command(cmd) => {
                     let prompt_id = cmd.prompt_meta.as_ref().map(|m| m.id.clone());
+                    let is_prompt = prompt_id.is_some();
 
                     // Tombstone check — if the user cancelled this prompt
                     // while it was sitting in the channel, drop it without
@@ -411,6 +500,37 @@ pub fn spawn_queue(
                         .unwrap_or("?")
                         .to_string();
 
+                    // Prompt commands must be serialized against the currently
+                    // active agent turn. We cannot rely on response ACK order:
+                    // ACK can arrive before pi-mono actually starts streaming.
+                    if is_prompt && state.is_agent_active() {
+                        let ok =
+                            wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
+                        if !ok {
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
+                            let _ = cmd
+                                .reply
+                                .send(Err("Pi process died while processing".to_string()));
+                            continue;
+                        }
+
+                        // The first queued prompt can already be popped from
+                        // the mpsc channel and parked here waiting for the
+                        // current turn to finish. If the user deletes it
+                        // during that wait, the original tombstone check above
+                        // is now stale. Re-check before writing so "Delete"
+                        // really prevents the prompt from ever reaching Pi.
+                        if let Some(pid) = &prompt_id {
+                            if state.take_cancelled(pid) {
+                                state.dequeue_prompt(pid);
+                                let _ = cmd.reply.send(Err("cancelled".to_string()));
+                                continue;
+                            }
+                        }
+                    }
+
                     // Write to stdin
                     let write_result = {
                         let mut stdin_guard = stdin.lock().await;
@@ -436,21 +556,35 @@ pub fn spawn_queue(
                         continue;
                     }
 
+                    // `agent_start` can arrive a little later than the write.
+                    // Mark active optimistically for prompt commands so the
+                    // next queued prompt cannot slip through this tiny window.
+                    if is_prompt {
+                        state.mark_agent_active();
+                    }
+
                     match cmd.wait_mode {
                         WaitMode::WriteOnly => {
-                            // Pi-mono owns serialization for prompts via its
-                            // internal followUp queue. We don't wait for done
-                            // and we don't dequeue from the UI rail here —
-                            // the entry stays visible until pi-mono fires
-                            // `message_start` for the user message, at which
-                            // point the stdout reader removes it.
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
                             let _ = cmd.reply.send(Ok(()));
+                        }
+                        WaitMode::Prompt => {
+                            // The prompt has now left the waiting queue and
+                            // entered the transcript as the active turn.
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
+                            let _ = cmd.reply.send(Ok(()));
+                            let _ =
+                                wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
                         }
                         WaitMode::WaitDone => {
                             // Successful write — for blocking commands the
                             // entry should be removed from the queued rail
                             // immediately (it's now in-flight, not waiting).
-                            // Prompts use WriteOnly and skip this branch.
+                            // Prompts use Prompt mode and skip this branch.
                             if let Some(pid) = &prompt_id {
                                 state.dequeue_prompt(pid);
                             }
@@ -490,6 +624,12 @@ pub fn spawn_queue(
                     // queued-prompt list. The drain above should cover them
                     // but a paranoid clear is cheap and correct.
                     state.queued.send_modify(|v| v.clear());
+                    if let Ok(mut payloads) = state.queued_payloads.lock() {
+                        payloads.clear();
+                    }
+                    if let Ok(mut tombstones) = state.cancelled.lock() {
+                        tombstones.clear();
+                    }
                     // Abort halts the agent loop. Clear the active flag so
                     // the abort's `response` ACK is allowed to fire the
                     // done-fallback (otherwise the wait below hangs until
@@ -629,7 +769,11 @@ mod tests {
         // Verify the handle API works without a real subprocess
         let (tx, mut rx) = mpsc::channel::<QueueMessage>(8);
         let state = PiQueueState::new();
-        let handle = PiQueueHandle { tx, state };
+        let handle = PiQueueHandle {
+            tx,
+            stdin: None,
+            state,
+        };
 
         // Send a command in the background
         let h = tokio::spawn(async move {
@@ -656,7 +800,11 @@ mod tests {
     async fn test_abort_cancels_pending() {
         let (tx, mut rx) = mpsc::channel::<QueueMessage>(8);
         let state = PiQueueState::new();
-        let handle = PiQueueHandle { tx, state };
+        let handle = PiQueueHandle {
+            tx,
+            stdin: None,
+            state,
+        };
 
         // Queue two commands
         let h1 = {
