@@ -10,6 +10,8 @@ const DEEPGRAM_LIVE_URL = 'https://api.deepgram.com/v1/listen';
 const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
 const DEFAULT_DEEPGRAM_LIVE_COST_PER_HOUR = 0.26;
 const LEGACY_OPENAI_SAMPLE_RATE = '24000';
+const DEEPGRAM_LIVE_UPGRADE_ATTEMPTS = 3;
+const DEEPGRAM_LIVE_UPGRADE_RETRY_DELAYS_MS = [150, 500];
 
 const FORWARDED_QUERY_PARAMS = new Set([
 	'channels',
@@ -55,18 +57,18 @@ export async function handleRealtimeTranscriptionUpgrade(
 	}
 	const model = upstreamUrl.searchParams.get('model') || DEFAULT_DEEPGRAM_MODEL;
 
-	const upstreamResponse = await fetch(upstreamUrl.toString(), {
-		headers: {
-			Upgrade: 'websocket',
-			Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
-			'User-Agent': 'screenpipe-ai-gateway-deepgram-live',
-		},
-	});
-
-	if (upstreamResponse.status !== 101 || !upstreamResponse.webSocket) {
-		const body = await upstreamResponse.text().catch(() => '');
-		console.error('Deepgram live upgrade failed', upstreamResponse.status, body.slice(0, 500));
-		return createErrorResponse(502, `Realtime transcription upstream failed (${upstreamResponse.status})`);
+	const upstreamResult = await connectDeepgramLiveWithRetry(upstreamUrl, env);
+	const upstreamResponse = upstreamResult.response;
+	if (!upstreamResponse || upstreamResponse.status !== 101 || !upstreamResponse.webSocket) {
+		console.error(
+			'Deepgram live upgrade failed',
+			upstreamResult.status ?? 'network_error',
+			upstreamResult.body.slice(0, 500),
+		);
+		return createErrorResponse(
+			503,
+			`Realtime transcription upstream unavailable (${upstreamResult.status ?? 'network_error'})`,
+		);
 	}
 
 	const pair = new WebSocketPair();
@@ -131,6 +133,57 @@ export async function handleRealtimeTranscriptionUpgrade(
 		status: 101,
 		webSocket: client,
 	});
+}
+
+type DeepgramLiveUpgradeResult = {
+	response?: Response;
+	status?: number;
+	body: string;
+};
+
+async function connectDeepgramLiveWithRetry(
+	upstreamUrl: URL,
+	env: Env,
+): Promise<DeepgramLiveUpgradeResult> {
+	let last: DeepgramLiveUpgradeResult = { body: '' };
+
+	for (let attempt = 1; attempt <= DEEPGRAM_LIVE_UPGRADE_ATTEMPTS; attempt++) {
+		try {
+			const response = await fetch(upstreamUrl.toString(), {
+				headers: {
+					Upgrade: 'websocket',
+					Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
+					'User-Agent': 'screenpipe-ai-gateway-deepgram-live',
+				},
+			});
+
+			if (response.status === 101 && response.webSocket) {
+				return { response, status: response.status, body: '' };
+			}
+
+			const body = await response.text().catch(() => '');
+			last = { response, status: response.status, body };
+			if (!isRetryableDeepgramLiveUpgradeStatus(response.status)) {
+				return last;
+			}
+		} catch (error: any) {
+			last = { body: error?.message || 'unknown error' };
+		}
+
+		if (attempt < DEEPGRAM_LIVE_UPGRADE_ATTEMPTS) {
+			await sleep(DEEPGRAM_LIVE_UPGRADE_RETRY_DELAYS_MS[attempt - 1] ?? 500);
+		}
+	}
+
+	return last;
+}
+
+function isRetryableDeepgramLiveUpgradeStatus(status: number): boolean {
+	return [429, 500, 502, 503, 504, 520, 522, 524].includes(status);
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 type ClientProtocol = 'deepgram-live' | 'legacy-openai-realtime';

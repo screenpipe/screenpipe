@@ -187,7 +187,14 @@ pub async fn load_oauth_json(
     instance: Option<&str>,
 ) -> Option<Value> {
     if let Some(v) = load_oauth_json_exact(store, integration_id, instance).await {
-        return Some(v);
+        if instance.is_some() || oauth_json_is_recoverable(&v) {
+            return Some(v);
+        }
+
+        tracing::warn!(
+            "oauth: {} default token is not recoverable, checking for a single healthy named instance",
+            integration_id,
+        );
     }
 
     // Fallback: callers that don't know about instances (instance=None)
@@ -209,6 +216,21 @@ pub async fn load_oauth_json(
         return load_oauth_json_exact(store, integration_id, inst).await;
     }
     None
+}
+
+fn oauth_json_has_valid_access_token(v: &Value) -> bool {
+    if v["access_token"].as_str().is_none() {
+        return false;
+    }
+
+    match v["expires_at"].as_u64() {
+        Some(expires_at) => unix_now() < expires_at.saturating_sub(60),
+        None => true,
+    }
+}
+
+fn oauth_json_is_recoverable(v: &Value) -> bool {
+    oauth_json_has_valid_access_token(v) || v["refresh_token"].as_str().is_some()
 }
 
 /// Exact-key variant with no instance fallback. Everything `load_oauth_json`
@@ -296,20 +318,30 @@ pub async fn is_oauth_instance_connected(
     integration_id: &str,
     instance: Option<&str>,
 ) -> bool {
-    let v = match load_oauth_json(store, integration_id, instance).await {
-        Some(v) => v,
-        None => return false,
-    };
+    load_oauth_json(store, integration_id, instance)
+        .await
+        .as_ref()
+        .is_some_and(oauth_json_is_recoverable)
+}
 
-    // Valid (non-expired) access token → connected
-    if let Some(expires_at) = v["expires_at"].as_u64() {
-        if unix_now() < expires_at.saturating_sub(60) {
-            return v["access_token"].as_str().is_some();
+/// List only instances that are recoverable: either the access token is still
+/// valid, or a refresh token exists and can keep the connection alive.
+pub async fn list_connected_oauth_instances(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+) -> Vec<Option<String>> {
+    let instances = list_oauth_instances(store, integration_id).await;
+    let mut connected = Vec::new();
+    for inst in instances {
+        if load_oauth_json_exact(store, integration_id, inst.as_deref())
+            .await
+            .as_ref()
+            .is_some_and(oauth_json_is_recoverable)
+        {
+            connected.push(inst);
         }
     }
-
-    // Expired but has refresh token → recoverable (still "connected")
-    v["refresh_token"].as_str().is_some()
+    connected
 }
 
 // ---------------------------------------------------------------------------
@@ -665,13 +697,14 @@ mod tests {
     #[tokio::test]
     async fn load_with_none_prefers_exact_match_over_fallback() {
         // When BOTH a no-instance entry and a named one exist, the exact
-        // match wins — don't accidentally prefer a random named instance.
+        // recoverable match wins — don't accidentally prefer a random named
+        // instance.
         let store = mem_store().await;
         let id = "_t_prefer";
         store
             .set_json(
                 &format!("oauth:{}", id),
-                &json!({"access_token": "default"}),
+                &json!({"access_token": "default", "refresh_token": "default-rt"}),
             )
             .await
             .unwrap();
@@ -685,6 +718,39 @@ mod tests {
 
         let got = load_oauth_json(Some(&store), id, None).await.unwrap();
         assert_eq!(got["access_token"], "default");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_falls_back_when_default_is_unrecoverable() {
+        // A stale default slot must not shadow a healthy named Google account.
+        // This is the calendar "reconnect every hour" failure mode: status
+        // checked the default key, found an expired non-refreshable token, and
+        // ignored the refreshable token saved under the user's email.
+        let store = mem_store().await;
+        let id = "_t_shadowed_unrecoverable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "stale-default", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:louis@screenpi.pe", id),
+                &json!({
+                    "access_token": "fresh-named",
+                    "refresh_token": "named-rt",
+                    "expires_at": expired,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await.unwrap();
+        assert_eq!(got["access_token"], "fresh-named");
+        assert_eq!(got["refresh_token"], "named-rt");
     }
 
     #[tokio::test]
@@ -759,6 +825,78 @@ mod tests {
             .unwrap();
 
         assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_treats_expired_refresh_token_as_connected() {
+        let store = mem_store().await;
+        let id = "_t_expired_refreshable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({
+                    "access_token": "expired",
+                    "refresh_token": "rt",
+                    "expires_at": expired,
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_accepts_legacy_token_without_expiry() {
+        let store = mem_store().await;
+        let id = "_t_legacy_no_expiry";
+        store
+            .set_json(&format!("oauth:{}", id), &json!({"access_token": "legacy"}))
+            .await
+            .unwrap();
+
+        assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_rejects_expired_token_without_refresh() {
+        let store = mem_store().await;
+        let id = "_t_expired_unrecoverable";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "expired", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+
+        assert!(!is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+
+    #[tokio::test]
+    async fn list_connected_oauth_instances_filters_unrecoverable_slots() {
+        let store = mem_store().await;
+        let id = "_t_list_connected";
+        let expired = unix_now().saturating_sub(3600);
+        store
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "stale-default", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:connected@example.com", id),
+                &json!({"access_token": "expired", "refresh_token": "rt", "expires_at": expired}),
+            )
+            .await
+            .unwrap();
+
+        let got = list_connected_oauth_instances(Some(&store), id).await;
+        assert_eq!(got, vec![Some("connected@example.com".to_string())]);
     }
 
     // ---- sweep_shadowed_default_slots --------------------------------

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Screenpipe Tauri Example",
+  "version": "0.1.0",
+  "identifier": "pe.screenpipe.sdk.tauri-example",
+  "build": {
+    "beforeDevCommand": "npm run vite -- --host 127.0.0.1",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run vite -- build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Screenpipe Tauri Example",
+        "width": 860,
+        "height": 620
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

@@ -1,0 +1,188 @@
+# screenpipe - AI that knows everything you've seen, said, or heard
+# https://screenpi.pe
+#
+# Manual SDK npm release workflow. This workflow defaults to dry-run packaging.
+# To publish public npm packages, a human must set publish_npm=true and provide
+# the matching confirmation string when dispatching the workflow.
+
+name: Release SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SDK semver version already committed in ee/sdk/package.json"
+        required: true
+        default: "0.1.0"
+      npm_tag:
+        description: "npm dist-tag to publish under"
+        required: true
+        default: "latest"
+      publish_npm:
+        description: "Publish public npm packages instead of dry-run only"
+        required: true
+        type: boolean
+        default: false
+      confirm:
+        description: "Required when publishing: publish-sdk-VERSION"
+        required: true
+        default: "dry-run"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DEBUG: napi:*
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      publish_npm: ${{ steps.mode.outputs.publish_npm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate requested version
+        working-directory: ee/sdk
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const version = process.env.VERSION;
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          if (pkg.version !== version) {
+            throw new Error(`package.json version ${pkg.version} does not match requested ${version}`);
+          }
+          for (const [name, depVersion] of Object.entries(pkg.optionalDependencies || {})) {
+            if (depVersion !== version) {
+              throw new Error(`${name} optional dependency is ${depVersion}, expected ${version}`);
+            }
+          }
+          const cargo = fs.readFileSync("Cargo.toml", "utf8");
+          if (!cargo.includes(`version = "${version}"`)) {
+            throw new Error(`Cargo.toml does not contain version = "${version}"`);
+          }
+          NODE
+      - id: mode
+        name: Validate publish confirmation
+        env:
+          VERSION: ${{ inputs.version }}
+          PUBLISH_NPM: ${{ inputs.publish_npm }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [[ "$PUBLISH_NPM" == "true" ]]; then
+            expected="publish-sdk-${VERSION}"
+            if [[ "$CONFIRM" != "$expected" ]]; then
+              echo "::error::Publishing requires confirm=${expected}"
+              exit 1
+            fi
+          fi
+          echo "publish_npm=${PUBLISH_NPM}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    name: build ${{ matrix.settings.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: x86_64-apple-darwin
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.settings.host }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ee/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-release-${{ matrix.settings.target }}
+          workspaces: ee/sdk -> target
+          cache-bin: false
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Build native binding
+        run: bun run build --target ${{ matrix.settings.target }}
+      - name: Upload binding
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-bindings-${{ matrix.settings.target }}
+          path: ee/sdk/*.node
+          if-no-files-found: error
+          retention-days: 7
+
+  npm:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ee/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Download native bindings
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sdk-bindings-*
+          path: ee/sdk
+          merge-multiple: true
+      - name: Prepare npm packages
+        run: bun run prepublishOnly
+      - name: Inspect package contents
+        run: npm pack --dry-run --ignore-scripts
+      - name: Publish npm packages
+        if: needs.validate.outputs.publish_npm == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ inputs.npm_tag }}
+        run: |
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "::error::NPM_TOKEN secret is required to publish"
+            exit 1
+          fi
+
+          if [[ ! -d npm ]]; then
+            echo "::error::napi prepublish did not create platform package directories under ee/sdk/npm"
+            exit 1
+          fi
+
+          while IFS= read -r -d '' package_dir; do
+            if [[ -f "$package_dir/package.json" ]]; then
+              echo "Publishing $package_dir"
+              (cd "$package_dir" && npm publish --access public --tag "$NPM_TAG" --provenance)
+            fi
+          done < <(find npm -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+
+          npm publish --access public --tag "$NPM_TAG" --provenance

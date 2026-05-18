@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox"
-import { Check } from "lucide-react"
+import { Check, Minus } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -20,9 +20,15 @@ const Checkbox = React.forwardRef<
     {...props}
   >
     <CheckboxPrimitive.Indicator
-      className={cn("flex items-center justify-center text-current")}
+      className={cn(
+        "flex items-center justify-center text-current",
+        "[&>svg]:h-4 [&>svg]:w-4",
+        "data-[state=indeterminate]:[&>.sp-check]:hidden",
+        "data-[state=indeterminate]:[&>.sp-minus]:block"
+      )}
     >
-      <Check className="h-4 w-4" />
+      <Check className="sp-check" />
+      <Minus className="sp-minus hidden" />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ))

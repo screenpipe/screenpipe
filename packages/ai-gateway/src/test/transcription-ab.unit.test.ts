@@ -19,6 +19,7 @@ import {
   getDualSendPct,
   getSelfHostedUrl,
   extractTranscript,
+  runTranscriptionABTest,
 } from '../services/transcription-ab';
 
 // ─── Config parsing ─────────────────────────────────────────────────────────
@@ -202,6 +203,55 @@ describe('callDeepgram', () => {
       const url = new URL(urls[0]);
       expect(url.searchParams.get('diarize')).toBe('true');
       expect(url.searchParams.get('utterances')).toBe('true');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('runTranscriptionABTest', () => {
+  it('falls back to configured self-hosted transcription when Deepgram fails', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.startsWith('https://api.deepgram.com/')) {
+        return new Response('upstream timeout', { status: 500 });
+      }
+      return new Response(
+        JSON.stringify({
+          results: {
+            channels: [{
+              alternatives: [{ transcript: 'fallback worked', confidence: 0.9 }],
+            }],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const { result, status } = await runTranscriptionABTest(
+        {
+          audioBuffer: new Uint8Array([1, 2, 3]).buffer,
+          contentType: 'audio/wav',
+          sampleRate: '16000',
+          languages: [],
+        },
+        {
+          DEEPGRAM_API_KEY: 'dg-test-key',
+          SELF_HOSTED_TRANSCRIPTION_URL: 'https://whisper.example',
+        } as any,
+        'device-1',
+      );
+
+      expect(status).toBe('fallback');
+      expect(result.provider).toBe('whisper');
+      expect(result.ok).toBe(true);
+      expect(urls.some((url) => url.startsWith('https://api.deepgram.com/'))).toBe(true);
+      expect(urls.some((url) => url.startsWith('https://whisper.example/v1/listen'))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }

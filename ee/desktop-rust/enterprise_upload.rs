@@ -4,11 +4,11 @@
 
 //! Enterprise direct-upload data plane.
 //!
-//! Hosted ingest sends plaintext JSONL to Screenpipe over TLS. Direct upload is
-//! the stricter enterprise mode: encrypt on device, request a control-plane
-//! ticket, PUT ciphertext directly into the customer's Azure Blob container,
-//! then complete the manifest. The Screenpipe API sees checksums, cursors and
-//! wrapped keys, but not plaintext telemetry.
+//! Hosted ingest sends plaintext JSONL to Screenpipe over TLS. Direct upload
+//! requests a control-plane ticket, PUTs the batch directly into the customer's
+//! Azure Blob container, then completes the manifest. Encrypted mode stores
+//! ciphertext; readable mode stores JSONL. In both cases Screenpipe Cloud sees
+//! checksums and cursors, not the telemetry body.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -24,7 +24,9 @@ use super::{Cursor, EnterpriseSyncConfig, EnterpriseSyncError};
 
 pub const DIRECT_UPLOAD_CONTENT_TYPE: &str =
     "application/vnd.screenpipe.telemetry+jsonl.chacha20poly1305";
+pub const DIRECT_UPLOAD_READABLE_CONTENT_TYPE: &str = "application/vnd.screenpipe.telemetry+jsonl";
 const DIRECT_UPLOAD_MODE: &str = "direct_upload_encrypted";
+const DIRECT_UPLOAD_READABLE_MODE: &str = "direct_upload_readable";
 const DIRECT_UPLOAD_ALGORITHM: &str = "chacha20poly1305";
 const DIRECT_UPLOAD_MAX_RETRIES: u32 = 3;
 const DIRECT_UPLOAD_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
@@ -33,6 +35,7 @@ const DIRECT_UPLOAD_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 pub enum EnterpriseUploadMode {
     HostedIngest,
     DirectEncrypted(DirectUploadConfig),
+    DirectReadable(DirectUploadConfig),
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +62,9 @@ impl EnterpriseUploadMode {
 
         match mode.as_str() {
             "" | "screenpipe_write" | "hosted_ingest" => Some(Self::HostedIngest),
+            "direct_upload_readable" => Some(Self::DirectReadable(
+                DirectUploadConfig::without_recipients(ingest_url),
+            )),
             "direct_upload" | "direct_upload_encrypted" => {
                 let primary_key_b64 = match required_env(
                     "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
@@ -125,18 +131,11 @@ impl EnterpriseUploadMode {
                     );
                     return None;
                 }
-                let ticket_url = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_TICKET_URL")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| sibling_enterprise_endpoint(ingest_url, "upload-ticket"));
-                let complete_url = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_COMPLETE_URL")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| sibling_enterprise_endpoint(ingest_url, "upload-complete"));
+                let control_plane = DirectUploadConfig::without_recipients(ingest_url);
 
                 Some(Self::DirectEncrypted(DirectUploadConfig {
-                    ticket_url,
-                    complete_url,
+                    ticket_url: control_plane.ticket_url,
+                    complete_url: control_plane.complete_url,
                     recipients: vec![
                         DirectUploadKeyRecipientConfig {
                             purpose: "primary".to_string(),
@@ -160,6 +159,24 @@ impl EnterpriseUploadMode {
                 );
                 None
             }
+        }
+    }
+}
+
+impl DirectUploadConfig {
+    fn without_recipients(ingest_url: &str) -> Self {
+        let ticket_url = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_TICKET_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| sibling_enterprise_endpoint(ingest_url, "upload-ticket"));
+        let complete_url = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_COMPLETE_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| sibling_enterprise_endpoint(ingest_url, "upload-complete"));
+        Self {
+            ticket_url,
+            complete_url,
+            recipients: Vec::new(),
         }
     }
 }
@@ -217,18 +234,24 @@ pub struct DirectUploadManifest {
     pub content_type: String,
     pub content_length: usize,
     pub plaintext_sha256: String,
-    pub ciphertext_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ciphertext_sha256: Option<String>,
     pub record_counts: DirectUploadRecordCounts,
     pub cursors: DirectUploadCursors,
-    pub encryption: DirectUploadEncryption,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<DirectUploadEncryption>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct DirectUploadCompleteRequest {
+    mode: String,
     device_id: String,
     batch_id: String,
     content_length: usize,
-    ciphertext_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ciphertext_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plaintext_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -294,15 +317,15 @@ pub fn encrypt_direct_upload_batch(
             content_type: DIRECT_UPLOAD_CONTENT_TYPE.to_string(),
             content_length: ciphertext.len(),
             plaintext_sha256,
-            ciphertext_sha256,
+            ciphertext_sha256: Some(ciphertext_sha256),
             record_counts: counts,
             cursors,
-            encryption: DirectUploadEncryption {
+            encryption: Some(DirectUploadEncryption {
                 algorithm: DIRECT_UPLOAD_ALGORITHM.to_string(),
                 primary_key_id,
                 nonce_b64: BASE64.encode(nonce),
                 recipients,
-            },
+            }),
         },
         ciphertext,
     })
@@ -319,10 +342,54 @@ pub async fn upload_direct_encrypted_batch(
     let encrypted = encrypt_direct_upload_batch(cfg, direct, &plaintext, counts, cursors)?;
 
     let ticket = request_upload_ticket(http, cfg, direct, &encrypted.manifest).await?;
-    put_ciphertext(http, &ticket, &encrypted.ciphertext).await?;
+    put_direct_upload_body(http, &ticket, &encrypted.ciphertext).await?;
     complete_upload(http, cfg, direct, &encrypted.manifest).await?;
 
     Ok(encrypted.manifest)
+}
+
+pub fn readable_direct_upload_manifest(
+    cfg: &EnterpriseSyncConfig,
+    plaintext: &[u8],
+    counts: DirectUploadRecordCounts,
+    cursors: DirectUploadCursors,
+) -> Result<DirectUploadManifest, EnterpriseSyncError> {
+    if plaintext.is_empty() {
+        return Err(EnterpriseSyncError::Ingest(
+            "direct upload refuses empty plaintext batch".to_string(),
+        ));
+    }
+    let plaintext_sha256 = compute_checksum(plaintext);
+    let batch_id = compute_batch_id(&cfg.device_id, &plaintext_sha256, &counts, &cursors);
+    Ok(DirectUploadManifest {
+        version: 1,
+        mode: DIRECT_UPLOAD_READABLE_MODE.to_string(),
+        device_id: cfg.device_id.clone(),
+        device_label: cfg.device_label.clone(),
+        batch_id,
+        content_type: DIRECT_UPLOAD_READABLE_CONTENT_TYPE.to_string(),
+        content_length: plaintext.len(),
+        plaintext_sha256,
+        ciphertext_sha256: None,
+        record_counts: counts,
+        cursors,
+        encryption: None,
+    })
+}
+
+pub async fn upload_direct_readable_batch(
+    http: &reqwest::Client,
+    cfg: &EnterpriseSyncConfig,
+    direct: &DirectUploadConfig,
+    plaintext: Vec<u8>,
+    counts: DirectUploadRecordCounts,
+    cursors: DirectUploadCursors,
+) -> Result<DirectUploadManifest, EnterpriseSyncError> {
+    let manifest = readable_direct_upload_manifest(cfg, &plaintext, counts, cursors)?;
+    let ticket = request_upload_ticket(http, cfg, direct, &manifest).await?;
+    put_direct_upload_body(http, &ticket, &plaintext).await?;
+    complete_upload(http, cfg, direct, &manifest).await?;
+    Ok(manifest)
 }
 
 async fn request_upload_ticket(
@@ -342,10 +409,10 @@ async fn request_upload_ticket(
     classify_control_plane_response(resp, "upload ticket").await
 }
 
-async fn put_ciphertext(
+async fn put_direct_upload_body(
     http: &reqwest::Client,
     ticket: &UploadTicketResponse,
-    ciphertext: &[u8],
+    body: &[u8],
 ) -> Result<(), EnterpriseSyncError> {
     if !ticket.ok || ticket.method.to_uppercase() != "PUT" {
         return Err(EnterpriseSyncError::Ingest(
@@ -370,7 +437,7 @@ async fn put_ciphertext(
         match http
             .put(&ticket.upload_url)
             .headers(headers.clone())
-            .body(ciphertext.to_vec())
+            .body(body.to_vec())
             .send()
             .await
         {
@@ -411,10 +478,16 @@ async fn complete_upload(
     manifest: &DirectUploadManifest,
 ) -> Result<(), EnterpriseSyncError> {
     let req = DirectUploadCompleteRequest {
+        mode: manifest.mode.clone(),
         device_id: manifest.device_id.clone(),
         batch_id: manifest.batch_id.clone(),
         content_length: manifest.content_length,
         ciphertext_sha256: manifest.ciphertext_sha256.clone(),
+        plaintext_sha256: if manifest.mode == DIRECT_UPLOAD_READABLE_MODE {
+            Some(manifest.plaintext_sha256.clone())
+        } else {
+            None
+        },
     };
     let resp = http
         .post(&direct.complete_url)
@@ -650,23 +723,20 @@ mod tests {
         assert_eq!(batch.manifest.cursors, cursors);
         assert_eq!(batch.manifest.plaintext_sha256, compute_checksum(plaintext));
         assert_eq!(
-            batch.manifest.ciphertext_sha256,
+            batch.manifest.ciphertext_sha256.as_deref().unwrap(),
             compute_checksum(&batch.ciphertext)
         );
-        assert_eq!(batch.manifest.encryption.primary_key_id, "tenant-root-v1");
-        assert_eq!(batch.manifest.encryption.recipients.len(), 2);
+        let encryption = batch.manifest.encryption.as_ref().unwrap();
+        assert_eq!(encryption.primary_key_id, "tenant-root-v1");
+        assert_eq!(encryption.recipients.len(), 2);
         assert!(!String::from_utf8_lossy(&batch.ciphertext).contains("secret customer text"));
 
-        let primary = batch
-            .manifest
-            .encryption
+        let primary = encryption
             .recipients
             .iter()
             .find(|r| r.purpose == "primary")
             .unwrap();
-        let recovery = batch
-            .manifest
-            .encryption
+        let recovery = encryption
             .recipients
             .iter()
             .find(|r| r.purpose == "recovery")
@@ -694,7 +764,7 @@ mod tests {
         .unwrap();
         assert_eq!(recovery_data_key, data_key);
 
-        let nonce: Vec<u8> = BASE64.decode(&batch.manifest.encryption.nonce_b64).unwrap();
+        let nonce: Vec<u8> = BASE64.decode(&encryption.nonce_b64).unwrap();
         let mut nonce_arr = [0u8; 12];
         nonce_arr.copy_from_slice(&nonce);
         let decrypted = decrypt(
@@ -730,5 +800,35 @@ mod tests {
 
         assert_eq!(a.manifest.batch_id, b.manifest.batch_id);
         assert_ne!(a.ciphertext, b.ciphertext);
+    }
+
+    #[test]
+    fn readable_batch_manifest_keeps_jsonl_as_payload() {
+        let cfg = sync_cfg();
+        let plaintext = b"{\"kind\":\"frame\",\"text\":\"customer-readable text\"}\n";
+        let counts = DirectUploadRecordCounts {
+            frames: 1,
+            audio: 0,
+            ui: 0,
+            snapshots: 0,
+        };
+        let cursors = DirectUploadCursors {
+            last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
+            last_audio_ts: None,
+            last_ui_ts: None,
+        };
+
+        let manifest =
+            readable_direct_upload_manifest(&cfg, plaintext, counts.clone(), cursors.clone())
+                .unwrap();
+
+        assert_eq!(manifest.mode, DIRECT_UPLOAD_READABLE_MODE);
+        assert_eq!(manifest.content_type, DIRECT_UPLOAD_READABLE_CONTENT_TYPE);
+        assert_eq!(manifest.content_length, plaintext.len());
+        assert_eq!(manifest.plaintext_sha256, compute_checksum(plaintext));
+        assert!(manifest.ciphertext_sha256.is_none());
+        assert!(manifest.encryption.is_none());
+        assert_eq!(manifest.record_counts, counts);
+        assert_eq!(manifest.cursors, cursors);
     }
 }

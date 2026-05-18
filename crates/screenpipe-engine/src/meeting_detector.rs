@@ -2908,7 +2908,12 @@ async fn insert_new_meeting(
             // Emit event so triggered pipes can react
             if let Err(e) = screenpipe_events::send_event(
                 "meeting_started",
-                serde_json::json!({ "meeting_id": id, "app": app, "title": title }),
+                serde_json::json!({
+                    "meeting_id": id,
+                    "app": app,
+                    "title": title,
+                    "detection_source": "ui_scan",
+                }),
             ) {
                 warn!("meeting v2: failed to emit meeting_started event: {}", e);
             }

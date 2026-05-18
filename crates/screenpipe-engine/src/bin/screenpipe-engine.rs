@@ -357,6 +357,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::login::handle_whoami_command().await?;
             return Ok(());
         }
+        Command::Survey => {
+            screenpipe_engine::cli::survey::handle_survey_command().await?;
+            return Ok(());
+        }
         Command::Auth { ref subcommand } => {
             screenpipe_engine::cli::auth::handle_auth_command(subcommand).await?;
             return Ok(());

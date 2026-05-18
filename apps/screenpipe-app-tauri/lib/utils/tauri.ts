@@ -388,6 +388,35 @@ async hideMainWindow() : Promise<void> {
     await TAURI_INVOKE("hide_main_window");
 },
 /**
+ * E2E helper: emit a deterministic chat stream from the Rust side.
+ *
+ * This keeps chat performance tests close to production's Pi stdout path:
+ * one backend command starts the stream, then the app emits `agent_event`
+ * envelopes into the WebView. Tests avoid the extra WebView→Rust→WebView
+ * bridge hop that would come from calling `plugin:event|emit` for every token.
+ */
+async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_agent_stream", { sessionId, deltaCount }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper for the scheduled-pipe path: feed synthetic pipe stdout
+ * through the same Rust-side callback adapter production uses, then let the
+ * frontend's default pipe handlers record it as a completed pipe run.
+ */
+async e2eEmitPipeStream(pipeName: string, executionId: bigint, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_pipe_stream", { pipeName, executionId, deltaCount }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Open the screenpi.pe login page.
  * On Windows, opens in the system browser (WebView2 has issues with some auth
  * providers; the registered deep-link scheme handles the redirect back).
@@ -1371,6 +1400,7 @@ source?: string }
 export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
+export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }

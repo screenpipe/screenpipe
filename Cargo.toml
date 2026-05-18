@@ -2,11 +2,15 @@
 members = [
     "crates/*",
 ]
-exclude = ["apps/screenpipe-app-tauri/src-tauri", "crates/screenpipe-integrations"]
+exclude = [
+    "apps/screenpipe-app-tauri/src-tauri",
+    "crates/screenpipe-integrations",
+    "ee/sdk",
+]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.335"
+version = "0.3.336"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"

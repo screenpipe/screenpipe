@@ -14,6 +14,7 @@ use std::time::Duration;
 
 const REMINDER_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const DESKTOP_APP_URL: &str = "https://screenpi.pe";
+const SURVEY_URL: &str = "https://screenpi.pe/survey";
 
 /// Spawn the background reminder loop. Safe to call once at CLI startup.
 pub fn spawn() {
@@ -35,11 +36,12 @@ pub fn spawn() {
 }
 
 fn print_tip(idx: usize) {
-    let tips: [fn(); 4] = [
+    let tips: [fn(); 5] = [
         print_desktop_app_tip,
         print_mcp_tip,
         print_install_bundle_tip,
         print_login_tip,
+        print_survey_tip,
     ];
     tips[idx % tips.len()]();
 }
@@ -95,5 +97,16 @@ fn print_login_tip() {
         "tip:".cyan().bold(),
     );
     eprintln!("       {}", "npx screenpipe login".green().bold());
+    eprintln!();
+}
+
+fn print_survey_tip() {
+    eprintln!();
+    eprintln!(
+        "  {} tell us what you think of screenpipe:",
+        "survey:".cyan().bold(),
+    );
+    eprintln!("       {}", "npx screenpipe survey".green().bold());
+    eprintln!("       {}", SURVEY_URL.green().underline());
     eprintln!();
 }

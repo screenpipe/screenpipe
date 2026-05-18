@@ -114,6 +114,7 @@ const FOLLOW_UP_GENERATION_DELAY_MS = 10_000;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 const CONNECTION_SUGGESTION_LIMIT = 3;
+const VISIBLE_SUGGESTION_LIMIT = 2;
 
 type ConnectedIntegration = {
   id: string;
@@ -348,8 +349,19 @@ function suggestionForConnection(connection: ConnectedIntegration): Suggestion |
 function mergeConnectionSuggestions(
   autoSuggestions: Suggestion[],
   connections: ConnectedIntegration[],
-  previewSuggestions: Suggestion[] = []
+  previewSuggestions: Suggestion[] = [],
+  rotationSeed = 0
 ): Suggestion[] {
+  const rotateVisible = (suggestions: Suggestion[]) => {
+    if (suggestions.length <= VISIBLE_SUGGESTION_LIMIT || rotationSeed <= 0) {
+      return suggestions.slice(0, VISIBLE_SUGGESTION_LIMIT);
+    }
+
+    const offset = rotationSeed % suggestions.length;
+    const rotated = [...suggestions.slice(offset), ...suggestions.slice(0, offset)];
+    return rotated.slice(0, VISIBLE_SUGGESTION_LIMIT);
+  };
+
   const previewIcons = new Set(previewSuggestions.map((s) => s.connectionIcon).filter(Boolean));
   const connectionSuggestions = connections
     .filter((connection) => !previewIcons.has(connection.icon || connection.id))
@@ -358,19 +370,21 @@ function mergeConnectionSuggestions(
     .slice(0, CONNECTION_SUGGESTION_LIMIT);
 
   const combinedConnectionSuggestions = [...previewSuggestions, ...connectionSuggestions].slice(0, CONNECTION_SUGGESTION_LIMIT);
-  if (combinedConnectionSuggestions.length === 0) return autoSuggestions;
+  if (combinedConnectionSuggestions.length === 0) return rotateVisible(autoSuggestions);
 
   const [first, ...rest] = autoSuggestions;
   const merged = first
     ? [first, ...combinedConnectionSuggestions, ...rest]
     : combinedConnectionSuggestions;
   const seen = new Set<string>();
-  return merged.filter((suggestion) => {
+  const deduped = merged.filter((suggestion) => {
     const key = suggestion.text.toLowerCase().replace(/\s+/g, " ").trim();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 6);
+  });
+
+  return rotateVisible(deduped);
 }
 
 interface Speaker {
@@ -1083,6 +1097,253 @@ function friendlyToolLabel(toolCall: ToolCall): string {
   }
 }
 
+interface ToolDetailField {
+  label: string;
+  value: string;
+}
+
+interface BashToolDetailsPresentation {
+  title: string;
+  eyebrow: string;
+  fields: ToolDetailField[];
+  resultSummary?: string;
+  rawCommand: string;
+  rawResult?: string;
+}
+
+function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresentation | null {
+  const command = String(toolCall.args.command ?? "");
+  if (!command) return null;
+
+  const classified = classifyCurl(command);
+  const method = curlMethod(command);
+  const localUrl = urlsInCommand(command).find(isLocalScreenpipeUrl);
+  const fields: ToolDetailField[] = [];
+
+  if (!localUrl) {
+    const target = firstExternalWebTarget(command, "fetch");
+    if (!target || !classified) return null;
+    fields.push({ label: "domain", value: target.domain });
+    fields.push({ label: "method", value: method });
+    return {
+      title: classified.label,
+      eyebrow: "Web request",
+      fields,
+      resultSummary: summarizeToolResult(toolCall.result, "web"),
+      rawCommand: command,
+      rawResult: toolCall.result,
+    };
+  }
+
+  const path = localUrl.pathname.replace(/\/$/, "") || "/";
+  fields.push({ label: "endpoint", value: path });
+  fields.push({ label: "method", value: method });
+
+  const sp = localUrl.searchParams;
+  const addParam = (label: string, key: string) => {
+    const value = sp.get(key);
+    if (value) fields.push({ label, value: trunc(value, 80) });
+  };
+
+  addParam("query", "q");
+  addParam("content", "content_type");
+  addParam("app", "app_name");
+  addParam("window", "window_name");
+  addParam("limit", "limit");
+
+  const body = curlBodyJson(command);
+  if (path === "/raw_sql" && body && typeof body.query === "string") {
+    const tables = sqlTables(body.query);
+    if (tables.length > 0) fields.push({ label: "tables", value: tables.join(", ") });
+  }
+
+  if (path.startsWith("/connections/")) {
+    const connection = path.split("/")[2];
+    if (connection) fields.push({ label: "connection", value: connection });
+  }
+
+  return {
+    title: classified?.label ?? `${method} ${path}`,
+    eyebrow: endpointFamily(path),
+    fields,
+    resultSummary: summarizeToolResult(toolCall.result, path),
+    rawCommand: command,
+    rawResult: toolCall.result,
+  };
+}
+
+function endpointFamily(path: string): string {
+  if (path === "/memories" || path.startsWith("/memories/")) return "Memory";
+  if (path === "/search") return "Screen search";
+  if (path === "/activity-summary") return "Activity";
+  if (path === "/raw_sql") return "Database";
+  if (path.startsWith("/connections/")) return "Connection";
+  if (path.startsWith("/meetings")) return "Meetings";
+  if (path.startsWith("/speakers")) return "Speakers";
+  if (path.startsWith("/pipes")) return "Pipes";
+  return "Screenpipe";
+}
+
+function parseToolResultJson(result: string | undefined): any | null {
+  if (!result?.trim()) return null;
+  try {
+    return JSON.parse(result);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolResult(result: string | undefined, family: string): string | undefined {
+  const json = parseToolResultJson(result);
+  if (!json) return result?.trim() ? trunc(result.trim().replace(/\s+/g, " "), 120) : undefined;
+
+  const noun = family === "/memories" ? "memories"
+    : family === "/search" ? "results"
+    : family.startsWith("/meetings") ? "meetings"
+    : family.startsWith("/connections") ? "items"
+    : "items";
+
+  if (Array.isArray(json)) return json.length === 0 ? `No ${noun} returned` : `${json.length} ${noun} returned`;
+  if (Array.isArray(json.data)) {
+    const total = typeof json.pagination?.total === "number" ? json.pagination.total : json.data.length;
+    return total === 0 ? `No ${noun} found` : `${total} ${noun} found`;
+  }
+  if (Array.isArray(json.search_results)) {
+    return json.search_results.length === 0 ? "No web sources returned" : `${json.search_results.length} web sources returned`;
+  }
+  if (Array.isArray(json.choices)) return `${json.choices.length} response${json.choices.length === 1 ? "" : "s"} returned`;
+  if (typeof json.success === "boolean") return json.success ? "Request succeeded" : "Request did not succeed";
+  if (typeof json.status === "string") return `Status: ${json.status}`;
+  return "JSON response returned";
+}
+
+function formatToolResult(result: string | undefined): string | undefined {
+  if (!result) return undefined;
+  const json = parseToolResultJson(result);
+  if (!json) return result;
+  return JSON.stringify(json, null, 2);
+}
+
+function sanitizeCommand(command: string): string {
+  return command
+    .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+[^'"]+['"]/g, " -H \"Authorization: Bearer …\"")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
+  const details = bashToolDetailsPresentation(toolCall);
+  if (!details) {
+    return (
+      <div className="py-1.5">
+        <ToolCodeBlock code={sanitizeCommand(String(toolCall.args.command ?? ""))} language="shell" />
+      </div>
+    );
+  }
+
+  const formattedResult = formatToolResult(details.rawResult);
+
+  return (
+    <div className="py-1.5 space-y-2">
+      <div className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2">
+        <div className="mb-1 flex min-w-0 items-center gap-1.5">
+          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono uppercase leading-none text-muted-foreground">
+            {details.eyebrow}
+          </span>
+          {details.resultSummary && (
+            <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+              {details.resultSummary}
+            </span>
+          )}
+        </div>
+        <div className="text-sm font-medium text-foreground/85">{details.title}</div>
+        {details.fields.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {details.fields.map((field) => (
+              <span
+                key={`${field.label}:${field.value}`}
+                className="max-w-full rounded border border-border/40 bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+              >
+                <span className="text-muted-foreground/60">{field.label}</span>{" "}
+                <span className="text-foreground/70">{field.value}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <details className="group rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
+        <summary className="cursor-pointer select-none text-[10px] font-mono uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
+          technical details
+        </summary>
+        <div className="mt-2 space-y-2">
+          <ToolCodeBlock label="command" code={sanitizeCommand(details.rawCommand)} language="shell" />
+          {formattedResult && <ToolCodeBlock label="response" code={formattedResult} language="json" />}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function ToolCodeBlock({
+  code,
+  language,
+  label,
+}: {
+  code: string;
+  language: "shell" | "json";
+  label?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      {label && <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground/50">{label}</div>}
+      <pre className="max-h-[220px] max-w-full overflow-auto rounded border border-border/30 bg-muted/20 p-2 text-xs leading-relaxed">
+        <code className="font-mono">
+          {language === "json" ? <HighlightedJson code={code} /> : <HighlightedShell code={code} />}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
+function HighlightedShell({ code }: { code: string }) {
+  const parts = code.split(/(\s+|https?:\/\/[^\s"']+|-[A-Za-z-]+|\$[A-Z0-9_]+)/g).filter(Boolean);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const className = /^https?:\/\//.test(part)
+          ? "text-cyan-700 dark:text-cyan-300"
+          : /^-[A-Za-z-]+$/.test(part)
+            ? "text-purple-700 dark:text-purple-300"
+            : /^\$[A-Z0-9_]+$/.test(part)
+              ? "text-amber-700 dark:text-amber-300"
+              : part === "curl"
+                ? "text-foreground"
+                : "text-muted-foreground";
+        return <span key={`${part}-${index}`} className={className}>{part}</span>;
+      })}
+    </>
+  );
+}
+
+function HighlightedJson({ code }: { code: string }) {
+  const parts = code.split(/("(?:\\.|[^"\\])*"\s*:|"(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?)/g).filter(Boolean);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const className = /^".*"\s*:$/s.test(part)
+          ? "text-purple-700 dark:text-purple-300"
+          : /^"/s.test(part)
+            ? "text-emerald-700 dark:text-emerald-300"
+            : /^(true|false|null|-?\d)/.test(part)
+              ? "text-amber-700 dark:text-amber-300"
+              : "text-muted-foreground";
+        return <span key={`${part}-${index}`} className={className}>{part}</span>;
+      })}
+    </>
+  );
+}
+
 // Render friendly expanded details instead of raw JSON
 function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.toolName === "edit" && toolCall.args.old_string && toolCall.args.new_string) {
@@ -1098,13 +1359,7 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
     );
   }
   if (toolCall.toolName === "bash" && toolCall.args.command) {
-    return (
-      <div className="py-1.5">
-        <pre className="whitespace-pre-wrap break-words text-foreground/70 text-xs font-mono max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full">
-          {toolCall.args.command}
-        </pre>
-      </div>
-    );
+    return <BashToolDetails toolCall={toolCall} />;
   }
   const entries = Object.entries(toolCall.args).filter(([k]) => k !== "path" && k !== "command");
   if (entries.length === 0) return null;
@@ -1191,7 +1446,7 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
             >
               <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
                 <FriendlyToolDetails toolCall={toolCall} />
-                {toolCall.result !== undefined && (
+                {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
                       "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono",
@@ -1652,7 +1907,8 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
 type GroupedBlock =
   | { type: "text"; text: string; key: number }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
-  | { type: "tool-group"; toolCalls: ToolCall[]; key: number };
+  | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
+  | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
 function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   const result: GroupedBlock[] = [];
@@ -1680,6 +1936,63 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
   return result;
 }
 
+function collapseHiddenWorkGroups(grouped: GroupedBlock[], hideThinkingBlocks: boolean): GroupedBlock[] {
+  if (!hideThinkingBlocks) return grouped;
+
+  const out: GroupedBlock[] = [];
+  let pendingToolCalls: ToolCall[] = [];
+  let pendingDurationMs = 0;
+  let pendingToolGroupCount = 0;
+  let pendingKey: number | null = null;
+
+  const flushPending = () => {
+    if (pendingToolCalls.length === 0) {
+      pendingDurationMs = 0;
+      pendingToolGroupCount = 0;
+      pendingKey = null;
+      return;
+    }
+
+    const key = pendingKey ?? out.length;
+    if (pendingToolGroupCount > 1 || pendingToolCalls.length >= 3) {
+      out.push({
+        type: "work-group",
+        toolCalls: [...pendingToolCalls],
+        durationMs: pendingDurationMs,
+        key,
+      });
+    } else {
+      out.push({ type: "tool-group", toolCalls: [...pendingToolCalls], key });
+    }
+
+    pendingToolCalls = [];
+    pendingDurationMs = 0;
+    pendingToolGroupCount = 0;
+    pendingKey = null;
+  };
+
+  for (const group of grouped) {
+    if (group.type === "tool-group") {
+      pendingKey ??= group.key;
+      pendingToolCalls.push(...group.toolCalls);
+      pendingToolGroupCount++;
+      continue;
+    }
+
+    if (group.type === "thinking") {
+      pendingDurationMs += group.durationMs ?? 0;
+      pendingKey ??= group.key;
+      continue;
+    }
+
+    flushPending();
+    out.push(group);
+  }
+
+  flushPending();
+  return out;
+}
+
 // Build natural-language summary of completed tool calls
 function buildToolSummary(toolCalls: ToolCall[]): string {
   const counts: Record<string, number> = {};
@@ -1698,11 +2011,29 @@ function buildToolSummary(toolCalls: ToolCall[]): string {
   return parts.join(", ");
 }
 
+function formatWorkDuration(durationMs: number): string {
+  if (!durationMs || durationMs <= 0) return "Worked";
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return "Worked for <1 min";
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+}
+
 function toolCallRenderKey(toolCall: ToolCall, index: number): string {
   return `${toolCall.id || toolCall.toolName || "tool"}:${index}`;
 }
 
-function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: ToolCall[]; defaultExpanded?: boolean }) {
+function ToolCallGroup({
+  toolCalls,
+  defaultExpanded = false,
+  summaryOverride,
+  hideCount = false,
+}: {
+  toolCalls: ToolCall[];
+  defaultExpanded?: boolean;
+  summaryOverride?: string;
+  hideCount?: boolean;
+}) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
 
   const hasRunning = toolCalls.some((tc) => tc.isRunning);
@@ -1710,7 +2041,7 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
   const allDone = !hasRunning;
   const doneCount = toolCalls.filter((tc) => !tc.isRunning).length;
   const total = toolCalls.length;
-  const summary = allDone ? buildToolSummary(toolCalls) : "";
+  const summary = allDone ? (summaryOverride || buildToolSummary(toolCalls)) : "";
 
   // Auto-expand while running, auto-collapse when done (user can override).
   // `defaultExpanded` keeps the group open even when done — used for
@@ -1726,19 +2057,21 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
         className="w-full flex items-center gap-2 py-1 text-left min-w-0 group"
       >
         {/* Status indicator */}
-        <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
-          {hasRunning ? (
-            <motion.span
-              className="inline-block"
-              animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
-              transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
-            >
-              [{doneCount}/{total}]
-            </motion.span>
-          ) : (
-            <span>[{total}]</span>
-          )}
-        </span>
+        {!hideCount && (
+          <span className="flex-shrink-0 text-xs font-mono text-foreground/40">
+            {hasRunning ? (
+              <motion.span
+                className="inline-block"
+                animate={{ opacity: [1, 1, 0.3, 0.3, 1] }}
+                transition={{ duration: 1, repeat: Infinity, times: [0, 0.25, 0.25, 0.75, 0.75], ease: "linear" }}
+              >
+                [{doneCount}/{total}]
+              </motion.span>
+            ) : (
+              <span>[{total}]</span>
+            )}
+          </span>
+        )}
 
         {/* Summary text */}
         <span className="truncate flex-1 text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
@@ -1792,10 +2125,12 @@ function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: Tool
 // Renders message content with interleaved text and tool call blocks
 function MessageContent({
   message,
+  deferSourceFooter = false,
   onImageClick,
   onRetry,
 }: {
   message: Message;
+  deferSourceFooter?: boolean;
   onImageClick?: (images: string[], index: number) => void;
   onRetry?: (prompt: string) => void;
 }) {
@@ -1803,7 +2138,7 @@ function MessageContent({
   const { settings } = useSettings();
   const hideThinkingBlocks = settings?.hideThinkingBlocks ?? true;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
-  const sourceFooter = sourceCitations.length > 0 ? (
+  const sourceFooter = !deferSourceFooter && sourceCitations.length > 0 ? (
     <SourceCitationFooter citations={sourceCitations} />
   ) : null;
 
@@ -1826,6 +2161,7 @@ function MessageContent({
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
+    const displayGroups = collapseHiddenWorkGroups(grouped, hideThinkingBlocks);
     // When the message has no rendered prose (no text block — common for
     // pipe-run executions whose entire output is thinking + tool calls),
     // expand thinking blocks by default. Otherwise the collapsed
@@ -1835,7 +2171,7 @@ function MessageContent({
     const hasText = grouped.some((g) => g.type === "text");
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
-        {grouped.map((group) => {
+        {displayGroups.map((group) => {
           if (group.type === "text") {
             return <MarkdownBlock key={`text-${group.key}`} text={group.text} isUser={isUser} />;
           }
@@ -1850,6 +2186,17 @@ function MessageContent({
           }
           if (group.type === "tool-group") {
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
+          }
+          if (group.type === "work-group") {
+            return (
+              <ToolCallGroup
+                key={`work-${group.key}`}
+                toolCalls={group.toolCalls}
+                defaultExpanded={!hasText}
+                summaryOverride={formatWorkDuration(group.durationMs)}
+                hideCount={hasText}
+              />
+            );
           }
           return null;
         })}
@@ -2139,10 +2486,22 @@ export function StandaloneChat({
   // agent pick the right connection for a query instead of having to guess.
   const [connections, setConnections] = useState<ConnectedIntegration[]>([]);
   const [connectionPreviewSuggestions, setConnectionPreviewSuggestions] = useState<Suggestion[]>([]);
-  const connectionAwareSuggestions = React.useMemo(
-    () => mergeConnectionSuggestions(autoSuggestions, connections, connectionPreviewSuggestions),
-    [autoSuggestions, connections, connectionPreviewSuggestions]
+  const [suggestionRefreshSeed, setSuggestionRefreshSeed] = useState(0);
+  const visibleSuggestionSignature = React.useMemo(
+    () =>
+      [...autoSuggestions, ...connectionPreviewSuggestions]
+        .map((s) => `${s.text}|${s.preview ?? ""}|${s.connectionIcon ?? ""}|${s.priority ?? ""}`)
+        .join("\n"),
+    [autoSuggestions, connectionPreviewSuggestions]
   );
+  const connectionAwareSuggestions = React.useMemo(
+    () => mergeConnectionSuggestions(autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed),
+    [autoSuggestions, connections, connectionPreviewSuggestions, suggestionRefreshSeed]
+  );
+
+  useEffect(() => {
+    setSuggestionRefreshSeed(0);
+  }, [visibleSuggestionSignature]);
   // Watch the input section's width so suggestion chips can collapse into
   // a popover on narrow chat columns.
   useEffect(() => {
@@ -2217,6 +2576,16 @@ export function StandaloneChat({
       cancelled = true;
     };
   }, [connections]);
+
+  const refreshVisibleSuggestions = useCallback(() => {
+    setSuggestionRefreshSeed((seed) => seed + 1);
+    void refreshSuggestions();
+
+    if (connections.length === 0) return;
+    void fetchConnectionPreviewSuggestions(connections).then((suggestions) => {
+      setConnectionPreviewSuggestions(suggestions);
+    });
+  }, [connections, refreshSuggestions]);
 
   // Custom summary templates (persisted in settings)
   const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
@@ -3122,6 +3491,10 @@ export function StandaloneChat({
     const sess = s.sessions[conversationId];
     if (!sess || sess.kind === "pipe-watch") return undefined;
     return !!sess.isLoading;
+  });
+  const currentStreamingMessageId = useChatStore((s) => {
+    if (!conversationId) return null;
+    return s.sessions[conversationId]?.streamingMessageId ?? null;
   });
   useEffect(() => {
     if (storeChatIsStreaming === false) setIsStreaming(false);
@@ -6018,6 +6391,11 @@ export function StandaloneChat({
     );
   };
 
+  const activeSourceFooterMessageId =
+    isLoading || isStreaming
+      ? piMessageIdRef.current ?? currentStreamingMessageId ?? null
+      : null;
+
   return (
     <div className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       {/* Header - draggable only in standalone mode */}
@@ -6342,7 +6720,7 @@ export function StandaloneChat({
             onSendMessage={sendMessage}
             autoSuggestions={connectionAwareSuggestions}
             suggestionsRefreshing={suggestionsRefreshing}
-            onRefreshSuggestions={refreshSuggestions}
+            onRefreshSuggestions={refreshVisibleSuggestions}
             customTemplates={customTemplates}
             onSaveCustomTemplate={saveCustomTemplate}
             onDeleteCustomTemplate={deleteCustomTemplate}
@@ -6462,6 +6840,7 @@ export function StandaloneChat({
                 ) : (
                   <MessageContent
                     message={message}
+                    deferSourceFooter={message.id === activeSourceFooterMessageId}
                     onImageClick={(images, index) => setImageViewer({ images, index })}
                     onRetry={(prompt) => sendMessage(prompt)}
                   />
@@ -6724,7 +7103,7 @@ export function StandaloneChat({
                 </button>
               ))}
               <button
-                onClick={refreshSuggestions}
+                onClick={refreshVisibleSuggestions}
                 disabled={suggestionsRefreshing}
                 className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
                 title="refresh suggestions"
@@ -6769,7 +7148,7 @@ export function StandaloneChat({
                 </PopoverContent>
               </Popover>
               <button
-                onClick={refreshSuggestions}
+                onClick={refreshVisibleSuggestions}
                 disabled={suggestionsRefreshing}
                 className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
                 title="refresh suggestions"

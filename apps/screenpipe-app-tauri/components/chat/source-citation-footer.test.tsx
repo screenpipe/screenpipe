@@ -44,4 +44,48 @@ describe("SourceCitationFooter", () => {
     );
     expect(duplicateKeyErrors).toEqual([]);
   });
+
+  it("uses the Perplexity icon for Perplexity connector sources", () => {
+    const { container } = render(
+      <SourceCitationFooter
+        citations={[
+          {
+            id: "screenpipe-connections-perplexity-proxy-chat-completions",
+            kind: "connector",
+            title: "Perplexity search",
+            subtitle: "external web context via Screenpipe connection",
+          },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /1 source/i }));
+
+    expect(container.querySelector('img[src="/images/perplexity.svg"]')).toBeTruthy();
+  });
+
+  it("uses branded icons for other connector and screenpipe sources", () => {
+    const { container } = render(
+      <SourceCitationFooter
+        citations={[
+          {
+            id: "screenpipe-connections-google-calendar-events",
+            kind: "connector",
+            title: "Google Calendar events",
+          },
+          {
+            id: "screenpipe-memories-jill-benaglio",
+            kind: "screenpipe",
+            title: "Screenpipe memories",
+            subtitle: "memory query: Jill Benaglio",
+          },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /2 sources/i }));
+
+    expect(container.querySelector('img[src="/images/google-calendar.svg"]')).toBeTruthy();
+    expect(container.querySelector('img[src="/images/screenpipe.png"]')).toBeTruthy();
+  });
 });

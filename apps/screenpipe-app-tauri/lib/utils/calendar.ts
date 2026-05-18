@@ -264,17 +264,25 @@ async function fetchGoogleProvider(
   hoursBack: number,
   hoursAhead: number,
 ): Promise<ProviderCalendarResult> {
+  let statusKnown = false;
   let statusConnected = false;
   try {
     const status = await commands.oauthStatus("google-calendar", null);
-    statusConnected = status.status === "ok" && status.data.connected;
+    if (status.status === "ok") {
+      statusKnown = true;
+      statusConnected = status.data.connected;
+    }
   } catch {
     // Fall back to probing the events endpoint below.
   }
 
-  // The status command can report disconnected when the access token is
-  // expired, even though a refresh token is present. The events endpoint is
-  // the source of truth because it refreshes before reading the calendar.
+  // Once OAuth status is available, disconnected means there is no recoverable
+  // token. Avoid repeatedly probing an endpoint that can only fail until the
+  // user reconnects.
+  if (statusKnown && !statusConnected) {
+    return { source: "google", connected: false, ok: true, events: [] };
+  }
+
   const events = await fetchGoogleCalendar(hoursBack, hoursAhead);
   return {
     source: "google",

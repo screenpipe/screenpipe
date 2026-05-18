@@ -11,9 +11,9 @@ use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::notifications::client;
 use crate::store::SettingsStore;
@@ -30,6 +30,8 @@ struct MeetingStartedEvent {
     title: Option<String>,
     #[serde(default)]
     calendar_title: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
     #[serde(default)]
     detection_source: Option<String>,
 }
@@ -57,6 +59,25 @@ struct JoinLink {
     label: String,
 }
 
+#[derive(Clone, Debug, Default)]
+struct CalendarMatch {
+    title: Option<String>,
+    join_link: Option<JoinLink>,
+}
+
+impl From<crate::calendar::CalendarEventItem> for CalendarEventSignal {
+    fn from(item: crate::calendar::CalendarEventItem) -> Self {
+        Self {
+            title: item.title,
+            start: item.start,
+            end: item.end,
+            location: item.location,
+            meeting_url: item.meeting_url,
+            is_all_day: item.is_all_day,
+        }
+    }
+}
+
 impl MeetingStartedEvent {
     fn resolved_meeting_id(&self) -> Option<i64> {
         self.meeting_id.or(self.id)
@@ -74,6 +95,13 @@ impl MeetingStartedEvent {
             .or_else(|| self.app.as_deref().filter(|s| !s.trim().is_empty()))
             .unwrap_or("meeting")
             .to_string()
+    }
+
+    fn event_time(&self) -> chrono::DateTime<chrono::Utc> {
+        self.timestamp
+            .as_deref()
+            .and_then(parse_rfc3339_utc)
+            .unwrap_or_else(chrono::Utc::now)
     }
 
     fn should_notify(&self) -> bool {
@@ -144,15 +172,33 @@ pub fn start(app: AppHandle) {
                 continue;
             }
 
-            let title = event.data.display_title();
-            let url = format!("screenpipe://meeting/{meeting_id}?live=1");
-            let join_link = {
+            let url = format!("screenpipe://meeting/{meeting_id}?live=0");
+            let mut calendar_match = {
                 let events = calendar_events.read().await;
-                find_join_link(&events, &event.data)
+                find_calendar_match(&events, &event.data)
             };
 
+            if calendar_match
+                .as_ref()
+                .is_none_or(|m| m.join_link.is_none())
+            {
+                let fresh_events = fetch_fresh_calendar_events(&app).await;
+                if !fresh_events.is_empty() {
+                    calendar_match = find_calendar_match(&fresh_events, &event.data);
+                    let mut events = calendar_events.write().await;
+                    *events = fresh_events;
+                }
+            }
+
+            let title = calendar_match
+                .as_ref()
+                .and_then(|m| m.title.as_ref())
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| event.data.display_title());
+
             let mut actions = Vec::new();
-            if let Some(join) = join_link {
+            if let Some(join) = calendar_match.and_then(|m| m.join_link) {
                 actions.push(json!({
                     "id": "join-meeting",
                     "action": "join-meeting",
@@ -174,7 +220,7 @@ pub fn start(app: AppHandle) {
                 actions.push(json!({
                     "id": "open-live-notes",
                     "action": "open-live-notes",
-                    "label": "open live notes",
+                    "label": "open note",
                     "type": "deeplink",
                     "url": url.clone(),
                     "primary": true,
@@ -189,7 +235,7 @@ pub fn start(app: AppHandle) {
 
             client::send_typed_with_actions(
                 "meeting detected",
-                format!("screenpipe is capturing notes for {title}"),
+                format!("screenpipe is saving this meeting for transcription: {title}"),
                 "meeting",
                 Some(30_000),
                 actions,
@@ -222,37 +268,126 @@ fn meeting_notifications_enabled(app: &AppHandle) -> bool {
         .unwrap_or(true)
 }
 
-fn find_join_link(
-    events: &[CalendarEventSignal],
-    meeting: &MeetingStartedEvent,
-) -> Option<JoinLink> {
-    let now = chrono::Utc::now();
-    let title = meeting.display_title().trim().to_lowercase();
+async fn fetch_fresh_calendar_events(app: &AppHandle) -> Vec<CalendarEventSignal> {
+    let mut events = Vec::new();
+
+    match crate::calendar::calendar_get_events(Some(1), Some(1)).await {
+        Ok(items) => events.extend(items.into_iter().map(CalendarEventSignal::from)),
+        Err(err) => debug!("meeting live notes: native calendar refresh failed: {err}"),
+    }
+
+    match crate::ics_calendar::ics_calendar_get_upcoming(app.clone()).await {
+        Ok(items) => events.extend(items.into_iter().map(CalendarEventSignal::from)),
+        Err(err) => debug!("meeting live notes: ICS calendar refresh failed: {err}"),
+    }
+
+    events.extend(fetch_google_calendar_events(app).await);
 
     events
+        .into_iter()
+        .filter(|event| !event.is_all_day)
+        .collect()
+}
+
+async fn fetch_google_calendar_events(app: &AppHandle) -> Vec<CalendarEventSignal> {
+    let Some((port, api_key)) = local_api_config(app).await else {
+        return Vec::new();
+    };
+
+    let url = format!(
+        "http://127.0.0.1:{port}/connections/google-calendar/events?hours_back=1&hours_ahead=1"
+    );
+    let client = reqwest::Client::new();
+    let mut req = client.get(url);
+    if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+        req = req.bearer_auth(key);
+    }
+
+    let Ok(resp) = req.send().await else {
+        return Vec::new();
+    };
+    if !resp.status().is_success() {
+        debug!(
+            "meeting live notes: Google Calendar refresh returned {}",
+            resp.status()
+        );
+        return Vec::new();
+    }
+
+    match resp.json::<Vec<CalendarEventSignal>>().await {
+        Ok(events) => events,
+        Err(err) => {
+            warn!("meeting live notes: failed to parse Google Calendar events: {err}");
+            Vec::new()
+        }
+    }
+}
+
+async fn local_api_config(app: &AppHandle) -> Option<(u16, Option<String>)> {
+    let state = app.try_state::<crate::recording::RecordingState>()?;
+    let guard = state.server.lock().await;
+    let core = guard.as_ref()?;
+    Some((core.port, core.local_api_key.clone()))
+}
+
+fn find_calendar_match(
+    events: &[CalendarEventSignal],
+    meeting: &MeetingStartedEvent,
+) -> Option<CalendarMatch> {
+    let now = meeting.event_time();
+    let title = meeting.display_title().trim().to_lowercase();
+
+    let best_event = events
+        .iter()
+        .filter_map(|event| score_calendar_event(event, &title, now).map(|score| (score, event)))
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, event)| event)?;
+
+    let join_link = events
         .iter()
         .filter_map(|event| {
-            let start = parse_rfc3339_utc(&event.start)?;
-            let end = parse_rfc3339_utc(&event.end)?;
-            if start > now + chrono::Duration::minutes(10)
-                || end < now - chrono::Duration::minutes(5)
-            {
-                return None;
-            }
-
-            let url = normalize_meeting_url(event.meeting_url.clone())
-                .or_else(|| extract_meeting_url(event.location.as_deref()))?;
-            let mut score = 1;
-            if start <= now && end >= now {
-                score += 4;
-            }
-            if !title.is_empty() && event.title.trim().eq_ignore_ascii_case(&title) {
-                score += 8;
-            }
-            Some((score, provider_join_link(url)))
+            let url = event_join_url(event)?;
+            score_calendar_event(event, &title, now).map(|score| (score, provider_join_link(url)))
         })
         .max_by_key(|(score, _)| *score)
-        .map(|(_, link)| link)
+        .map(|(_, link)| link);
+
+    Some(CalendarMatch {
+        title: Some(best_event.title.clone()).filter(|s| !s.trim().is_empty()),
+        join_link,
+    })
+}
+
+fn score_calendar_event(
+    event: &CalendarEventSignal,
+    meeting_title: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<i32> {
+    if event.is_all_day {
+        return None;
+    }
+    let start = parse_rfc3339_utc(&event.start)?;
+    let end = parse_rfc3339_utc(&event.end)?;
+    if start > now + chrono::Duration::minutes(10) || end < now - chrono::Duration::minutes(5) {
+        return None;
+    }
+
+    let mut score = 1;
+    if start <= now && end >= now {
+        score += 4;
+    }
+    if !meeting_title.is_empty() && event.title.trim().eq_ignore_ascii_case(meeting_title) {
+        score += 8;
+    }
+    if event_join_url(event).is_some() {
+        score += 2;
+    }
+    Some(score)
+}
+
+fn event_join_url(event: &CalendarEventSignal) -> Option<String> {
+    normalize_meeting_url(event.meeting_url.clone())
+        .or_else(|| extract_meeting_url(event.location.as_deref()))
 }
 
 fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -331,9 +466,33 @@ mod tests {
             ..Default::default()
         };
 
-        let link = find_join_link(&events, &meeting).expect("join link");
+        let link = find_calendar_match(&events, &meeting)
+            .and_then(|m| m.join_link)
+            .expect("join link");
         assert_eq!(link.url, "https://meet.google.com/abc-defg-hij");
         assert_eq!(link.label, "join Google Meet");
+    }
+
+    #[test]
+    fn matches_current_calendar_event_even_when_title_differs() {
+        let now = chrono::Utc::now();
+        let events = vec![CalendarEventSignal {
+            title: "Customer onboarding".to_string(),
+            start: (now - chrono::Duration::minutes(5)).to_rfc3339(),
+            end: (now + chrono::Duration::minutes(25)).to_rfc3339(),
+            location: Some("https://zoom.us/j/123".to_string()),
+            ..Default::default()
+        }];
+        let meeting = MeetingStartedEvent {
+            title: Some("Zoom".to_string()),
+            ..Default::default()
+        };
+
+        let matched = find_calendar_match(&events, &meeting).expect("calendar match");
+        assert_eq!(matched.title.as_deref(), Some("Customer onboarding"));
+        let link = matched.join_link.expect("join link");
+        assert_eq!(link.url, "https://zoom.us/j/123");
+        assert_eq!(link.label, "join Zoom");
     }
 
     #[test]
@@ -347,6 +506,21 @@ mod tests {
             ..Default::default()
         }];
 
-        assert!(find_join_link(&events, &MeetingStartedEvent::default()).is_none());
+        assert!(find_calendar_match(&events, &MeetingStartedEvent::default()).is_none());
+    }
+
+    #[test]
+    fn ignores_all_day_calendar_events() {
+        let now = chrono::Utc::now();
+        let events = vec![CalendarEventSignal {
+            title: "OOO".to_string(),
+            start: (now - chrono::Duration::hours(1)).to_rfc3339(),
+            end: (now + chrono::Duration::hours(1)).to_rfc3339(),
+            meeting_url: Some("https://meet.google.com/all-day".to_string()),
+            is_all_day: true,
+            ..Default::default()
+        }];
+
+        assert!(find_calendar_match(&events, &MeetingStartedEvent::default()).is_none());
     }
 }

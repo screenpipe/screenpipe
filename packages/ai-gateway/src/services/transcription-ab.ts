@@ -251,6 +251,14 @@ function callProvider(provider: TranscriptionProvider, req: TranscriptionRequest
   }
 }
 
+function availableFallbackProviders(primary: TranscriptionProvider, env: Env): TranscriptionProvider[] {
+  const providers: TranscriptionProvider[] = [];
+  if (primary !== 'whisper' && getWhisperUrl(env)) providers.push('whisper');
+  if (primary !== 'parakeet' && getParakeetUrl(env)) providers.push('parakeet');
+  if (primary !== 'deepgram') providers.push('deepgram');
+  return providers;
+}
+
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
 /**
@@ -261,19 +269,25 @@ export async function runTranscriptionABTest(
   req: TranscriptionRequest,
   env: Env,
   deviceId: string | null,
-): Promise<{ result: TranscriptionResult; status: 'success' | 'fallback'; logEntry: ABTestLog; extraLogs: ABTestLog[] }> {
+): Promise<{ result: TranscriptionResult; status: 'success' | 'fallback' | 'error'; logEntry: ABTestLog; extraLogs: ABTestLog[] }> {
   const { primary, dualSend } = pickProvider(env);
   const estimatedDuration = req.audioBuffer.byteLength / 8000;
 
   // Call primary
   let primaryResult = await callProvider(primary, req, env);
-  let status: 'success' | 'fallback' = 'success';
+  let status: 'success' | 'fallback' | 'error' = primaryResult.ok ? 'success' : 'error';
 
-  // Fallback to Deepgram if self-hosted failed
-  if (!primaryResult.ok && primary !== 'deepgram') {
-    console.warn(`${primary} failed (${primaryResult.error}), falling back to deepgram`);
-    primaryResult = await callDeepgram(req, env);
-    status = primaryResult.ok ? 'fallback' : 'error' as any;
+  if (!primaryResult.ok) {
+    for (const fallback of availableFallbackProviders(primary, env)) {
+      console.warn(`${primaryResult.provider} failed (${primaryResult.error}), falling back to ${fallback}`);
+      const fallbackResult = await callProvider(fallback, req, env);
+      if (fallbackResult.ok) {
+        primaryResult = fallbackResult;
+        status = 'fallback';
+        break;
+      }
+      primaryResult = fallbackResult;
+    }
   }
 
   // Primary log entry

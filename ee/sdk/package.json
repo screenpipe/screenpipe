@@ -1,0 +1,127 @@
+{
+  "name": "@screenpipe/sdk",
+  "version": "0.1.0",
+  "description": "Screen recording SDK for Electron and Node apps, powered by screenpipe's native capture stack.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js"
+    },
+    "./electron": {
+      "types": "./electron/index.d.ts",
+      "require": "./electron/index.js"
+    },
+    "./electron/preload": {
+      "types": "./electron/preload.d.ts",
+      "require": "./electron/preload.js"
+    },
+    "./session": {
+      "types": "./session/index.d.ts",
+      "require": "./session/index.js"
+    },
+    "./tauri": {
+      "types": "./tauri/index.d.ts",
+      "require": "./tauri/index.js"
+    }
+  },
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "screenpipe",
+    "screen-recording",
+    "electron",
+    "node-addon",
+    "napi-rs"
+  ],
+  "homepage": "https://screenpi.pe",
+  "bugs": {
+    "url": "https://github.com/screenpipe/screenpipe/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/screenpipe/screenpipe.git",
+    "directory": "ee/sdk"
+  },
+  "files": [
+    "bridges",
+    "docs/integration.md",
+    "docs/screenshots",
+    "electron",
+    "examples/README.md",
+    "examples/record-10s.mjs",
+    "examples/electron-app/README.md",
+    "examples/electron-app/index.html",
+    "examples/electron-app/main.js",
+    "examples/electron-app/package.json",
+    "examples/electron-app/preload.js",
+    "examples/electron-app/renderer.js",
+    "examples/electron-app/smoke-app.mjs",
+    "examples/electron-app/smoke.mjs",
+    "examples/swift-app/Package.swift",
+    "examples/swift-app/README.md",
+    "examples/swift-app/Sources",
+    "examples/tauri-app/README.md",
+    "examples/tauri-app/index.html",
+    "examples/tauri-app/package.json",
+    "examples/tauri-app/smoke.mjs",
+    "examples/tauri-app/src",
+    "examples/tauri-app/src-tauri/Cargo.lock",
+    "examples/tauri-app/src-tauri/Cargo.toml",
+    "examples/tauri-app/src-tauri/build.rs",
+    "examples/tauri-app/src-tauri/icons",
+    "examples/tauri-app/src-tauri/src",
+    "examples/tauri-app/src-tauri/tauri.conf.json",
+    "session",
+    "tauri/index.d.ts",
+    "tauri/index.js",
+    "tauri/rust/Cargo.lock",
+    "tauri/rust/Cargo.toml",
+    "tauri/rust/src",
+    "Package.swift",
+    "Sources",
+    "index.d.ts",
+    "index.js"
+  ],
+  "napi": {
+    "name": "screenpipe-sdk",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "optionalDependencies": {
+    "@screenpipe/sdk-darwin-arm64": "0.1.0",
+    "@screenpipe/sdk-darwin-x64": "0.1.0",
+    "@screenpipe/sdk-win32-arm64-msvc": "0.1.0",
+    "@screenpipe/sdk-win32-x64-msvc": "0.1.0"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node --test --test-concurrency=1 \"__test__/**/*.test.mjs\"",
+    "test:smoke": "node --test --test-concurrency=1 \"__test__/**/*.test.mjs\"",
+    "test:rust": "cargo test --lib",
+    "universal": "napi universal",
+    "version": "napi version"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
+    "@types/node": "^22.10.1"
+  },
+  "packageManager": "bun@1.3.10"
+}

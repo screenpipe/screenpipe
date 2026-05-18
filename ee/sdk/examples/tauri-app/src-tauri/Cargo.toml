@@ -1,0 +1,12 @@
+[package]
+name = "screenpipe-tauri-example"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+screenpipe-tauri = { path = "../../../tauri/rust" }
+tauri = { version = "2", features = [] }

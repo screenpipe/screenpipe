@@ -5,6 +5,7 @@
 export type SourceCitationKind =
   | "screenpipe"
   | "database"
+  | "connector"
   | "web"
   | "file"
   | "memory"
@@ -71,7 +72,9 @@ export function formatSourceCitationsMarkdown(citations: SourceCitation[]): stri
 function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): SourceCitation[] {
   if (!toolCall || toolCall.isError === true || toolCall.isRunning === true) return [];
 
-  const toolName = typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown";
+  const toolName = normalizeToolName(
+    typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown"
+  );
   const args = isObject(toolCall.args) ? toolCall.args : {};
   const resultText = resultToText(toolCall.result);
 
@@ -86,6 +89,12 @@ function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): Source
   if (toolName === "read") {
     const path = stringArg(args, "path");
     return path ? [fileCitation(path, "Read")] : [];
+  }
+
+  if (toolName === "write" || toolName === "edit") {
+    const path = stringArg(args, "path") ?? stringArg(args, "file_path") ?? stringArg(args, "filePath");
+    const verb = toolName === "write" ? "Wrote" : "Edited";
+    return path ? [fileCitation(path, verb)] : [];
   }
 
   if (toolName === "grep" || toolName === "rg") {
@@ -115,7 +124,7 @@ function webSearchCitations(
   resultText: string
 ): SourceCitation[] {
   const query = stringArg(args, "query");
-  const urls = [...extractStructuredSources(result), ...extractWebLinks(resultText)];
+  const urls = resultLinks(result, resultText);
   if (urls.length > 0) {
     return dedupeLinks(urls).slice(0, 6).map((link) => ({
       id: stableId(["web", link.url]),
@@ -177,6 +186,17 @@ function bashCitations(command: string, resultText: string): SourceCitation[] {
     });
   }
 
+  for (const link of extractStructuredSourcesFromText(resultText).slice(0, 6)) {
+    if (isLocalScreenpipeUrl(link.url)) continue;
+    citations.push({
+      id: stableId(["web-result", link.url]),
+      kind: "web",
+      title: link.title || hostname(link.url) || "Web source",
+      subtitle: "tool result",
+      href: link.url,
+    });
+  }
+
   const filePaths = extractFilePathsFromCommand(command);
   for (const path of filePaths) {
     citations.push(fileCitation(path, "Local file"));
@@ -198,7 +218,7 @@ function screenpipeApiCitation(call: string): SourceCitation {
   const path = extractPath(call);
   const query = extractQuery(call);
   const title = screenpipeTitle(path);
-  const kind: SourceCitationKind = path === "/raw_sql" ? "database" : "screenpipe";
+  const kind = screenpipeKind(path);
 
   return {
     id: stableId(["screenpipe", path, query]),
@@ -208,14 +228,29 @@ function screenpipeApiCitation(call: string): SourceCitation {
   };
 }
 
+function screenpipeKind(path: string): SourceCitationKind {
+  if (path === "/raw_sql") return "database";
+  if (path === "/memories") return "memory";
+  if (path.startsWith("/connections/")) return "connector";
+  return "screenpipe";
+}
+
 function screenpipeTitle(path: string): string {
   if (path === "/search") return "Screenpipe search";
   if (path === "/activity-summary") return "Activity summary";
   if (path === "/raw_sql") return "Local database query";
+  if (path === "/memories") return "Screenpipe memories";
+  if (path.startsWith("/connections/perplexity/")) return "Perplexity search";
+  if (path.startsWith("/connections/google-calendar/") || path.startsWith("/connections/calendar/")) {
+    return "Google Calendar events";
+  }
+  if (path.startsWith("/connections/notion")) return "Notion connection";
+  if (path.startsWith("/connections/obsidian")) return "Obsidian connection";
   if (path.startsWith("/meetings")) return "Meeting data";
   if (path.startsWith("/frames")) return "Frame data";
   if (path.startsWith("/speakers")) return "Speaker data";
   if (path === "/health") return "Screenpipe health";
+  if (path.startsWith("/connections/")) return `${titleCase(path.split("/")[2] ?? "connector")} connection`;
   return "Screenpipe API";
 }
 
@@ -239,8 +274,24 @@ function screenpipeSubtitle(path: string, query: string): string | undefined {
     return "local screenpipe data";
   }
 
+  if (path === "/memories") {
+    return params.q ? `memory query: ${truncate(params.q, 60)}` : limitSubtitle(params.limit);
+  }
+
+  if (path.startsWith("/connections/perplexity/")) {
+    return "external web context via Screenpipe connection";
+  }
+
+  if (path.startsWith("/connections/google-calendar/") || path.startsWith("/connections/calendar/")) {
+    return timeRange(params.start_time ?? params.start, params.end_time ?? params.end) ?? limitSubtitle(params.limit);
+  }
+
+  if (path.startsWith("/connections/")) {
+    return "external app connection";
+  }
+
   if (params.limit) {
-    return `limit ${params.limit}`;
+    return limitSubtitle(params.limit);
   }
 
   return undefined;
@@ -291,6 +342,12 @@ function normalizeExplicitCitations(value: unknown): SourceCitation[] {
   return dedupeCitations(citations);
 }
 
+function normalizeToolName(toolName: string): string {
+  return toolName
+    .replace(/^tool_functions[._-]?/, "")
+    .replace(/^toolfunctions[._-]?/, "");
+}
+
 function extractScreenpipeApiCalls(command: string): string[] {
   const matches = command.match(
     /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1):3030\/[^\s"'`)<]+/g
@@ -321,20 +378,43 @@ function extractWebLinks(text: string): Array<{ title?: string; url: string }> {
 function extractStructuredSources(result: unknown): Array<{ title?: string; url: string }> {
   if (!isObject(result)) return [];
   const details = isObject(result.details) ? result.details : undefined;
-  const sources = Array.isArray(details?.sources) ? details.sources : undefined;
-  if (!sources) return [];
+  const sourceArrays = [
+    Array.isArray(details?.sources) ? details.sources : undefined,
+    Array.isArray(result.sources) ? result.sources : undefined,
+    Array.isArray(result.search_results) ? result.search_results : undefined,
+    Array.isArray(result.citations) ? result.citations : undefined,
+  ].filter((sources): sources is unknown[] => Array.isArray(sources));
 
   const links: Array<{ title?: string; url: string }> = [];
-  for (const source of sources) {
-    if (!isObject(source) || typeof source.url !== "string") continue;
-    const url = cleanUrl(source.url);
-    if (!url) continue;
-    links.push({
-      title: typeof source.title === "string" ? source.title.trim() : undefined,
-      url,
-    });
+  for (const sources of sourceArrays) {
+    for (const source of sources) {
+      if (!isObject(source) || typeof source.url !== "string") continue;
+      const url = cleanUrl(source.url);
+      if (!url) continue;
+      links.push({
+        title: typeof source.title === "string" ? source.title.trim() : undefined,
+        url,
+      });
+    }
   }
   return links;
+}
+
+function resultLinks(result: unknown, resultText: string): Array<{ title?: string; url: string }> {
+  return dedupeLinks([
+    ...extractStructuredSources(result),
+    ...extractStructuredSourcesFromText(resultText),
+    ...extractWebLinks(resultText),
+  ]);
+}
+
+function extractStructuredSourcesFromText(text: string): Array<{ title?: string; url: string }> {
+  if (!text.trim()) return [];
+  try {
+    return extractStructuredSources(JSON.parse(text));
+  } catch {
+    return [];
+  }
 }
 
 function dedupeLinks(links: Array<{ title?: string; url: string }>): Array<{ title?: string; url: string }> {
@@ -468,7 +548,7 @@ function stableId(parts: Array<string | undefined>): string {
 }
 
 function isSourceKind(kind: string): kind is SourceCitationKind {
-  return ["screenpipe", "database", "web", "file", "memory", "pipe", "command"].includes(kind);
+  return ["screenpipe", "database", "connector", "web", "file", "memory", "pipe", "command"].includes(kind);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -536,6 +616,18 @@ function shortenPath(path: string): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}...` : text;
+}
+
+function limitSubtitle(limit: string | undefined): string | undefined {
+  return limit ? `limit ${limit}` : undefined;
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function safeDecode(value: string): string {

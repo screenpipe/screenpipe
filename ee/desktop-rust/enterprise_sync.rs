@@ -41,8 +41,8 @@ use tracing::{debug, error, info, warn};
 #[path = "enterprise_upload.rs"]
 mod enterprise_upload;
 use enterprise_upload::{
-    upload_direct_encrypted_batch, DirectUploadCursors, DirectUploadRecordCounts,
-    EnterpriseUploadMode,
+    upload_direct_encrypted_batch, upload_direct_readable_batch, DirectUploadCursors,
+    DirectUploadRecordCounts, EnterpriseUploadMode,
 };
 
 /// How often we wake up and try to sync.
@@ -582,6 +582,23 @@ pub async fn run_one_sync(
             )
             .await?;
         }
+        EnterpriseUploadMode::DirectReadable(direct) => {
+            let counts = DirectUploadRecordCounts {
+                frames: frames.len(),
+                audio: audio.len(),
+                ui: ui.len(),
+                snapshots: snapshots.len(),
+            };
+            upload_direct_readable_batch(
+                http,
+                cfg,
+                direct,
+                body,
+                counts,
+                DirectUploadCursors::from_cursor(&next_cursor),
+            )
+            .await?;
+        }
     }
 
     // Advance cursor only on success — partial failure must not skip records.
@@ -1001,9 +1018,39 @@ mod tests {
                 assert_eq!(direct.complete_url, "https://staging/upload-complete");
             }
             EnterpriseUploadMode::HostedIngest => panic!("expected direct upload mode"),
+            EnterpriseUploadMode::DirectReadable(_) => {
+                panic!("expected encrypted direct upload mode")
+            }
         }
 
-        // Case 6: direct upload without a valid root key fails closed.
+        // Case 6: readable direct upload does not require customer-held root keys.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_readable",
+        );
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64");
+        std::env::remove_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64");
+        let dir = TempDir::new().unwrap();
+        let cfg =
+            EnterpriseSyncConfig::from_env(dir.path().to_path_buf(), "dev".into(), "host".into())
+                .unwrap();
+        match cfg.upload_mode {
+            EnterpriseUploadMode::DirectReadable(direct) => {
+                assert!(direct.recipients.is_empty());
+                assert_eq!(direct.ticket_url, "https://staging/upload-ticket");
+                assert_eq!(direct.complete_url, "https://staging/upload-complete");
+            }
+            EnterpriseUploadMode::HostedIngest => panic!("expected readable direct upload mode"),
+            EnterpriseUploadMode::DirectEncrypted(_) => {
+                panic!("expected readable direct upload mode")
+            }
+        }
+
+        // Case 7: encrypted direct upload without a valid root key fails closed.
+        std::env::set_var(
+            "SCREENPIPE_ENTERPRISE_UPLOAD_MODE",
+            "direct_upload_encrypted",
+        );
         std::env::set_var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64", "bad");
         let dir = TempDir::new().unwrap();
         assert!(EnterpriseSyncConfig::from_env(
@@ -1013,7 +1060,7 @@ mod tests {
         )
         .is_none());
 
-        // Case 7: direct upload without a recovery key also fails closed.
+        // Case 8: encrypted direct upload without a recovery key also fails closed.
         std::env::set_var(
             "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
             base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
@@ -1150,6 +1197,20 @@ mod tests {
                     root_key: [4u8; 32],
                 },
             ],
+        });
+        cfg
+    }
+
+    fn readable_direct_test_cfg(
+        dir: &TempDir,
+        ticket_url: String,
+        complete_url: String,
+    ) -> EnterpriseSyncConfig {
+        let mut cfg = test_cfg(dir, "http://host/ingest".to_string());
+        cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+            ticket_url,
+            complete_url,
+            recipients: Vec::new(),
         });
         cfg
     }
@@ -1302,6 +1363,79 @@ mod tests {
         );
         let loaded = Cursor::load(&cfg.cursor_path);
         assert_eq!(loaded.last_frame_ts, cursor.last_frame_ts);
+    }
+
+    #[tokio::test]
+    async fn readable_direct_upload_puts_jsonl_body() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ticket"))
+            .and(wiremock::matchers::body_string_contains(
+                "\"mode\":\"direct_upload_readable\"",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "ok": true,
+                    "method": "PUT",
+                    "upload_url": format!("{}/blob", server.uri()),
+                    "headers": {
+                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_READABLE_CONTENT_TYPE,
+                        "x-ms-blob-type": "BlockBlob"
+                    }
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path("/blob"))
+            .and(wiremock::matchers::body_string_contains(
+                "customer-readable",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/complete"))
+            .and(wiremock::matchers::body_string_contains(
+                "\"mode\":\"direct_upload_readable\"",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let cfg = readable_direct_test_cfg(
+            &dir,
+            format!("{}/ticket", server.uri()),
+            format!("{}/complete", server.uri()),
+        );
+        let mut cursor = Cursor {
+            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+        };
+        let local = MockLocal::new(
+            vec![vec![frame(
+                1,
+                "2026-05-07T10:00:00Z",
+                "Arc",
+                "customer-readable text",
+            )]],
+            vec![vec![]],
+        );
+        let http = reqwest::Client::new();
+        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+            .await
+            .unwrap();
+
+        assert_eq!(report.frames, 1);
+        assert_eq!(
+            cursor.last_frame_ts.as_deref(),
+            Some("2026-05-07T10:00:00Z")
+        );
     }
 
     #[tokio::test]

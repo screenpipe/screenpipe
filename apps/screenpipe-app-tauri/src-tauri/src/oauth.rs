@@ -437,11 +437,11 @@ pub async fn oauth_status(
     instance: Option<String>,
 ) -> Result<OAuthStatus, String> {
     let store = open_secret_store().await;
-    let token =
-        oauth::read_oauth_token_instance(store.as_ref(), &integration_id, instance.as_deref())
+    let connected =
+        oauth::is_oauth_instance_connected(store.as_ref(), &integration_id, instance.as_deref())
             .await;
 
-    let display_name = if token.is_some() {
+    let display_name = if connected {
         oauth::load_oauth_json(store.as_ref(), &integration_id, instance.as_deref())
             .await
             .and_then(|v| {
@@ -456,7 +456,7 @@ pub async fn oauth_status(
     };
 
     Ok(OAuthStatus {
-        connected: token.is_some(),
+        connected,
         display_name,
     })
 }
@@ -504,7 +504,7 @@ pub async fn oauth_list_instances(
     integration_id: String,
 ) -> Result<Vec<OAuthInstanceInfo>, String> {
     let store = open_secret_store().await;
-    let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
+    let instances = oauth::list_connected_oauth_instances(store.as_ref(), &integration_id).await;
     let mut result = Vec::new();
 
     for inst in instances {

@@ -1027,10 +1027,15 @@ async fn gcal_events(
     let client = reqwest::Client::new();
     match gcal_events_inner(&client, params, &state.secret_store).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Err(e) => {
+            let message = e.to_string();
+            let status = if message.contains("Google Calendar not connected") {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": message })))
+        }
     }
 }
 

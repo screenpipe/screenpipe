@@ -174,9 +174,9 @@ export type Settings = SettingsStore & {
 	enableWorkflowEvents?: boolean;
 	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
 	transcriptionMode?: "realtime" | "smart" | "batch";
-	/** Meeting-only live notes. Separate from background 24/7 transcription. */
+	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
 	meetingLiveTranscriptionEnabled?: boolean;
-	/** Provider for meeting-only live notes. Defaults to the selected transcription engine. */
+	/** Provider for manually-started live notes. Defaults to the selected transcription engine. */
 	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "openai-realtime" | "deepgram-live";
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;

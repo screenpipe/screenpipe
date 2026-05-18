@@ -32,14 +32,17 @@ export function useAutoSuggestions() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevTextsRef = useRef<string>("");
+  const prevSignatureRef = useRef<string>("");
 
   const applySuggestions = useCallback(
-    (data: { suggestions: Suggestion[]; mode: string; tags?: string[] }) => {
-      const newTexts = data.suggestions.map((s) => s.text).join("|");
-      // Only update state if suggestions actually changed (avoids re-render flicker)
-      if (newTexts !== prevTextsRef.current) {
-        prevTextsRef.current = newTexts;
+    (data: { suggestions: Suggestion[]; mode: string; tags?: string[] }, options?: { force?: boolean }) => {
+      const newSignature = JSON.stringify(
+        data.suggestions.map((s) => [s.text, s.preview ?? "", s.priority ?? "", s.connectionIcon ?? ""])
+      );
+      // Only update state if suggestions actually changed (avoids re-render flicker),
+      // except for a manual refresh where the user expects visible feedback.
+      if (options?.force || newSignature !== prevSignatureRef.current) {
+        prevSignatureRef.current = newSignature;
         setSuggestions(data.suggestions);
       }
       setMode(data.mode as ActivityMode);
@@ -80,7 +83,7 @@ export function useAutoSuggestions() {
     try {
       const result = await commands.forceRegenerateSuggestions();
       if (result.status === "ok") {
-        applySuggestions(result.data);
+        applySuggestions(result.data, { force: true });
       }
     } catch (err) {
       console.error("force refresh failed:", err);

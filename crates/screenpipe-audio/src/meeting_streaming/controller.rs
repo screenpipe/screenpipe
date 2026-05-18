@@ -19,8 +19,8 @@ use crate::{core::engine::AudioTranscriptionEngine, transcription::engine::Trans
 use super::{
     deepgram_live,
     events::{
-        MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
-        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
+        is_manual_live_marker, MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent,
+        MeetingStreamingError, MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
         MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
     openai_realtime, selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
@@ -93,20 +93,32 @@ pub fn start_meeting_streaming_loop(
 
         match db.get_most_recent_active_meeting().await {
             Ok(Some(meeting)) => {
-                info!(
-                    "meeting streaming: reattaching active meeting on coordinator start (meeting_id={})",
-                    meeting.id
-                );
-                start_streaming_session(
-                    &config,
-                    &audio_tap,
-                    &transcription_engine,
-                    &mut active,
-                    meeting.id,
-                    Some(meeting.meeting_app),
-                    meeting.title,
-                )
-                .await;
+                if should_reattach_manual_live_session(
+                    &meeting.meeting_app,
+                    &meeting.detection_source,
+                ) {
+                    info!(
+                        "meeting streaming: reattaching active meeting on coordinator start (meeting_id={})",
+                        meeting.id
+                    );
+                    start_streaming_session(
+                        &config,
+                        &audio_tap,
+                        &transcription_engine,
+                        &mut active,
+                        meeting.id,
+                        Some(meeting.meeting_app),
+                        meeting.title,
+                    )
+                    .await;
+                } else {
+                    debug!(
+                        "meeting streaming: active meeting {} is background-only (source={}); not reattaching live stream",
+                        meeting.id, meeting.detection_source
+                    );
+                    audio_tap.set_active(false);
+                    audio_tap.set_background_suppressed(false);
+                }
             }
             Ok(None) => {}
             Err(err) => {
@@ -127,6 +139,18 @@ pub fn start_meeting_streaming_loop(
 
                     if active.as_ref().is_some_and(|s| s.meeting_id == meeting_id) {
                         debug!("meeting streaming: duplicate start for meeting {}", meeting_id);
+                        continue;
+                    }
+
+                    if !event.data.is_manual_live_start() {
+                        debug!(
+                            "meeting streaming: meeting {} is background-only (source={:?}, app={:?}); not starting live stream",
+                            meeting_id,
+                            event.data.detection_source,
+                            event.data.app
+                        );
+                        audio_tap.set_active(false);
+                        audio_tap.set_background_suppressed(false);
                         continue;
                     }
 
@@ -258,6 +282,10 @@ pub fn start_meeting_streaming_loop(
             }
         }
     })
+}
+
+fn should_reattach_manual_live_session(meeting_app: &str, detection_source: &str) -> bool {
+    is_manual_live_marker(Some(detection_source)) || is_manual_live_marker(Some(meeting_app))
 }
 
 async fn start_streaming_session(
@@ -734,6 +762,36 @@ mod tests {
     fn test_audio_tap() -> MeetingAudioTap {
         let (tx, _) = broadcast::channel(8);
         MeetingAudioTap::new(tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    #[test]
+    fn auto_detected_meeting_event_is_background_only() {
+        let event = MeetingLifecycleEvent {
+            meeting_id: Some(7),
+            app: Some("zoom.us".to_string()),
+            detection_source: Some("ui_scan".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!event.is_manual_live_start());
+    }
+
+    #[test]
+    fn manual_meeting_event_starts_live_mode() {
+        let event = MeetingLifecycleEvent {
+            meeting_id: Some(7),
+            app: Some("manual".to_string()),
+            detection_source: Some("manual".to_string()),
+            ..Default::default()
+        };
+
+        assert!(event.is_manual_live_start());
+    }
+
+    #[test]
+    fn active_auto_meeting_does_not_reattach_live_stream() {
+        assert!(!should_reattach_manual_live_session("zoom.us", "ui_scan"));
+        assert!(should_reattach_manual_live_session("manual", "manual"));
     }
 
     #[tokio::test]

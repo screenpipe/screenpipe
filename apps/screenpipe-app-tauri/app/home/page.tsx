@@ -42,6 +42,7 @@ import {
   ChatSidebar,
   CollapsedChatSidebarButton,
 } from "@/components/chat-sidebar";
+import { ChatHistoryView } from "@/components/chat/chat-history-view";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
@@ -73,7 +74,7 @@ type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | 
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "memories", "connections", "meetings",
+  "home", "timeline", "pipes", "help", "memories", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
 ];
 
@@ -111,6 +112,28 @@ function HomeContent() {
   const selectChatConversation = useCallback((id: string) => {
     setActiveSection("home");
     useChatStore.getState().actions.setCurrent(id);
+    void emit("chat-load-conversation", { conversationId: id });
+  }, [setActiveSection]);
+
+  const startNewChat = useCallback(() => {
+    const id = crypto.randomUUID();
+    const store = useChatStore.getState();
+    Object.values(store.sessions).forEach((s) => {
+      if (s.draft) store.actions.drop(s.id);
+    });
+    store.actions.upsert({
+      id,
+      title: "new chat",
+      preview: "",
+      status: "idle",
+      messageCount: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      pinned: false,
+      unread: false,
+      draft: true,
+    });
+    store.actions.setCurrent(id);
     void emit("chat-load-conversation", { conversationId: id });
   }, [setActiveSection]);
 
@@ -711,6 +734,16 @@ function HomeContent() {
         );
       case "help":
         return <FeedbackSection />;
+      case "history":
+        return (
+          <ChatHistoryView
+            onBack={() => setActiveSection("home")}
+            onNewChat={() => startNewChat()}
+            onSelectConversation={(id) => {
+              selectChatConversation(id);
+            }}
+          />
+        );
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -755,7 +788,8 @@ function HomeContent() {
   const isFullHeight =
     activeSection === "home" ||
     activeSection === "timeline" ||
-    activeSection === "meetings";
+    activeSection === "meetings" ||
+    activeSection === "history";
 
   return (
     <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
@@ -1055,33 +1089,7 @@ function HomeContent() {
                         // clicking it (from any view) always spawns a
                         // new chat session and switches to it.
                         if (section.id === "home") {
-                          // Always start a brand-new session. Reusing an
-                          // empty row (getOrCreateEmptyChatId) felt like
-                          // "nothing happened" / jumping to an old blank
-                          // row in recents instead of a fresh compose view.
-                          const id = crypto.randomUUID();
-                          const store = useChatStore.getState();
-                          // Drop stale drafts before creating a new one so
-                          // repeated "New chat" clicks don't accumulate empty rows.
-                          Object.values(store.sessions).forEach((s) => {
-                            if (s.draft) store.actions.drop(s.id);
-                          });
-                          store.actions.upsert({
-                            id,
-                            title: "new chat",
-                            preview: "",
-                            status: "idle",
-                            messageCount: 0,
-                            createdAt: Date.now(),
-                            updatedAt: Date.now(),
-                            pinned: false,
-                            unread: false,
-                            draft: true,
-                          });
-                          store.actions.setCurrent(id);
-                          void emit("chat-load-conversation", {
-                            conversationId: id,
-                          });
+                          startNewChat();
                         }
                       }}
                       className={cn(
@@ -1159,7 +1167,7 @@ function HomeContent() {
                     isTranslucent ? "vibrant-sidebar-border" : "border-border/50"
                   )}
                 >
-                  <ChatSidebar />
+                  <ChatSidebar onViewAll={() => setActiveSection("history")} />
                 </div>
               ) : (
                 <div className="flex-1" />

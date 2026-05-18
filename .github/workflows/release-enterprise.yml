@@ -328,9 +328,18 @@ jobs:
         working-directory: apps/screenpipe-app-tauri
         run: bun install
 
+      - name: Install macOS binary dependencies
+        shell: bash
+        run: |
+          eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null || true)"
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/sbin" >> $GITHUB_PATH
+          brew install ffmpeg wget
+
       - name: Run pre_build.js
         env:
           SKIP_SCREENPIPE_SETUP: true
+          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
         working-directory: apps/screenpipe-app-tauri
         run: bun ./scripts/pre_build.js
 
@@ -405,6 +414,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CI: false
+          SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
           MACOSX_DEPLOYMENT_TARGET: "14.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
           CFLAGS: "-mmacosx-version-min=14.0 -mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
