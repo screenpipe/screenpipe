@@ -2639,6 +2639,23 @@ export function StandaloneChat({
   // select (let the browser select text — don't swallow it).
   const pendingEditDownXYRef = useRef<{ x: number; y: number } | null>(null);
 
+  const enterEditMode = useCallback((message: Message, caretPos?: number) => {
+    setEditDraft(message.content);
+    pendingCaretRef.current = caretPos ?? message.content.length;
+    setEditingMessageId(message.id);
+  }, []);
+
+  const commitEditedMessage = useCallback((message: Message, draft: string) => {
+    const trimmed = draft.trim();
+    setEditingMessageId(null);
+    pendingCaretRef.current = null;
+    if (!trimmed || trimmed === message.content) return;
+    const idx = messages.findIndex((m) => m.id === message.id);
+    if (idx === -1) return;
+    setMessages((prev) => prev.slice(0, idx));
+    sendMessage(trimmed, message.displayContent);
+  }, [messages, sendMessage]);
+
   // Given a click on a rendered message bubble, compute the character offset
   // into `content` that corresponds to where the user clicked. Falls back to
   // end-of-text if the browser can't resolve a caret position (old Safari).
@@ -6757,7 +6774,7 @@ export function StandaloneChat({
                 className={cn(
                   "group/message flex flex-col min-w-0",
                   message.role === "user"
-                    ? "items-end max-w-[82%]"
+                    ? (editingMessageId === message.id ? "items-end w-full" : "items-end max-w-[82%]")
                     : "items-start w-full"
                 )}
               >
@@ -6786,8 +6803,7 @@ export function StandaloneChat({
                     return;
                   }
                   // Real click — enter edit mode.
-                  setEditDraft(message.content);
-                  setEditingMessageId(message.id);
+                  enterEditMode(message, pendingCaretRef.current ?? undefined);
                 }}
                 className={cn(
                   "relative rounded-xl text-sm overflow-hidden max-w-full transition-all",
@@ -6798,45 +6814,75 @@ export function StandaloneChat({
                   // Queued user messages — visually de-emphasised so the eye stays on
                   // the active turn. Cleared when pi-mono fires message_start for
                   // this turn (see handler above).
-                  message.queued && "bg-muted/35 text-muted-foreground opacity-80"
+                  message.queued && "bg-muted/35 text-muted-foreground opacity-80",
+                  // In edit mode, keep the bubble at full available width so it
+                  // doesn't shrink or look like a separate small input.
+                  editingMessageId === message.id && message.role === "user" && "w-full"
                 )}
               >
                 {editingMessageId === message.id ? (
-                  <textarea
-                    ref={(el) => {
-                      editTextareaRef.current = el;
-                      // Synchronous focus + caret placement BEFORE the browser
-                      // paints. Using the ref callback (instead of useEffect)
-                      // guarantees the cursor lands where the user clicked on
-                      // the very first frame — no flash-of-start-of-text.
-                      if (el && pendingCaretRef.current != null) {
-                        const pos = pendingCaretRef.current;
-                        pendingCaretRef.current = null;
-                        el.focus({ preventScroll: true });
-                        try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
-                      }
-                    }}
-                    value={editDraft}
-                    onChange={(e) => setEditDraft(e.target.value)}
-                    onBlur={() => {
-                      const trimmed = editDraft.trim();
-                      setEditingMessageId(null);
-                      if (!trimmed || trimmed === message.content) return;
-                      const idx = messages.findIndex((m) => m.id === message.id);
-                      if (idx === -1) return;
-                      setMessages((prev) => prev.slice(0, idx));
-                      sendMessage(trimmed, message.displayContent);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") { e.preventDefault(); setEditingMessageId(null); }
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        (e.currentTarget as HTMLTextAreaElement).blur();
-                      }
-                    }}
-                    rows={Math.min(8, Math.max(1, editDraft.split("\n").length))}
-                    className="w-full resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  />
+                  <div className="flex flex-col gap-2 w-full min-w-0">
+                    <textarea
+                      ref={(el) => {
+                        editTextareaRef.current = el;
+                        // Synchronous focus + caret placement BEFORE the browser
+                        // paints. Using the ref callback (instead of useEffect)
+                        // guarantees the cursor lands where the user clicked on
+                        // the very first frame — no flash-of-start-of-text.
+                        if (el && pendingCaretRef.current != null) {
+                          const pos = pendingCaretRef.current;
+                          pendingCaretRef.current = null;
+                          el.focus({ preventScroll: true });
+                          try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                        }
+                      }}
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onBlur={() => commitEditedMessage(message, editDraft)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditingMessageId(null);
+                          pendingCaretRef.current = null;
+                          setEditDraft(message.content);
+                        }
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          (e.currentTarget as HTMLTextAreaElement).blur();
+                        }
+                      }}
+                      rows={Math.min(10, Math.max(1, editDraft.split("\n").length))}
+                      className="block w-full min-w-0 resize-none bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none leading-relaxed"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingMessageId(null);
+                          pendingCaretRef.current = null;
+                          setEditDraft(message.content);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs px-2 py-1 rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          commitEditedMessage(message, editDraft);
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <MessageContent
                     message={message}
@@ -6847,23 +6893,38 @@ export function StandaloneChat({
                 )}
               </div>
                 {/* Action buttons - appear on hover, outside the message box */}
-                <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 transition-all duration-200">
-                  <button
-                    onClick={async () => {
-                      await navigator.clipboard.writeText(message.content);
-                      setCopiedMessageId(message.id);
-                      setTimeout(() => setCopiedMessageId(null), 2000);
-                    }}
-                    className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                    title="Copy message"
-                  >
-                    {copiedMessageId === message.id ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Copy className="h-3 w-3" />
+                {editingMessageId !== message.id && (
+                  <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100 transition-all duration-200">
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(message.content);
+                        setCopiedMessageId(message.id);
+                        setTimeout(() => setCopiedMessageId(null), 2000);
+                      }}
+                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                      title="Copy message"
+                    >
+                      {copiedMessageId === message.id ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                    {message.role === "user" && !isLoading && (
+                      <button
+                        type="button"
+                        onMouseUp={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          enterEditMode(message);
+                        }}
+                        className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                        title="Edit"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
                     )}
-                  </button>
-                  {message.role === "assistant" && !isLoading && (
+                    {message.role === "assistant" && !isLoading && (
                     <button
                       onClick={() => {
                         const msgIndex = messages.findIndex((m) => m.id === message.id);
@@ -6883,8 +6944,8 @@ export function StandaloneChat({
                     >
                       <RefreshCw className="h-3 w-3" />
                     </button>
-                  )}
-                  {message.role === "assistant" && (
+                    )}
+                    {message.role === "assistant" && (
                     <Popover
                       open={openMessageMenuId === message.id}
                       onOpenChange={(open) => setOpenMessageMenuId(open ? message.id : null)}
@@ -6937,8 +6998,9 @@ export function StandaloneChat({
                         </button>
                       </PopoverContent>
                     </Popover>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           ))}
