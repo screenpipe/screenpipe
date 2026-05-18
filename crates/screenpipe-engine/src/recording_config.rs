@@ -145,6 +145,13 @@ pub struct RecordingConfig {
     /// See `RecordingSettings.disable_meeting_detector` for details.
     pub disable_meeting_detector: bool,
 
+    /// Mitsukeru fork: overrides for event-driven capture parameters.
+    /// None = follow active PowerProfile.
+    pub idle_capture_interval_ms: Option<u64>,
+    pub visual_check_interval_ms: Option<u64>,
+    pub visual_change_threshold: Option<f64>,
+    pub min_capture_interval_ms: Option<u64>,
+
     /// Require authentication for remote (non-localhost) API access.
     /// When true, requests from other devices must include
     /// `Authorization: Bearer <SCREENPIPE_API_KEY>`.
@@ -284,6 +291,10 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             disable_snapshot_compaction: settings.disable_snapshot_compaction,
             disable_meeting_detector: settings.disable_meeting_detector,
+            idle_capture_interval_ms: settings.idle_capture_interval_ms,
+            visual_check_interval_ms: settings.visual_check_interval_ms,
+            visual_change_threshold: settings.visual_change_threshold,
+            min_capture_interval_ms: settings.min_capture_interval_ms,
             // LAN exposure is opt-in. We force `api_auth` on whenever
             // `listen_on_lan` is true so a user can never accidentally
             // publish an unauthenticated API on their local network. The
@@ -363,6 +374,10 @@ impl RecordingConfig {
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
             video_quality: self.video_quality.clone(),
+            idle_capture_interval_ms: self.idle_capture_interval_ms,
+            visual_check_interval_ms: self.visual_check_interval_ms,
+            visual_change_threshold: self.visual_change_threshold,
+            min_capture_interval_ms: self.min_capture_interval_ms,
         }
     }
 }
