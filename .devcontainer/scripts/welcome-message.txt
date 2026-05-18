@@ -10,3 +10,7 @@
 
 💻 You can run 'dev-screenpipe' in the terminal to keep Screenpipe running while you iterate.
 
+💻 You can run 'open-browser <url>' to launch the container-safe browser.
+
+💻 You can run 'open-screenpipe-data' to open ~/.screenpipe in the file browser.
+

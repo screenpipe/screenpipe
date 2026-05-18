@@ -134035,7 +134035,7 @@
       "frame_id": 36019,
       "browser_url": "https://ezgif.com/maker",
       "app_name": "Arc",
-      "text": "For permanent links you can use: https://ezgif.com/maker?url=https://example.com/images.zip",
+      "text": "For permanent links you can use: https://ezgif.com/maker?url=https://screenpi.pe/images.zip",
       "confidence": 1,
       "bounds": {
         "left": 0.3314,
@@ -134044,7 +134044,7 @@
         "height": 0.01574
       },
       "ground_truth_urls": [
-        "https://ezgif.com/maker?url=https://example.com/images.zip"
+        "https://ezgif.com/maker?url=https://screenpi.pe/images.zip"
       ]
     },
     {

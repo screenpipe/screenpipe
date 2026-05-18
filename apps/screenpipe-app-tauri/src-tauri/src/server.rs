@@ -529,7 +529,7 @@ curl -X POST http://localhost:11435/notify \
 # Markdown body
 curl -X POST http://localhost:11435/notify \
   -H "Content-Type: application/json" \
-  -d '{"title": "Meeting Summary", "body": "**Q3 Planning**\n- Budget approved\n- Launch date: *Oct 15*\n- [Notes](https://example.com)"}'
+  -d '{"title": "Meeting Summary", "body": "**Q3 Planning**\n- Budget approved\n- Launch date: *Oct 15*\n- [Notes](https://screenpi.pe)"}'
 
 # Custom auto-dismiss (5 seconds)
 curl -X POST http://localhost:11435/notify \

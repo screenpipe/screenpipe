@@ -5399,7 +5399,7 @@ mod tests {
     #[test]
     fn test_url_to_pipe_name_basic() {
         assert_eq!(
-            url_to_pipe_name("https://example.com/pipes/my-pipe.md"),
+            url_to_pipe_name("https://screenpi.pe/pipes/my-pipe.md"),
             "my-pipe"
         );
     }
@@ -5407,7 +5407,7 @@ mod tests {
     #[test]
     fn test_url_to_pipe_name_no_extension() {
         assert_eq!(
-            url_to_pipe_name("https://example.com/pipes/my-pipe"),
+            url_to_pipe_name("https://screenpi.pe/pipes/my-pipe"),
             "my-pipe"
         );
     }

@@ -644,7 +644,7 @@ mod tests {
         assert!(!is_drm_url("https://google.com"));
         assert!(!is_drm_url("https://github.com"));
         assert!(!is_drm_url("https://max.com"));
-        assert!(!is_drm_url("https://example.com/netflix.com"));
+        assert!(!is_drm_url("https://screenpi.pe/netflix.com"));
         assert!(!is_drm_url("https://amazon.com/dp/B09V3KXJPB"));
         assert!(!is_drm_url("https://amazon.com/s?k=headphones"));
     }

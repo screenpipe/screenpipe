@@ -4,10 +4,12 @@
 
 use crate::transcription::VocabularyEntry;
 use anyhow::Result;
+#[cfg(not(target_os = "linux"))]
 use mp3lame_encoder::{Builder, FlushNoGap, MonoPcm};
 use reqwest::{Client, Response};
 use screenpipe_core::Language;
 use serde_json::Value;
+#[cfg(not(target_os = "linux"))]
 use std::mem::MaybeUninit;
 use tracing::{debug, error, info};
 
@@ -27,8 +29,8 @@ pub async fn transcribe_with_deepgram(
     let custom_api_key = CUSTOM_DEEPGRAM_API_TOKEN.as_str();
     let is_custom_endpoint = !custom_api_key.is_empty();
 
-    // Encode as MP3 for smaller upload size (64kbps mono speech ≈ 8x smaller than WAV)
-    let (audio_bytes, content_type) = create_mp3_data(audio_data, sample_rate)?;
+    // Linux release builds avoid mp3lame-sys and upload WAV instead.
+    let (audio_bytes, content_type) = create_upload_data(audio_data, sample_rate)?;
     debug!(
         "encoded audio: {} bytes as {}",
         audio_bytes.len(),
@@ -62,7 +64,18 @@ pub async fn transcribe_with_deepgram(
     handle_deepgram_response(response, device).await
 }
 
-fn create_mp3_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'static str)> {
+#[cfg(target_os = "linux")]
+fn create_upload_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'static str)> {
+    let effective_sample_rate = match sample_rate {
+        88200 => 16000,
+        _ => sample_rate,
+    };
+
+    Ok((create_wav_data(audio_data, effective_sample_rate), "audio/wav"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn create_upload_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'static str)> {
     let effective_sample_rate = match sample_rate {
         88200 => 16000,
         _ => sample_rate,
@@ -117,6 +130,41 @@ fn create_mp3_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'s
     }
 
     Ok((result, "audio/mpeg"))
+}
+
+fn create_wav_data(audio_data: &[f32], sample_rate: u32) -> Vec<u8> {
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * u32::from(num_channels) * u32::from(bits_per_sample) / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+
+    let pcm_i16: Vec<i16> = audio_data
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect();
+
+    let data_size = (pcm_i16.len() * 2) as u32;
+    let file_size = 36 + data_size;
+
+    let mut wav = Vec::with_capacity(44 + data_size as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    for sample in &pcm_i16 {
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    wav
 }
 
 fn create_query_params(languages: Vec<Language>, vocabulary: &[VocabularyEntry]) -> String {

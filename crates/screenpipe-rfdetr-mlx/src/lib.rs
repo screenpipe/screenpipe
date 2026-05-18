@@ -12,15 +12,23 @@
 //! let detections = model.detect(&image)?;
 //! ```
 
-#![cfg_attr(not(target_os = "macos"), allow(unused))]
+#![cfg_attr(not(all(target_os = "macos", target_arch = "aarch64")), allow(unused))]
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod backbone;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod decoder;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod deformable_attn;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod encoder;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod postprocess;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod transformer;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod util;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod weights;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +41,8 @@ pub enum Error {
     Inference(String),
     #[error("not implemented yet — see ROADMAP.md phase {phase}")]
     NotImplemented { phase: u8 },
+    #[error("unsupported platform: screenpipe-rfdetr-mlx requires macOS on Apple Silicon")]
+    UnsupportedPlatform,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -71,6 +81,7 @@ impl Detection {
 }
 
 /// Loaded model. Holds MLX-resident weights + lazily-initialized modules.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub struct RfDetr {
     pub(crate) weights: weights::Weights,
     backbone: Option<backbone::Backbone>,
@@ -78,6 +89,7 @@ pub struct RfDetr {
     decoder: Option<decoder::Decoder>,
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 impl RfDetr {
     /// Load weights from a safetensors file produced by `convert/onnx_to_mlx.py`.
     pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self> {
@@ -261,5 +273,27 @@ impl RfDetr {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         Ok(out)
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+pub struct RfDetr;
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+impl RfDetr {
+    pub fn load(_path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Err(Error::UnsupportedPlatform)
+    }
+
+    pub fn detect(&mut self, _img: &image::RgbImage) -> Result<Vec<Detection>> {
+        Err(Error::UnsupportedPlatform)
+    }
+
+    pub fn detect_with_threshold(
+        &mut self,
+        _img: &image::RgbImage,
+        _score_threshold: f32,
+    ) -> Result<Vec<Detection>> {
+        Err(Error::UnsupportedPlatform)
     }
 }

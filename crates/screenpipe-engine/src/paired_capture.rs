@@ -632,7 +632,7 @@ mod tests {
             device_name: "test_monitor",
             app_name: Some("Safari"),
             window_name: Some("Example Page"),
-            browser_url: Some("https://example.com"),
+            browser_url: Some("https://screenpi.pe"),
             document_path: None,
             focused: true,
             capture_trigger: "app_switch",
@@ -652,7 +652,7 @@ mod tests {
                 bounds: None,
                 ..Default::default()
             }],
-            browser_url: Some("https://example.com".to_string()),
+            browser_url: Some("https://screenpi.pe".to_string()),
             document_path: None,
             timestamp: now,
             node_count: 1,
@@ -1046,7 +1046,7 @@ mod tests {
         assert!(!a11y_content_is_thin(
             &snap,
             Some("Creon's list of profound books"),
-            Some("https://example.com"),
+            Some("https://screenpi.pe"),
             None,
         ));
     }

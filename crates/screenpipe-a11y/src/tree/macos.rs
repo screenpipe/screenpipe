@@ -1116,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_looks_like_url() {
-        assert!(looks_like_url("https://example.com"));
+        assert!(looks_like_url("https://screenpi.pe"));
         assert!(looks_like_url("http://localhost:3000"));
         assert!(looks_like_url("example.com"));
         assert!(looks_like_url("docs.rs"));
@@ -1176,7 +1176,7 @@ mod tests {
     #[test]
     fn test_parse_axdocument_value_skips_non_file() {
         // Browsers and other URL schemes must not show up as document_path.
-        assert_eq!(parse_axdocument_value("https://example.com"), None);
+        assert_eq!(parse_axdocument_value("https://screenpi.pe"), None);
         assert_eq!(parse_axdocument_value("http://localhost:3000/"), None);
         assert_eq!(
             parse_axdocument_value("chrome-extension://abc/popup.html"),

@@ -79,7 +79,7 @@ describe("TextOverlay", () => {
 
 	it("should render a whole-block URL as clickable link", () => {
 		const positions = [
-			createTextPosition("https://example.com", 0.1, 0.05, 0.2, 0.02),
+			createTextPosition("https://screenpi.pe", 0.1, 0.05, 0.2, 0.02),
 		];
 		const { container } = render(
 			<TextOverlay
@@ -93,7 +93,7 @@ describe("TextOverlay", () => {
 		);
 		const link = container.querySelector("a");
 		expect(link).toBeInTheDocument();
-		expect(link).toHaveAttribute("href", "https://example.com");
+		expect(link).toHaveAttribute("href", "https://screenpi.pe");
 	});
 
 	it("should extract and render URLs embedded in longer text", () => {
@@ -185,7 +185,7 @@ describe("TextOverlay", () => {
 	it("should show visible underline on links", () => {
 		const positions = [
 			createTextPosition(
-				"https://example.com",
+				"https://screenpi.pe",
 				0.1,
 				0.3,
 				0.2,
@@ -247,7 +247,7 @@ describe("TextOverlay", () => {
 	it("should render nothing when displayed dimensions are invalid", () => {
 		const positions = [
 			createTextPosition(
-				"https://example.com",
+				"https://screenpi.pe",
 				0.1,
 				0.05,
 				0.2,
@@ -302,13 +302,13 @@ describe("extractUrlsFromText", () => {
 	});
 
 	it("should compute approximate position fractions", () => {
-		const text = "Go to https://example.com now";
+		const text = "Go to https://screenpi.pe now";
 		const urls = extractUrlsFromText(text);
 		expect(urls.length).toBe(1);
 		// "Go to " is 6 chars, URL starts at index 6
 		expect(urls[0].startFraction).toBeCloseTo(6 / text.length, 1);
 		expect(urls[0].widthFraction).toBeCloseTo(
-			"https://example.com".length / text.length,
+			"https://screenpi.pe".length / text.length,
 			1
 		);
 	});
@@ -320,10 +320,10 @@ describe("extractUrlsFromText", () => {
 
 	it("should strip trailing punctuation", () => {
 		const urls = extractUrlsFromText(
-			"See https://example.com. Also check https://test.com)"
+			"See https://screenpi.pe. Also check https://test.com)"
 		);
 		expect(urls.length).toBe(2);
-		expect(urls[0].normalizedUrl).toBe("https://example.com");
+		expect(urls[0].normalizedUrl).toBe("https://screenpi.pe");
 		expect(urls[1].normalizedUrl).toBe("https://test.com");
 	});
 
@@ -342,8 +342,8 @@ describe("extractUrlsFromText", () => {
 
 describe("isUrl", () => {
 	it("should detect https URLs", () => {
-		expect(isUrl("https://example.com")).toBe(true);
-		expect(isUrl("https://example.com/path")).toBe(true);
+		expect(isUrl("https://screenpi.pe")).toBe(true);
+		expect(isUrl("https://screenpi.pe/path")).toBe(true);
 	});
 
 	it("should detect http URLs", () => {
@@ -378,8 +378,8 @@ describe("isUrl", () => {
 
 describe("normalizeUrl", () => {
 	it("should keep https URLs unchanged", () => {
-		expect(normalizeUrl("https://example.com")).toBe(
-			"https://example.com"
+		expect(normalizeUrl("https://screenpi.pe")).toBe(
+			"https://screenpi.pe"
 		);
 	});
 
@@ -390,6 +390,6 @@ describe("normalizeUrl", () => {
 	});
 
 	it("should add https to bare domains", () => {
-		expect(normalizeUrl("example.com")).toBe("https://example.com");
+		expect(normalizeUrl("example.com")).toBe("https://screenpi.pe");
 	});
 });

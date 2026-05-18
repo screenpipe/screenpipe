@@ -58,7 +58,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
     xdotool \
     openbox \
     xterm \
-    epiphany-browser \
+    falkon \
     eog \
     vlc \
     python3-xdg \

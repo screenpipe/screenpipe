@@ -1,0 +1,14 @@
+{
+  "name": "Screenpipe (CI)",
+  "build": {
+    "dockerfile": "../Dockerfile"
+  },
+  "runArgs": [
+    "--shm-size=1g"
+  ],
+  "forwardPorts": [3030],
+  "postCreateCommand": "bash .devcontainer/scripts/postCreateCommand.sh",
+  "remoteEnv": {
+    "SCREENPIPE_CONTAINER_PROFILE": "ci"
+  }
+}

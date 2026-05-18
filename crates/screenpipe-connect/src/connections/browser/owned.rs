@@ -209,7 +209,7 @@ mod tests {
     #[tokio::test]
     async fn unattached_owned_navigate_returns_not_connected() {
         let owned = OwnedBrowser::default_instance();
-        let result = owned.navigate("https://example.com").await;
+        let result = owned.navigate("https://screenpi.pe").await;
         assert!(matches!(result, Err(EvalError::NotConnected)));
     }
 
@@ -226,11 +226,11 @@ mod tests {
         });
         owned.attach(handle.clone()).await;
 
-        owned.navigate("https://example.com").await.unwrap();
+        owned.navigate("https://screenpi.pe").await.unwrap();
 
         assert_eq!(
             handle.last_code.lock().await.clone(),
-            Some(r#"location.href = "https://example.com""#.into())
+            Some(r#"location.href = "https://screenpi.pe""#.into())
         );
     }
 }

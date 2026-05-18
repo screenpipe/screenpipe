@@ -156,7 +156,7 @@ describe("team-crypto", () => {
         name: "会議メモ",
         emoji: "🔒🔑",
         path: "C:\\Users\\test\\pipe.md",
-        url: "https://example.com/path?q=hello&lang=ja#section",
+        url: "https://screenpi.pe/path?q=hello&lang=ja#section",
         multiline: "line1\nline2\ttab",
       };
 

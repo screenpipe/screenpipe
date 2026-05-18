@@ -1218,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_looks_like_url() {
-        assert!(looks_like_url("https://example.com"));
+        assert!(looks_like_url("https://screenpi.pe"));
         assert!(looks_like_url("http://localhost:3000"));
         assert!(looks_like_url("example.com"));
         assert!(!looks_like_url(""));

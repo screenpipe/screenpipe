@@ -1316,7 +1316,7 @@ describe('Image content conversion to Anthropic format', () => {
 		const openaiImageContent = {
 			type: 'image_url',
 			image_url: {
-				url: 'https://example.com/image.png',
+				url: 'https://screenpi.pe/image.png',
 			},
 		};
 
@@ -1325,7 +1325,7 @@ describe('Image content conversion to Anthropic format', () => {
 			type: 'image',
 			source: {
 				type: 'url',
-				url: 'https://example.com/image.png',
+				url: 'https://screenpi.pe/image.png',
 			},
 		};
 

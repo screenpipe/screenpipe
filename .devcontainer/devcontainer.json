@@ -6,6 +6,10 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
+	"runArgs": [
+		"--shm-size=2g",
+		"--ipc=host"
+	],
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		"ghcr.io/devcontainers/features/desktop-lite:1": {
@@ -17,7 +21,10 @@
 	"forwardPorts": [3000, 3030, 6080],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "bash .devcontainer/scripts/postCreateCommand.sh",
+	"postCreateCommand": "bash .devcontainer/scripts/postCreateCommand.sh && bash .devcontainer/scripts/ensure_vnc_desktop.sh",
+
+	// Ensure noVNC desktop session is corrected on each start.
+	"postStartCommand": "bash .devcontainer/scripts/ensure_vnc_desktop.sh",
 
 	"onCreateCommand": "sudo cp .devcontainer/scripts/welcome-message.txt /usr/local/etc/vscode-dev-containers/first-run-notice.txt"
 
