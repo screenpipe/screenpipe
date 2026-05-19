@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,6 +18,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { CONNECTION_CATEGORY_BY_ID } from "@/lib/constants/connections";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -474,6 +476,26 @@ interface ConnectionTile {
   name: string;
   icon: string;
   connected: boolean;
+  category?: string;
+}
+
+type ConnectionSort = "default" | "alphabetical";
+
+const ALL_CONNECTION_CATEGORIES = "All";
+
+const CONNECTION_SORT_OPTIONS: { value: ConnectionSort; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "alphabetical", label: "Alphabetical" },
+];
+
+function normalizeConnectionCategory(category: string | null | undefined): string {
+  const value = (category || "Other").trim();
+  if (!value) return "Other";
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function Tile({ tile, selected, onClick }: {
@@ -1892,6 +1914,8 @@ interface ConnectionsSectionProps {
 
 export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
+  const [sortBy, setSortBy] = useState<ConnectionSort>("default");
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
   const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
@@ -2035,7 +2059,13 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     const hardcodedIds = new Set(hardcoded.map(h => h.id));
     const apiTiles: ConnectionTile[] = integrations
       .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default")
-      .map(i => ({ id: i.id, name: i.name, icon: i.icon, connected: i.connected }));
+      .map(i => ({
+        id: i.id,
+        name: i.name,
+        icon: i.icon,
+        connected: i.connected,
+        category: normalizeConnectionCategory(i.category),
+      }));
     // Update connected status from API for hardcoded tiles that also exist in API
     for (const h of hardcoded) {
       const api = integrations.find(i => i.id === h.id);
@@ -2048,14 +2078,33 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     // in sync immediately after connect/disconnect without waiting for cache expiry.
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
-    return [...hardcoded, ...apiTiles];
+    return [...hardcoded, ...apiTiles].map((tile) => ({
+      ...tile,
+      category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
+    }));
   }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
 
+  const categoryOptions = useMemo(() => {
+    const categories = Array.from(
+      new Set(allTiles.map((tile) => normalizeConnectionCategory(tile.category)))
+    ).sort((a, b) => a.localeCompare(b));
+    return [ALL_CONNECTION_CATEGORIES, ...categories];
+  }, [allTiles]);
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return allTiles;
+    let tiles = allTiles;
+    if (categoryFilter !== ALL_CONNECTION_CATEGORIES) {
+      tiles = tiles.filter((tile) => normalizeConnectionCategory(tile.category) === categoryFilter);
+    }
     const q = search.toLowerCase();
-    return allTiles.filter(t => t.name.toLowerCase().includes(q));
-  }, [allTiles, search]);
+    if (q.trim()) {
+      tiles = tiles.filter(t => t.name.toLowerCase().includes(q));
+    }
+    if (sortBy === "alphabetical") {
+      return [...tiles].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return tiles;
+  }, [allTiles, categoryFilter, search, sortBy]);
 
   const selectedIntegration = integrations.find(i => i.id === selected);
 
@@ -2160,15 +2209,43 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     <div className="space-y-5">
       <p className="text-muted-foreground text-sm mb-4">Give AI access to your memory, and connect to the apps you use every day</p>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="search connections..."
-          className="pl-9 h-9 text-sm"
-        />
+      {/* Search & filters */}
+      <div className="space-y-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="search connections..."
+            className="pl-9 h-9 text-sm"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+            <SelectTrigger className="h-9 flex-1 text-sm">
+              <SelectValue placeholder="Filter by" />
+            </SelectTrigger>
+            <SelectContent>
+              {categoryOptions.map((category) => (
+                <SelectItem key={category} value={category}>
+                  {category === ALL_CONNECTION_CATEGORIES ? "All categories" : category}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={sortBy} onValueChange={(value) => setSortBy(value as ConnectionSort)}>
+            <SelectTrigger className="h-9 w-[150px] text-sm">
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              {CONNECTION_SORT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {/* Grid */}
