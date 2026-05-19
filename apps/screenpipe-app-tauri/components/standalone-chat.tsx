@@ -4723,14 +4723,18 @@ export function StandaloneChat({
               provider: activePreset?.provider,
             };
 
+            let nextRows: Message[] | null = null;
             setMessages((prev) => {
               const rows = [...prev, startedUser, assistantPlaceholder];
-              void saveConversation(rows, {
+              nextRows = rows;
+              return rows;
+            });
+            if (nextRows) {
+              void saveConversation(nextRows, {
                 refreshHistory: false,
                 syncActiveConversation: false,
               });
-              return rows;
-            });
+            }
 
             piMessageIdRef.current = queuedTurnAssistantId;
             piStreamingTextRef.current = "";
@@ -5774,11 +5778,15 @@ export function StandaloneChat({
     }
     lastUserMessageRef.current = userMessage;
 
+    let nextRowsAfterUserAppend: Message[] | null = null;
     setMessages((prev) => {
       const next = [...prev, newUserMessage];
-      void saveConversation(next, { refreshHistory: false });
+      nextRowsAfterUserAppend = next;
       return next;
     });
+    if (nextRowsAfterUserAppend) {
+      void saveConversation(nextRowsAfterUserAppend, { refreshHistory: false });
+    }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
     setIsLoading(true);
@@ -6228,8 +6236,9 @@ export function StandaloneChat({
     const activeAssistantId = piMessageIdRef.current;
     if (!activeAssistantId) return;
 
+    let changed = false;
+    let nextRows: Message[] | null = null;
     setMessages((prev) => {
-      let changed = false;
       const next = prev.map((message) => {
         if (message.id !== activeAssistantId || message.role !== "assistant" || message.interruptedBySteer) {
           return message;
@@ -6237,26 +6246,27 @@ export function StandaloneChat({
         changed = true;
         return { ...message, interruptedBySteer: true };
       });
-      if (changed) {
-        void saveConversation(next, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-        const sidNow = piSessionIdRef.current;
-        if (sidNow) {
-          useChatStore.getState().actions.setMessages(sidNow, next as any);
-        }
-      }
+      if (changed) nextRows = next;
       return changed ? next : prev;
     });
+    if (!changed || !nextRows) return;
+    void saveConversation(nextRows, {
+      refreshHistory: false,
+      syncActiveConversation: false,
+    });
+    const sidNow = piSessionIdRef.current;
+    if (sidNow) {
+      useChatStore.getState().actions.setMessages(sidNow, nextRows as any);
+    }
   }
 
   function clearCurrentAssistantInterrupted() {
     const activeAssistantId = piMessageIdRef.current;
     if (!activeAssistantId) return;
 
+    let changed = false;
+    let nextRows: Message[] | null = null;
     setMessages((prev) => {
-      let changed = false;
       const next = prev.map((message) => {
         if (message.id !== activeAssistantId || message.role !== "assistant" || !message.interruptedBySteer) {
           return message;
@@ -6264,18 +6274,18 @@ export function StandaloneChat({
         changed = true;
         return { ...message, interruptedBySteer: false };
       });
-      if (changed) {
-        void saveConversation(next, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-        const sidNow = piSessionIdRef.current;
-        if (sidNow) {
-          useChatStore.getState().actions.setMessages(sidNow, next as any);
-        }
-      }
+      if (changed) nextRows = next;
       return changed ? next : prev;
     });
+    if (!changed || !nextRows) return;
+    void saveConversation(nextRows, {
+      refreshHistory: false,
+      syncActiveConversation: false,
+    });
+    const sidNow = piSessionIdRef.current;
+    if (sidNow) {
+      useChatStore.getState().actions.setMessages(sidNow, nextRows as any);
+    }
   }
 
   async function steerMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
