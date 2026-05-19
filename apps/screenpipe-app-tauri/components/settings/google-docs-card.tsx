@@ -13,6 +13,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
+import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
 
 interface DriveFile {
   id: string;
@@ -151,20 +152,23 @@ export function GoogleDocsCard() {
                 </button>
               </div>
             ) : !connected ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="text-xs"
-              >
-                {isConnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <img src="/images/google-docs.svg" alt="" className="h-3 w-3 mr-1.5" />
-                )}
-                {isConnecting ? "Waiting for Google..." : "Connect Google Docs"}
-              </Button>
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleConnect}
+                  disabled={isConnecting}
+                  className="text-xs"
+                >
+                  {isConnecting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : (
+                    <img src="/images/google-docs.svg" alt="" className="h-3 w-3 mr-1.5" />
+                  )}
+                  {isConnecting ? "Waiting for Google..." : "Connect Google Docs"}
+                </Button>
+                <GoogleOAuthUnverifiedAppHint />
+              </div>
             ) : (
               <Button
                 variant="ghost"

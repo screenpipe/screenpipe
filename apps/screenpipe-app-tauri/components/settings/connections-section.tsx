@@ -30,6 +30,7 @@ import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { CalendarCard } from "./calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
+import { GoogleSheetsCard } from "./google-sheets-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
@@ -1972,7 +1973,6 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
           setIntegrationsLoaded(true);
-          notifyConnectionsUpdated({ invalidateCache: false });
           // Track active connections as user property (IDs only, no credentials)
           const connected = data.data
             .filter((i: any) => i.connected)
@@ -2090,6 +2090,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
+      case "google-sheets": return <GoogleSheetsCard onConnectionChange={fetchIntegrations} />;
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
       case "openclaw": return <OpenClawCard />;
