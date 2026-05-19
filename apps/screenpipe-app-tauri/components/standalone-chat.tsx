@@ -757,6 +757,12 @@ type QueuedDisplayPayload = {
   preview: string;
   images: string[];
   displayContent?: string;
+  optimisticUserId?: string;
+};
+
+type OptimisticSteerPayload = {
+  id: string;
+  content: string;
 };
 
 // Tool icons by name
@@ -2369,14 +2375,8 @@ function MessageContent({
 }
 
 function getMessageIntentLabel(message: Message): string | null {
-  if (message.role === "user" && message.intent === "steer") {
-    return "Steered";
-  }
   if (message.role === "assistant" && message.steeredResponse) {
-    return "Reply redirected";
-  }
-  if (message.role === "assistant" && message.interruptedBySteer) {
-    return "Interrupted by steer";
+    return "Steered conversation";
   }
   return null;
 }
@@ -2873,6 +2873,7 @@ export function StandaloneChat({
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
   const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
   const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
+  const optimisticSteerRef = useRef<OptimisticSteerPayload | null>(null);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
@@ -3292,6 +3293,7 @@ export function StandaloneChat({
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            optimisticSteerRef.current = null;
             piLastErrorRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
@@ -4696,8 +4698,14 @@ export function StandaloneChat({
             return "";
           })();
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
+          const pendingOptimisticSteer = optimisticSteerRef.current;
+          const isPendingOptimisticSteerEcho = Boolean(
+            pendingOptimisticSteer &&
+            pendingOptimisticSteer.content.trim() === text.trim()
+          );
+          const shouldConsumePendingOptimisticSteer = Boolean(pendingOptimisticSteer);
 
-          if (!piMessageIdRef.current) {
+          if (!piMessageIdRef.current || isPendingOptimisticSteerEcho) {
             const sidForStartedUser = piSessionIdRef.current;
             const pendingDisplay = pendingNextPiUserDisplayRef.current;
             const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
@@ -4712,7 +4720,18 @@ export function StandaloneChat({
             pendingNextPiUserIntentRef.current = null;
             const queuedTurnUserId = Date.now().toString();
             const queuedTurnAssistantId = (Date.now() + 1).toString();
-            const startedUser: Message = {
+            const optimisticSteer = optimisticSteerRef.current;
+            const isOptimisticSteerEcho = Boolean(
+              queuedDisplay?.optimisticUserId ||
+              (
+                optimisticSteer &&
+                optimisticSteer.content.trim() === text.trim()
+              ),
+            );
+            if (isOptimisticSteerEcho || shouldConsumePendingOptimisticSteer) {
+              optimisticSteerRef.current = null;
+            }
+            const startedUser: Message | null = isOptimisticSteerEcho ? null : {
               id: queuedTurnUserId,
               role: "user",
               content: text,
@@ -4733,7 +4752,9 @@ export function StandaloneChat({
 
             let nextRows: Message[] | null = null;
             setMessages((prev) => {
-              const rows = [...prev, startedUser, assistantPlaceholder];
+              const rows = startedUser
+                ? [...prev, startedUser, assistantPlaceholder]
+                : [...prev, assistantPlaceholder];
               nextRows = rows;
               return rows;
             });
@@ -4752,7 +4773,9 @@ export function StandaloneChat({
 
             if (sidForStartedUser) {
               const storeState = useChatStore.getState();
-              storeState.actions.appendMessage(sidForStartedUser, startedUser as any);
+              if (startedUser) {
+                storeState.actions.appendMessage(sidForStartedUser, startedUser as any);
+              }
               storeState.actions.appendMessage(sidForStartedUser, assistantPlaceholder as any);
               storeState.actions.setStreaming(sidForStartedUser, {
                 streamingMessageId: queuedTurnAssistantId,
@@ -5025,6 +5048,7 @@ export function StandaloneChat({
             error_type: errorCategory,
           });
           piStreamingTextRef.current = "";
+          optimisticSteerRef.current = null;
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             setActivePipeExecution(null);
           }
@@ -5706,6 +5730,8 @@ export function StandaloneChat({
   }
 
   async function sendPiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
+    optimisticSteerRef.current = null;
+
     // Auto-start Pi if it's not running yet (new session or crash recovery)
     if (!piInfo?.running) {
       if (piStartInFlightRef.current) {
@@ -6324,17 +6350,92 @@ export function StandaloneChat({
     }
     lastUserMessageRef.current = trimmed;
     pendingNextPiUserIntentRef.current = "steer";
+    const optimisticUser: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: trimmed,
+      ...(displayLabel ? { displayContent: displayLabel } : {}),
+      ...(outgoingImages.length ? { images: [...outgoingImages] } : {}),
+      intent: "steer",
+      timestamp: Date.now(),
+    };
+    optimisticSteerRef.current = {
+      id: optimisticUser.id,
+      content: trimmed,
+    };
     pendingNextPiUserDisplayRef.current = {
       preview: queuedPreviewForText(trimmed),
       images: [...outgoingImages],
       ...(displayLabel ? { displayContent: displayLabel } : {}),
+      optimisticUserId: optimisticUser.id,
     };
     markCurrentAssistantInterrupted();
+    const activeAssistantId = piMessageIdRef.current;
+    let nextRowsAfterOptimisticAppend: Message[] | null = null;
+    setMessages((prev) => {
+      const activeAssistantIndex = activeAssistantId
+        ? prev.findIndex((message) => message.id === activeAssistantId)
+        : -1;
+      if (activeAssistantIndex < 0) {
+        const next = [...prev, optimisticUser];
+        nextRowsAfterOptimisticAppend = next;
+        return next;
+      }
+
+      const activeAssistant = prev[activeAssistantIndex];
+      const hasVisibleAssistantContent = Boolean(
+        activeAssistant?.content &&
+        activeAssistant.content !== "Processing..."
+      ) || Boolean(activeAssistant?.contentBlocks?.length);
+      const insertIndex = hasVisibleAssistantContent
+        ? activeAssistantIndex + 1
+        : activeAssistantIndex;
+      const next = [
+        ...prev.slice(0, insertIndex),
+        optimisticUser,
+        ...prev.slice(insertIndex),
+      ];
+      nextRowsAfterOptimisticAppend = next;
+      return next;
+    });
+    if (nextRowsAfterOptimisticAppend) {
+      void saveConversation(nextRowsAfterOptimisticAppend, {
+        refreshHistory: false,
+        syncActiveConversation: false,
+      });
+    }
+    const sidNow = piSessionIdRef.current;
+    if (sidNow && nextRowsAfterOptimisticAppend) {
+      useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterOptimisticAppend as any);
+    }
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
 
     const piImages = imageDataUrlsToPiImages(outgoingImages);
     if (shouldClearPastedImages) setPastedImages([]);
+
+    const rollbackOptimisticSteer = () => {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      optimisticSteerRef.current = null;
+
+      let nextRowsAfterRollback: Message[] | null = null;
+      setMessages((prev) => {
+        const next = prev.filter((message) => message.id !== optimisticUser.id);
+        nextRowsAfterRollback = next;
+        return next;
+      });
+      if (sidNow && nextRowsAfterRollback) {
+        useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterRollback as any);
+      }
+      if (nextRowsAfterRollback) {
+        void saveConversation(nextRowsAfterRollback, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+      }
+      clearCurrentAssistantInterrupted();
+    };
 
     try {
       const result = await commands.piSteer(
@@ -6343,15 +6444,11 @@ export function StandaloneChat({
         piImages.length > 0 ? piImages : null,
       );
       if (result.status !== "ok") {
-        pendingNextPiUserIntentRef.current = null;
-        pendingNextPiUserDisplayRef.current = null;
-        clearCurrentAssistantInterrupted();
+        rollbackOptimisticSteer();
         toast({ title: "failed to steer message", description: result.error, variant: "destructive" });
       }
     } catch (e) {
-      pendingNextPiUserIntentRef.current = null;
-      pendingNextPiUserDisplayRef.current = null;
-      clearCurrentAssistantInterrupted();
+      rollbackOptimisticSteer();
       console.warn("[Pi] failed to steer message:", e);
       toast({
         title: "failed to steer message",
