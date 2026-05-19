@@ -36,6 +36,7 @@ use specta_typescript::Typescript;
 use tauri_specta::{collect_commands, Builder};
 
 mod analytics;
+mod bedrock;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;
@@ -844,6 +845,9 @@ async fn main() {
                 hardware::get_hardware_capability,
                 // Store encryption
                 store::reencrypt_store,
+                // Bedrock commands
+                bedrock::bedrock_list_models,
+                bedrock::bedrock_test_connection,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -857,7 +861,9 @@ async fn main() {
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
-            .typ::<oauth::OAuthStatus>();
+            .typ::<oauth::OAuthStatus>()
+            .typ::<bedrock::BedrockModel>()
+            .typ::<bedrock::BedrockDiagnosticResult>();
 
         // Export to a temp file first, then only overwrite if content changed.
         // This avoids triggering the Tauri dev watcher on every launch which
@@ -1160,6 +1166,9 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            // Bedrock commands
+            bedrock::bedrock_list_models,
+            bedrock::bedrock_test_connection,
         ])
         .setup(move |app| {
             //deep link register_all

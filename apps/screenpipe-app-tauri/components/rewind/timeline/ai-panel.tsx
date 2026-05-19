@@ -45,6 +45,7 @@ const providerIcons: Record<AIPreset["provider"], JSX.Element> = {
 	custom: <Image src="/images/custom.png" alt="Custom" width={16} height={16} />,
 	"screenpipe-cloud": <Image src="/images/screenpipe.png" alt="Screenpipe Cloud" width={16} height={16} />,
 	pi: <Image src="/images/screenpipe.png" alt="Screenpipe Cloud" width={16} height={16} />,
+	bedrock: <Image src="/images/bedrock-logo.png" alt="AWS Bedrock" width={16} height={16} />,
 };
 
 const getPresetProviderIcon = (provider: AIPreset["provider"]) => {

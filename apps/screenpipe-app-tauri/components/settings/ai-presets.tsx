@@ -156,7 +156,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud" | "bedrock";
   title: string;
   description: string;
   imageSrc: string;
@@ -544,6 +544,7 @@ const AISection = ({
       "anthropic": "claude",
       "native-ollama": "ollama",
       "screenpipe-cloud": "screenpipe-cloud",
+      "bedrock": "bedrock",
     };
 
     let newUrl = "";
@@ -571,6 +572,10 @@ const AISection = ({
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
         break;
+      case "bedrock":
+        newUrl = "";
+        newModel = "";
+        break;
     }
 
     const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
@@ -587,8 +592,59 @@ const AISection = ({
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
 
+  const runBedrockDiagnostics = useCallback(async () => {
+    setTestStatus("testing");
+    setDiagnosticsOpen(true);
+    setTestResults({
+      endpoint: { status: "running", message: "Checking AWS profile..." },
+      auth: { status: "pending", message: "" },
+      models: { status: "pending", message: "" },
+      chat: { status: "pending", message: "" },
+    });
+
+    const profile = (settingsPreset as any)?.awsProfile || null;
+    const region = (settingsPreset as any)?.awsRegion || null;
+    const model = settingsPreset?.model || null;
+
+    const result = await commands.bedrockTestConnection(profile, region, model);
+    if (result.status === "error") {
+      setTestResults({
+        endpoint: { status: "fail", message: `Command failed: ${result.error}` },
+        auth: { status: "skip", message: "Skipped" },
+        models: { status: "skip", message: "Skipped" },
+        chat: { status: "skip", message: "Skipped" },
+      });
+      setTestStatus("done");
+      return;
+    }
+
+    const diag = result.data;
+    setTestResults({
+      endpoint: {
+        status: diag.profile_valid ? "pass" : "fail",
+        message: diag.profile_valid ? `Profile '${profile || "default"}' is valid` : (diag.error || "Profile check failed"),
+      },
+      auth: {
+        status: diag.credentials_valid ? "pass" : "fail",
+        message: diag.credentials_valid ? "AWS credentials valid" : (diag.error || "Credentials invalid"),
+      },
+      models: {
+        status: diag.credentials_valid ? "pass" : (diag.profile_valid ? "fail" : "skip"),
+        message: diag.credentials_valid ? "Bedrock API accessible" : (diag.error || "Skipped"),
+      },
+      chat: {
+        status: diag.model_accessible ? "pass" : (diag.credentials_valid && model ? "fail" : "skip"),
+        message: diag.model_accessible ? `Model '${model}' accessible` : (model ? (diag.error || "Model not accessible") : "No model selected"),
+      },
+    });
+    setTestStatus("done");
+  }, [settingsPreset]);
+
   const runDiagnostics = useCallback(async () => {
     if (settingsPreset?.provider === "screenpipe-cloud") return;
+    if (settingsPreset?.provider === "bedrock") {
+      return runBedrockDiagnostics();
+    }
 
     // Abort any previous run
     diagnosticsAbortRef.current?.abort();
@@ -890,7 +946,7 @@ const AISection = ({
     }
 
     setTestStatus("done");
-  }, [settingsPreset?.provider, settingsPreset?.url, settingsPreset?.apiKey, settingsPreset?.model]);
+  }, [settingsPreset?.provider, settingsPreset?.url, settingsPreset?.apiKey, settingsPreset?.model, runBedrockDiagnostics]);
 
   const isApiKeyRequired =
     settingsPreset?.provider !== "openai-chatgpt" &&
@@ -1051,6 +1107,27 @@ const AISection = ({
               "gpt-5.2-codex", "gpt-5.2", "gpt-5.1-codex-max",
               "gpt-5.1", "gpt-5.1-codex-mini",
             ].map((id) => ({ id, name: id, provider: "openai-chatgpt" })));
+          }
+          break;
+        }
+
+        case "bedrock": {
+          const profile = (settingsPreset as any)?.awsProfile || null;
+          const region = (settingsPreset as any)?.awsRegion || null;
+          const result = await commands.bedrockListModels(profile, region);
+          if (result.status === "ok" && result.data.length > 0) {
+            setModels(result.data.map((m) => ({
+              id: m.id,
+              name: m.name,
+              provider: "bedrock",
+            })));
+          } else {
+            setModels([]);
+            toast({
+              title: "Could not fetch Bedrock models",
+              description: "Check your AWS profile and region, then try again.",
+              variant: "destructive",
+            });
           }
           break;
         }
@@ -1219,6 +1296,15 @@ const AISection = ({
             onClick={() => handleAiProviderChange("native-ollama")}
           />
 
+          <AIProviderCard
+            type="bedrock"
+            title="AWS Bedrock"
+            description="Use AWS Bedrock with your AWS credentials (no API key needed)"
+            imageSrc="/images/bedrock-logo.png"
+            selected={settingsPreset?.provider === "bedrock"}
+            onClick={() => handleAiProviderChange("bedrock")}
+          />
+
           {piAvailable && (!isEnterprise || aiPresetPolicy.allow_screenpipe_cloud) && (
             <AIProviderCard
               type="screenpipe-cloud"
@@ -1260,6 +1346,48 @@ const AISection = ({
           required={true}
           helperText="Enter the base URL for your custom AI provider"
         />
+      )}
+
+      {settingsPreset?.provider === "bedrock" && (
+        <>
+          <div className="w-full">
+            <Label htmlFor="awsProfile">AWS Profile</Label>
+            <p className="text-xs text-muted-foreground mb-2">
+              AWS CLI profile name (from ~/.aws/config). Leave empty to use default profile.
+            </p>
+            <Input
+              id="awsProfile"
+              type="text"
+              value={(settingsPreset as any)?.awsProfile || ""}
+              onChange={(e) => updateSettingsPreset({ awsProfile: e.target.value } as any)}
+              onBlur={() => fetchModels()}
+              placeholder="default"
+              className="w-full"
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+            />
+          </div>
+
+          <div className="w-full">
+            <Label htmlFor="awsRegion">AWS Region</Label>
+            <p className="text-xs text-muted-foreground mb-2">
+              AWS region for Bedrock (e.g., us-east-1, us-west-2).
+            </p>
+            <Input
+              id="awsRegion"
+              type="text"
+              value={(settingsPreset as any)?.awsRegion || ""}
+              onChange={(e) => updateSettingsPreset({ awsRegion: e.target.value } as any)}
+              onBlur={() => fetchModels()}
+              placeholder="us-east-1"
+              className="w-full"
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+            />
+          </div>
+        </>
       )}
 
 
@@ -1827,6 +1955,7 @@ const providerImageSrc: Record<string, string> = {
   "openai-chatgpt": "/images/openai.png",
   anthropic: "/images/claude-ai.svg",
   "native-ollama": "/images/ollama.png",
+  bedrock: "/images/bedrock-logo.png",
   custom: "/images/custom.png",
   pi: "/images/screenpipe.png",
   screenpipe: "/images/screenpipe.png",
@@ -2285,7 +2414,7 @@ export const AIPresets = () => {
                   key={preset.id}
                   preset={preset}
                   isDefault={preset.defaultPreset}
-                  hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
+                  hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "bedrock" || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
                   onEdit={() => {
                     setSelectedPreset(preset);
                     setIsDuplicating(false);

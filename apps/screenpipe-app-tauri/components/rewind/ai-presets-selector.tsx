@@ -51,7 +51,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -108,6 +110,159 @@ type RecommendedPreset = BaseRecommendedPreset &
         provider: "native-ollama";
       }
   );
+
+interface BedrockModelItem { id: string; name: string }
+
+const MODELS_PER_PROVIDER = 5;
+
+const PROVIDER_ORDER = ["anthropic", "amazon", "meta", "mistral", "deepseek", "cohere", "openai", "google", "writer"];
+
+function groupBedrockModels(models: BedrockModelItem[], filter: string): Map<string, BedrockModelItem[]> {
+  const raw = new Map<string, BedrockModelItem[]>();
+  const lowerFilter = filter.toLowerCase().trim();
+
+  const filtered = lowerFilter
+    ? models.filter((m) => m.name.toLowerCase().includes(lowerFilter) || m.id.toLowerCase().includes(lowerFilter))
+    : models;
+
+  for (const m of filtered) {
+    const parts = m.id.replace(/^(us|global)\./, "").split(".");
+    const provider = parts[0] || "other";
+    if (!raw.has(provider)) raw.set(provider, []);
+    raw.get(provider)!.push(m);
+  }
+
+  if (!lowerFilter) {
+    for (const [key, items] of raw) {
+      raw.set(key, items.slice(0, MODELS_PER_PROVIDER));
+    }
+  }
+
+  const ordered = new Map<string, BedrockModelItem[]>();
+  for (const p of PROVIDER_ORDER) {
+    if (raw.has(p)) {
+      ordered.set(p, raw.get(p)!);
+      raw.delete(p);
+    }
+  }
+  for (const [p, items] of raw) {
+    ordered.set(p, items);
+  }
+
+  return ordered;
+}
+
+function BedrockFields({ formData, setFormData }: { formData: any; setFormData: (fn: any) => void }) {
+  const [bedrockModels, setBedrockModels] = useState<BedrockModelItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [modelSearch, setModelSearch] = useState("");
+
+  const fetchBedrockModels = useCallback(async () => {
+    if (!formData.awsRegion?.trim()) return;
+    setLoading(true);
+    setFetchError(null);
+    try {
+      const result = await commands.bedrockListModels(
+        formData.awsProfile || null,
+        formData.awsRegion || null,
+      );
+      if (result.status === "ok" && result.data.length > 0) {
+        setBedrockModels(result.data.map((m) => ({ id: m.id, name: m.name })));
+      } else {
+        setBedrockModels([]);
+        setFetchError(result.status === "error" ? String(result.error) : "No models found. Check your AWS profile and region.");
+      }
+    } catch (e) {
+      setBedrockModels([]);
+      setFetchError(String(e));
+    }
+    setLoading(false);
+  }, [formData.awsProfile, formData.awsRegion]);
+
+  const groupedModels = useMemo(() => groupBedrockModels(bedrockModels, modelSearch), [bedrockModels, modelSearch]);
+
+  return (
+    <div className="space-y-1">
+      <div className="space-y-1">
+        <Label htmlFor="awsProfile" className="text-xs">aws profile</Label>
+        <Input
+          id="awsProfile"
+          type="text"
+          placeholder="default"
+          value={formData.awsProfile || ""}
+          onChange={(e) => setFormData((prev: any) => ({ ...prev, awsProfile: e.target.value }))}
+          className="h-8 text-sm"
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="awsRegion" className="text-xs">aws region</Label>
+        <Input
+          id="awsRegion"
+          type="text"
+          placeholder="us-east-1"
+          value={formData.awsRegion || ""}
+          onChange={(e) => setFormData((prev: any) => ({ ...prev, awsRegion: e.target.value }))}
+          onBlur={() => fetchBedrockModels()}
+          className="h-8 text-sm"
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+        />
+      </div>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="model" className="text-xs">model</Label>
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+            onClick={() => fetchBedrockModels()}
+            disabled={loading}
+          >
+            {loading ? "loading..." : "fetch models"}
+          </button>
+        </div>
+        {fetchError && !loading && (
+          <p className="text-xs text-destructive">{fetchError}</p>
+        )}
+        {bedrockModels.length > 0 && (
+          <Input
+            type="text"
+            placeholder="search models..."
+            value={modelSearch}
+            onChange={(e) => setModelSearch(e.target.value)}
+            className="h-7 text-xs"
+            spellCheck={false}
+          />
+        )}
+        <Select
+          value={formData.model}
+          onValueChange={(value) => setFormData((prev: any) => ({ ...prev, model: value }))}
+          disabled={bedrockModels.length === 0 && !loading}
+        >
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue placeholder={loading ? "loading models..." : bedrockModels.length === 0 ? "enter profile + region, then fetch models" : "select model"} />
+          </SelectTrigger>
+          <SelectContent>
+            {Array.from(groupedModels.entries()).map(([provider, models]) => (
+              <SelectGroup key={provider}>
+                <SelectLabel className="text-xs font-semibold capitalize bg-muted/50 sticky top-0 py-1.5 pl-3 pr-2 -mx-1 rounded-sm">{provider}</SelectLabel>
+                {models.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
 
 interface AIProviderConfigProps {
   onSubmit: (data: AIPreset) => void;
@@ -260,7 +415,11 @@ export function AIProviderConfig({
     prompt: defaultPreset?.prompt || DEFAULT_PROMPT,
     id: defaultPreset?.id || "",
     defaultPreset: defaultPreset?.defaultPreset || false,
-  });
+    ...(defaultPreset?.provider === "bedrock" ? {
+      awsProfile: (defaultPreset as any).awsProfile || null,
+      awsRegion: (defaultPreset as any).awsRegion || null,
+    } : {}),
+  } as any);
 
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
@@ -565,6 +724,25 @@ export function AIProviderConfig({
 
           <Button
             type="button"
+            variant={selectedProvider === "bedrock" ? "default" : "outline"}
+            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+            onClick={() => {
+              setSelectedProvider("bedrock");
+              setFormData({
+                ...formData,
+                provider: "bedrock",
+                url: "",
+                model: "",
+              });
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/bedrock-logo.png" alt="AWS Bedrock" className="h-3.5 w-3.5 rounded-sm" />
+            <span>bedrock</span>
+          </Button>
+
+          <Button
+            type="button"
             variant={(selectedProvider as string) === "anthropic" ? "default" : "outline"}
             className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
             onClick={() => {
@@ -842,6 +1020,10 @@ export function AIProviderConfig({
           </div>
         )}
 
+        {selectedProvider === "bedrock" && (
+          <BedrockFields formData={formData} setFormData={setFormData} />
+        )}
+
         {selectedProvider === "screenpipe-cloud" && (
           <div className="space-y-1">
             <Label htmlFor="model" className="text-xs">model</Label>
@@ -1007,6 +1189,12 @@ export const AIPresetDialog = ({
       (newPreset as any).apiKey = providerData.apiKey;
     }
 
+    // Add AWS fields for Bedrock provider
+    if (providerData.provider === "bedrock") {
+      (newPreset as any).awsProfile = providerData.awsProfile || null;
+      (newPreset as any).awsRegion = providerData.awsRegion || null;
+    }
+
     onSave(newPreset);
   };
 
@@ -1023,6 +1211,9 @@ export const AIPresetDialog = ({
         prompt: preset.prompt,
         defaultPreset: preset.defaultPreset,
         apiKey: preset.apiKey || null,
+        ...(preset.provider === "bedrock"
+          ? { awsProfile: (preset as any).awsProfile || null, awsRegion: (preset as any).awsRegion || null }
+          : {}),
       }
     : undefined;
 

@@ -761,6 +761,10 @@ pub struct AIPreset {
     pub max_context_chars: i32,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: i32,
+    #[serde(rename = "awsProfile", default, skip_serializing_if = "Option::is_none")]
+    pub aws_profile: Option<String>,
+    #[serde(rename = "awsRegion", default, skip_serializing_if = "Option::is_none")]
+    pub aws_region: Option<String>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -779,6 +783,8 @@ impl Default for AIPreset {
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
+            aws_profile: None,
+            aws_region: None,
         }
     }
 }
@@ -925,6 +931,8 @@ Rules:
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
+            aws_profile: None,
+            aws_region: None,
         };
 
         Self {

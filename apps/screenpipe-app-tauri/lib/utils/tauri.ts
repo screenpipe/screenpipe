@@ -1258,6 +1258,22 @@ async reencryptStore() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async bedrockListModels(awsProfile: string | null, awsRegion: string | null) : Promise<Result<BedrockModel[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("bedrock_list_models", { awsProfile, awsRegion }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async bedrockTestConnection(awsProfile: string | null, awsRegion: string | null, modelId: string | null) : Promise<Result<BedrockDiagnosticResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("bedrock_test_connection", { awsProfile, awsRegion, modelId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -1271,9 +1287,11 @@ async reencryptStore() : Promise<Result<null, string>> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number; awsProfile?: string | null; awsRegion?: string | null }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" | "bedrock"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
+export type BedrockModel = { id: string; name: string; provider: string; created_at: string | null }
+export type BedrockDiagnosticResult = { profile_valid: boolean; credentials_valid: boolean; model_accessible: boolean; error: string | null }
 export type BootPhaseSnapshot = { 
 /**
  * One of: idle | starting | migrating_database | building_audio |
