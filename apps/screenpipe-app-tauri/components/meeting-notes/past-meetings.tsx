@@ -4,7 +4,7 @@
 "use client";
 
 import React from "react";
-import { FileText, Phone, Trash2 } from "lucide-react";
+import { FileText, Loader2, Phone, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -25,11 +25,14 @@ import {
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
 
+const MEETING_DRAG_MIME = "application/x-screenpipe-meeting-id";
+
 interface PastMeetingsProps {
   meetings: MeetingRecord[];
   activeId: number | null;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
+  onMerged: (merged: MeetingRecord, sourceIds: number[]) => void;
 }
 
 interface Bucket {
@@ -76,8 +79,103 @@ export function PastMeetings({
   activeId,
   onSelect,
   onDelete,
+  onMerged,
 }: PastMeetingsProps) {
   const buckets = bucketByRelativeDay(meetings);
+  const { toast } = useToast();
+  const [draggingId, setDraggingId] = React.useState<number | null>(null);
+  const [dropTargetId, setDropTargetId] = React.useState<number | null>(null);
+  const [pendingMerge, setPendingMerge] = React.useState<{
+    source: MeetingRecord;
+    target: MeetingRecord;
+  } | null>(null);
+  const [merging, setMerging] = React.useState(false);
+
+  const handleDragStart = React.useCallback(
+    (id: number, e: React.DragEvent<HTMLDivElement>) => {
+      // Never let the active meeting be dragged — merging a live row would
+      // race the live transcript. The UI also disables drag at the source.
+      if (id === activeId) {
+        e.preventDefault();
+        return;
+      }
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData(MEETING_DRAG_MIME, String(id));
+      setDraggingId(id);
+    },
+    [activeId],
+  );
+
+  const handleDragEnd = React.useCallback(() => {
+    setDraggingId(null);
+    setDropTargetId(null);
+  }, []);
+
+  const handleDragOver = React.useCallback(
+    (id: number, e: React.DragEvent<HTMLDivElement>) => {
+      if (draggingId === null || draggingId === id || id === activeId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dropTargetId !== id) setDropTargetId(id);
+    },
+    [draggingId, dropTargetId, activeId],
+  );
+
+  const handleDragLeave = React.useCallback((id: number) => {
+    setDropTargetId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  const handleDrop = React.useCallback(
+    (id: number, e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData(MEETING_DRAG_MIME);
+      const sourceId = Number(raw);
+      setDraggingId(null);
+      setDropTargetId(null);
+      if (!Number.isFinite(sourceId) || sourceId === id) return;
+      if (sourceId === activeId || id === activeId) return;
+      const source = meetings.find((m) => m.id === sourceId);
+      const target = meetings.find((m) => m.id === id);
+      if (!source || !target) return;
+      setPendingMerge({ source, target });
+    },
+    [meetings, activeId],
+  );
+
+  const closeDialog = React.useCallback(() => {
+    if (merging) return;
+    setPendingMerge(null);
+  }, [merging]);
+
+  const confirmMerge = React.useCallback(async () => {
+    if (!pendingMerge) return;
+    setMerging(true);
+    try {
+      const res = await localFetch("/meetings/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: [pendingMerge.source.id, pendingMerge.target.id],
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ""}`);
+      }
+      const merged: MeetingRecord = await res.json();
+      onMerged(merged, [pendingMerge.source.id, pendingMerge.target.id]);
+      setPendingMerge(null);
+    } catch (err) {
+      toast({
+        title: "couldn't merge meetings",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setMerging(false);
+    }
+  }, [pendingMerge, onMerged, toast]);
+
   if (buckets.length === 0) return null;
 
   return (
@@ -96,11 +194,74 @@ export function PastMeetings({
                 isActive={m.id === activeId}
                 onClick={() => onSelect(m.id)}
                 onDelete={onDelete}
+                isDragging={draggingId === m.id}
+                isDropTarget={dropTargetId === m.id && draggingId !== m.id}
+                draggable={m.id !== activeId}
+                onDragStart={(e) => handleDragStart(m.id, e)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => handleDragOver(m.id, e)}
+                onDragLeave={() => handleDragLeave(m.id)}
+                onDrop={(e) => handleDrop(m.id, e)}
               />
             ))}
           </ul>
         </section>
       ))}
+
+      <AlertDialog
+        open={pendingMerge !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDialog();
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>merge meetings</AlertDialogTitle>
+            <AlertDialogDescription>
+              combine these two meetings into one. titles, attendees, notes
+              and transcripts are joined chronologically. this can't be
+              undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {pendingMerge && (
+            <div className="text-sm text-muted-foreground space-y-1.5 border-y border-border py-3">
+              <MergePreviewRow meeting={pendingMerge.source} />
+              <MergePreviewRow meeting={pendingMerge.target} />
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={merging}>cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmMerge();
+              }}
+              disabled={merging}
+            >
+              {merging ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  merging
+                </span>
+              ) : (
+                "merge"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+function MergePreviewRow({ meeting }: { meeting: MeetingRecord }) {
+  const title = meeting.title?.trim() || titleFromApp(meeting.meeting_app);
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-foreground truncate">{title}</span>
+      <span className="ml-auto text-[11px] tabular-nums">
+        {formatDuration(meeting.meeting_start, meeting.meeting_end)}
+      </span>
     </div>
   );
 }
@@ -111,12 +272,28 @@ function PastMeetingRow({
   isActive,
   onClick,
   onDelete,
+  isDragging,
+  isDropTarget,
+  draggable,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
 }: {
   meeting: MeetingRecord;
   bucket: string;
   isActive: boolean;
   onClick: () => void;
   onDelete: (id: number) => void;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  draggable: boolean;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const { toast } = useToast();
 
@@ -146,6 +323,12 @@ function PastMeetingRow({
       <div
         role="button"
         tabIndex={0}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         onClick={onClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -157,6 +340,8 @@ function PastMeetingRow({
           "w-full flex items-center gap-3 py-2 px-1 transition-colors text-left cursor-pointer",
           "hover:bg-muted/30",
           isActive && "bg-muted/20",
+          isDragging && "opacity-40",
+          isDropTarget && "bg-muted/60 ring-1 ring-inset ring-foreground/30",
         )}
       >
         <div className="h-7 w-7 shrink-0 border border-border flex items-center justify-center bg-background">

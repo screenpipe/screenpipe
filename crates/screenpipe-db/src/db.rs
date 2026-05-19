@@ -5484,34 +5484,52 @@ impl DatabaseManager {
     pub async fn delete_speaker(&self, id: i64) -> Result<(), sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
 
-        // Array of (query, operation description) tuples
+        // Collect candidate chunk IDs before deleting transcriptions
+        let candidate_chunk_ids: Vec<(i64,)> = sqlx::query_as(
+            "SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ?",
+        )
+        .bind(id)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Delete in FK-safe order: transcriptions first (they reference chunks), then chunks
         let operations = [
             (
                 "DELETE FROM audio_transcriptions WHERE speaker_id = ?",
                 "audio transcriptions",
             ),
             (
-                "DELETE FROM audio_chunks WHERE id IN (SELECT audio_chunk_id FROM audio_transcriptions WHERE speaker_id = ? AND start_time IS NULL)",
-                "audio chunks",
-            ),
-            (
                 "DELETE FROM speaker_embeddings WHERE speaker_id = ?",
                 "speaker embeddings",
             ),
-            (
-                "DELETE FROM speakers WHERE id = ?",
-                "speaker",
-            ),
+            ("DELETE FROM speakers WHERE id = ?", "speaker"),
         ];
 
-        // Execute each deletion operation
         for (query, operation) in operations {
             if let Err(e) = sqlx::query(query).bind(id).execute(&mut **tx.conn()).await {
                 error!("Failed to delete {} for speaker {}: {}", operation, id, e);
-                // tx will rollback automatically on drop
                 return Err(e);
             }
             debug!("Successfully deleted {} for speaker {}", operation, id);
+        }
+
+        // Delete only orphaned chunks (not referenced by any remaining transcription)
+        for (chunk_id,) in &candidate_chunk_ids {
+            if let Err(e) = sqlx::query(
+                "DELETE FROM audio_chunks WHERE id = ? \
+                 AND NOT EXISTS (SELECT 1 FROM audio_transcriptions WHERE audio_chunk_id = ?)",
+            )
+            .bind(chunk_id)
+            .bind(chunk_id)
+            .execute(&mut **tx.conn())
+            .await
+            {
+                error!(
+                    "Failed to delete audio chunk {} for speaker {}: {}",
+                    chunk_id, id, e
+                );
+                return Err(e);
+            }
         }
 
         tx.commit().await.map_err(|e| {
@@ -7787,35 +7805,10 @@ LIMIT ? OFFSET ?
     /// Insert a UI event via the write coalescing queue.
     pub async fn insert_ui_event(&self, event: &InsertUiEvent) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
-        let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
         let result = self
             .write_queue
             .submit(WriteOp::InsertUiEvent {
-                timestamp: event.timestamp.to_rfc3339(),
-                session_id: event.session_id.clone(),
-                relative_ms: event.relative_ms,
-                event_type: event.event_type.to_string(),
-                x: event.x,
-                y: event.y,
-                delta_x: event.delta_x.map(|v| v as i32),
-                delta_y: event.delta_y.map(|v| v as i32),
-                button: event.button.map(|v| v as i32),
-                click_count: event.click_count.map(|v| v as i32),
-                key_code: event.key_code.map(|v| v as i32),
-                modifiers: event.modifiers.map(|v| v as i32),
-                text_content: event.text_content.clone(),
-                text_length,
-                app_name: event.app_name.clone(),
-                app_pid: event.app_pid,
-                window_title: event.window_title.clone(),
-                browser_url: event.browser_url.clone(),
-                element_role: event.element_role.clone(),
-                element_name: event.element_name.clone(),
-                element_value: event.element_value.clone(),
-                element_description: event.element_description.clone(),
-                element_automation_id: event.element_automation_id.clone(),
-                element_bounds: event.element_bounds.clone(),
-                frame_id: event.frame_id,
+                event: Self::ui_event_write(event),
             })
             .await?;
         match result {
@@ -7832,12 +7825,47 @@ LIMIT ? OFFSET ?
         if events.is_empty() {
             return Ok(0);
         }
-        let mut count = 0;
-        for event in events {
-            self.insert_ui_event(event).await?;
-            count += 1;
+        use crate::write_queue::{WriteOp, WriteResult};
+        let events = events.iter().map(Self::ui_event_write).collect();
+        let result = self
+            .write_queue
+            .submit(WriteOp::InsertUiEventsBatch { events })
+            .await?;
+        match result {
+            WriteResult::Count(count) => Ok(count),
+            _ => unreachable!(),
         }
-        Ok(count)
+    }
+
+    fn ui_event_write(event: &InsertUiEvent) -> crate::write_queue::UiEventWrite {
+        let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
+        crate::write_queue::UiEventWrite {
+            timestamp: event.timestamp.to_rfc3339(),
+            session_id: event.session_id.clone(),
+            relative_ms: event.relative_ms,
+            event_type: event.event_type.to_string(),
+            x: event.x,
+            y: event.y,
+            delta_x: event.delta_x.map(|v| v as i32),
+            delta_y: event.delta_y.map(|v| v as i32),
+            button: event.button.map(|v| v as i32),
+            click_count: event.click_count.map(|v| v as i32),
+            key_code: event.key_code.map(|v| v as i32),
+            modifiers: event.modifiers.map(|v| v as i32),
+            text_content: event.text_content.clone(),
+            text_length,
+            app_name: event.app_name.clone(),
+            app_pid: event.app_pid,
+            window_title: event.window_title.clone(),
+            browser_url: event.browser_url.clone(),
+            element_role: event.element_role.clone(),
+            element_name: event.element_name.clone(),
+            element_value: event.element_value.clone(),
+            element_description: event.element_description.clone(),
+            element_automation_id: event.element_automation_id.clone(),
+            element_bounds: event.element_bounds.clone(),
+            frame_id: event.frame_id,
+        }
     }
 
     // ============================================================================

@@ -403,6 +403,26 @@ export function MeetingNotesSection({
     setSelectedId((prev) => (prev === id ? null : prev));
   }, []);
 
+  const handleMerged = useCallback(
+    (merged: MeetingRecord, sourceIds: number[]) => {
+      // The backend keeps the lowest id and deletes the rest. Drop the
+      // losers, swap-in the survivor with its joined fields, and forward
+      // selection if it was pointing at a row that just vanished.
+      const removeIds = new Set(sourceIds.filter((id) => id !== merged.id));
+      setMeetings((prev) => {
+        const without = prev.filter((m) => !removeIds.has(m.id));
+        const exists = without.some((m) => m.id === merged.id);
+        return exists
+          ? without.map((m) => (m.id === merged.id ? merged : m))
+          : [merged, ...without];
+      });
+      setSelectedId((prev) =>
+        prev !== null && removeIds.has(prev) ? merged.id : prev,
+      );
+    },
+    [],
+  );
+
   const handleLoadMore = useCallback(() => {
     void fetchPage(meetings.length, true);
   }, [meetings.length, fetchPage]);
@@ -507,6 +527,7 @@ export function MeetingNotesSection({
       activeMeeting={activeMeeting}
       onSelect={setSelectedId}
       onDelete={handleDeleted}
+      onMerged={handleMerged}
       onStart={() => handleStart()}
       onStop={handleStop}
       onStartFromEvent={handleStartFromEvent}

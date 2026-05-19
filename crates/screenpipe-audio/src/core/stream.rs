@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
-use tokio::task::LocalSet;
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use tracing::{error, warn};
 
@@ -79,8 +78,41 @@ pub struct AudioStream {
     pub is_disconnected: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StopMode {
+    Immediate,
+    DeferredDeviceDisconnect,
+}
+
+impl StopMode {
+    fn teardown_delay(self) -> Option<std::time::Duration> {
+        match self {
+            StopMode::Immediate => None,
+            // CoreAudio can still be unwinding its device/error callback when the
+            // control thread receives the stop signal. Give HAL a short grace
+            // period before pausing/dropping the CPAL stream.
+            StopMode::DeferredDeviceDisconnect => Some(std::time::Duration::from_millis(500)),
+        }
+    }
+}
+
 enum StreamControl {
-    Stop(oneshot::Sender<()>),
+    Stop {
+        response: oneshot::Sender<()>,
+        mode: StopMode,
+    },
+}
+
+impl StreamControl {
+    fn stop(mode: StopMode) -> (Self, oneshot::Receiver<()>) {
+        let (tx, rx) = oneshot::channel();
+        (Self::Stop { response: tx, mode }, rx)
+    }
+
+    fn stop_without_wait(mode: StopMode) -> Self {
+        let (control, _rx) = Self::stop(mode);
+        control
+    }
 }
 
 impl AudioStream {
@@ -316,7 +348,10 @@ impl AudioStream {
                     return;
                 }
 
-                if let Ok(StreamControl::Stop(response)) = stream_control_rx.recv() {
+                if let Ok(StreamControl::Stop { response, mode }) = stream_control_rx.recv() {
+                    if let Some(delay) = mode.teardown_delay() {
+                        std::thread::sleep(delay);
+                    }
                     stream.pause().ok();
                     drop(stream);
                     response.send(()).ok();
@@ -340,8 +375,8 @@ impl AudioStream {
             // `from_sender_for_test`) drop the receiver, so the send/recv
             // here will error. That's expected — `is_disconnected` already
             // signals the playback task to exit. Don't propagate this error.
-            let (tx, rx) = oneshot::channel();
-            if self.stream_control.send(StreamControl::Stop(tx)).is_ok() {
+            let (control, rx) = StreamControl::stop(StopMode::Immediate);
+            if self.stream_control.send(control).is_ok() {
                 let _ = rx.await;
             }
         }
@@ -507,7 +542,9 @@ fn create_error_callback(
                 device_name
             );
             if stream_control_tx
-                .send(StreamControl::Stop(oneshot::channel().0))
+                .send(StreamControl::stop_without_wait(
+                    StopMode::DeferredDeviceDisconnect,
+                ))
                 .is_err()
             {
                 warn!(
@@ -659,15 +696,10 @@ fn cpal_stream_config(
 
 impl Drop for AudioStream {
     fn drop(&mut self) {
-        let set = LocalSet::new();
-
-        let stream_control = self.stream_control.clone();
-        let is_disconnected = self.is_disconnected.clone();
-
-        set.spawn_local(async move {
-            let _ = stream_control.send(StreamControl::Stop(oneshot::channel().0));
-            is_disconnected.store(true, Ordering::Relaxed);
-        });
+        let _ = self
+            .stream_control
+            .send(StreamControl::stop_without_wait(StopMode::Immediate));
+        self.is_disconnected.store(true, Ordering::Relaxed);
     }
 }
 
@@ -675,6 +707,26 @@ impl Drop for AudioStream {
 mod from_wav_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn device_disconnect_stop_mode_defers_teardown() {
+        assert_eq!(StopMode::Immediate.teardown_delay(), None);
+
+        let delay = StopMode::DeferredDeviceDisconnect
+            .teardown_delay()
+            .expect("device disconnect should defer teardown");
+        assert!(delay >= Duration::from_millis(250));
+        assert!(delay <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn stop_without_wait_preserves_requested_mode() {
+        match StreamControl::stop_without_wait(StopMode::DeferredDeviceDisconnect) {
+            StreamControl::Stop { mode, .. } => {
+                assert_eq!(mode, StopMode::DeferredDeviceDisconnect);
+            }
+        }
+    }
 
     /// 16 kHz mono sine wav round-trips through `from_wav`. The test counts
     /// every chunk that lands on the broadcast receiver — sample count must

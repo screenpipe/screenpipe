@@ -478,13 +478,24 @@ impl ServerCore {
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
 
+        // Cloud Clerk JWT — same token used for the cloud transcription
+        // bearer (see line 96). Tinfoil's enclave is on the screenpipe
+        // cloud auth boundary, so the user's signed-in token is what
+        // authenticates redactor requests. Without this the worker logs
+        // "no api key — requests will be un-authenticated" on every
+        // restart even when the user is signed in.
+        let tinfoil_api_key = config
+            .user_id
+            .clone()
+            .filter(|s| !s.is_empty());
+
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
         let redact_shutdown = Arc::new(Notify::new());
 
         if config.async_pii_redaction {
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
-            use screenpipe_redact::adapters::tinfoil::TinfoilRedactor;
+            use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
             use screenpipe_redact::worker::{Worker, WorkerConfig, ALL_TARGET_TABLES};
             use screenpipe_redact::Redactor;
@@ -504,8 +515,14 @@ impl ServerCore {
             // removal" toggle means. The 20260507 migration drops the
             // dead duplicate columns the old non-destructive mode used.
             if use_tinfoil {
-                info!("starting async text-PII reconciliation worker (backend=tinfoil)");
-                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async text-PII reconciliation worker (backend=tinfoil)"
+                );
+                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::new(TinfoilConfig {
+                    api_key: tinfoil_api_key.clone(),
+                    ..Default::default()
+                }));
                 let pipeline = Pipeline::regex_then_ai(ai, PipelineConfig::default());
                 let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
                 let cfg = WorkerConfig {
@@ -557,14 +574,23 @@ impl ServerCore {
 
         if config.async_image_pii_redaction {
             use screenpipe_redact::adapters::rfdetr::{RfdetrConfig, RfdetrRedactor};
-            use screenpipe_redact::adapters::tinfoil_image::TinfoilImageRedactor;
+            use screenpipe_redact::adapters::tinfoil_image::{
+                TinfoilImageConfig, TinfoilImageRedactor,
+            };
             use screenpipe_redact::image::worker::{ImageWorker, ImageWorkerConfig};
             use screenpipe_redact::ImageRedactor;
 
             let pool = db.pool.clone();
             if use_tinfoil {
-                info!("starting async image-PII worker (backend=tinfoil)");
-                let detector = Arc::new(TinfoilImageRedactor::from_env()) as Arc<dyn ImageRedactor>;
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async image-PII worker (backend=tinfoil)"
+                );
+                let detector =
+                    Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
+                        api_key: tinfoil_api_key.clone(),
+                        ..Default::default()
+                    })) as Arc<dyn ImageRedactor>;
                 let _ = ImageWorker::new(pool, detector, ImageWorkerConfig::default())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {

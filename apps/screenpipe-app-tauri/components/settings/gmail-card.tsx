@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Lock, LogOut, Mail, Plus } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
 
@@ -59,6 +60,7 @@ export function GmailCard() {
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
+        notifyConnectionsUpdated();
       }
     } catch (e) {
       console.error("gmail oauth failed:", e);
@@ -73,6 +75,7 @@ export function GmailCard() {
       await commands.oauthDisconnect("gmail", instance ?? null);
       posthog.capture("gmail_disconnected", { instance });
       await fetchAccounts();
+      notifyConnectionsUpdated();
     } catch (e) {
       console.error("failed to disconnect gmail:", e);
     }

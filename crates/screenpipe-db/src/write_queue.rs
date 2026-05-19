@@ -138,31 +138,10 @@ pub(crate) enum WriteOp {
         time_end: String,
     },
     InsertUiEvent {
-        timestamp: String,
-        session_id: Option<String>,
-        relative_ms: i64,
-        event_type: String,
-        x: Option<i32>,
-        y: Option<i32>,
-        delta_x: Option<i32>,
-        delta_y: Option<i32>,
-        button: Option<i32>,
-        click_count: Option<i32>,
-        key_code: Option<i32>,
-        modifiers: Option<i32>,
-        text_content: Option<String>,
-        text_length: Option<i32>,
-        app_name: Option<String>,
-        app_pid: Option<i32>,
-        window_title: Option<String>,
-        browser_url: Option<String>,
-        element_role: Option<String>,
-        element_name: Option<String>,
-        element_value: Option<String>,
-        element_description: Option<String>,
-        element_automation_id: Option<String>,
-        element_bounds: Option<String>,
-        frame_id: Option<i64>,
+        event: UiEventWrite,
+    },
+    InsertUiEventsBatch {
+        events: Vec<UiEventWrite>,
     },
     DeleteAudioChunksBatch {
         chunk_ids: Vec<i64>,
@@ -307,6 +286,35 @@ pub(crate) struct FrameBatchWindow {
     pub text_json: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct UiEventWrite {
+    pub timestamp: String,
+    pub session_id: Option<String>,
+    pub relative_ms: i64,
+    pub event_type: String,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub delta_x: Option<i32>,
+    pub delta_y: Option<i32>,
+    pub button: Option<i32>,
+    pub click_count: Option<i32>,
+    pub key_code: Option<i32>,
+    pub modifiers: Option<i32>,
+    pub text_content: Option<String>,
+    pub text_length: Option<i32>,
+    pub app_name: Option<String>,
+    pub app_pid: Option<i32>,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
+    pub element_role: Option<String>,
+    pub element_name: Option<String>,
+    pub element_value: Option<String>,
+    pub element_description: Option<String>,
+    pub element_automation_id: Option<String>,
+    pub element_bounds: Option<String>,
+    pub frame_id: Option<i64>,
+}
+
 /// Which table to mark as synced.
 #[derive(Debug, Clone)]
 pub enum SyncTable {
@@ -322,6 +330,8 @@ pub enum SyncTable {
 pub(crate) enum WriteResult {
     /// An inserted row ID (i64). Used by most insert operations.
     Id(i64),
+    /// Number of rows inserted/updated by a batch operation.
+    Count(usize),
     /// For operations that return nothing meaningful.
     #[allow(dead_code)]
     Unit,
@@ -894,46 +904,16 @@ async fn execute_single_write(
             Ok(WriteResult::Unit)
         }
 
-        WriteOp::InsertUiEvent {
-            timestamp,
-            session_id,
-            relative_ms,
-            event_type,
-            x,
-            y,
-            delta_x,
-            delta_y,
-            button,
-            click_count,
-            key_code,
-            modifiers,
-            text_content,
-            text_length,
-            app_name,
-            app_pid,
-            window_title,
-            browser_url,
-            element_role,
-            element_name,
-            element_value,
-            element_description,
-            element_automation_id,
-            element_bounds,
-            frame_id,
-        } => {
-            let result = sqlx::query(
-                "INSERT INTO ui_events (timestamp, session_id, relative_ms, event_type, x, y, delta_x, delta_y, button, click_count, key_code, modifiers, text_content, text_length, app_name, app_pid, window_title, browser_url, element_role, element_name, element_value, element_description, element_automation_id, element_bounds, frame_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
-            )
-            .bind(timestamp.as_str()).bind(session_id.as_deref()).bind(relative_ms).bind(event_type.as_str())
-            .bind(x).bind(y).bind(delta_x).bind(delta_y)
-            .bind(button).bind(click_count).bind(key_code).bind(modifiers)
-            .bind(text_content.as_deref()).bind(text_length)
-            .bind(app_name.as_deref()).bind(app_pid).bind(window_title.as_deref()).bind(browser_url.as_deref())
-            .bind(element_role.as_deref()).bind(element_name.as_deref()).bind(element_value.as_deref())
-            .bind(element_description.as_deref()).bind(element_automation_id.as_deref()).bind(element_bounds.as_deref())
-            .bind(frame_id)
-            .execute(&mut **conn).await?;
-            Ok(WriteResult::Id(result.last_insert_rowid()))
+        WriteOp::InsertUiEvent { event } => {
+            let id = insert_ui_event_row(conn, event).await?;
+            Ok(WriteResult::Id(id))
+        }
+
+        WriteOp::InsertUiEventsBatch { events } => {
+            for event in events {
+                insert_ui_event_row(conn, event).await?;
+            }
+            Ok(WriteResult::Count(events.len()))
         }
 
         WriteOp::DeleteAudioChunksBatch { chunk_ids } => {
@@ -1341,6 +1321,44 @@ async fn execute_single_write(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+async fn insert_ui_event_row(
+    conn: &mut sqlx::pool::PoolConnection<Sqlite>,
+    event: &UiEventWrite,
+) -> Result<i64, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO ui_events (timestamp, session_id, relative_ms, event_type, x, y, delta_x, delta_y, button, click_count, key_code, modifiers, text_content, text_length, app_name, app_pid, window_title, browser_url, element_role, element_name, element_value, element_description, element_automation_id, element_bounds, frame_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
+    )
+    .bind(event.timestamp.as_str())
+    .bind(event.session_id.as_deref())
+    .bind(event.relative_ms)
+    .bind(event.event_type.as_str())
+    .bind(event.x)
+    .bind(event.y)
+    .bind(event.delta_x)
+    .bind(event.delta_y)
+    .bind(event.button)
+    .bind(event.click_count)
+    .bind(event.key_code)
+    .bind(event.modifiers)
+    .bind(event.text_content.as_deref())
+    .bind(event.text_length)
+    .bind(event.app_name.as_deref())
+    .bind(event.app_pid)
+    .bind(event.window_title.as_deref())
+    .bind(event.browser_url.as_deref())
+    .bind(event.element_role.as_deref())
+    .bind(event.element_name.as_deref())
+    .bind(event.element_value.as_deref())
+    .bind(event.element_description.as_deref())
+    .bind(event.element_automation_id.as_deref())
+    .bind(event.element_bounds.as_deref())
+    .bind(event.frame_id)
+    .execute(&mut **conn)
+    .await?;
+
+    Ok(result.last_insert_rowid())
+}
 
 fn send_error_to_all(batch: &mut Vec<PendingWrite>, error: sqlx::Error) {
     let err_str = error.to_string();

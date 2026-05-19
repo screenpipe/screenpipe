@@ -16,6 +16,7 @@ import {
   Check,
   Copy,
   Loader2,
+  Search,
   User,
   X,
 } from "lucide-react";
@@ -257,6 +258,8 @@ export function TranscriptPanel({
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [copied, setCopied] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<LiveTranscriptBlock[]>([]);
   const [liveStatus, setLiveStatus] = useState<LiveStreamingStatus | null>(
@@ -530,6 +533,19 @@ export function TranscriptPanel({
   }, [isOpen, meeting.id, query]);
 
   useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchOpen(false);
+      setQuery("");
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
     if (!isOpen || !isLive || query.trim()) return;
     if (!isFollowingLive) {
       setHasUnseenLive(hasTranscriptContent);
@@ -611,6 +627,27 @@ export function TranscriptPanel({
         <header className="flex items-center justify-end px-4 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-1">
             {headerActions}
+            {showSearch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearchOpen((prev) => {
+                    const next = !prev;
+                    if (!next) setQuery("");
+                    return next;
+                  });
+                }}
+                className={cn(
+                  "h-7 w-7 p-0",
+                  searchOpen && "bg-accent text-accent-foreground",
+                )}
+                title={searchOpen ? "hide search" : "search transcript"}
+                aria-pressed={searchOpen}
+              >
+                <Search className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -644,12 +681,20 @@ export function TranscriptPanel({
           </div>
         )}
 
-        {showSearch && (
+        {showSearch && (searchOpen || Boolean(query.trim())) && (
           <div className="px-4 py-2 border-b border-border shrink-0">
             <input
+              ref={searchInputRef}
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setQuery("");
+                  setSearchOpen(false);
+                }
+              }}
               placeholder="search transcript..."
               className="w-full bg-transparent text-xs px-2 py-1 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
             />

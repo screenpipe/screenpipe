@@ -41,6 +41,9 @@ onnxruntime-win-x64*/
 # JavaScript stuff
 node_modules/
 
+# Swift build artifacts (ee/sdk)
+.build/
+
 # Python stuff
 venv/
 app.py

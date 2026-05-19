@@ -406,6 +406,28 @@ pub struct RecordArgs {
     #[arg(long, default_value = "balanced")]
     pub video_quality: String,
 
+    /// Mitsukeru fork: override the active PowerProfile's idle_capture_interval_ms.
+    /// Forces this idle snapshot interval regardless of power mode. Useful for
+    /// fixed desktop / long-running recording where AC-power Performance defaults
+    /// (30s) are too aggressive. Reference: Balanced=60_000, Saver=120_000.
+    #[arg(long)]
+    pub idle_capture_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::visual_check_interval_ms`.
+    /// Sets the interval between frame-diff checks (set to 0 to disable visual change detection).
+    #[arg(long)]
+    pub visual_check_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
+    /// Frame diff above this threshold triggers a VisualChange capture.
+    #[arg(long)]
+    pub visual_change_threshold: Option<f64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::min_capture_interval_ms`.
+    /// Debounce floor between any two captures.
+    #[arg(long)]
+    pub min_capture_interval_ms: Option<u64>,
+
     /// Enable cloud sync
     #[arg(long, default_value_t = false)]
     pub enable_sync: bool,
@@ -675,6 +697,10 @@ impl RecordArgs {
             video_quality: self.video_quality.clone(),
             disable_snapshot_compaction: self.disable_snapshot_compaction,
             disable_meeting_detector: self.disable_meeting_detector,
+            idle_capture_interval_ms: self.idle_capture_interval_ms,
+            visual_check_interval_ms: self.visual_check_interval_ms,
+            visual_change_threshold: self.visual_change_threshold,
+            min_capture_interval_ms: self.min_capture_interval_ms,
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,

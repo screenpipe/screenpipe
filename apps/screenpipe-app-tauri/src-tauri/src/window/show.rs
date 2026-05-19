@@ -404,6 +404,18 @@ impl ShowRewindWindow {
 
     pub fn show(&self, app: &AppHandle) -> tauri::Result<WebviewWindow> {
         let id = self.id();
+        if crate::enterprise_policy::is_app_ui_hidden() && id != RewindWindowId::PermissionRecovery
+        {
+            info!(
+                "enterprise: suppressed {} window in hidden UI mode",
+                id.label()
+            );
+            return Err(tauri::Error::Anyhow(anyhow::anyhow!(
+                "window suppressed by enterprise hidden UI mode: {}",
+                id.label()
+            )));
+        }
+
         let onboarding_store = OnboardingStore::get(app)
             .unwrap_or_else(|_| None)
             .unwrap_or_default();

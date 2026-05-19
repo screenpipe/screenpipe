@@ -811,10 +811,13 @@ async fn main() {
                 pi::pi_check,
                 pi::pi_install,
                 pi::pi_prompt,
+                pi::pi_queue_prompt,
                 pi::pi_steer,
+                pi::pi_steer_queued,
                 pi::pi_pending,
                 pi::pi_cancel_queued,
                 pi::pi_abort,
+                pi::pi_abort_active,
                 pi::pi_new_session,
                 pi::pi_set_model,
                 pi::pi_update_config,
@@ -961,7 +964,9 @@ async fn main() {
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
             // Focus the existing window
-            show_main_window(app_for_closure.clone());
+            if !crate::enterprise_policy::is_app_ui_hidden() {
+                show_main_window(app_for_closure.clone());
+            }
 
             // Forward deep-link URL from args
             if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
@@ -1116,10 +1121,13 @@ async fn main() {
             pi::pi_check,
             pi::pi_install,
             pi::pi_prompt,
+            pi::pi_queue_prompt,
             pi::pi_steer,
+            pi::pi_steer_queued,
             pi::pi_pending,
             pi::pi_cancel_queued,
             pi::pi_abort,
+            pi::pi_abort_active,
             pi::pi_new_session,
             pi::pi_set_model,
             pi::pi_update_config,
@@ -1197,6 +1205,7 @@ async fn main() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder, PredefinedMenuItem, MenuItemBuilder};
+                let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
 
                 let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
                     .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
@@ -1207,11 +1216,14 @@ async fn main() {
                             .build(app)?)
                         .separator();
                 }
+                if !app_ui_hidden {
+                    app_submenu_builder = app_submenu_builder
+                        .item(&MenuItemBuilder::with_id("settings", "Settings...")
+                            .accelerator("CmdOrCtrl+,")
+                            .build(app)?)
+                        .separator();
+                }
                 let app_submenu = app_submenu_builder
-                    .item(&MenuItemBuilder::with_id("settings", "Settings...")
-                        .accelerator("CmdOrCtrl+,")
-                        .build(app)?)
-                    .separator()
                     .item(&PredefinedMenuItem::quit(app, Some("Quit screenpipe"))?)
                     .build()?;
 
@@ -1532,8 +1544,13 @@ async fn main() {
                 });
             }
 
-            // Show onboarding window if not completed
-            if !onboarding_store.is_completed {
+            let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
+
+            // Show onboarding/home unless this device is deployed as a managed
+            // background agent. Permission recovery is handled separately below.
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping startup app windows");
+            } else if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
             } else {
                 let _ = ShowRewindWindow::Home { page: None }.show(&app.handle());
@@ -1548,7 +1565,7 @@ async fn main() {
             // macOS-only: on Windows/Linux the non-macOS chat builder doesn't
             // set .visible(false), causing a visible chat window on startup.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed && !app_ui_hidden {
                 let app_handle_chat = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Wait for main window to finish setup
@@ -1573,7 +1590,7 @@ async fn main() {
 
             // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
             // Don't show reminder during first-time onboarding to reduce overwhelm
-            if store.show_shortcut_overlay && onboarding_store.is_completed {
+            if store.show_shortcut_overlay && onboarding_store.is_completed && !app_ui_hidden {
                 let shortcut = store.show_screenpipe_shortcut.clone();
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1597,7 +1614,7 @@ async fn main() {
             // Uses retry loop because CGPreflightScreenCaptureAccess can return false
             // transiently on startup before TCC fully initializes.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed || app_ui_hidden {
                 let mut screen_ok = false;
                 let mut mic_ok = false;
                 for attempt in 0..3 {
@@ -1928,12 +1945,16 @@ async fn main() {
             // instance), apply_shortcuts early-returns and skips the rest. Fix this to:
             // 1. Collect per-shortcut failures instead of aborting on the first one
             // 2. Emit a user-visible notification listing the conflicting shortcuts
-            let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
-                    warn!("Failed to initialize global shortcuts: {}", e);
-                }
-            });
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+            } else {
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
+                        warn!("Failed to initialize global shortcuts: {}", e);
+                    }
+                });
+            }
 
             // Auto-start suggestions scheduler (always on)
             let suggestions_state = app_handle.state::<suggestions::SuggestionsState>();
@@ -2036,8 +2057,10 @@ async fn main() {
     // Setup dock right-click menu (fallback for when tray is behind the notch)
     #[cfg(target_os = "macos")]
     {
-        let app_handle_dock = app.app_handle().clone();
-        dock_menu::setup_dock_menu(app_handle_dock);
+        if !crate::enterprise_policy::is_app_ui_hidden() {
+            let app_handle_dock = app.app_handle().clone();
+            dock_menu::setup_dock_menu(app_handle_dock);
+        }
     }
 
     app.run(|app_handle, event| {
@@ -2153,6 +2176,9 @@ async fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     // Defer off the event stack so run handler stays panic-free.
                     // Open the settings/app window (not the timeline overlay).
+                    if crate::enterprise_policy::is_app_ui_hidden() {
+                        return;
+                    }
                     let app = app_handle.app_handle().clone();
                     let _ = app_handle.app_handle().run_on_main_thread(move || {
                         let _ = ShowRewindWindow::Home { page: None }.show(&app);

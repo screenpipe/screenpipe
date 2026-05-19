@@ -38,6 +38,9 @@ export interface ConversationListOptions {
   offset?: number;
   /** Preserve hidden rows unless a caller is rendering normal user-facing lists. */
   includeHidden?: boolean;
+  /** Only return hidden rows (for the archived tab). Storage-level filter so
+   *  pagination offsets line up — post-filtering in JS would skew the page size. */
+  hiddenOnly?: boolean;
   /** Restrict results to one conversation surface. Undefined means all kinds. */
   kind?: ConversationKind | "all";
 }
@@ -282,7 +285,10 @@ function matchesConversationOptions(
   meta: ConversationMeta,
   options: ConversationListOptions
 ): boolean {
-  if (options.includeHidden === false && meta.hidden) return false;
+  if (options.hiddenOnly === true && !meta.hidden) return false;
+  if (options.hiddenOnly !== true && options.includeHidden === false && meta.hidden) {
+    return false;
+  }
   if (options.kind && options.kind !== "all" && meta.kind !== options.kind) {
     return false;
   }

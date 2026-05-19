@@ -73,6 +73,7 @@ const READY_EVENT: &str = "owned-browser:ready";
 /// user's real browser. The sidebar answers through the
 /// `owned_browser_resolve_session_access` command.
 const SESSION_ACCESS_REQUEST_EVENT: &str = "owned-browser:session-access-request";
+const V20_COOKIE_BLOCK_EVENT: &str = "owned-browser:v20-cookie-blocked";
 const SESSION_ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Marker prefix for `document.title`-based result delivery. The bridge JS
@@ -126,6 +127,19 @@ struct BrowserSessionAccessRequestPayload {
     request_id: String,
     url: String,
     host: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct V20CookieBlockPayload {
+    url: String,
+    host: String,
+    rows: usize,
+    v20_count: usize,
+    sources: Vec<String>,
+    /// "v20" = app-bound encryption blocked decrypt; "locked" = browser running, DB inaccessible
+    #[serde(default)]
+    reason: String,
 }
 
 static SESSION_ACCESS_PENDING: OnceLock<
@@ -829,15 +843,91 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
     }
 
     info!(host, "owned-browser cookies: pre-navigate inject starting");
-    let cookies = crate::owned_browser_cookies::cookies_for_host(host).await;
+    let mut cookies = crate::owned_browser_cookies::cookies_for_host(host).await;
     if cookies.is_empty() {
-        info!(
-            host,
-            "owned-browser cookies: 0 cookies available — navigating without inject \
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(block) = crate::owned_browser_cookies::v20_cookie_block_for_host(host).await {
+                // App-bound encrypted (v20) cookies — try extension first.
+                match extension_cookies_for_host(app, host).await {
+                    Ok(extension_cookies) if !extension_cookies.is_empty() => {
+                        info!(
+                            host,
+                            count = extension_cookies.len(),
+                            "owned-browser cookies: using extension fallback for v20 cookies"
+                        );
+                        cookies = extension_cookies;
+                    }
+                    Ok(_) => {
+                        info!(
+                            host,
+                            "owned-browser cookies: extension fallback returned no cookies for v20"
+                        );
+                    }
+                    Err(e) => {
+                        info!(
+                            host,
+                            "owned-browser cookies: extension fallback unavailable for v20 — {e}"
+                        );
+                    }
+                }
+                if cookies.is_empty() {
+                    // Extension couldn't supply cookies — show the v20 card.
+                    let payload = V20CookieBlockPayload {
+                        url: url.as_str().to_string(),
+                        host: block.host,
+                        rows: block.rows,
+                        v20_count: block.v20_count,
+                        sources: block.sources,
+                        reason: "v20".to_string(),
+                    };
+                    if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
+                        warn!("owned-browser cookies: failed to emit v20 block event: {e}");
+                    }
+                    return;
+                }
+            } else if crate::owned_browser_cookies::locked_browser_block_for_host(host)
+                .await
+                .is_some()
+            {
+                // DB locked (browser running) — browser_session_decision_for_url already
+                // confirmed the extension is connected before returning UseBrowserSession,
+                // so go straight to the extension cookie path.
+                match extension_cookies_for_host(app, host).await {
+                    Ok(extension_cookies) if !extension_cookies.is_empty() => {
+                        info!(
+                            host,
+                            count = extension_cookies.len(),
+                            "owned-browser cookies: using extension cookies (browser DB locked)"
+                        );
+                        cookies = extension_cookies;
+                    }
+                    Ok(_) => {
+                        info!(
+                            host,
+                            "owned-browser cookies: extension returned no cookies for locked browser"
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        info!(
+                            host,
+                            "owned-browser cookies: extension unavailable for locked browser — {e}"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        if cookies.is_empty() {
+            info!(
+                host,
+                "owned-browser cookies: 0 cookies available — navigating without inject \
              (causes: real browser not installed, Keychain denied, or no cookies stored \
              for this host yet)"
-        );
-        return;
+            );
+            return;
+        }
     }
     info!(
         host,
@@ -854,27 +944,181 @@ async fn inject_cookies_for_url(app: &AppHandle, url: &url::Url) {
             "owned-browser cookies: WKHTTPCookieStore.setCookie completed"
         );
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (app, &cookies); // until Windows/Linux injectors land
+    #[cfg(target_os = "windows")]
+    {
+        let n = inject_cookies_windows(app, &cookies).await;
+        info!(
+            host,
+            attempted = cookies.len(),
+            injected = n,
+            "owned-browser cookies: WebView2 CookieManager.AddOrUpdateCookie completed"
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = (app, &cookies); // until Linux injector lands
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtensionCookie {
+    name: String,
+    value: String,
+    domain: String,
+    path: String,
+    secure: bool,
+    http_only: bool,
+    expires_at: Option<i64>,
+    same_site: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, serde::Deserialize)]
+struct ExtensionCookieResult {
+    cookies: Vec<ExtensionCookie>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, serde::Deserialize)]
+struct ExtensionCookieResponse {
+    success: bool,
+    result: Option<ExtensionCookieResult>,
+    error: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+async fn is_extension_connected(app: &AppHandle) -> bool {
+    let api = crate::recording::local_api_context_from_app(app);
+    let client = reqwest::Client::new();
+    let request = client.get(api.url("/connections/browser/status"));
+    let request = api.apply_auth(request);
+    match request.send().await {
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("connected")?.as_bool())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn extension_cookies_for_host(
+    app: &AppHandle,
+    host: &str,
+) -> Result<Vec<crate::owned_browser_cookies::Cookie>, String> {
+    let api = crate::recording::local_api_context_from_app(app);
+    let client = reqwest::Client::new();
+    let request = client
+        .post(api.url("/connections/browser/cookies"))
+        .json(&serde_json::json!({
+            "host": host,
+            "timeout_secs": 5,
+        }));
+    let request = api.apply_auth(request);
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("extension cookie request failed: {e}"))?;
+    let status = response.status();
+    let body = response
+        .json::<ExtensionCookieResponse>()
+        .await
+        .map_err(|e| format!("extension cookie response parse failed: {e}"))?;
+
+    if !status.is_success() || !body.success {
+        return Err(body
+            .error
+            .unwrap_or_else(|| format!("extension cookie request returned HTTP {status}")));
+    }
+
+    let Some(result) = body.result else {
+        return Ok(Vec::new());
+    };
+
+    Ok(result
+        .cookies
+        .into_iter()
+        .map(|c| crate::owned_browser_cookies::Cookie {
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: if c.path.is_empty() {
+                "/".to_string()
+            } else {
+                c.path
+            },
+            secure: c.secure,
+            http_only: c.http_only,
+            expires_at: c.expires_at,
+            same_site: match c.same_site.as_deref() {
+                Some("no_restriction") => 0,
+                Some("lax") => 1,
+                Some("strict") => 2,
+                _ => -1,
+            },
+        })
+        .collect())
 }
 
 async fn browser_session_decision_for_url(
     app: &AppHandle,
     url: &url::Url,
 ) -> BrowserSessionDecision {
-    let _ = app;
     let Some(host) = url.host_str() else {
         return BrowserSessionDecision::ContinueLoggedOut;
     };
     let host_key = session_host_key(host);
 
     if !crate::owned_browser_cookies::has_cookies_for_host(&host_key).await {
+        // Browser may be running with its DB locked.
+        #[cfg(target_os = "windows")]
+        if let Some(block) =
+            crate::owned_browser_cookies::locked_browser_block_for_host(&host_key).await
+        {
+            // If the Screenpipe Browser Bridge extension is already connected,
+            // skip the card entirely and let inject_cookies_for_url use the
+            // extension's cookie API instead. This also prevents the retry loop:
+            // when the frontend detects extension connected and re-calls navigate,
+            // we go straight to UseBrowserSession here instead of emitting the
+            // card event again.
+            if is_extension_connected(app).await {
+                info!(
+                    host = host_key.as_str(),
+                    "owned-browser: browser DB locked but extension is connected — using extension cookies"
+                );
+                return BrowserSessionDecision::UseBrowserSession;
+            }
+            let payload = V20CookieBlockPayload {
+                url: url.as_str().to_string(),
+                host: block.host,
+                rows: 0,
+                v20_count: 0,
+                sources: block.sources,
+                reason: "locked".to_string(),
+            };
+            if let Err(e) = app.emit(V20_COOKIE_BLOCK_EVENT, payload) {
+                warn!("owned-browser: failed to emit locked-browser event: {e}");
+            }
+        }
         return BrowserSessionDecision::ContinueLoggedOut;
     }
 
     if session_access_allowed().lock().await.contains(&host_key) {
         return BrowserSessionDecision::UseBrowserSession;
     }
+
+    // On Windows there is no OS-level permission dialog (unlike macOS Keychain),
+    // so we don't need an explicit consent step. DPAPI cookies inject silently;
+    // if they are v20-encrypted inject_cookies_for_url will show the single
+    // "Browser login is protected" card which already acts as consent + setup.
+    // SESSION_ACCESS_ALLOWED is a macOS-only concept (remembers "user clicked
+    // allow" to skip the Keychain consent dialog next time) — we don't store
+    // anything on Windows because there is no dialog to skip.
+    #[cfg(target_os = "windows")]
+    return BrowserSessionDecision::UseBrowserSession;
 
     // Agent may navigate the same host repeatedly while the first prompt is open.
     let wait_deadline = Instant::now() + SESSION_ACCESS_TIMEOUT;
@@ -1082,6 +1326,140 @@ async fn inject_cookies_macos(
     // Tiny grace period so the WKHTTPCookieStore's own async commit to
     // its on-disk store flushes before the upcoming navigate fires its
     // request. Empirically <10ms; 50 covers slow startups.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    injected
+}
+
+/// Windows only: push real-browser cookies into the owned WebView2 instance
+/// before navigate. WebView2 exposes this through `ICoreWebView2_2`'s
+/// CookieManager; Tauri gives us the raw controller via `Webview::with_webview`.
+#[cfg(target_os = "windows")]
+async fn inject_cookies_windows(
+    app: &AppHandle,
+    cookies: &[crate::owned_browser_cookies::Cookie],
+) -> usize {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_2, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+    };
+    use windows_core::{Interface, HSTRING};
+
+    let Some(webview) = browser_state().active().await else {
+        warn!("owned-browser cookies: WebView2 inject skipped — no active owned browser");
+        return 0;
+    };
+
+    let cookies = cookies.to_vec();
+    let (tx, rx) = tokio::sync::oneshot::channel::<usize>();
+    let app = app.clone();
+    let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+    let tx_for_main = tx.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        let tx = tx_for_main;
+        let tx_for_webview = tx.clone();
+        if let Err(e) = webview.with_webview(move |platform| {
+            let mut injected: usize = 0;
+            let result: Result<(), String> = (|| unsafe {
+                let controller = platform.controller();
+                let webview = controller
+                    .CoreWebView2()
+                    .map_err(|e| format!("CoreWebView2: {e}"))?;
+                let webview: ICoreWebView2_2 = webview
+                    .cast()
+                    .map_err(|e| format!("ICoreWebView2_2: {e}"))?;
+                let cookie_manager = webview
+                    .CookieManager()
+                    .map_err(|e| format!("CookieManager: {e}"))?;
+
+                for c in &cookies {
+                    let path = if c.path.is_empty() { "/" } else { &c.path };
+                    let name = HSTRING::from(&c.name);
+                    let value = HSTRING::from(&c.value);
+                    let domain = HSTRING::from(&c.domain);
+                    let path = HSTRING::from(path);
+                    let cookie = match cookie_manager.CreateCookie(&name, &value, &domain, &path) {
+                        Ok(cookie) => cookie,
+                        Err(e) => {
+                            debug!(
+                                name = c.name.as_str(),
+                                "owned-browser cookies: CreateCookie failed: {e}"
+                            );
+                            continue;
+                        }
+                    };
+
+                    if let Some(secs) = c.expires_at {
+                        if let Err(e) = cookie.SetExpires(secs as f64) {
+                            debug!(
+                                name = c.name.as_str(),
+                                "owned-browser cookies: SetExpires failed: {e}"
+                            );
+                        }
+                    }
+                    if let Err(e) = cookie.SetIsHttpOnly(c.http_only) {
+                        debug!(
+                            name = c.name.as_str(),
+                            "owned-browser cookies: SetIsHttpOnly failed: {e}"
+                        );
+                    }
+                    if let Err(e) = cookie.SetIsSecure(c.secure) {
+                        debug!(
+                            name = c.name.as_str(),
+                            "owned-browser cookies: SetIsSecure failed: {e}"
+                        );
+                    }
+                    let same_site = match c.same_site {
+                        0 => Some(COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE),
+                        1 => Some(COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX),
+                        2 => Some(COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT),
+                        _ => None,
+                    };
+                    if let Some(same_site) = same_site {
+                        if let Err(e) = cookie.SetSameSite(same_site) {
+                            debug!(
+                                name = c.name.as_str(),
+                                "owned-browser cookies: SetSameSite failed: {e}"
+                            );
+                        }
+                    }
+
+                    match cookie_manager.AddOrUpdateCookie(&cookie) {
+                        Ok(()) => injected += 1,
+                        Err(e) => debug!(
+                            name = c.name.as_str(),
+                            "owned-browser cookies: AddOrUpdateCookie failed: {e}"
+                        ),
+                    }
+                }
+                Ok(())
+            })();
+
+            if let Err(e) = result {
+                warn!("owned-browser cookies: WebView2 inject failed: {e}");
+            }
+            if let Ok(mut tx) = tx_for_webview.lock() {
+                if let Some(tx) = tx.take() {
+                    let _ = tx.send(injected);
+                }
+            }
+        }) {
+            warn!("owned-browser cookies: WebView2 with_webview failed: {e}");
+            if let Ok(mut tx) = tx.lock() {
+                if let Some(tx) = tx.take() {
+                    let _ = tx.send(0);
+                }
+            }
+        }
+    }) {
+        warn!("owned-browser cookies: run_on_main_thread failed: {e}");
+        if let Ok(mut tx) = tx.lock() {
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(0);
+            }
+        }
+    }
+
+    let injected = rx.await.unwrap_or(0);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     injected
 }

@@ -1,0 +1,40 @@
+[package]
+name = "screenpipe-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Screenpipe SDK — Rust core for screen recording exposed via napi-rs"
+license = "LicenseRef-Screenpipe-Enterprise"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4", "async"] }
+napi-derive = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
+tracing = "0.1"
+# PNG encoding for frames before handing them to ffmpeg's image2pipe demuxer
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Depend on the local Screenpipe monorepo crates. The JS API stays narrow, but
+# `screenpipe-screen` brings more monorepo crates transitively
+# (connect/db/events/secrets), so audit build size before a public release if
+# package weight matters.
+# Mic level meter uses `cpal` directly — pulling `screenpipe-audio` would
+# drag in whisper-rs, ort, vad-rs, symphonia, audiopipe. Computing RMS on
+# a running cpal input stream is ~30 lines and doesn't reinvent anything
+# screenpipe-audio exposes as a "just a level meter" helper.
+screenpipe-screen = { path = "../../crates/screenpipe-screen" }
+screenpipe-core   = { path = "../../crates/screenpipe-core", default-features = false }
+screenpipe-a11y   = { path = "../../crates/screenpipe-a11y", default-features = false }
+cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

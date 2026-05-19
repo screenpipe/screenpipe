@@ -432,6 +432,22 @@ const MEETING_APP_PATTERNS: &[&str] = &[
     "riverside",
 ];
 
+/// Browser-hosted meeting URLs. Browser app names are usually "Chrome",
+/// "Arc", or "Safari", so app-name matching misses these sessions.
+const MEETING_URL_PATTERNS: &[&str] = &[
+    "meet.google.com",
+    "zoom.us/wc",
+    "zoom.us/j",
+    "app.zoom.us/wc",
+    "teams.microsoft.com",
+    "teams.live.com",
+    "webex.com/meet",
+    ".webex.com/meet",
+    "meet.jit.si",
+    "whereby.com",
+    "riverside.fm/studio",
+];
+
 /// URL patterns for canvas-rendered apps. When inside a Google Doc, the window
 /// title is the document name (not "Google Docs"), so we also check the URL.
 const CANVAS_URL_PATTERNS: &[&str] = &[
@@ -478,6 +494,14 @@ fn a11y_content_is_thin(
             .any(|pat| url_lower.contains(pat))
         {
             debug!("a11y_content_is_thin: known canvas URL '{}'", url);
+            return true;
+        }
+
+        if MEETING_URL_PATTERNS
+            .iter()
+            .any(|pat| url_lower.contains(pat))
+        {
+            debug!("a11y_content_is_thin: meeting URL '{}'", url);
             return true;
         }
     }
@@ -1048,6 +1072,60 @@ mod tests {
             Some("Creon's list of profound books"),
             Some("https://example.com"),
             None,
+        ));
+    }
+
+    #[test]
+    fn test_thin_browser_hosted_google_meet_by_url() {
+        let snap = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Mute microphone Camera Captions Present now Participants Chat More options Meeting details People Controls Share screen presentation toolbar repeated meeting chrome".into(),
+            depth: 0,
+            bounds: None,
+            ..Default::default()
+        }]);
+
+        assert!(a11y_content_is_thin(
+            &snap,
+            Some("Team sync - Google Meet"),
+            Some("https://meet.google.com/abc-defg-hij"),
+            Some("Arc"),
+        ));
+    }
+
+    #[test]
+    fn test_thin_browser_hosted_zoom_by_url() {
+        let snap = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Mute Start Video Security Participants Chat Share Screen Record Reactions Apps Whiteboards More leave meeting browser client controls".into(),
+            depth: 0,
+            bounds: None,
+            ..Default::default()
+        }]);
+
+        assert!(a11y_content_is_thin(
+            &snap,
+            Some("Zoom Meeting"),
+            Some("https://zoom.us/wc/123456789/start"),
+            Some("Google Chrome"),
+        ));
+    }
+
+    #[test]
+    fn test_calendar_page_with_meet_link_is_not_meeting_url() {
+        let snap = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Calendar event details Product review agenda project milestones join with Google Meet attendee notes and preparation checklist with substantial readable event content".into(),
+            depth: 0,
+            bounds: None,
+            ..Default::default()
+        }]);
+
+        assert!(!a11y_content_is_thin(
+            &snap,
+            Some("Product review - Google Calendar"),
+            Some("https://calendar.google.com/calendar/u/0/r/eventedit/abc123"),
+            Some("Google Chrome"),
         ));
     }
 }

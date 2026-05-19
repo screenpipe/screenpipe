@@ -20,11 +20,47 @@ mod windows;
 
 pub use null::NullFocusTracker;
 
+/// Stable-enough monitor identity for focus/capture comparisons.
+///
+/// The runtime numeric id comes from the platform capture backend and is still
+/// useful for logs and fallbacks, but it can drift across enumerations on some
+/// macOS setups. The stable id is based on the monitor descriptor used by the
+/// capture stack, so the focus tracker and capture loop can agree on the same
+/// physical display even when the raw ids differ.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MonitorIdentity {
+    pub id: u32,
+    pub stable_id: Option<String>,
+}
+
+impl MonitorIdentity {
+    pub fn new(id: u32, stable_id: Option<String>) -> Self {
+        Self { id, stable_id }
+    }
+
+    pub fn runtime_id(id: u32) -> Self {
+        Self::new(id, None)
+    }
+
+    pub fn from_monitor(monitor: &screenpipe_screen::monitor::SafeMonitor) -> Self {
+        Self::new(monitor.id(), Some(monitor.stable_id()))
+    }
+
+    pub fn matches(&self, other: &Self) -> bool {
+        match (&self.stable_id, &other.stable_id) {
+            (Some(a), Some(b)) if !a.is_empty() && a == b => true,
+            (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => false,
+            _ if self.id == other.id => true,
+            _ => false,
+        }
+    }
+}
+
 /// Focus event — emitted whenever the tracker detects a change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FocusEvent {
-    /// User is now looking at this monitor (our internal u32 monitor id).
-    Focused(u32),
+    /// User is now looking at this monitor.
+    Focused(MonitorIdentity),
     /// Focus cannot be determined (API unavailable, permission denied, etc.)
     /// Controller should fall back to treating all monitors as Active.
     Unknown,
@@ -32,7 +68,7 @@ pub enum FocusEvent {
 
 pub trait FocusTracker: Send + Sync {
     /// Current best-effort focused monitor. None if unknown.
-    fn current(&self) -> Option<u32>;
+    fn current(&self) -> Option<MonitorIdentity>;
     /// Subscribe to focus-change events. Broadcast so multiple consumers OK.
     fn subscribe(&self) -> broadcast::Receiver<FocusEvent>;
     /// Stop the tracker (idempotent). Called on shutdown.

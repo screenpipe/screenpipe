@@ -650,7 +650,11 @@ pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
 
     let path = dir.join("enterprise.json");
-    let json = serde_json::json!({ "license_key": license_key });
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    json["license_key"] = serde_json::Value::String(license_key);
     std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
         .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
 
@@ -732,6 +736,11 @@ pub fn set_tray_health_icon(app_handle: tauri::AppHandle) {
 #[specta::specta]
 pub fn show_main_window(app_handle: tauri::AppHandle) {
     info!("show_main_window called");
+    if crate::enterprise_policy::is_app_ui_hidden() {
+        info!("enterprise: suppressing main window in hidden UI mode");
+        return;
+    }
+
     set_main_close_in_progress(false);
     let window_to_show = ShowRewindWindow::Main;
 

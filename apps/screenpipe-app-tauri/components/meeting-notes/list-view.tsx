@@ -17,6 +17,7 @@ interface ListViewProps {
   activeMeeting: MeetingRecord | null;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
+  onMerged: (merged: MeetingRecord, sourceIds: number[]) => void;
   onStart: () => void | Promise<void>;
   onStop: () => void | Promise<void>;
   onStartFromEvent: (event: CalendarEvent) => void | Promise<void>;
@@ -40,6 +41,7 @@ export function ListView({
   activeMeeting,
   onSelect,
   onDelete,
+  onMerged,
   onStart,
   onStop,
   onStartFromEvent,
@@ -152,6 +154,7 @@ export function ListView({
             activeId={activeId}
             onSelect={onSelect}
             onDelete={onDelete}
+            onMerged={onMerged}
           />
         )}
 

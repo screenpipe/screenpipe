@@ -267,6 +267,8 @@ export type Settings = SettingsStore & {
 		pipeNotifications: boolean;
 		/** Toast when a monitor is plugged, unplugged, or switched (clamshell, dock). Default true. */
 		displayChanges?: boolean;
+		/** Live-note prompt when a meeting is detected. Default true. */
+		meetingLiveNotes?: boolean;
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */

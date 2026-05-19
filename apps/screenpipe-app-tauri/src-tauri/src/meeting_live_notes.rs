@@ -208,14 +208,6 @@ pub fn start(app: AppHandle) {
                     "deeplink_url": url.clone(),
                     "primary": true,
                 }));
-                actions.push(json!({
-                    "id": "open-live-notes",
-                    "action": "open-live-notes",
-                    "label": "open note",
-                    "type": "deeplink",
-                    "url": url.clone(),
-                    "primary": false,
-                }));
             } else {
                 actions.push(json!({
                     "id": "open-live-notes",
@@ -226,12 +218,6 @@ pub fn start(app: AppHandle) {
                     "primary": true,
                 }));
             }
-            actions.push(json!({
-                "id": "dismiss",
-                "action": "dismiss",
-                "label": "not now",
-                "type": "dismiss",
-            }));
 
             client::send_typed_with_actions(
                 "meeting detected",
@@ -397,19 +383,9 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 fn provider_join_link(url: String) -> JoinLink {
-    let lower = url.to_lowercase();
-    let label = if lower.contains("meet.google.com/") {
-        "join Google Meet"
-    } else if lower.contains("zoom.us/") {
-        "join Zoom"
-    } else if lower.contains("teams.microsoft.com/") || lower.contains("teams.live.com/") {
-        "join Teams"
-    } else {
-        "join meeting"
-    };
     JoinLink {
         url,
-        label: label.to_string(),
+        label: "join and take notes".to_string(),
     }
 }
 
@@ -470,7 +446,7 @@ mod tests {
             .and_then(|m| m.join_link)
             .expect("join link");
         assert_eq!(link.url, "https://meet.google.com/abc-defg-hij");
-        assert_eq!(link.label, "join Google Meet");
+        assert_eq!(link.label, "join and take notes");
     }
 
     #[test]
@@ -492,7 +468,7 @@ mod tests {
         assert_eq!(matched.title.as_deref(), Some("Customer onboarding"));
         let link = matched.join_link.expect("join link");
         assert_eq!(link.url, "https://zoom.us/j/123");
-        assert_eq!(link.label, "join Zoom");
+        assert_eq!(link.label, "join and take notes");
     }
 
     #[test]

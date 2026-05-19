@@ -169,6 +169,30 @@ pub struct RecordingSettings {
     #[serde(rename = "disableMeetingDetector", default)]
     pub disable_meeting_detector: bool,
 
+    // ── Mitsukeru fork: event-driven capture overrides ─────────────────
+    // ミツケル拡張：PowerProfile に依らず個別パラメータを直接指定するための上書き値。
+    // None の場合は通常通り PowerProfile が決定。デスクトップ常時記録のような用途で
+    // 「AC 電源だが Balanced 相当の頻度に固定したい」ケースに対応する。
+    /// Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "idleCaptureIntervalMs", default)]
+    pub idle_capture_interval_ms: Option<u64>,
+
+    /// Override `EventDrivenCaptureConfig::visual_check_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "visualCheckIntervalMs", default)]
+    pub visual_check_interval_ms: Option<u64>,
+
+    /// Override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "visualChangeThreshold", default)]
+    pub visual_change_threshold: Option<f64>,
+
+    /// Override `EventDrivenCaptureConfig::min_capture_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "minCaptureIntervalMs", default)]
+    pub min_capture_interval_ms: Option<u64>,
+
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
     #[serde(rename = "ignoredWindows")]
@@ -414,6 +438,10 @@ impl Default for RecordingSettings {
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
             disable_meeting_detector: false,
+            idle_capture_interval_ms: None,
+            visual_check_interval_ms: None,
+            visual_change_threshold: None,
+            min_capture_interval_ms: None,
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],

@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -254,7 +255,15 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
-export function IntegrationIcon({ icon }: { icon: string }) {
+export function IntegrationIcon({
+  icon,
+  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
+  fallbackClassName = "h-5 w-5 text-muted-foreground",
+}: {
+  icon: string;
+  className?: string;
+  fallbackClassName?: string;
+}) {
   const icons: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
@@ -449,8 +458,8 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     ),
   };
   return (
-    <div className="w-10 h-10 bg-muted rounded-xl flex items-center justify-center">
-      {icons[icon] || <Send className="h-5 w-5 text-muted-foreground" />}
+    <div className={className}>
+      {icons[icon] || <Send className={fallbackClassName} />}
     </div>
   );
 }
@@ -1085,7 +1094,7 @@ function WhatsAppPanel() {
 
   const handleDisconnect = async () => {
     await localFetch("/connections/whatsapp/disconnect", { method: "POST" });
-    apiCache.invalidate("connections/list");
+    notifyConnectionsUpdated();
     setStatus("idle");
     setQr(null);
     setInfo(null);
@@ -1251,7 +1260,7 @@ function OAuthPanel({
       if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
         await fetchStatus();
-        apiCache.invalidate("connections/list");
+        notifyConnectionsUpdated();
         onConnected?.();
       } else {
         setStatus("idle");
@@ -1283,7 +1292,7 @@ function OAuthPanel({
       await commands.oauthDisconnect(integrationId, instance ?? null);
       setAccounts(remainingAccounts);
       await fetchStatus();
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       if (remainingAccounts.length === 0) {
         onDisconnected?.();
       } else {
@@ -1453,7 +1462,7 @@ export function ConnectionCredentialForm({
       userDisconnectedRef.current = false; // allow future syncs after reconnect
       setStatus("idle");
       setIsSaved(true);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
     } catch (e: any) {
@@ -1472,7 +1481,7 @@ export function ConnectionCredentialForm({
       setIsSaved(false);
       setStatus("idle");
       setError(null);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       onDisconnect?.();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -1619,7 +1628,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       setConnectedPath(vaultPath);
       setManualPath("");
       setStatus("idle");
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: "obsidian" });
       onConnected?.();
     } catch (e: any) {
@@ -1637,7 +1646,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       setManualPath("");
       setStatus("idle");
       setError(null);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       onDisconnected?.();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -1875,7 +1884,12 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 // Main connections section
 // ---------------------------------------------------------------------------
 
-export function ConnectionsSection() {
+interface ConnectionsSectionProps {
+  focusConnectionId?: string | null;
+  focusRequestId?: number;
+}
+
+export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
@@ -1889,6 +1903,11 @@ export function ConnectionsSection() {
     sessionStorage.removeItem("openConnection");
     setSelected(pending);
   }, []);
+
+  useEffect(() => {
+    if (!focusRequestId) return;
+    setSelected(focusConnectionId || null);
+  }, [focusConnectionId, focusRequestId]);
 
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
@@ -1953,6 +1972,7 @@ export function ConnectionsSection() {
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
           setIntegrationsLoaded(true);
+          notifyConnectionsUpdated({ invalidateCache: false });
           // Track active connections as user property (IDs only, no credentials)
           const connected = data.data
             .filter((i: any) => i.connected)
@@ -1974,7 +1994,7 @@ export function ConnectionsSection() {
 
   const refreshIntegrationConnection = useCallback((id: string, connected: boolean) => {
     setIntegrations(prev => prev.map(i => i.id === id ? { ...i, connected } : i));
-    apiCache.invalidate("connections/list");
+    notifyConnectionsUpdated();
     fetchIntegrations();
   }, [fetchIntegrations]);
 
@@ -2060,10 +2080,14 @@ export function ConnectionsSection() {
       case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
-      case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
+      case "apple-calendar": return <CalendarCard onConnectionChange={() => {
+        refreshCalendarTile();
+        notifyConnectionsUpdated();
+        fetchIntegrations();
+      }} />;
       case "google-calendar": return <GoogleCalendarCard
         onConnected={() => setGoogleCalendarConnected(true)}
-        onDisconnected={() => { setGoogleCalendarConnected(false); apiCache.invalidate("connections/list"); }}
+        onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
       case "gmail": return <GmailCard />;
@@ -2077,10 +2101,10 @@ export function ConnectionsSection() {
       case "msty": return <MstyPanel />;
       case "warp": return <WarpPanel />;
       case "obsidian": return <ObsidianPanel
-        onConnected={() => { apiCache.invalidate("connections/list"); fetchIntegrations(); }}
+        onConnected={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
         onDisconnected={() => {
           setIntegrations(prev => prev.map(i => i.id === "obsidian" ? { ...i, connected: false } : i));
-          apiCache.invalidate("connections/list");
+          notifyConnectionsUpdated();
           fetchIntegrations();
         }}
       />;
@@ -2119,7 +2143,7 @@ export function ConnectionsSection() {
               size="sm"
               variant="outline"
               className="h-7 text-xs gap-1.5 normal-case font-sans tracking-normal"
-              onClick={() => { apiCache.invalidate("connections/list"); fetchIntegrations(); }}
+              onClick={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
             >
               <Loader2 className="h-3 w-3" />
               retry

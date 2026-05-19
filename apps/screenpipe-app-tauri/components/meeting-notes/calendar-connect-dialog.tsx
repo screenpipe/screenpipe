@@ -306,7 +306,6 @@ function GoogleCalendarConnect({
     try {
       const result = await commands.oauthConnect("google-calendar", null);
       if (result.status === "ok" && result.data.connected) {
-        localStorage?.setItem("google-calendar-enabled", "true");
         await onConnected();
         onClose();
       } else {

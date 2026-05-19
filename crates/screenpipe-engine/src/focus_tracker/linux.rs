@@ -24,7 +24,7 @@
 //! This slot is wired up via `focus_tracker::new_tracker()` so we can swap in
 //! a real X11 implementation in a follow-up without touching callers.
 
-use super::{FocusEvent, FocusTracker};
+use super::{FocusEvent, FocusTracker, MonitorIdentity};
 use anyhow::Result;
 use tokio::sync::broadcast;
 
@@ -48,7 +48,7 @@ impl LinuxFocusTracker {
 }
 
 impl FocusTracker for LinuxFocusTracker {
-    fn current(&self) -> Option<u32> {
+    fn current(&self) -> Option<MonitorIdentity> {
         None
     }
 

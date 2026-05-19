@@ -2586,7 +2586,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       <SelectItem value="selected-engine">Current transcription engine</SelectItem>
                       <SelectItem value="screenpipe-cloud">screenpipe cloud live</SelectItem>
                       <SelectItem value="deepgram-live">Direct Deepgram live</SelectItem>
-                      <SelectItem value="openai-realtime">Direct OpenAI realtime</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

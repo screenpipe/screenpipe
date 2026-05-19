@@ -16,7 +16,13 @@ export interface PingRequest {
   action: "ping";
 }
 
-export type IncomingMessage = EvalRequest | PingRequest;
+export interface CookieRequest {
+  id: string;
+  action: "get_cookies";
+  host: string;
+}
+
+export type IncomingMessage = EvalRequest | CookieRequest | PingRequest;
 
 /** Response sent from extension back to screenpipe server */
 export interface EvalResponse {
@@ -24,6 +30,17 @@ export interface EvalResponse {
   ok: boolean;
   result?: unknown;
   error?: string;
+}
+
+export interface BrowserCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  secure: boolean;
+  httpOnly: boolean;
+  expiresAt?: number;
+  sameSite: "unspecified" | "no_restriction" | "lax" | "strict";
 }
 
 export interface PongResponse {

@@ -709,24 +709,6 @@ export default function NotificationPanelPage() {
                 </button>
               ))
             )}
-            <span
-              onClick={() => hide(false)}
-              style={{
-                marginLeft: "auto",
-                fontSize: "10px",
-                color: "rgba(0, 0, 0, 0.3)",
-                cursor: "pointer",
-                fontFamily: '"IBM Plex Mono", monospace',
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")
-              }
-            >
-              dismiss →
-            </span>
           </div>
         )}
 

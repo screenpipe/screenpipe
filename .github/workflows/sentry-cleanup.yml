@@ -98,6 +98,41 @@ jobs:
                   return "screenpipe-engine@"
               return None
 
+          def get_release_tag(event):
+              if not event:
+                  return None
+              for tag in event.get("tags", []):
+                  if tag.get("key") == "release":
+                      return tag.get("value")
+              return event.get("release")
+
+          def get_top_stack_frame(event):
+              if not event:
+                  return "stack=unavailable"
+              for entry in event.get("entries", []):
+                  if entry.get("type") != "exception":
+                      continue
+                  values = entry.get("data", {}).get("values", [])
+                  for value in reversed(values):
+                      frames = value.get("stacktrace", {}).get("frames", [])
+                      if not frames:
+                          continue
+                      frame = frames[-1]
+                      function = frame.get("function") or "<unknown>"
+                      filename = frame.get("filename") or frame.get("absPath") or "<unknown>"
+                      lineno = frame.get("lineno")
+                      if lineno:
+                          return f"top={function} ({filename}:{lineno})"
+                      return f"top={function} ({filename})"
+              return "stack=unavailable"
+
+          def issue_context(issue, event, release_tag, full_ver, gap):
+              issue_url = issue.get("permalink") or issue.get("url") or ""
+              culprit = issue.get("culprit") or "culprit=unknown"
+              release_part = f"v{full_ver}" if full_ver else f"release={release_tag or 'missing'}"
+              gap_part = f"gap={gap}" if gap is not None else "gap=unknown"
+              return f"{release_part} ({gap_part}) {get_top_stack_frame(event)} culprit={culprit} {issue_url}".strip()
+
           print(f"=== Sentry Cleanup ===")
           print(f"App version: {APP_VERSION} (patch: {APP_VERSION.split('.')[-1]})")
           print(f"Server version: {SERVER_VERSION} (patch: {SERVER_VERSION.split('.')[-1]})")
@@ -128,50 +163,50 @@ jobs:
 
               for issue in issues:
                   short_id = issue["shortId"]
-                  title = issue["title"][:80]
+                  title = issue["title"].replace("\n", " ")[:180]
                   event_count = int(issue["count"])
                   user_count = int(issue.get("userCount", 0))
                   assignee = issue.get("assignedTo")
                   issue_id = issue["id"]
 
+                  # Always fetch latest event before skipping. High-user
+                  # issues are exactly the ones humans need release + stack
+                  # detail for, and previously this workflow hid that data.
+                  event_url = f"https://sentry.io/api/0/organizations/{ORG_SLUG}/issues/{issue_id}/events/latest/"
+                  event = sentry_request(event_url)
+                  release_tag = get_release_tag(event)
+                  event_patch, full_ver = parse_version(release_tag) if release_tag else (None, None)
+                  gap = current_patch - event_patch if event_patch is not None else None
+                  context = issue_context(issue, event, release_tag, full_ver, gap)
+
                   # Skip if has assignee (someone is working on it)
                   if assignee:
-                      print(f"  SKIP [{short_id}] has assignee - {title}")
+                      print(f"  SKIP [{short_id}] has assignee {context} {event_count} events, {user_count} users - {title}")
                       skipped_count += 1
                       continue
 
                   # Skip if high user count (widespread, worth investigating)
                   if user_count >= 10:
-                      print(f"  SKIP [{short_id}] {user_count} users affected - {title}")
+                      print(f"  SKIP [{short_id}] high-user {context} {event_count} events, {user_count} users - {title}")
                       skipped_count += 1
                       continue
 
-                  # Get latest event to check its release version
-                  event_url = f"https://sentry.io/api/0/organizations/{ORG_SLUG}/issues/{issue_id}/events/latest/"
-                  event = sentry_request(event_url)
                   if not event:
                       continue
 
-                  # Find release tag
-                  release_tag = None
-                  for tag in event.get("tags", []):
-                      if tag["key"] == "release":
-                          release_tag = tag["value"]
-                          break
-
                   if not release_tag:
-                      # No release tag, skip
+                      print(f"  KEEP [{short_id}] release=missing {context} {event_count} events, {user_count} users - {title}")
+                      skipped_count += 1
                       continue
 
-                  event_patch, full_ver = parse_version(release_tag)
                   if event_patch is None:
+                      print(f"  KEEP [{short_id}] release-unparseable {context} {event_count} events, {user_count} users - {title}")
+                      skipped_count += 1
                       continue
-
-                  gap = current_patch - event_patch
 
                   if gap >= VERSION_GAP:
                       if DRY_RUN:
-                          print(f"  WOULD RESOLVE [{short_id}] v{full_ver} (gap={gap}) {event_count} events, {user_count} users - {title}")
+                          print(f"  WOULD RESOLVE [{short_id}] {context} {event_count} events, {user_count} users - {title}")
                       else:
                           # Resolve as "resolvedInNextRelease" so it auto-reopens if bug persists
                           resolve_url = f"https://sentry.io/api/0/issues/{issue_id}/"
@@ -180,12 +215,12 @@ jobs:
                               "statusDetails": {"inNextRelease": True}
                           })
                           if result:
-                              print(f"  RESOLVED [{short_id}] v{full_ver} (gap={gap}) {event_count} events, {user_count} users - {title}")
+                              print(f"  RESOLVED [{short_id}] {context} {event_count} events, {user_count} users - {title}")
                               resolved_count += 1
                           else:
                               print(f"  FAILED to resolve [{short_id}]")
                   else:
-                      print(f"  KEEP [{short_id}] v{full_ver} (gap={gap}) {event_count} events, {user_count} users - {title}")
+                      print(f"  KEEP [{short_id}] {context} {event_count} events, {user_count} users - {title}")
                       skipped_count += 1
 
               print()

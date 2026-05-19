@@ -60,6 +60,12 @@ pub struct EvalRequestBody {
     pub timeout_secs: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CookieRequestBody {
+    pub host: String,
+    pub timeout_secs: Option<u64>,
+}
+
 /// Frames the extension sends back over the WebSocket. The `ok` field
 /// distinguishes eval responses from hello/pong messages which lack it.
 #[derive(Debug, Deserialize)]
@@ -122,6 +128,67 @@ pub async fn browser_eval_handler(
     let timeout = Duration::from_secs(body.timeout_secs.unwrap_or(30).min(120));
 
     match bridge.eval(&body.code, body.url.as_deref(), timeout).await {
+        Ok(EvalResult { ok, result, error }) => {
+            let status = if ok {
+                StatusCode::OK
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            (
+                status,
+                Json(EvalResponseBody {
+                    success: ok,
+                    result,
+                    error,
+                }),
+            )
+        }
+        Err(EvalError::NotConnected) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(EvalResponseBody {
+                success: false,
+                result: None,
+                error: Some(EvalError::NotConnected.to_string()),
+            }),
+        ),
+        Err(e @ EvalError::SendFailed(_)) | Err(e @ EvalError::Disconnected) => (
+            StatusCode::BAD_GATEWAY,
+            Json(EvalResponseBody {
+                success: false,
+                result: None,
+                error: Some(e.to_string()),
+            }),
+        ),
+        Err(e @ EvalError::Timeout(_)) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(EvalResponseBody {
+                success: false,
+                result: None,
+                error: Some(e.to_string()),
+            }),
+        ),
+    }
+}
+
+pub async fn browser_cookies_handler(
+    State(bridge): State<Arc<InnerBridge>>,
+    Json(body): Json<CookieRequestBody>,
+) -> impl IntoResponse {
+    let timeout = Duration::from_secs(body.timeout_secs.unwrap_or(5).min(30));
+    let host = body.host.trim().trim_end_matches('.').to_ascii_lowercase();
+
+    if host.is_empty() || host.contains('/') || host.contains(':') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(EvalResponseBody {
+                success: false,
+                result: None,
+                error: Some("invalid host".to_string()),
+            }),
+        );
+    }
+
+    match bridge.get_cookies(&host, timeout).await {
         Ok(EvalResult { ok, result, error }) => {
             let status = if ok {
                 StatusCode::OK

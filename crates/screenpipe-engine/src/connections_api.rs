@@ -1993,6 +1993,13 @@ async fn browser_eval(
     crate::routes::browser::browser_eval_handler(State(state.browser_bridge), body).await
 }
 
+async fn browser_cookies(
+    State(state): State<ConnectionsState>,
+    body: Json<crate::routes::browser::CookieRequestBody>,
+) -> impl axum::response::IntoResponse {
+    crate::routes::browser::browser_cookies_handler(State(state.browser_bridge), body).await
+}
+
 async fn browser_status(
     State(state): State<ConnectionsState>,
 ) -> impl axum::response::IntoResponse {
@@ -2393,6 +2400,7 @@ where
         // (Chrome v0.2.x and v0.3.0) hardcode these. Keep until usage drops.
         .route("/browser/ws", get(browser_ws))
         .route("/browser/eval", post(browser_eval))
+        .route("/browser/cookies", post(browser_cookies))
         .route("/browser/status", get(browser_status))
         // OAuth callback (must be before /:id to avoid conflict)
         .route("/oauth/callback", get(oauth_callback))
