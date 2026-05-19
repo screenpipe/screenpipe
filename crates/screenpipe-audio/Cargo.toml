@@ -17,9 +17,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 oasgen = { workspace = true }
 
-# Cross-platform audio capture
-# Using fork with unified cidre version (compatible with sck-rs)
-cpal = { git = "https://github.com/divanshu-go/screenpipe-cpal.git", rev = "070548661878f0aac2d1c2ba445ef2d6ed18705f" }
+# Cross-platform audio capture.
+# Use the divanshu-go Windows AEC fork so Windows microphone AEC can be
+# wired through screenpipe's capture path. Cargo.lock pins the resolved
+# commit; update the cpal guard in .github/workflows/ci.yml whenever this
+# dependency is intentionally advanced.
+cpal = { git = "https://github.com/divanshu-go/cpal.git", branch = "windows-aec" }
 
 # Wav encoding
 hound = "3.5"
@@ -86,6 +89,9 @@ audiopipe = { git = "https://github.com/divanshu-go/audiopipe.git", branch = "ma
 mlx-rs = { version = "0.25", optional = true }
 bytes = { version = "1.9.0", features = ["serde"] }
 rand = "0.9.0"
+base64 = "0.22"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libpulse-binding = { version = "2.28", optional = true }
@@ -110,7 +116,6 @@ ort = { version = "=2.0.0-rc.10", features = [
   "download-binaries",
   "copy-dylibs",
 ] }
-esaxx-rs = "0.1.10"
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
 
@@ -118,7 +123,6 @@ libsamplerate-sys = "0.1.10"
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
 ort-sys = { version = "=2.0.0-rc.10", default-features = false }
-esaxx-rs = "0.1.10"
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
 

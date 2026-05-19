@@ -62,6 +62,14 @@ interface BusInternals {
   mountPromise: Promise<UnlistenFn> | null;
 }
 
+interface PendingTextDelta {
+  envelope: AgentEventEnvelope;
+  delta: string;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const TEXT_DELTA_BATCH_MS = 50;
+
 // Singleton state — one bus per webview process. Exported for tests so
 // they can reset between cases without spinning up Tauri listeners.
 const internals: BusInternals = {
@@ -74,7 +82,30 @@ const internals: BusInternals = {
   mountPromise: null,
 };
 
-async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
+const pendingTextDeltas = new Map<string, PendingTextDelta>();
+
+function isAssistantTextDelta(envelope: AgentEventEnvelope): boolean {
+  return (
+    envelope.event?.type === "message_update" &&
+    envelope.event.assistantMessageEvent?.type === "text_delta" &&
+    typeof envelope.event.assistantMessageEvent.delta === "string"
+  );
+}
+
+function withTextDelta(envelope: AgentEventEnvelope, delta: string): AgentEventEnvelope {
+  return {
+    ...envelope,
+    event: {
+      ...envelope.event,
+      assistantMessageEvent: {
+        ...envelope.event.assistantMessageEvent,
+        delta,
+      },
+    },
+  };
+}
+
+async function dispatchEventNow(envelope: AgentEventEnvelope): Promise<void> {
   if (!envelope?.sessionId || !envelope.event) return;
   const fg = internals.foreground.get(envelope.sessionId);
   if (fg) {
@@ -85,6 +116,44 @@ async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
   // unregister others during dispatch, and we don't want that to skip
   // peers. Promise.all so a slow handler can't block its peers.
   await Promise.all(Array.from(internals.defaults).map((h) => h(envelope)));
+}
+
+async function flushPendingTextDelta(sessionId: string): Promise<void> {
+  const pending = pendingTextDeltas.get(sessionId);
+  if (!pending) return;
+  pendingTextDeltas.delete(sessionId);
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
+  await dispatchEventNow(withTextDelta(pending.envelope, pending.delta));
+}
+
+async function dispatchEvent(envelope: AgentEventEnvelope): Promise<void> {
+  if (!envelope?.sessionId || !envelope.event) return;
+
+  if (isAssistantTextDelta(envelope)) {
+    const existing = pendingTextDeltas.get(envelope.sessionId);
+    const delta = envelope.event.assistantMessageEvent?.delta ?? "";
+    if (existing) {
+      existing.delta += delta;
+      existing.envelope = envelope;
+      return;
+    }
+
+    const pending: PendingTextDelta = {
+      envelope,
+      delta,
+      timer: null,
+    };
+    pending.timer = setTimeout(() => {
+      void flushPendingTextDelta(envelope.sessionId);
+    }, TEXT_DELTA_BATCH_MS);
+    pendingTextDeltas.set(envelope.sessionId, pending);
+    return;
+  }
+
+  await flushPendingTextDelta(envelope.sessionId);
+  await dispatchEventNow(envelope);
 }
 
 async function dispatchTerminated(payload: AgentTerminatedPayload): Promise<void> {
@@ -200,6 +269,10 @@ export const __testing = {
     internals.foreground.clear();
     internals.terminated.clear();
     internals.evicted.clear();
+    for (const pending of pendingTextDeltas.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+    }
+    pendingTextDeltas.clear();
   },
   dispatchEvent,
   dispatchTerminated,

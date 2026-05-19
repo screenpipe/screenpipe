@@ -28,11 +28,11 @@ fn word_error_rate(reference: &str, hypothesis: &str) -> (f64, usize, usize) {
 
     // DP matrix
     let mut d = vec![vec![0usize; h + 1]; r + 1];
-    for i in 0..=r {
-        d[i][0] = i;
+    for (i, row) in d.iter_mut().enumerate().take(r + 1) {
+        row[0] = i;
     }
-    for j in 0..=h {
-        d[0][j] = j;
+    for (j, cell) in d[0].iter_mut().enumerate().take(h + 1) {
+        *cell = j;
     }
     for i in 1..=r {
         for j in 1..=h {
@@ -59,7 +59,7 @@ fn char_accuracy(reference: &str, hypothesis: &str) -> f64 {
     let r = reference.to_lowercase();
     let h = hypothesis.to_lowercase();
     let dist = strsim_levenshtein(&r, &h);
-    if r.len() > 0 {
+    if !r.is_empty() {
         1.0 - (dist as f64 / r.len() as f64)
     } else {
         1.0
@@ -71,11 +71,11 @@ fn strsim_levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let (m, n) = (a.len(), b.len());
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
     }
-    for j in 0..=n {
-        dp[0][j] = j;
+    for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *cell = j;
     }
     for i in 1..=m {
         for j in 1..=n {

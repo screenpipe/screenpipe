@@ -47,3 +47,12 @@ export function healthUrl(baseHttpUrl: string): string {
 export function browserStatusUrl(baseHttpUrl: string): string {
   return `${baseHttpUrl.replace(/\/$/, "")}${BROWSER_BASE_PATH}/status`;
 }
+
+export function browserPairStartUrl(baseHttpUrl: string): string {
+  return `${baseHttpUrl.replace(/\/$/, "")}${BROWSER_BASE_PATH}/pair/start`;
+}
+
+export function browserPairStatusUrl(baseHttpUrl: string, id: string): string {
+  const base = `${baseHttpUrl.replace(/\/$/, "")}${BROWSER_BASE_PATH}/pair/status`;
+  return `${base}?id=${encodeURIComponent(id)}`;
+}

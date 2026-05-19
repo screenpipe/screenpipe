@@ -43,6 +43,28 @@ export class OpenAIProvider implements AIProvider {
 		}
 	}
 
+	private usesMaxCompletionTokens(model: string): boolean {
+		const lower = model.toLowerCase();
+		return lower.startsWith('gpt-5') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
+	}
+
+	private applyGenerationOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
+		if (body.temperature === undefined) return;
+		if (this.usesMaxCompletionTokens(body.model)) return;
+		params.temperature = body.temperature;
+	}
+
+	private applyTokenLimit(params: ChatCompletionCreateParams, body: RequestBody): void {
+		const maxTokens = body.max_completion_tokens ?? body.max_tokens;
+		if (maxTokens === undefined) return;
+
+		if (this.usesMaxCompletionTokens(body.model) || body.max_completion_tokens !== undefined) {
+			(params as ChatCompletionCreateParams & { max_completion_tokens?: number }).max_completion_tokens = maxTokens;
+			return;
+		}
+		(params as ChatCompletionCreateParams & { max_tokens?: number }).max_tokens = maxTokens;
+	}
+
 	async createCompletion(body: RequestBody): Promise<Response> {
 		const messages = this.formatMessages(body.messages);
 		const responseFormat = this.formatResponseFormat(body.response_format);
@@ -50,12 +72,14 @@ export class OpenAIProvider implements AIProvider {
 		const params: ChatCompletionCreateParams = {
 			model: body.model,
 			messages,
-			temperature: body.temperature,
 			stream: false,
 			response_format: responseFormat,
 			tools: body.tools as ChatCompletionCreateParams['tools'],
 			tool_choice: body.tool_choice as ChatCompletionCreateParams['tool_choice'],
 		};
+
+		this.applyGenerationOptions(params, body);
+		this.applyTokenLimit(params, body);
 
 		const response = await this.client.chat.completions.create(params);
 		return new Response(JSON.stringify(this.formatResponse(response)), {
@@ -64,14 +88,18 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	async createStreamingCompletion(body: RequestBody): Promise<ReadableStream> {
-		const stream = await this.client.chat.completions.create({
+		const params: ChatCompletionCreateParams = {
 			model: body.model,
 			messages: this.formatMessages(body.messages),
-			temperature: body.temperature,
 			stream: true,
 			response_format: this.formatResponseFormat(body.response_format),
 			tools: body.tools as ChatCompletionCreateParams['tools'],
-		});
+		};
+
+		this.applyGenerationOptions(params, body);
+		this.applyTokenLimit(params, body);
+
+		const stream = await this.client.chat.completions.create(params);
 
 		// Capture scope fields for the error path below — `this` inside the
 		// ReadableStream start() refers to the controller, not the provider.

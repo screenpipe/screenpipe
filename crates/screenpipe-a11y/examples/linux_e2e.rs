@@ -31,72 +31,66 @@ fn main() {
             let mut event_count = 0;
 
             while start.elapsed() < Duration::from_secs(15) {
-                match handle.recv_timeout(Duration::from_millis(500)) {
-                    Some(event) => {
-                        event_count += 1;
-                        let etype = event.event_type();
-                        match etype {
-                            "click" => {
-                                if let screenpipe_a11y::events::EventData::Click {
-                                    x,
-                                    y,
-                                    button,
-                                    ..
-                                } = &event.data
-                                {
-                                    println!(
-                                        "  [{:>5.1}s] CLICK button={} at ({}, {})",
-                                        start.elapsed().as_secs_f64(),
-                                        button,
-                                        x,
-                                        y
-                                    );
-                                }
-                            }
-                            "text" => {
-                                if let Some(text) = event.text_content() {
-                                    println!(
-                                        "  [{:>5.1}s] TEXT: {:?}",
-                                        start.elapsed().as_secs_f64(),
-                                        if text.len() > 100 { &text[..100] } else { text }
-                                    );
-                                }
-                            }
-                            "scroll" => {
-                                println!("  [{:>5.1}s] SCROLL", start.elapsed().as_secs_f64());
-                            }
-                            "clipboard" => {
-                                if let Some(text) = event.text_content() {
-                                    println!(
-                                        "  [{:>5.1}s] CLIPBOARD: {:?}",
-                                        start.elapsed().as_secs_f64(),
-                                        if text.len() > 100 { &text[..100] } else { text }
-                                    );
-                                }
-                            }
-                            "app_switch" => {
-                                if let screenpipe_a11y::events::EventData::AppSwitch { name, pid } =
-                                    &event.data
-                                {
-                                    println!(
-                                        "  [{:>5.1}s] APP_SWITCH: {:?} (pid={})",
-                                        start.elapsed().as_secs_f64(),
-                                        name,
-                                        pid
-                                    );
-                                }
-                            }
-                            _ => {
+                if let Some(event) = handle.recv_timeout(Duration::from_millis(500)) {
+                    event_count += 1;
+                    let etype = event.event_type();
+                    match etype {
+                        "click" => {
+                            if let screenpipe_a11y::events::EventData::Click {
+                                x, y, button, ..
+                            } = &event.data
+                            {
                                 println!(
-                                    "  [{:>5.1}s] {} ({})",
+                                    "  [{:>5.1}s] CLICK button={} at ({}, {})",
                                     start.elapsed().as_secs_f64(),
-                                    etype,
-                                    event_count
+                                    button,
+                                    x,
+                                    y
                                 );
                             }
                         }
+                        "text" => {
+                            if let Some(text) = event.text_content() {
+                                println!(
+                                    "  [{:>5.1}s] TEXT: {:?}",
+                                    start.elapsed().as_secs_f64(),
+                                    if text.len() > 100 { &text[..100] } else { text }
+                                );
+                            }
+                        }
+                        "scroll" => {
+                            println!("  [{:>5.1}s] SCROLL", start.elapsed().as_secs_f64());
+                        }
+                        "clipboard" => {
+                            if let Some(text) = event.text_content() {
+                                println!(
+                                    "  [{:>5.1}s] CLIPBOARD: {:?}",
+                                    start.elapsed().as_secs_f64(),
+                                    if text.len() > 100 { &text[..100] } else { text }
+                                );
+                            }
+                        }
+                        "app_switch" => {
+                            if let screenpipe_a11y::events::EventData::AppSwitch { name, pid } =
+                                &event.data
+                            {
+                                println!(
+                                    "  [{:>5.1}s] APP_SWITCH: {:?} (pid={})",
+                                    start.elapsed().as_secs_f64(),
+                                    name,
+                                    pid
+                                );
+                            }
+                        }
+                        _ => {
+                            println!(
+                                "  [{:>5.1}s] {} ({})",
+                                start.elapsed().as_secs_f64(),
+                                etype,
+                                event_count
+                            );
+                        }
                     }
-                    None => {} // timeout, keep waiting
                 }
             }
 

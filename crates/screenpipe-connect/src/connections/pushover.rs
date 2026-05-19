@@ -20,14 +20,14 @@ static DEF: IntegrationDef = IntegrationDef {
             label: "API Token",
             secret: true,
             placeholder: "your-app-token",
-            help_url: "https://pushover.net/apps/build",
+            help_url: "https://support.pushover.net/i175-how-to-get-a-pushover-api-or-pushover-application-token",
         },
         FieldDef {
             key: "user_key",
             label: "User Key",
             secret: true,
             placeholder: "your-user-key",
-            help_url: "https://pushover.net/apps/build",
+            help_url: "https://pushover.net/",
         },
     ],
 };

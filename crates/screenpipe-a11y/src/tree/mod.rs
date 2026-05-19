@@ -211,6 +211,7 @@ impl AccessibilityTreeNode {
 /// alternative — strict containment — would drop edge-clipped text the
 /// user clearly saw.
 #[doc(hidden)] // Public so it can be unit-tested from this module's tests; not part of the stable surface.
+#[allow(clippy::too_many_arguments)]
 pub fn rects_intersect(
     elem_x: f64,
     elem_y: f64,
@@ -489,6 +490,7 @@ impl TreeWalkerConfig {
 
 /// Result of a tree walk attempt.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum TreeWalkResult {
     /// Successfully walked the tree and captured a snapshot.
     Found(TreeSnapshot),

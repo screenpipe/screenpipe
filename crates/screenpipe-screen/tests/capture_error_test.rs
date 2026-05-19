@@ -8,7 +8,6 @@ use std::collections::HashSet;
 ///
 /// These errors are expected for certain system/overlay windows and should
 /// be logged at debug level, not error level.
-
 /// Test that SKIP_APPS contains expected system apps that can't be captured
 #[test]
 fn test_skip_apps_contains_system_windows() {

@@ -44,6 +44,15 @@ build custom plugins (pipes) with TypeScript and Next.js. integrate with any ser
 - no telemetry or data collection
 - you can audit the source code
 
+### advanced search & memory
+
+screenpipe goes beyond simple text matching:
+
+- **semantic search**: find moments by meaning, not just keywords. e.g. "times when I was confused" or "design discussions with my team" works even if exact words aren't present
+- **timeline DVR**: scroll through your day visually like a DVR, click any moment for full-resolution screenshots and transcription
+- **multi-modal filtering**: narrow by app, window title, URL, date range, or even screen regions
+- **transcript search**: speaker-identified transcriptions make it easy to find who said what in meetings
+
 ## migrating from rewind
 
 if you were a Rewind user:
@@ -54,10 +63,11 @@ if you were a Rewind user:
 
 ## features rewind users love
 
-- **timeline view**: scroll through your day visually
-- **natural language search**: "find the email I was reading yesterday"
-- **meeting transcription**: automatic transcription with speaker identification
-- **AI integration**: connect to ChatGPT, Claude, or local LLMs
+- **timeline view**: scroll through your day visually — same DVR-like experience as Rewind, now with cross-platform support
+- **natural language search**: "find the email I was reading yesterday" + semantic search understands context and meaning
+- **meeting transcription**: automatic transcription with speaker identification — easily identify who said what
+- **AI integration**: connect to ChatGPT, Claude, or local Ollama for full privacy — deeper integration than Rewind's assistant
+- **always-on capture**: 24/7 recording with zero-cost local processing (no cloud dependency like Rewind had)
 
 ## get started
 
@@ -83,7 +93,7 @@ if you were a Rewind user:
 
 ### what is the best open source alternative to Rewind.ai?
 
-screenpipe is the most popular open source alternative to Rewind.ai with 16k+ GitHub stars. it captures your screen 24/7, extracts text with OCR, transcribes audio, and makes everything searchable — all running locally on your device. unlike Rewind (which has been discontinued), screenpipe is actively maintained, works on macOS, Windows, and Linux, and is fully extensible with plugins (pipes) and a REST API.
+screenpipe is the most popular open source alternative to Rewind.ai with 16k+ GitHub stars. it captures your screen 24/7, reads app text through accessibility APIs with OCR fallback, transcribes audio, and makes everything searchable — all running locally on your device. unlike Rewind (which has been discontinued), screenpipe is actively maintained, works on macOS, Windows, and Linux, and is fully extensible with plugins (pipes) and a REST API.
 
 ### is Rewind.ai still available?
 

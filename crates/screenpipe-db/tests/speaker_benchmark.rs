@@ -643,11 +643,10 @@ mod speaker_benchmark {
         let mut results: Vec<(ClusterResult, Score)> = Vec::new();
 
         // Current system baseline
-        for &t in &[0.50] {
-            let r = strategy_current(&data.embeddings, t);
-            let s = score_result(&r, &data.speakers, &data.embeddings, &data.temporal_windows);
-            results.push((r, s));
-        }
+        let t = 0.50;
+        let r = strategy_current(&data.embeddings, t);
+        let s = score_result(&r, &data.speakers, &data.embeddings, &data.temporal_windows);
+        results.push((r, s));
 
         // Strategy A: current system at different thresholds
         for &t in &[0.55, 0.60, 0.65, 0.70, 0.75, 0.80] {

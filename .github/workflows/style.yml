@@ -3,8 +3,8 @@ name: Code Quality & Optimization
 on: [push, pull_request]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
@@ -34,6 +34,7 @@ jobs:
         run: |
           # Skip packages with macOS-specific Objective-C code that won't compile on Linux
           cargo clippy --workspace \
+            --exclude screenpipe-rfdetr-mlx \
             --exclude screenpipe-screen \
             --exclude screenpipe-audio \
             --all-targets -- -W clippy::all

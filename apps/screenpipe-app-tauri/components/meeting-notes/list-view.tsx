@@ -6,12 +6,9 @@
 import React, { useEffect, useRef } from "react";
 import { Loader2, Plus, Phone, Square, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  formatDuration,
-  type MeetingRecord,
-} from "@/lib/utils/meeting-format";
-import type { CalendarEvent } from "@/lib/utils/calendar";
-import { ComingUp } from "./coming-up";
+import { formatDuration, type MeetingRecord } from "@/lib/utils/meeting-format";
+import type { CalendarEvent, CalendarSource } from "@/lib/utils/calendar";
+import { ComingUp, type ComingUpStatus } from "./coming-up";
 import { PastMeetings } from "./past-meetings";
 
 interface ListViewProps {
@@ -30,6 +27,10 @@ interface ListViewProps {
   errorText: string | null;
   onRetry: () => void;
   comingUp: CalendarEvent[];
+  comingUpStatus: ComingUpStatus;
+  connectedCalendarSources: CalendarSource[];
+  onOpenCalendarConnections: () => void;
+  onCalendarConnectionChange: () => void | Promise<void>;
   meetingActive: boolean;
 }
 
@@ -49,6 +50,10 @@ export function ListView({
   errorText,
   onRetry,
   comingUp,
+  comingUpStatus,
+  connectedCalendarSources,
+  onOpenCalendarConnections,
+  onCalendarConnectionChange,
   meetingActive,
 }: ListViewProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -91,7 +96,7 @@ export function ListView({
                   size="sm"
                   onClick={() => void onStart()}
                   disabled={starting}
-                  className="gap-2"
+                  className="gap-2 normal-case tracking-normal border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted disabled:opacity-100 disabled:bg-muted/40 disabled:text-muted-foreground disabled:border-border"
                   title="start a manual meeting"
                 >
                   {starting ? (
@@ -127,6 +132,10 @@ export function ListView({
 
         <ComingUp
           events={comingUp}
+          status={comingUpStatus}
+          connectedSources={connectedCalendarSources}
+          onOpenCalendarConnections={onOpenCalendarConnections}
+          onCalendarConnectionChange={onCalendarConnectionChange}
           onStart={onStartFromEvent}
           meetingActive={meetingActive}
         />
@@ -180,7 +189,9 @@ function RecordingStrip({
           <span className="text-[10px] uppercase tracking-[0.18em] text-foreground/80 shrink-0">
             recording
           </span>
-          <span className="text-muted-foreground/60" aria-hidden>·</span>
+          <span className="text-muted-foreground/60" aria-hidden>
+            ·
+          </span>
           <span className="text-sm text-foreground truncate">{title}</span>
         </div>
         <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
@@ -202,7 +213,7 @@ function RecordingStrip({
         size="sm"
         onClick={() => void onStop()}
         disabled={stopping}
-        className="gap-1.5 h-8 px-3 shrink-0"
+        className="gap-1.5 h-8 px-3 shrink-0 normal-case tracking-normal border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted disabled:opacity-100 disabled:bg-muted/40 disabled:text-muted-foreground disabled:border-border"
       >
         {stopping ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -236,7 +247,7 @@ function ListEmpty({
         size="sm"
         onClick={() => void onStart()}
         disabled={starting}
-        className="gap-2"
+        className="gap-2 normal-case tracking-normal border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted disabled:opacity-100 disabled:bg-muted/40 disabled:text-muted-foreground disabled:border-border"
       >
         {starting ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />

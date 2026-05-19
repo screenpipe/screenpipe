@@ -170,6 +170,40 @@ async fn test_add_tags_and_search() {
 }
 
 #[tokio::test]
+async fn test_openapi_includes_meeting_retranscribe() {
+    let (app, _) = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let paths = spec["paths"].as_object().unwrap();
+    let retranscribe_paths = paths
+        .keys()
+        .filter(|path| path.contains("retranscribe"))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        paths.contains_key("/meetings/{id}/retranscribe")
+            || paths.contains_key("/meetings/:id/retranscribe"),
+        "missing meeting retranscribe path; retranscribe paths: {:?}",
+        retranscribe_paths
+    );
+}
+
+#[tokio::test]
 async fn test_add_multiple_tags_to_single_item() {
     let (app, db) = setup_test_app().await;
     insert_test_data(&db).await;

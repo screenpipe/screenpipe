@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn remote_tombstone_deletes_older_local() {
-        let mut local = manifest("A", vec![mem("u1", "hi", "2026-01-01T00:00:00Z", "A")]);
+        let local = manifest("A", vec![mem("u1", "hi", "2026-01-01T00:00:00Z", "A")]);
         let mut remote = MemoriesSyncManifest::empty("B");
         remote
             .tombstones

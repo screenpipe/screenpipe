@@ -5,7 +5,7 @@
 import { spawn, execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,6 +47,9 @@ function killPort(port: number): void {
 
 // e2e/helpers/ → ../.. = app root (Bun runs from source, no dist)
 const APP_ROOT = resolve(__dirname, '../..');
+export const E2E_DATA_DIR = resolve(APP_ROOT, '.e2e');
+const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
+
 // `onboarding` marks the onboarding store complete so the app drops straight
 // into the home window. `no-recording` disables vision + audio so the server
 // boots without Screen Recording / Microphone TCC — without it, an unsigned
@@ -56,8 +59,10 @@ const APP_ROOT = resolve(__dirname, '../..');
 //
 // Override with `SCREENPIPE_E2E_SEED=onboarding` (or any custom value) when
 // running on a host that DOES have TCC granted and you want to exercise the
-// real capture pipeline. The same env var is read by specs (e.g. timeline)
-// to skip when recording is off.
+// real capture pipeline. `cloud-audio-fallback` is an opt-in macOS seed that
+// leaves audio UI enabled, disables vision, and saves Screenpipe Cloud while
+// logged out so the fallback UX can be asserted. The same env var is read by
+// specs (e.g. timeline) to skip when recording is off.
 export const E2E_SEED_FLAGS = process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording';
 
 export function getAppPath(): string {
@@ -82,6 +87,18 @@ async function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
 
 let appProcess: ReturnType<typeof spawn> | null = null;
 
+export function getAppPid(): number | null {
+  const pid = appProcess?.pid;
+  if (pid) return pid;
+
+  try {
+    const filePid = Number.parseInt(readFileSync(APP_PID_FILE, 'utf8').trim(), 10);
+    return Number.isFinite(filePid) ? filePid : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof spawn> | null> {
   killPort(port);
   killPort(FOCUS_PORT);
@@ -93,16 +110,19 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
     );
   }
 
-  const e2eDataDir = resolve(APP_ROOT, '.e2e');
-  rmSync(e2eDataDir, { recursive: true, force: true });
-  mkdirSync(e2eDataDir, { recursive: true });
+  rmSync(E2E_DATA_DIR, { recursive: true, force: true });
+  mkdirSync(E2E_DATA_DIR, { recursive: true });
 
   appProcess = spawn(appPath, [], {
     env: {
       ...process.env,
-      SCREENPIPE_DATA_DIR: e2eDataDir,
+      SCREENPIPE_DATA_DIR: E2E_DATA_DIR,
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
       TAURI_WEBDRIVER_PORT: String(port),
+      // When the app panics under E2E (common during early platform bring-up),
+      // a backtrace in CI logs is far more actionable than the default "run with
+      // RUST_BACKTRACE=1" hint.
+      RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -112,8 +132,16 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
   appProcess.on('error', (err) => console.error('[app error]', err));
   appProcess.on('exit', (code) => {
     if (code != null && code !== 0) console.warn(`[app] exited ${code}`);
+    try {
+      unlinkSync(APP_PID_FILE);
+    } catch {
+      // already gone
+    }
     appProcess = null;
   });
+  if (appProcess.pid) {
+    writeFileSync(APP_PID_FILE, String(appProcess.pid));
+  }
 
   await waitForServer(port);
   return appProcess;
@@ -123,5 +151,10 @@ export function stopApp(): void {
   if (appProcess) {
     appProcess.kill('SIGTERM');
     appProcess = null;
+  }
+  try {
+    unlinkSync(APP_PID_FILE);
+  } catch {
+    // already gone
   }
 }

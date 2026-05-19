@@ -85,3 +85,142 @@ pub fn setup_content_process_handler(window: &tauri::WebviewWindow) {
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+pub fn setup_content_process_handler(window: &tauri::WebviewWindow) {
+    use tauri::{Emitter, Manager};
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_PROCESS_FAILED_KIND,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED,
+            COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED,
+        },
+        ProcessFailedEventHandler,
+    };
+
+    let label = window.label().to_string();
+    let app = window.app_handle().clone();
+
+    if let Err(e) = window.with_webview(move |platform| {
+        let controller = platform.controller();
+        let webview = match unsafe { controller.CoreWebView2() } {
+            Ok(webview) => webview,
+            Err(e) => {
+                tracing::warn!(
+                    target: "screenpipe::webview2",
+                    label = %label,
+                    error = ?e,
+                    "WebView2 process-failure handler skipped: CoreWebView2 unavailable"
+                );
+                return;
+            }
+        };
+
+        let label_for_handler = label.clone();
+        let app_for_handler = app.clone();
+        let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let kind = args
+                    .as_ref()
+                    .and_then(process_failed_kind)
+                    .unwrap_or(COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED);
+                let kind_name = process_failed_kind_name(kind);
+                let should_reload = process_failed_kind_is_reloadable(kind);
+
+                tracing::warn!(
+                    target: "screenpipe::webview2",
+                    label = %label_for_handler,
+                    kind = %kind_name,
+                    "WebView2 process failed"
+                );
+
+                let app_for_main = app_for_handler.clone();
+                let label_for_main = label_for_handler.clone();
+                let payload = serde_json::json!({
+                    "kind": kind_name,
+                    "willReload": should_reload,
+                });
+                let _ = app_for_handler.run_on_main_thread(move || {
+                    if let Some(window) = app_for_main.get_webview_window(&label_for_main) {
+                        let _ = window.emit("webview-process-failed", payload);
+                        if should_reload {
+                            if let Err(e) = window.reload() {
+                                tracing::warn!(
+                                    target: "screenpipe::webview2",
+                                    label = %label_for_main,
+                                    error = %e,
+                                    "WebView2 reload after process failure failed"
+                                );
+                            }
+                        }
+                    }
+                });
+            }));
+            Ok(())
+        }));
+
+        let mut token = 0;
+        match unsafe { webview.add_ProcessFailed(&handler, &mut token) } {
+            Ok(()) => tracing::info!(
+                target: "screenpipe::webview2",
+                label = %label,
+                "installed WebView2 process-failure handler"
+            ),
+            Err(e) => tracing::warn!(
+                target: "screenpipe::webview2",
+                label = %label,
+                error = ?e,
+                "failed to install WebView2 process-failure handler"
+            ),
+        }
+
+        fn process_failed_kind(
+            args: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2ProcessFailedEventArgs,
+        ) -> Option<COREWEBVIEW2_PROCESS_FAILED_KIND> {
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+            unsafe { args.ProcessFailedKind(&mut kind).ok()? };
+            Some(kind)
+        }
+
+        fn process_failed_kind_name(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> &'static str {
+            if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
+                "browser_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
+                "render_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {
+                "render_process_unresponsive"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED {
+                "frame_render_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED {
+                "gpu_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED {
+                "sandbox_helper_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED {
+                "utility_process_exited"
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED {
+                "unknown_process_exited"
+            } else {
+                "other"
+            }
+        }
+
+        fn process_failed_kind_is_reloadable(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> bool {
+            kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED
+                || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
+        }
+    }) {
+        tracing::warn!(
+            target: "screenpipe::webview2",
+            label = %window.label(),
+            error = %e,
+            "failed to inspect WebView2 handle"
+        );
+    }
+}

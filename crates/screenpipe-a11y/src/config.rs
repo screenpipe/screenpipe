@@ -88,6 +88,14 @@ pub struct UiCaptureConfig {
     /// Raw patterns for serialization
     pub excluded_window_pattern_strings: Vec<String>,
 
+    /// User-configured app/window names to skip (case-insensitive substring match)
+    #[serde(default)]
+    pub ignored_windows: Vec<String>,
+
+    /// Optional user-configured allow-list for app/window names
+    #[serde(default)]
+    pub included_windows: Vec<String>,
+
     // === Retention Settings ===
     /// Days to keep UI events
     pub retention_days: u32,
@@ -149,6 +157,8 @@ impl Default for UiCaptureConfig {
             // positives on normal windows (e.g. password manager settings,
             // "Secret Santa Planning", AWS Secrets Manager, etc.).
             excluded_window_pattern_strings: vec![],
+            ignored_windows: Vec::new(),
+            included_windows: Vec::new(),
 
             // Retention
             retention_days: 30,
@@ -178,6 +188,18 @@ impl UiCaptureConfig {
             .collect();
     }
 
+    fn matches_user_pattern(patterns: &[String], value: &str) -> bool {
+        if value.is_empty() {
+            return false;
+        }
+
+        let value_lower = value.to_lowercase();
+        patterns.iter().any(|pattern| {
+            let pattern = pattern.trim();
+            !pattern.is_empty() && value_lower.contains(&pattern.to_lowercase())
+        })
+    }
+
     /// Check if an app should be captured
     pub fn should_capture_app(&self, app_name: &str) -> bool {
         if !self.enabled {
@@ -185,10 +207,15 @@ impl UiCaptureConfig {
         }
 
         let app_lower = app_name.to_lowercase();
-        !self
+        if self
             .excluded_apps
             .iter()
             .any(|excluded| app_lower.contains(&excluded.to_lowercase()))
+        {
+            return false;
+        }
+
+        !Self::matches_user_pattern(&self.ignored_windows, app_name)
     }
 
     /// Check if a window should be captured
@@ -197,10 +224,37 @@ impl UiCaptureConfig {
             return false;
         }
 
-        !self
+        if self
             .excluded_window_patterns
             .iter()
             .any(|pattern| pattern.is_match(window_title))
+        {
+            return false;
+        }
+
+        !Self::matches_user_pattern(&self.ignored_windows, window_title)
+    }
+
+    /// Check a concrete app/window pair against all capture filters.
+    pub fn should_capture_target(&self, app_name: &str, window_title: Option<&str>) -> bool {
+        if !self.should_capture_app(app_name) {
+            return false;
+        }
+
+        if let Some(title) = window_title {
+            if !self.should_capture_window(title) {
+                return false;
+            }
+        }
+
+        if self.included_windows.is_empty() {
+            return true;
+        }
+
+        Self::matches_user_pattern(&self.included_windows, app_name)
+            || window_title
+                .map(|title| Self::matches_user_pattern(&self.included_windows, title))
+                .unwrap_or(false)
     }
 
     /// Check if element appears to be a password field
@@ -310,6 +364,24 @@ mod tests {
         assert!(!config.should_capture_window("Secret Notes - App"));
         // "Private Browsing" and "Incognito" are handled by crate::incognito.
         assert!(config.should_capture_window("GitHub - Chrome"));
+    }
+
+    #[test]
+    fn test_user_window_filters() {
+        let mut config = UiCaptureConfig::new();
+        config.ignored_windows = vec!["WhatsApp".to_string()];
+
+        assert!(!config.should_capture_app("WhatsApp"));
+        assert!(!config.should_capture_window("WhatsApp chat"));
+        assert!(!config.should_capture_target("WhatsApp", Some("Inbox")));
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
+
+        config.ignored_windows.clear();
+        config.included_windows = vec!["Chrome".to_string(), "ScreenPipe".to_string()];
+
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
+        assert!(config.should_capture_target("Terminal", Some("ScreenPipe logs")));
+        assert!(!config.should_capture_target("Slack", Some("DM")));
     }
 
     #[test]

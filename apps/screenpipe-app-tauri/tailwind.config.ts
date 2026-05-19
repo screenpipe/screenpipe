@@ -188,12 +188,18 @@ module.exports = {
 			  "background-position": "200%",
 			},
 		  },
+		  "owned-browser-load": {
+			"0%": { transform: "translateX(-100%)" },
+			"100%": { transform: "translateX(400%)" },
+		  },
 		},
 		animation: {
 		  "accordion-down": "accordion-down 0.2s ease-out",
 		  "accordion-up": "accordion-up 0.2s ease-out",
 		  pulse: "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
 		  rainbow: "rainbow var(--speed, 2s) infinite linear",
+		  "owned-browser-load":
+			"owned-browser-load 1.1s ease-in-out infinite",
 		},
 	  }
 	  

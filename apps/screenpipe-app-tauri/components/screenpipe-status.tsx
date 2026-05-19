@@ -15,7 +15,7 @@ import { toast } from "./ui/use-toast";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
-import { Folder, Activity, Mic, RefreshCw, AlertTriangle } from "lucide-react";
+import { Folder, Mic, RefreshCw, AlertTriangle } from "lucide-react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
 
@@ -140,7 +140,6 @@ const HealthStatus = ({ className }: { className?: string }) => {
     health?.audio_status ?? "",
     settings.disableAudio
   );
-
   const handleOpenStatusDialog = async () => {
     try {
       const dir = await getDataDir();

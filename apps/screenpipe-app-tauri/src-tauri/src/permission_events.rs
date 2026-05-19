@@ -53,11 +53,7 @@ async fn run(app: AppHandle, server_port: u16, api_key: Option<String>) {
     }
 }
 
-async fn connect(
-    app: &AppHandle,
-    port: u16,
-    api_key: Option<&str>,
-) -> Result<(), String> {
+async fn connect(app: &AppHandle, port: u16, api_key: Option<&str>) -> Result<(), String> {
     // The /ws/events endpoint streams all events (meetings, workflows, permissions…).
     // We filter by event name client-side — lighter than a query param.
     use crate::recording::LocalApiContext;
@@ -78,7 +74,10 @@ async fn connect(
         ws_url = format!("{}?token={}", ws_url, urlencoding::encode(k));
     }
 
-    let req = ws_url.as_str().into_client_request().map_err(|e| e.to_string())?;
+    let req = ws_url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| e.to_string())?;
     let (mut ws, _) = connect_async(req).await.map_err(|e| e.to_string())?;
     info!("permission events WS connected");
 

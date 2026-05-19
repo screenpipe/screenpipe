@@ -105,8 +105,9 @@ impl ImageWorker {
         self.status.lock().await.clone()
     }
 
-    /// Spawn on the current tokio runtime, no shutdown signal — for tests
-    /// + the standalone CLI. Production callers should use
+    /// Spawn on the current tokio runtime without a shutdown signal.
+    ///
+    /// Used by tests and the standalone CLI. Production callers should use
     /// [`Self::spawn_with_shutdown`] so the worker exits before the tokio
     /// runtime tears down (otherwise in-flight sqlx queries holding
     /// `tokio::time::timeout` futures panic with "A Tokio 1.x context was

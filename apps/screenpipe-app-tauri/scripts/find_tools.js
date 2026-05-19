@@ -6,6 +6,43 @@ import { $ } from 'bun'
 import fs from 'fs/promises'
 import path from 'path'
 
+export async function downloadFile(url, destination, { retries = 5, timeoutMs = 30000 } = {}) {
+	let lastError;
+
+	for (let attempt = 1; attempt <= retries; attempt++) {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+		try {
+			console.log(`downloading ${url} -> ${destination} (${attempt}/${retries})`);
+			const response = await fetch(url, {
+				redirect: 'follow',
+				signal: controller.signal,
+				headers: {
+					'user-agent': 'screenpipe-build',
+				},
+			});
+
+			if (!response.ok) {
+				throw new Error(`download failed with HTTP ${response.status} ${response.statusText}`);
+			}
+
+			await Bun.write(destination, response);
+			return;
+		} catch (error) {
+			lastError = error;
+			await fs.rm(destination, { force: true }).catch(() => {});
+			if (attempt < retries) {
+				await new Promise((resolve) => setTimeout(resolve, Math.min(30000, 2000 * attempt)));
+			}
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	throw lastError;
+}
+
 export async function findWget() {
 	const possiblePaths = [
 		'C:\\ProgramData\\chocolatey\\bin\\wget.exe',

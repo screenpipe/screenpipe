@@ -59,6 +59,10 @@ struct Args {
     /// audio file stem so downstream report-builders don't have to compute it.
     #[arg(long)]
     fixture: Option<String>,
+
+    /// Optional path to write the predicted speaker turns as RTTM.
+    #[arg(long)]
+    hyp_rttm: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -152,6 +156,23 @@ async fn main() -> Result<()> {
         });
     }
     let wall_clock = started.elapsed().as_secs_f64();
+
+    if let Some(path) = &args.hyp_rttm {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("create hyp RTTM dir: {}", parent.display()))?;
+            }
+        }
+        let mut out = String::new();
+        for seg in &hypothesis {
+            out.push_str(&format!(
+                "SPEAKER {} 1 {:.3} {:.3} <NA> <NA> {} <NA> <NA>\n",
+                fixture, seg.start, seg.duration, seg.speaker
+            ));
+        }
+        std::fs::write(path, out).with_context(|| format!("write hyp RTTM: {}", path.display()))?;
+    }
 
     eprintln!(
         "scored {} predicted segments against {} reference segments in {:.2}s",

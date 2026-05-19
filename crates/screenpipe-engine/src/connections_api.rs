@@ -4,8 +4,8 @@
 
 //! HTTP API for connection credential management.
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Html;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -14,9 +14,12 @@ use screenpipe_connect::connections::ConnectionManager;
 use screenpipe_connect::oauth::{self as oauth_store, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
 use screenpipe_secrets::SecretStore;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::routes::browser::BrowserBridge;
@@ -32,6 +35,196 @@ pub struct ConnectionsState {
     pub secret_store: Option<Arc<SecretStore>>,
     pub browser_bridge: Arc<BrowserBridge>,
     pub browser_registry: Arc<BrowserRegistry>,
+    pub browser_pairing: BrowserPairingState,
+    pub api_auth_key: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct BrowserPairingState {
+    pending: Arc<Mutex<HashMap<String, BrowserPairingRequest>>>,
+}
+
+#[derive(Clone)]
+struct BrowserPairingRequest {
+    id: String,
+    code: String,
+    browser: String,
+    extension_id: Option<String>,
+    extension_version: Option<String>,
+    origin: Option<String>,
+    status: BrowserPairingStatus,
+    created_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BrowserPairingStatus {
+    Pending,
+    Approved,
+    Denied,
+    Expired,
+}
+
+#[derive(Deserialize)]
+struct BrowserPairStartBody {
+    #[serde(default)]
+    browser: Option<String>,
+    #[serde(default)]
+    extension_id: Option<String>,
+    #[serde(default)]
+    extension_version: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BrowserPairStatusQuery {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct BrowserPairApproveBody {
+    id: String,
+    approved: bool,
+}
+
+#[derive(Serialize)]
+struct BrowserPairPendingResponse {
+    id: String,
+    code: String,
+    browser: String,
+    extension_id: Option<String>,
+    extension_version: Option<String>,
+    origin: Option<String>,
+    expires_in_secs: u64,
+}
+
+const BROWSER_PAIRING_TTL: Duration = Duration::from_secs(2 * 60);
+
+impl BrowserPairingState {
+    async fn start(
+        &self,
+        body: BrowserPairStartBody,
+        origin: Option<String>,
+    ) -> BrowserPairPendingResponse {
+        self.cleanup_expired().await;
+
+        let browser = body
+            .browser
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "browser".to_string());
+        let extension_id = body.extension_id;
+        let extension_version = body.extension_version;
+        let id = uuid::Uuid::new_v4().to_string();
+        let code = format!("{:06}", fastrand::u32(100_000..1_000_000));
+        let request = BrowserPairingRequest {
+            id: id.clone(),
+            code: code.clone(),
+            browser: browser.clone(),
+            extension_id: extension_id.clone(),
+            extension_version,
+            origin: origin.clone(),
+            status: BrowserPairingStatus::Pending,
+            created_at: Instant::now(),
+        };
+
+        let response = request.pending_response();
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, existing| {
+            if existing.status != BrowserPairingStatus::Pending {
+                return true;
+            }
+
+            let same_extension = match (&extension_id, &existing.extension_id) {
+                (Some(new), Some(existing)) => new == existing,
+                _ => false,
+            };
+            let same_origin_browser = extension_id.is_none()
+                && existing.extension_id.is_none()
+                && existing.browser == browser
+                && match (&origin, &existing.origin) {
+                    (Some(new), Some(existing)) => new == existing,
+                    _ => false,
+                };
+
+            !(same_extension || same_origin_browser)
+        });
+        pending.insert(id, request);
+        response
+    }
+
+    async fn status(
+        &self,
+        id: &str,
+        api_auth_key: Option<&str>,
+    ) -> (BrowserPairingStatus, Option<String>) {
+        self.cleanup_expired().await;
+
+        let mut pending = self.pending.lock().await;
+        let Some(request) = pending.get_mut(id) else {
+            return (BrowserPairingStatus::Expired, None);
+        };
+
+        if request.created_at.elapsed() > BROWSER_PAIRING_TTL {
+            request.status = BrowserPairingStatus::Expired;
+            return (BrowserPairingStatus::Expired, None);
+        }
+
+        match request.status {
+            BrowserPairingStatus::Approved => (request.status, api_auth_key.map(str::to_string)),
+            status => (status, None),
+        }
+    }
+
+    async fn pending(&self) -> Option<BrowserPairPendingResponse> {
+        self.cleanup_expired().await;
+
+        let pending = self.pending.lock().await;
+        pending
+            .values()
+            .filter(|request| request.status == BrowserPairingStatus::Pending)
+            .min_by_key(|request| request.created_at)
+            .map(BrowserPairingRequest::pending_response)
+    }
+
+    async fn approve(&self, id: &str, approved: bool) -> bool {
+        self.cleanup_expired().await;
+
+        let mut pending = self.pending.lock().await;
+        let Some(request) = pending.get_mut(id) else {
+            return false;
+        };
+
+        if request.status != BrowserPairingStatus::Pending {
+            return false;
+        }
+
+        request.status = if approved {
+            BrowserPairingStatus::Approved
+        } else {
+            BrowserPairingStatus::Denied
+        };
+        true
+    }
+
+    async fn cleanup_expired(&self) {
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, request| request.created_at.elapsed() <= BROWSER_PAIRING_TTL);
+    }
+}
+
+impl BrowserPairingRequest {
+    fn pending_response(&self) -> BrowserPairPendingResponse {
+        BrowserPairPendingResponse {
+            id: self.id.clone(),
+            code: self.code.clone(),
+            browser: self.browser.clone(),
+            extension_id: self.extension_id.clone(),
+            extension_version: self.extension_version.clone(),
+            origin: self.origin.clone(),
+            expires_in_secs: BROWSER_PAIRING_TTL
+                .saturating_sub(self.created_at.elapsed())
+                .as_secs(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -42,6 +235,20 @@ pub struct ConnectRequest {
 #[derive(Deserialize)]
 pub struct TestRequest {
     pub credentials: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub struct SlackSendRequest {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub blocks: Option<Value>,
+    #[serde(default)]
+    pub attachments: Option<Value>,
+    #[serde(default)]
+    pub instance: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -396,6 +603,7 @@ fn get_native_calendar_events(hours_back: i64, hours_ahead: i64) -> Result<Vec<V
                 "end_display": e.end_local.format("%H:%M").to_string(),
                 "attendees": e.attendees,
                 "location": e.location,
+                "meeting_url": e.meeting_url,
                 "calendar_name": e.calendar_name,
                 "is_all_day": e.is_all_day,
             })
@@ -420,6 +628,7 @@ fn get_native_calendar_events(hours_back: i64, hours_ahead: i64) -> Result<Vec<V
                 "end_display": e.end_local.format("%H:%M").to_string(),
                 "attendees": e.attendees,
                 "location": e.location,
+                "meeting_url": e.meeting_url,
                 "calendar_name": e.calendar_name,
                 "is_all_day": e.is_all_day,
             })
@@ -818,10 +1027,15 @@ async fn gcal_events(
     let client = reqwest::Client::new();
     match gcal_events_inner(&client, params, &state.secret_store).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Err(e) => {
+            let message = e.to_string();
+            let status = if message.contains("Google Calendar not connected") {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": message })))
+        }
     }
 }
 
@@ -847,6 +1061,7 @@ async fn gcal_events_inner(
             ("singleEvents", "true"),
             ("orderBy", "startTime"),
             ("maxResults", "50"),
+            ("conferenceDataVersion", "1"),
         ])
         .send()
         .await?
@@ -878,6 +1093,7 @@ async fn gcal_events_inner(
                         .collect()
                 })
                 .unwrap_or_default();
+            let meeting_url = google_calendar_meeting_url(&item);
 
             json!({
                 "id": item["id"].as_str().unwrap_or(""),
@@ -886,6 +1102,7 @@ async fn gcal_events_inner(
                 "end": end,
                 "attendees": attendees,
                 "location": item["location"].as_str(),
+                "meetingUrl": meeting_url,
                 "calendarName": "primary",
                 "isAllDay": is_all_day,
             })
@@ -893,6 +1110,60 @@ async fn gcal_events_inner(
         .collect();
 
     Ok(events)
+}
+
+fn google_calendar_meeting_url(item: &Value) -> Option<String> {
+    item["hangoutLink"]
+        .as_str()
+        .and_then(|s| normalize_meeting_url(Some(s.to_string())))
+        .or_else(|| {
+            item["conferenceData"]["entryPoints"]
+                .as_array()
+                .and_then(|entry_points| {
+                    entry_points
+                        .iter()
+                        .find(|entry| entry["entryPointType"].as_str() == Some("video"))
+                        .or_else(|| entry_points.first())
+                        .and_then(|entry| entry["uri"].as_str())
+                        .and_then(|uri| normalize_meeting_url(Some(uri.to_string())))
+                })
+        })
+        .or_else(|| extract_meeting_url(item["location"].as_str()))
+        .or_else(|| extract_meeting_url(item["description"].as_str()))
+}
+
+fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
+    let trimmed = raw?
+        .trim()
+        .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
+        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let is_known_meeting = lower.contains("meet.google.com/")
+        || lower.contains("zoom.us/")
+        || lower.contains("teams.microsoft.com/")
+        || lower.contains("teams.live.com/")
+        || lower.contains("webex.com/");
+
+    if !is_known_meeting {
+        return None;
+    }
+
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(trimmed)
+    } else {
+        Some(format!("https://{}", trimmed.trim_start_matches('/')))
+    }
+}
+
+fn extract_meeting_url(text: Option<&str>) -> Option<String> {
+    let text = text?;
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+        .find_map(|token| normalize_meeting_url(Some(token.to_string())))
 }
 
 /// DELETE /connections/google-calendar/disconnect — remove stored tokens.
@@ -1143,6 +1414,32 @@ fn resolve_auth(
     }
 }
 
+fn split_instance_query(raw_query: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(query) = raw_query.filter(|q| !q.is_empty()) else {
+        return (None, None);
+    };
+
+    let mut instance = None;
+    let mut has_forwarded_query = false;
+    let mut forwarded = url::form_urlencoded::Serializer::new(String::new());
+
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let key = key.into_owned();
+        let value = value.into_owned();
+        if key == "instance" && instance.is_none() {
+            if !value.is_empty() {
+                instance = Some(value);
+            }
+        } else {
+            forwarded.append_pair(&key, &value);
+            has_forwarded_query = true;
+        }
+    }
+
+    let forwarded_query = has_forwarded_query.then(|| forwarded.finish());
+    (instance, forwarded_query)
+}
+
 /// Proxy handler: forward requests to third-party APIs with credentials injected.
 /// Route: ANY /connections/:id/proxy/*path
 ///
@@ -1175,6 +1472,8 @@ async fn connection_proxy(
             .into_response();
     }
 
+    let (instance, forwarded_query) = split_instance_query(raw_query.as_deref());
+    let instance_ref = instance.as_deref();
     let mgr = state.cm.lock().await;
 
     // Find the integration and its proxy config
@@ -1192,9 +1491,17 @@ async fn connection_proxy(
     // Load credentials (from connections.json) and the raw OAuth token JSON in parallel.
     // OAuth JSON is passed separately to resolve_base_url so callback-only fields like
     // QuickBooks' {realmId} can fill URL placeholders without polluting the credentials map.
-    let creds = mgr.get_credentials(&id).await.ok().flatten();
-    let oauth_json =
-        screenpipe_connect::oauth::load_oauth_json(state.secret_store.as_deref(), &id, None).await;
+    let creds = mgr
+        .get_credentials_instance(&id, instance_ref)
+        .await
+        .ok()
+        .flatten();
+    let oauth_json = screenpipe_connect::oauth::load_oauth_json(
+        state.secret_store.as_deref(),
+        &id,
+        instance_ref,
+    )
+    .await;
     // Use get_valid_token_instance (not read_oauth_token_instance) so expired
     // access tokens are transparently refreshed via the stored refresh_token.
     // Before this fix the proxy would surface "no credentials found" and 401
@@ -1205,7 +1512,7 @@ async fn connection_proxy(
         state.secret_store.as_deref(),
         &http_client,
         &id,
-        None,
+        instance_ref,
     );
 
     // Resolve auth
@@ -1224,8 +1531,9 @@ async fn connection_proxy(
         )
     {
         tracing::warn!(
-            "proxy: no credentials found for connection '{}' — cannot authenticate",
-            id
+            "proxy: no credentials found for connection '{}' instance {:?} — cannot authenticate",
+            id,
+            instance_ref
         );
         return (
             StatusCode::UNAUTHORIZED,
@@ -1254,7 +1562,7 @@ async fn connection_proxy(
     // `?valueInputOption=USER_ENTERED` for Google Sheets appends) must be
     // forwarded verbatim — without this, callers silently hit defaults and
     // bad requests like 400s on `values:append`.
-    let target_url = match raw_query.as_deref() {
+    let target_url = match forwarded_query.as_deref() {
         Some(q) if !q.is_empty() => {
             format!("{}/{}?{}", base_url, api_path.trim_start_matches('/'), q)
         }
@@ -1263,11 +1571,12 @@ async fn connection_proxy(
 
     // Audit log
     tracing::info!(
-        "proxy: {} {} → {} (connection: {})",
+        "proxy: {} {} → {} (connection: {}, instance: {:?})",
         method,
         api_path,
         target_url,
-        id
+        id,
+        instance_ref
     );
 
     // Forward the request — use a client that trusts any extra root CA the
@@ -1380,9 +1689,37 @@ async fn connection_proxy(
 async fn connection_config(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> (StatusCode, Json<Value>) {
+    let (instance, _) = split_instance_query(raw_query.as_deref());
+    if id == "slack" {
+        if let Some(oauth) =
+            oauth_store::load_oauth_json(state.secret_store.as_deref(), &id, instance.as_deref())
+                .await
+        {
+            let mut safe = Map::new();
+            for key in [
+                "workspace_name",
+                "team_id",
+                "slack_channel",
+                "slack_channel_id",
+            ] {
+                if let Some(value) = oauth.get(key) {
+                    safe.insert(key.to_string(), value.clone());
+                }
+            }
+            if let Some(url) = oauth["incoming_webhook"]["configuration_url"].as_str() {
+                safe.insert(
+                    "configuration_url".to_string(),
+                    Value::String(url.to_string()),
+                );
+            }
+            return (StatusCode::OK, Json(json!({ "config": safe })));
+        }
+    }
+
     let mgr = state.cm.lock().await;
-    match mgr.get_credentials(&id).await {
+    match mgr.get_credentials_instance(&id, instance.as_deref()).await {
         Ok(Some(creds)) => {
             // Filter out secret fields
             let def = mgr.find_def(&id);
@@ -1409,6 +1746,234 @@ async fn connection_config(
     }
 }
 
+/// POST /connections/slack/send — send a Slack message through the incoming
+/// webhook selected during OAuth. The webhook URL remains server-side.
+async fn slack_send(
+    State(state): State<ConnectionsState>,
+    Json(body): Json<SlackSendRequest>,
+) -> (StatusCode, Json<Value>) {
+    let token_json = match oauth_store::load_oauth_json(
+        state.secret_store.as_deref(),
+        "slack",
+        body.instance.as_deref(),
+    )
+    .await
+    {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(
+                    json!({ "error": "Slack is not connected. Connect Slack in Settings > Connections." }),
+                ),
+            );
+        }
+    };
+
+    let webhook_url = match token_json["incoming_webhook"]["url"].as_str() {
+        Some(url) if !url.is_empty() => url,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({ "error": "Slack connection does not include an incoming webhook. Reconnect Slack and choose a channel." }),
+                ),
+            );
+        }
+    };
+
+    let mut payload = body.extra;
+    if let Some(text) = body.text {
+        payload.insert("text".to_string(), Value::String(text));
+    }
+    if let Some(blocks) = body.blocks {
+        payload.insert("blocks".to_string(), blocks);
+    }
+    if let Some(attachments) = body.attachments {
+        payload.insert("attachments".to_string(), attachments);
+    }
+
+    if payload.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "Slack message requires text, blocks, attachments, or another webhook payload field." }),
+            ),
+        );
+    }
+
+    match reqwest::Client::new()
+        .post(webhook_url)
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "ok": true,
+                        "channel": token_json["slack_channel"]
+                            .as_str()
+                            .or_else(|| token_json["incoming_webhook"]["channel"].as_str()),
+                        "team": token_json["workspace_name"]
+                            .as_str()
+                            .or_else(|| token_json["team"]["name"].as_str()),
+                    })),
+                )
+            } else {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({
+                        "error": "Slack webhook request failed",
+                        "status": status.as_u16(),
+                        "details": text,
+                    })),
+                )
+            }
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("Slack webhook request failed: {}", e) })),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Browser extension pairing — lets the extension receive the local API token
+// after an explicit approval in the desktop app, instead of making non-dev
+// users copy/paste secrets from Settings.
+// ---------------------------------------------------------------------------
+
+fn browser_pair_origin(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
+fn browser_pair_origin_allowed(headers: &HeaderMap) -> bool {
+    match browser_pair_origin(headers).as_deref() {
+        // Chrome, Edge, Brave, Arc, etc. use chrome-extension://. Firefox uses
+        // moz-extension://. Some extension fetches omit Origin entirely.
+        None => true,
+        Some(origin) => {
+            origin.starts_with("chrome-extension://")
+                || origin.starts_with("moz-extension://")
+                || origin.starts_with("extension://")
+        }
+    }
+}
+
+fn browser_pair_client_allowed(addr: SocketAddr, headers: &HeaderMap) -> bool {
+    addr.ip().is_loopback() && browser_pair_origin_allowed(headers)
+}
+
+async fn browser_pair_start(
+    State(state): State<ConnectionsState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<BrowserPairStartBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if !browser_pair_client_allowed(addr, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({ "error": "browser pairing is only available to local browser extensions" }),
+            ),
+        )
+            .into_response();
+    }
+
+    let origin = browser_pair_origin(&headers);
+    let response = state.browser_pairing.start(body, origin.clone()).await;
+    crate::analytics::capture_event_nonblocking(
+        "browser_pairing_requested",
+        json!({
+            "browser": &response.browser,
+            "has_extension_id": response.extension_id.is_some(),
+            "has_origin": origin.is_some(),
+        }),
+    );
+
+    (StatusCode::OK, Json(json!(response))).into_response()
+}
+
+async fn browser_pair_status(
+    State(state): State<ConnectionsState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<BrowserPairStatusQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if !browser_pair_client_allowed(addr, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({ "error": "browser pairing is only available to local browser extensions" }),
+            ),
+        )
+            .into_response();
+    }
+
+    let (status, token) = state
+        .browser_pairing
+        .status(&query.id, state.api_auth_key.as_deref())
+        .await;
+
+    if status == BrowserPairingStatus::Approved {
+        crate::analytics::capture_event_nonblocking(
+            "browser_pairing_connected",
+            json!({ "auth_required": token.is_some() }),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({ "status": status, "token": token })),
+    )
+        .into_response()
+}
+
+async fn browser_pair_pending(State(state): State<ConnectionsState>) -> Json<Value> {
+    Json(json!({
+        "pending": state.browser_pairing.pending().await,
+    }))
+}
+
+async fn browser_pair_approve(
+    State(state): State<ConnectionsState>,
+    Json(body): Json<BrowserPairApproveBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let ok = state.browser_pairing.approve(&body.id, body.approved).await;
+    if !ok {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "pairing request not found or already resolved" })),
+        )
+            .into_response();
+    }
+
+    crate::analytics::capture_event_nonblocking(
+        if body.approved {
+            "browser_pairing_approved"
+        } else {
+            "browser_pairing_denied"
+        },
+        json!({}),
+    );
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Browser extension bridge wrappers — re-extract the bridge from ConnectionsState
 // so the underlying handlers in routes::browser remain state-agnostic.
@@ -1426,6 +1991,13 @@ async fn browser_eval(
     body: Json<crate::routes::browser::EvalRequestBody>,
 ) -> impl axum::response::IntoResponse {
     crate::routes::browser::browser_eval_handler(State(state.browser_bridge), body).await
+}
+
+async fn browser_cookies(
+    State(state): State<ConnectionsState>,
+    body: Json<crate::routes::browser::CookieRequestBody>,
+) -> impl axum::response::IntoResponse {
+    crate::routes::browser::browser_cookies_handler(State(state.browser_bridge), body).await
 }
 
 async fn browser_status(
@@ -1795,6 +2367,7 @@ pub fn router<S>(
     secret_store: Option<Arc<SecretStore>>,
     browser_bridge: Arc<BrowserBridge>,
     browser_registry: Arc<BrowserRegistry>,
+    api_auth_key: Option<String>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -1805,6 +2378,8 @@ where
         secret_store,
         browser_bridge,
         browser_registry,
+        browser_pairing: BrowserPairingState::default(),
+        api_auth_key,
     };
     Router::new()
         .route("/", get(list_connections))
@@ -1815,10 +2390,17 @@ where
         .route("/browsers/:id/navigate", post(browser_run_navigate))
         .route("/browsers/:id/snapshot", get(browser_run_snapshot))
         .route("/browsers/:id/eval", post(browser_run_eval))
+        // Browser extension pairing — unauthenticated start/status are still
+        // loopback + extension-origin gated; approve/pending use normal API auth.
+        .route("/browser/pair/start", post(browser_pair_start))
+        .route("/browser/pair/status", get(browser_pair_status))
+        .route("/browser/pair/pending", get(browser_pair_pending))
+        .route("/browser/pair/approve", post(browser_pair_approve))
         // Legacy single-instance browser routes — deployed extensions
         // (Chrome v0.2.x and v0.3.0) hardcode these. Keep until usage drops.
         .route("/browser/ws", get(browser_ws))
         .route("/browser/eval", post(browser_eval))
+        .route("/browser/cookies", post(browser_cookies))
         .route("/browser/status", get(browser_status))
         // OAuth callback (must be before /:id to avoid conflict)
         .route("/oauth/callback", get(oauth_callback))
@@ -1837,6 +2419,8 @@ where
         .route("/gmail/messages", get(gmail_list_messages))
         .route("/gmail/messages/:id", get(gmail_get_message))
         .route("/gmail/send", post(gmail_send))
+        // Slack-specific send route (must be before /:id to avoid conflict)
+        .route("/slack/send", post(slack_send))
         // WhatsApp-specific routes (must be before /:id to avoid conflict)
         .route("/whatsapp/pair", post(whatsapp_pair))
         .route("/whatsapp/status", get(whatsapp_status))
@@ -1868,8 +2452,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screenpipe_connect::connections::{ProxyAuth, ProxyConfig};
+    use screenpipe_connect::connections::ProxyAuth;
     use serde_json::json;
+
+    #[test]
+    fn google_calendar_meeting_url_prefers_conference_video() {
+        let item = json!({
+            "location": "Board room",
+            "conferenceData": {
+                "entryPoints": [
+                    { "entryPointType": "phone", "uri": "tel:+15551234567" },
+                    { "entryPointType": "video", "uri": "meet.google.com/abc-defg-hij" }
+                ]
+            }
+        });
+        assert_eq!(
+            google_calendar_meeting_url(&item).as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
 
     // -- resolve_base_url ---------------------------------------------------
 
@@ -2081,6 +2682,21 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn split_instance_query_removes_instance_before_proxying() {
+        let (instance, forwarded) =
+            split_instance_query(Some("instance=work%20calendar&limit=10&q=hello%20world"));
+        assert_eq!(instance.as_deref(), Some("work calendar"));
+        assert_eq!(forwarded.as_deref(), Some("limit=10&q=hello+world"));
+    }
+
+    #[test]
+    fn split_instance_query_preserves_non_instance_queries() {
+        let (instance, forwarded) = split_instance_query(Some("page=1&limit=10"));
+        assert_eq!(instance, None);
+        assert_eq!(forwarded.as_deref(), Some("page=1&limit=10"));
+    }
+
     // -- proxy config validation --------------------------------------------
 
     #[test]
@@ -2144,6 +2760,114 @@ mod tests {
         // the default for reading the page.
         let s = format_browser_description("x", "y");
         assert!(s.contains("escape hatch"), "lost escape-hatch framing: {s}");
+    }
+
+    // -- browser pairing ----------------------------------------------------
+
+    #[tokio::test]
+    async fn browser_pairing_approval_returns_token() {
+        let pairing = BrowserPairingState::default();
+        let request = pairing
+            .start(
+                BrowserPairStartBody {
+                    browser: Some("chrome".to_string()),
+                    extension_id: Some("abc".to_string()),
+                    extension_version: Some("1.0.0".to_string()),
+                },
+                Some("chrome-extension://abc".to_string()),
+            )
+            .await;
+
+        let (status, token) = pairing.status(&request.id, Some("sp-test")).await;
+        assert_eq!(status, BrowserPairingStatus::Pending);
+        assert_eq!(token, None);
+
+        assert!(pairing.approve(&request.id, true).await);
+        let (status, token) = pairing.status(&request.id, Some("sp-test")).await;
+        assert_eq!(status, BrowserPairingStatus::Approved);
+        assert_eq!(token.as_deref(), Some("sp-test"));
+        assert!(
+            !pairing.approve(&request.id, true).await,
+            "resolved pairing requests should not be mutable"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_pairing_denial_never_returns_token() {
+        let pairing = BrowserPairingState::default();
+        let request = pairing
+            .start(
+                BrowserPairStartBody {
+                    browser: Some("edge".to_string()),
+                    extension_id: None,
+                    extension_version: None,
+                },
+                None,
+            )
+            .await;
+
+        assert!(pairing.approve(&request.id, false).await);
+        let (status, token) = pairing.status(&request.id, Some("sp-test")).await;
+        assert_eq!(status, BrowserPairingStatus::Denied);
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn browser_pairing_unknown_request_reads_as_expired() {
+        let pairing = BrowserPairingState::default();
+        let (status, token) = pairing.status("missing", Some("sp-test")).await;
+        assert_eq!(status, BrowserPairingStatus::Expired);
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn browser_pairing_replaces_stale_pending_request_for_same_extension() {
+        let pairing = BrowserPairingState::default();
+        let first = pairing
+            .start(
+                BrowserPairStartBody {
+                    browser: Some("chrome".to_string()),
+                    extension_id: Some("abc".to_string()),
+                    extension_version: Some("1.0.0".to_string()),
+                },
+                Some("chrome-extension://abc".to_string()),
+            )
+            .await;
+        let second = pairing
+            .start(
+                BrowserPairStartBody {
+                    browser: Some("chrome".to_string()),
+                    extension_id: Some("abc".to_string()),
+                    extension_version: Some("1.0.0".to_string()),
+                },
+                Some("chrome-extension://abc".to_string()),
+            )
+            .await;
+
+        let (status, token) = pairing.status(&first.id, Some("sp-test")).await;
+        assert_eq!(status, BrowserPairingStatus::Expired);
+        assert_eq!(token, None);
+        assert_eq!(pairing.pending().await.unwrap().id, second.id);
+    }
+
+    #[test]
+    fn browser_pairing_requires_loopback_and_extension_origin() {
+        let loopback = "127.0.0.1:12345".parse().unwrap();
+        let remote = "192.168.1.5:12345".parse().unwrap();
+        let mut headers = HeaderMap::new();
+
+        headers.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("chrome-extension://abc"),
+        );
+        assert!(browser_pair_client_allowed(loopback, &headers));
+        assert!(!browser_pair_client_allowed(remote, &headers));
+
+        headers.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://localhost:3000"),
+        );
+        assert!(!browser_pair_client_allowed(loopback, &headers));
     }
 
     // -- BrowserNavigateBody URL validation --------------------------------

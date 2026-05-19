@@ -12,7 +12,7 @@ import { $ } from 'bun'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { findWget, find7z } from './find_tools.js'
+import { downloadFile, find7z } from './find_tools.js'
 
 const config = {
 	openblasRealname: 'openblas',
@@ -29,16 +29,15 @@ const config = {
  * @returns {Promise<string>} path to openblas directory
  */
 export async function setupOpenBlas({ cwd, winArch }) {
-	const wgetPath = await findWget()
 	const sevenZ = await find7z()
 
 	if (!(await fs.exists(path.join(cwd, config.openblasRealname)))) {
 		if (winArch === 'arm64') {
-			await $`${wgetPath} --no-config --tries=5 ${config.windows.openblasUrlArm64} -O ${config.windows.openblasNameArm64}.zip`
+			await downloadFile(config.windows.openblasUrlArm64, `${config.windows.openblasNameArm64}.zip`, { retries: 5 })
 			await $`${sevenZ} x ${config.windows.openblasNameArm64}.zip -o${config.openblasRealname} -y`
 			await fs.rm(path.join(cwd, `${config.windows.openblasNameArm64}.zip`), { force: true })
 		} else {
-			await $`${wgetPath} --no-config --tries=5 ${config.windows.openblasUrl} -O ${config.windows.openblasName}.zip`
+			await downloadFile(config.windows.openblasUrl, `${config.windows.openblasName}.zip`, { retries: 5 })
 			await $`${sevenZ} x ${config.windows.openblasName}.zip -o${config.openblasRealname} -y`
 			await fs.rm(path.join(cwd, `${config.windows.openblasName}.zip`), { force: true })
 		}

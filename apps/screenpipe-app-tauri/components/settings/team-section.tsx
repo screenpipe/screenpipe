@@ -52,6 +52,7 @@ export function TeamSection() {
   const [showJoinInput, setShowJoinInput] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [refreshingInvite, setRefreshingInvite] = useState(false);
+  const [initializingTeamKey, setInitializingTeamKey] = useState(false);
   const [togglingAutoJoin, setTogglingAutoJoin] = useState(false);
   const [passphraseInput, setPassphraseInput] = useState("");
   const [pendingJoin, setPendingJoin] = useState<{
@@ -277,6 +278,26 @@ export function TeamSection() {
     setCopied(true);
     toast({ title: "invite link copied" });
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleInitializeTeamKey = async () => {
+    setInitializingTeamKey(true);
+    try {
+      await team.initializeTeamKey();
+      posthog.capture("team_secure_sharing_initialized");
+      toast({
+        title: "secure sharing initialized",
+        description: "you can now copy a secure invite link for teammates",
+      });
+    } catch (err: any) {
+      toast({
+        title: "failed to initialize secure sharing",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setInitializingTeamKey(false);
+    }
   };
 
   const handleRemoveMember = async (userId: string) => {
@@ -533,6 +554,8 @@ export function TeamSection() {
   const windowFilterConfigs = team.configs.filter((c) => c.config_type === "window_filter" && c.scope === "team");
   const urlFilterConfigs = team.configs.filter((c) => c.config_type === "url_filter" && c.scope === "team");
   const totalSharedConfigs = pipeConfigs.length + windowFilterConfigs.length + urlFilterConfigs.length;
+  const canInitializeSecureSharing =
+    isAdmin && team.missingKey && team.configs.length === 0;
 
   return (
     <div className="space-y-6">
@@ -548,10 +571,17 @@ export function TeamSection() {
             <Shield className="h-3 w-3 mr-1" />
             {team.role}
           </Badge>
-          <Badge variant="outline" className="text-xs">
-            <Lock className="h-3 w-3 mr-1" />
-            e2e encrypted
-          </Badge>
+          {team.missingKey ? (
+            <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-500/50">
+              <AlertTriangle className="h-3 w-3 mr-1" />
+              secure sharing pending
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-xs">
+              <Lock className="h-3 w-3 mr-1" />
+              e2e encrypted
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -560,15 +590,35 @@ export function TeamSection() {
         <Card className="p-4 border-yellow-500/50 bg-yellow-500/5">
           <div className="flex items-center gap-2 mb-2">
             <Lock className="h-4 w-4 text-yellow-600" />
-            <h3 className="text-sm font-medium text-yellow-600">encryption key missing on this device</h3>
+            <h3 className="text-sm font-medium text-yellow-600">
+              secure team sharing is not ready on this device
+            </h3>
           </div>
           <p className="text-xs text-muted-foreground mb-3">
-            you&apos;re in the team but the encryption key isn&apos;t on this device.
-            paste the team invite link to sync the key.
+            {canInitializeSecureSharing
+              ? "the team exists, but this desktop app has not initialized the secure sharing key yet."
+              : isAdmin
+                ? "this team may already have a secure sharing key on another admin device. paste that secure invite link to sync it here."
+                : "your seat is active, but this desktop app still needs the secure invite link from an admin."}
           </p>
+          {canInitializeSecureSharing && (
+            <Button
+              size="sm"
+              onClick={handleInitializeTeamKey}
+              disabled={initializingTeamKey}
+              className="mb-3"
+            >
+              {initializingTeamKey ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+              ) : (
+                <Lock className="h-3 w-3 mr-1.5" />
+              )}
+              initialize secure sharing
+            </Button>
+          )}
           <div className="flex items-center gap-2">
             <Input
-              placeholder="paste invite link (https://screenpi.pe/join/...)"
+              placeholder="paste secure invite link"
               value={inviteInput}
               onChange={(e) => setInviteInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleJoinFromLink()}

@@ -117,6 +117,7 @@ fn create_chart_screen(width: u32, height: u32, seed: u8) -> DynamicImage {
 }
 
 /// Mostly static screen (spotify, chat idle)
+#[allow(dead_code)]
 fn create_static_screen(width: u32, height: u32, _seed: u8) -> DynamicImage {
     let img = RgbImage::from_fn(width, height, |_x, y| {
         if y < 60 {

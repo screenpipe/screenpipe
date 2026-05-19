@@ -21,18 +21,54 @@ on:
       - '.github/scripts/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
   # Cancel superseded runs on PR branches (saves minutes when a contributor
-  # rapidly re-pushes), but let main runs always finish — pushes to main
-  # land faster than this workflow's longest job (cargo test on ubuntu, ~30
-  # min), so cancelling-in-progress on main means CI never reports a single
-  # green/red signal for any commit (we hit 30 consecutive cancellations).
+  # rapidly re-pushes). Main pushes use the commit SHA in the group so a
+  # newer merge does not sit pending behind a stale long-running commit.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
 
 jobs:
+  cpal-pin-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard cpal Windows audio pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="crates/screenpipe-audio/Cargo.toml"
+          expected_url='git = "https://github.com/divanshu-go/cpal.git"'
+          expected_branch='branch = "windows-aec"'
+          expected_lock_source='source = "git+https://github.com/divanshu-go/cpal.git?branch=windows-aec#eeae0269bec7b4fc6e21c461624a0fa0e7acdc82"'
+          cpal_line="$(grep -E '^cpal = ' "$manifest" || true)"
+
+          if [[ "$cpal_line" != *"$expected_url"* || "$cpal_line" != *"$expected_branch"* ]]; then
+            echo "::error file=${manifest},line=25::cpal source changed. Run the Windows audio RMS smoke on Win11 24H2 Communications-class hardware before merging, then update this guard with the verified source."
+            echo "current cpal line: ${cpal_line:-<missing>}"
+            exit 1
+          fi
+
+          cpal_lock_source() {
+            local lockfile="$1"
+            awk '
+              $0 == "[[package]]" { in_package = 1; is_cpal = 0 }
+              in_package && $0 == "name = \"cpal\"" { is_cpal = 1 }
+              in_package && is_cpal && /^source = / { print; exit }
+            ' "$lockfile"
+          }
+
+          for lockfile in Cargo.lock apps/screenpipe-app-tauri/src-tauri/Cargo.lock; do
+            lock_source="$(cpal_lock_source "$lockfile")"
+            if [[ "$lock_source" != "$expected_lock_source" ]]; then
+              echo "::error file=${lockfile}::cpal lock source changed. Run the Windows audio RMS smoke on Win11 24H2 Communications-class hardware before merging, then update this guard with the verified lock source."
+              echo "current cpal lock source: ${lock_source:-<missing>}"
+              exit 1
+            fi
+          done
+
   test-ubuntu:
     runs-on: ubuntu-latest
     env:
@@ -70,7 +106,7 @@ jobs:
           cp crates/screenpipe-screen/tests/testing_OCR.png target/debug/deps/
 
       - name: Run cargo tests
-        run: cargo test
+        run: cargo test --workspace --exclude screenpipe-rfdetr-mlx
 
   test-windows:
     # windows-2019 reached end-of-life on the GitHub-hosted runner fleet
@@ -126,9 +162,9 @@ jobs:
       - name: Download ONNX Runtime (CPU)
         shell: pwsh
         run: |
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+          $zipFile = "onnxruntime-win-x64-1.22.0.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -157,7 +193,7 @@ jobs:
       - name: Stage ONNX Runtime DLLs next to test binary
         shell: pwsh
         run: |
-          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib"
+          $src = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib"
           $dst = "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release/deps"
           if (-not (Test-Path $dst)) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
@@ -217,7 +253,7 @@ jobs:
       - name: Add ONNX lib dir to PATH for cargo tests
         shell: pwsh
         run: |
-          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib"
+          $ortLib = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib"
           echo $ortLib | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           Write-Host "PATH appended: $ortLib"
 
@@ -225,16 +261,16 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
-        run: cargo test test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
+        run: cargo test -p screenpipe-screen test_process_ocr_task_windows --release --target x86_64-pc-windows-msvc
 
       - name: Run PII removal tests
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-core pii_removal --release --target x86_64-pc-windows-msvc
@@ -243,7 +279,7 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=/LTCG"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --lib pii_redaction_tests --release --target x86_64-pc-windows-msvc
@@ -257,8 +293,11 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~\AppData\Local\cargo\
-            target\
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set up Rust
@@ -269,15 +308,37 @@ jobs:
           cache: true
           rustflags: ""
 
+      - name: Verify Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+          cargo_output="$(cargo --version 2>&1 || true)"
+          if [[ "$cargo_output" == *"rustup-init"* || "$cargo_output" != cargo* ]]; then
+            curl --proto '=https' --tlsv1.2 --retry 5 --retry-connrefused -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+            . "$HOME/.cargo/env"
+          fi
+
+          rustup default stable
+          rustup override set stable
+          cargo --version
+          rustc --version
+
       - name: setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.2
 
+      - name: Install macOS media sidecars
+        run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+
       - name: Run pre_build.js
         shell: bash
         env:
           SKIP_SCREENPIPE_SETUP: true # avoid trying to copy screenpipe binaries, not yet built (next step)
+          SCREENPIPE_RELEASE_TARGET: ${{ runner.arch == 'ARM64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}
         run: bun ./scripts/pre_build.js
         working-directory: ./apps/screenpipe-app-tauri
 

@@ -203,6 +203,55 @@ describe("pipe-watch-writer: agent_end takes precedence", () => {
     expect(session.isStreaming).toBe(false);
     expect(session.isLoading).toBe(false);
   });
+
+  it("does not render Codex-style function returns as chat messages", () => {
+    seedPipeWatchSession();
+    __testing.inject(
+      env({
+        type: "agent_end",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "analyze my screen" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Let me search." },
+              {
+                type: "toolCall",
+                id: "bash-1",
+                name: "bash",
+                arguments: { command: "curl localhost:3030/search" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: 'Return of functions.bash:0\n{"data":[{"content":{"chunk_type":"refined"}}]}',
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Found screen data." }],
+          },
+        ],
+      }),
+    );
+
+    const messages = useChatStore.getState().sessions[SID]!.messages! as any[];
+    expect(messages.map((m) => m.content)).toEqual([
+      "analyze my screen",
+      "Let me search.",
+      "Found screen data.",
+    ]);
+    expect(
+      messages.some((m) => String(m.content).includes("Return of functions.bash")),
+    ).toBe(false);
+    const toolBlock = messages[1].contentBlocks.find((b: any) => b.type === "tool");
+    expect(toolBlock.toolCall.result).toContain('"data"');
+  });
 });
 
 describe("pipe-watch-writer: regression — switch-away preserves messages", () => {

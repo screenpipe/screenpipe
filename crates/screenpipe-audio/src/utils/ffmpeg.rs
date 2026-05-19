@@ -23,6 +23,9 @@ fn encode_single_audio(
     let mut command = screenpipe_core::ffmpeg_cmd(find_ffmpeg_path().unwrap());
     command
         .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-f",
             "f32le",
             "-ar",
@@ -33,6 +36,8 @@ fn encode_single_audio(
             "pipe:0",
             "-c:a",
             "aac",
+            "-threads",
+            "1",
             "-b:a",
             "64k", // Reduced bitrate for higher compression
             "-profile:a",

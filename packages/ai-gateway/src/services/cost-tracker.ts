@@ -11,6 +11,16 @@ interface ModelPricing {
 }
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  // OpenAI API
+  'gpt-5.5-pro': { input: 30.00, output: 180.00 },
+  'gpt-5.5': { input: 5.00, output: 30.00 },
+  'gpt-5.4-pro': { input: 30.00, output: 180.00 },
+  'gpt-5.3-codex': { input: 1.75, output: 14.00 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.50 },
+  'gpt-5.4-nano': { input: 0.20, output: 1.25 },
+  'gpt-5.4': { input: 2.50, output: 15.00 },
+  'gpt-5-mini': { input: 0.25, output: 2.00 },
+  'gpt-5-nano': { input: 0.05, output: 0.40 },
   // Vertex AI MaaS — free for users (GCP credits absorb the cost)
   'glm-4.7': { input: 0, output: 0 },
   'glm-5': { input: 0, output: 0 },
@@ -47,6 +57,10 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+  // OpenAI
+  'gpt-5.5': { input: 5.00, output: 30.00 },
+  'gpt-5.4': { input: 2.50, output: 15.00 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.50 },
 };
 
 // Estimated average tokens per request when streaming can't determine actual usage.
@@ -137,7 +151,7 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
 export function inferProvider(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes('claude')) return 'anthropic';
-  if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) return 'openai';
+  if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3') || lower.includes('o4')) return 'openai';
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';

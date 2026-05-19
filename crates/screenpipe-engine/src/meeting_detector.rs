@@ -23,6 +23,7 @@
 //! and non-meeting contexts (Slack chat, etc.). A mute button counts only when
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
+use crate::meeting_telemetry::{capture_detection_decision, MeetingDetectionScanSummary};
 use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
@@ -2237,6 +2238,7 @@ pub async fn run_meeting_detection_loop(
     mut shutdown_rx: broadcast::Receiver<()>,
     scan_interval: Option<Duration>,
     detector: Option<Arc<screenpipe_audio::meeting_detector::MeetingDetector>>,
+    close_orphaned_meetings_on_start: bool,
 ) {
     let profiles = load_detection_profiles();
     let scanner = Arc::new(MeetingUiScanner::new());
@@ -2251,11 +2253,33 @@ pub async fn run_meeting_detection_loop(
             || !p.app_identifiers.browser_title_patterns.is_empty()
     });
 
-    // Close any orphaned meetings from a prior crash
-    match db.close_orphaned_meetings().await {
-        Ok(0) => debug!("meeting v2: no orphaned meetings"),
-        Ok(n) => info!("meeting v2: closed {} orphaned meeting(s)", n),
-        Err(e) => warn!("meeting v2: failed to close orphaned meetings: {}", e),
+    if close_orphaned_meetings_on_start {
+        // Close any orphaned meetings from a prior crash.
+        match db.close_orphaned_meetings().await {
+            Ok(0) => debug!("meeting v2: no orphaned meetings"),
+            Ok(n) => info!("meeting v2: closed {} orphaned meeting(s)", n),
+            Err(e) => warn!("meeting v2: failed to close orphaned meetings: {}", e),
+        }
+    } else {
+        debug!("meeting v2: preserving active meetings across capture restart");
+    }
+
+    if let Ok(Some(meeting)) = db.get_most_recent_active_meeting().await {
+        let started_at = DateTime::parse_from_rfc3339(&meeting.meeting_start)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        info!(
+            "meeting v2: reattached active meeting on watcher start (id={}, app={})",
+            meeting.id, meeting.meeting_app
+        );
+        state = MeetingState::Active {
+            meeting_id: meeting.id,
+            app: meeting.meeting_app,
+            started_at,
+            last_seen: Instant::now(),
+            is_browser: false,
+        };
+        sync_meeting_flag(true, &in_meeting_flag, &detector);
     }
 
     // Calendar enrichment: subscribe to calendar events from the event bus.
@@ -2265,6 +2289,8 @@ pub async fn run_meeting_detection_loop(
 
     // Subscribe to explicit stop signals from the API layer
     let mut stop_sub = subscribe_to_event::<DetectorStopSignal>("detector_stop_tracking");
+    let mut auto_end_sub =
+        subscribe_to_event::<MeetingAutoEndRequest>("meeting_auto_end_requested");
 
     info!(
         "meeting v2: detection loop started (base_interval={:?}, profiles={})",
@@ -2319,6 +2345,61 @@ pub async fn run_meeting_detection_loop(
                     state = MeetingState::Idle;
                     current_interval = IDLE_APPS_SCAN_INTERVAL;
                     sync_meeting_flag(false, &in_meeting_flag, &detector);
+                }
+            }
+        }
+
+        if let Some(event) = auto_end_sub.next().now_or_never().flatten() {
+            let request = event.data;
+            let manual_matches = { *manual_meeting.read().await == Some(request.meeting_id) };
+            let detector_matches = matches!(
+                &state,
+                MeetingState::Active { meeting_id, .. }
+                    | MeetingState::Ending { meeting_id, .. }
+                    if *meeting_id == request.meeting_id
+            );
+
+            if manual_matches || detector_matches {
+                let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                match db
+                    .end_meeting_with_typed_text(request.meeting_id, &now, false)
+                    .await
+                {
+                    Ok(()) => {
+                        info!(
+                            "meeting v2: auto-ended inactive live meeting (id={}, reason={})",
+                            request.meeting_id,
+                            request.reason.as_deref().unwrap_or("unknown")
+                        );
+                        if manual_matches {
+                            let mut manual = manual_meeting.write().await;
+                            if *manual == Some(request.meeting_id) {
+                                *manual = None;
+                            }
+                        }
+                        if detector_matches {
+                            state = MeetingState::Idle;
+                            current_interval = IDLE_APPS_SCAN_INTERVAL;
+                        }
+                        sync_meeting_flag(false, &in_meeting_flag, &detector);
+                        if let Ok(status) =
+                            resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
+                        {
+                            emit_meeting_status_changed(&status);
+                        }
+                        if let Err(e) = screenpipe_events::send_event(
+                            "meeting_ended",
+                            serde_json::json!({ "meeting_id": request.meeting_id }),
+                        ) {
+                            warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "meeting v2: failed to auto-end inactive live meeting {}: {}",
+                            request.meeting_id, e
+                        );
+                    }
                 }
             }
         }
@@ -2502,7 +2583,10 @@ pub async fn run_meeting_detection_loop(
                     let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
 
                     // Try to merge with recently-ended meeting
-                    let meeting_id = match db.find_recent_meeting_for_app(&app, 120).await {
+                    let (meeting_id, decision_trigger) = match db
+                        .find_recent_meeting_for_app(&app, 120)
+                        .await
+                    {
                         Ok(Some(recent)) => match db.reopen_meeting(recent.id).await {
                             Ok(()) => {
                                 info!(
@@ -2531,37 +2615,44 @@ pub async fn run_meeting_detection_loop(
                                         );
                                     }
                                 }
-                                recent.id
+                                (recent.id, "auto_reopen")
                             }
                             Err(e) => {
                                 warn!("meeting v2: failed to reopen meeting {}: {}", recent.id, e);
+                                (
+                                    insert_new_meeting(
+                                        &db,
+                                        &app,
+                                        cal_title.as_deref(),
+                                        attendees_str.as_deref(),
+                                    )
+                                    .await,
+                                    "auto_start",
+                                )
+                            }
+                        },
+                        Ok(None) => (
+                            insert_new_meeting(
+                                &db,
+                                &app,
+                                cal_title.as_deref(),
+                                attendees_str.as_deref(),
+                            )
+                            .await,
+                            "auto_start",
+                        ),
+                        Err(e) => {
+                            warn!("meeting v2: failed to find recent meeting: {}", e);
+                            (
                                 insert_new_meeting(
                                     &db,
                                     &app,
                                     cal_title.as_deref(),
                                     attendees_str.as_deref(),
                                 )
-                                .await
-                            }
-                        },
-                        Ok(None) => {
-                            insert_new_meeting(
-                                &db,
-                                &app,
-                                cal_title.as_deref(),
-                                attendees_str.as_deref(),
+                                .await,
+                                "auto_start",
                             )
-                            .await
-                        }
-                        Err(e) => {
-                            warn!("meeting v2: failed to find recent meeting: {}", e);
-                            insert_new_meeting(
-                                &db,
-                                &app,
-                                cal_title.as_deref(),
-                                attendees_str.as_deref(),
-                            )
-                            .await
                         }
                     };
 
@@ -2586,6 +2677,16 @@ pub async fn run_meeting_detection_loop(
                         resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
                     {
                         emit_meeting_status_changed(&status);
+                    }
+                    if let Ok(meeting) = db.get_meeting_by_id(meeting_id).await {
+                        capture_detection_decision(
+                            &meeting,
+                            decision_trigger,
+                            Some(MeetingDetectionScanSummary::from_scan_results(
+                                &scan_results,
+                                has_output_audio,
+                            )),
+                        );
                     }
                 }
                 StateAction::EndMeeting { meeting_id } => {
@@ -2749,6 +2850,13 @@ struct CalendarEventSignal {
     pub is_all_day: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct MeetingAutoEndRequest {
+    meeting_id: i64,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DetectorStopSignal {
     pub meeting_id: i64,
@@ -2800,7 +2908,12 @@ async fn insert_new_meeting(
             // Emit event so triggered pipes can react
             if let Err(e) = screenpipe_events::send_event(
                 "meeting_started",
-                serde_json::json!({ "meeting_id": id, "app": app, "title": title }),
+                serde_json::json!({
+                    "meeting_id": id,
+                    "app": app,
+                    "title": title,
+                    "detection_source": "ui_scan",
+                }),
             ) {
                 warn!("meeting v2: failed to emit meeting_started event: {}", e);
             }

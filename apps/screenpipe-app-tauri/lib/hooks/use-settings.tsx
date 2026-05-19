@@ -12,6 +12,7 @@ import posthog from "posthog-js";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
+import type { SourceCitation } from "@/lib/source-citations";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -86,6 +87,7 @@ export interface ChatMessage {
 	content: string;
 	timestamp: number;
 	contentBlocks?: any[];
+	sourceCitations?: SourceCitation[];
 	model?: string;
 	provider?: string;
 	/** UI override — when set, the sidebar / panel header renders this
@@ -178,6 +180,10 @@ export type Settings = SettingsStore & {
 	enableWorkflowEvents?: boolean;
 	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
 	transcriptionMode?: "realtime" | "smart" | "batch";
+	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
+	meetingLiveTranscriptionEnabled?: boolean;
+	/** Provider for manually-started live notes. Defaults to the selected transcription engine. */
+	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "openai-realtime" | "deepgram-live";
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;
 	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
@@ -215,6 +221,13 @@ export type Settings = SettingsStore & {
 	openaiCompatibleHeaders?: Record<string, string>;
 	/** Send raw WAV audio instead of MP3 to OpenAI-compatible endpoint */
 	openaiCompatibleRawAudio?: boolean;
+	/** Let Pi / Claude Code call the confidential cloud enclave
+	 * (Gemma 4 E4B inside an attested Tinfoil CVM) to analyze audio,
+	 * video frames, and images from screenpipe data. Default true. When
+	 * false, the "Cloud audio + video + image analysis" section is
+	 * stripped from `~/.claude/skills/screenpipe-api/SKILL.md` so agents
+	 * literally cannot see the endpoint and won't try to call it. */
+	cloudMediaAnalysisEnabled?: boolean;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
@@ -237,6 +250,8 @@ export type Settings = SettingsStore & {
 	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
 	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
 	experimentalCoreaudioSystemAudio?: boolean;
+	/** Experimental: request Windows WASAPI microphone AEC when supported. */
+	windowsInputAecEnabled?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -258,6 +273,8 @@ export type Settings = SettingsStore & {
 		pipeNotifications: boolean;
 		/** Toast when a monitor is plugged, unplugged, or switched (clamshell, dock). Default true. */
 		displayChanges?: boolean;
+		/** Live-note prompt when a meeting is detected. Default true. */
+		meetingLiveNotes?: boolean;
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
@@ -403,6 +420,8 @@ let DEFAULT_SETTINGS: Settings = {
 			analyticsId: "",
 			devMode: false,
 			audioTranscriptionEngine: "whisper-large-v3-turbo-quantized",
+			meetingLiveTranscriptionEnabled: true,
+			meetingLiveTranscriptionProvider: "selected-engine",
 			ocrEngine: "default",
 			monitorIds: ["default"],
 			audioDevices: ["default"],
@@ -477,6 +496,7 @@ let DEFAULT_SETTINGS: Settings = {
 			pauseOnDrmContent: false,
 			disableClipboardCapture: false,
 			experimentalCoreaudioSystemAudio: false,
+			windowsInputAecEnabled: false,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,
@@ -572,6 +592,15 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV2) {
 			settings.experimentalCoreaudioSystemAudio = false;
 			(settings as any).coreaudioTapMigrationV2 = true;
+			needsUpdate = true;
+		}
+
+		if (settings.meetingLiveTranscriptionEnabled === undefined) {
+			settings.meetingLiveTranscriptionEnabled = true;
+			needsUpdate = true;
+		}
+		if (!settings.meetingLiveTranscriptionProvider) {
+			settings.meetingLiveTranscriptionProvider = "selected-engine";
 			needsUpdate = true;
 		}
 

@@ -17,19 +17,29 @@ pub struct DeviceManager {
     /// on macOS 14.4+ instead of ScreenCaptureKit. Propagated to
     /// AudioStream::from_device at device-start time. Has no effect on
     /// macOS <14.4 or non-macOS — falls back to SCK there.
-    use_coreaudio_tap: bool,
+    use_coreaudio_tap: AtomicBool,
+    /// When true, Windows WASAPI input streams request endpoint AEC.
+    windows_input_aec: AtomicBool,
 }
 
 impl DeviceManager {
-    pub async fn new(use_coreaudio_tap: bool) -> Result<Self> {
+    pub async fn new(use_coreaudio_tap: bool, windows_input_aec: bool) -> Result<Self> {
         let streams = Arc::new(DashMap::new());
         let states = Arc::new(DashMap::new());
 
         Ok(Self {
             streams,
             states,
-            use_coreaudio_tap,
+            use_coreaudio_tap: AtomicBool::new(use_coreaudio_tap),
+            windows_input_aec: AtomicBool::new(windows_input_aec),
         })
+    }
+
+    pub fn configure_backend_flags(&self, use_coreaudio_tap: bool, windows_input_aec: bool) {
+        self.use_coreaudio_tap
+            .store(use_coreaudio_tap, Ordering::Relaxed);
+        self.windows_input_aec
+            .store(windows_input_aec, Ordering::Relaxed);
     }
 
     pub async fn devices(&self) -> Vec<AudioDevice> {
@@ -49,7 +59,8 @@ impl DeviceManager {
         let stream = match AudioStream::from_device(
             Arc::new(device.clone()),
             is_running.clone(),
-            self.use_coreaudio_tap,
+            self.use_coreaudio_tap.load(Ordering::Relaxed),
+            self.windows_input_aec.load(Ordering::Relaxed),
         )
         .await
         {

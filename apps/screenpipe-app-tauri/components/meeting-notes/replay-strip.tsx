@@ -19,6 +19,7 @@ import {
 } from "@/lib/utils/meeting-context";
 
 interface ReplayStripProps {
+  meetingId: number;
   /** "Notable quotes" sample from the activity summary — used purely to
    * derive the meeting time bounds when the full transcript is empty. */
   segments: AudioSegment[];
@@ -31,7 +32,7 @@ interface ReplayStripProps {
 
 const THUMB_COUNT = 12;
 
-export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
+export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps) {
   // Bounds from notable-quotes sample (cheap, already loaded).
   const sampleSorted = useMemo(
     () =>
@@ -116,7 +117,7 @@ export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
     setChunksLoading(true);
     const start = new Date(rangeStartMs).toISOString();
     const end = new Date(rangeEndMs).toISOString();
-    void fetchMeetingAudio(start, end, 1000).then((rows) => {
+    void fetchMeetingAudio(start, end, 1000, meetingId).then((rows) => {
       if (cancelled) return;
       setChunks(rows);
       setChunksLoading(false);
@@ -124,7 +125,7 @@ export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
     return () => {
       cancelled = true;
     };
-  }, [rangeStartMs, rangeEndMs]);
+  }, [meetingId, rangeStartMs, rangeEndMs]);
 
   // Frames across the meeting span.
   const [frames, setFrames] = useState<FrameSample[]>([]);
@@ -276,7 +277,7 @@ export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
 
   if (sampleSorted.length === 0) return null;
 
-  const speakerLabel = activeChunk?.speakerName || "unknown";
+  const speakerLabel = activeChunk?.speakerName || (activeChunk?.isInput ? "me" : "speaker");
   const showSpeakerPopover = !!activeChunk?.audioChunkId && !!activeChunk?.audioFilePath;
 
   return (

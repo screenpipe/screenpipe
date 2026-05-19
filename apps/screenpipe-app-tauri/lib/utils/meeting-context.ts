@@ -37,8 +37,45 @@ export interface MeetingAudioChunk {
   audioFilePath: string;
   speakerId: number | null;
   speakerName: string;
+  deviceType: string;
+  isInput: boolean;
   transcription: string;
   timestamp: string;
+  source?: "background" | "live";
+}
+
+interface MeetingTranscriptSegment {
+  id: number;
+  meetingId: number;
+  source?: "background" | "live";
+  provider: string;
+  model?: string | null;
+  itemId: string;
+  deviceName: string;
+  deviceType: string;
+  audioTranscriptionId?: number | null;
+  audioChunkId?: number | null;
+  audioFilePath?: string | null;
+  speakerId?: number | null;
+  speakerName?: string | null;
+  transcript: string;
+  capturedAt: string;
+}
+
+function timestampMs(iso: string): number {
+  const ms = new Date(iso).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function sortAudioChunks(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
+  return [...chunks].sort((a, b) => {
+    const byTime = timestampMs(a.timestamp) - timestampMs(b.timestamp);
+    if (byTime !== 0) return byTime;
+    const rank = (source?: string) => (source === "live" ? 0 : 1);
+    const bySource = rank(a.source) - rank(b.source);
+    if (bySource !== 0) return bySource;
+    return a.audioChunkId - b.audioChunkId;
+  });
 }
 
 export interface SpeakerSummary {
@@ -232,6 +269,7 @@ export function pathFromUrl(url: string): string {
 interface SummarizeInput {
   meeting: MeetingRecord;
   context: MeetingContext;
+  transcript?: MeetingAudioChunk[] | null;
   /** Replace the built-in directive with the body of a user-chosen summary
    * pipe (e.g. one selected from the Meeting summary pipe picker). The
    * meeting id is prepended so the pipe body doesn't have to look it up. */
@@ -247,6 +285,7 @@ interface SummarizeInput {
 export function buildEnrichedSummarizePrompt({
   meeting,
   context,
+  transcript,
   directiveOverride,
 }: SummarizeInput): string {
   const start = new Date(meeting.meeting_start);
@@ -298,7 +337,10 @@ export function buildEnrichedSummarizePrompt({
       );
     }
 
-    if (a.audio_summary.top_transcriptions.length > 0) {
+    if (
+      !transcript?.length &&
+      a.audio_summary.top_transcriptions.length > 0
+    ) {
       const lines = a.audio_summary.top_transcriptions.slice(0, 8).map((t) => {
         const ts = formatTimeShort(t.timestamp);
         const txt = t.transcription.replace(/\s+/g, " ").trim().slice(0, 240);
@@ -307,6 +349,14 @@ export function buildEnrichedSummarizePrompt({
       });
       sections.push(`top transcript fragments:\n${lines.join("\n")}`);
     }
+  }
+
+  const transcriptText = renderTranscript(transcript ?? null, null);
+  if (transcriptText) {
+    const segmentCount = transcript?.length ?? 0;
+    sections.push(
+      `meeting transcript (chronological${segmentCount > 0 ? `, ${segmentCount} segments` : ""}):\n${transcriptText}`,
+    );
   }
 
   if (context.clipboardCount > 0) {
@@ -344,6 +394,8 @@ export function buildMeetingSummarizeInstructions(
     `search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items.`,
     ``,
     `meeting id: ${meetingId}`,
+    `primary transcript source: GET "http://localhost:3030/meetings/${meetingId}/transcript" and use each row's "transcript", "speakerName", "capturedAt", and "source" fields. sort rows by capturedAt before summarizing.`,
+    `fallback transcript source: /search?content_type=audio for the meeting time window. audio rows use content.transcription (not content.text); content.text may be missing for audio and should not be treated as an empty transcript.`,
     `if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:`,
     `  curl -s -X PATCH "http://localhost:3030/meetings/${meetingId}" \\`,
     `    -H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" \\`,
@@ -493,7 +545,7 @@ function renderTranscript(
   activity: ActivitySummary | null,
 ): string {
   if (full && full.length > 0) {
-    return full
+    return sortAudioChunks(full)
       .map((c) => {
         const ts = formatTimeShort(c.timestamp);
         const sp =
@@ -596,6 +648,7 @@ interface SearchAudioItem {
     transcription?: string;
     timestamp?: string;
     file_path?: string;
+    device_type?: string;
     speaker?: { id?: number; name?: string } | null;
   };
 }
@@ -611,9 +664,12 @@ export async function fetchMeetingAudio(
   startIso: string,
   endIso: string,
   cap = 1000,
+  meetingId?: number,
 ): Promise<MeetingAudioChunk[]> {
+  const routedRows = await fetchRoutedMeetingTranscript(meetingId, cap);
+
   const out: MeetingAudioChunk[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const pageSize = 200;
   let offset = 0;
   for (let page = 0; page < 10 && out.length < cap; page++) {
@@ -629,16 +685,23 @@ export async function fetchMeetingAudio(
         const c = item.content;
         if (!c) continue;
         const id = c.chunk_id;
-        if (typeof id !== "number" || seen.has(id)) continue;
+        if (typeof id !== "number") continue;
         if (!c.transcription || !c.timestamp || !c.file_path) continue;
-        seen.add(id);
+        const rowKey = `${id}:${c.timestamp}:${c.transcription}`;
+        if (seen.has(rowKey)) continue;
+        const deviceType = c.device_type ?? "";
+        const isInput = deviceType.toLowerCase() === "input";
+        seen.add(rowKey);
         out.push({
           audioChunkId: id,
           audioFilePath: c.file_path,
-          speakerId: c.speaker?.id ?? null,
-          speakerName: c.speaker?.name ?? "unknown",
+          speakerId: isInput ? null : c.speaker?.id ?? null,
+          speakerName: isInput ? "me" : c.speaker?.name ?? "",
+          deviceType,
+          isInput,
           transcription: c.transcription,
           timestamp: c.timestamp,
+          source: "background",
         });
       }
       if (items.length < pageSize) break;
@@ -647,8 +710,72 @@ export async function fetchMeetingAudio(
       break;
     }
   }
-  out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  return mergeMeetingAudioChunks(routedRows, out, cap);
+}
+
+function mergeMeetingAudioChunks(
+  liveRows: MeetingAudioChunk[],
+  backgroundRows: MeetingAudioChunk[],
+  cap: number,
+): MeetingAudioChunk[] {
+  const merged = sortAudioChunks([...liveRows, ...backgroundRows]);
+  const seen = new Set<string>();
+  const out: MeetingAudioChunk[] = [];
+
+  for (const chunk of merged) {
+    const key = [
+      Math.round(timestampMs(chunk.timestamp) / 1000),
+      chunk.deviceType,
+      chunk.speakerName,
+      chunk.transcription.replace(/\s+/g, " ").trim().toLowerCase(),
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(chunk);
+    if (out.length >= cap) break;
+  }
+
   return out;
+}
+
+async function fetchRoutedMeetingTranscript(
+  meetingId: number | undefined,
+  cap: number,
+): Promise<MeetingAudioChunk[]> {
+  if (typeof meetingId !== "number" || !Number.isFinite(meetingId)) return [];
+
+  try {
+    const res = await localFetch(`/meetings/${meetingId}/transcript`);
+    if (!res.ok) return [];
+    const body = (await res.json()) as MeetingTranscriptSegment[];
+    return body
+      .slice(0, cap)
+      .filter((segment) => segment.transcript?.trim() && segment.capturedAt)
+      .map((segment) => {
+        const deviceType = segment.deviceType ?? "";
+        const isInput = deviceType.toLowerCase() === "input";
+        const source = segment.source ?? "live";
+        return {
+          audioChunkId:
+            typeof segment.audioChunkId === "number"
+              ? segment.audioChunkId
+              : -segment.id,
+          audioFilePath: segment.audioFilePath ?? "",
+          speakerId: isInput ? null : segment.speakerId ?? null,
+          speakerName: isInput
+            ? "me"
+            : segment.speakerName?.trim() || "speaker",
+          deviceType,
+          isInput,
+          transcription: segment.transcript,
+          timestamp: segment.capturedAt,
+          source,
+        };
+      })
+      .sort((a, b) => timestampMs(a.timestamp) - timestampMs(b.timestamp));
+  } catch {
+    return [];
+  }
 }
 
 /**

@@ -381,7 +381,7 @@ mod tests {
             let is_text_line = (y / line_height) % 2 == 0;
             if is_text_line {
                 let char_width = 10;
-                let is_char = ((x + seed as u32) / char_width) % 3 != 0;
+                let is_char = !((x + seed as u32) / char_width).is_multiple_of(3);
                 if is_char {
                     Rgb([30, 30, 30])
                 } else {
@@ -414,8 +414,10 @@ mod tests {
 
     #[test]
     fn test_hash_early_exit_disabled() {
-        let mut config = FrameComparisonConfig::default();
-        config.hash_early_exit = false;
+        let config = FrameComparisonConfig {
+            hash_early_exit: false,
+            ..Default::default()
+        };
 
         let mut comparer = FrameComparer::new(config);
         let image = create_solid_image(1920, 1080, 100, 100, 100);
@@ -518,8 +520,10 @@ mod tests {
     fn test_subtle_changes_detected_without_hash() {
         // Subtle changes that may hash-collide at downscaled resolution
         // should still be detected when hash early exit is disabled
-        let mut config = FrameComparisonConfig::default();
-        config.hash_early_exit = false;
+        let config = FrameComparisonConfig {
+            hash_early_exit: false,
+            ..Default::default()
+        };
 
         let mut comparer = FrameComparer::new(config);
 

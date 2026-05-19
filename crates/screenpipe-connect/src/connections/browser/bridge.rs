@@ -43,6 +43,13 @@ struct WsEvalRequest<'a> {
     url: Option<&'a str>,
 }
 
+#[derive(Debug, Serialize)]
+struct WsCookieRequest<'a> {
+    id: &'a str,
+    action: &'static str,
+    host: &'a str,
+}
+
 /// Why an eval call returned without a useful answer.
 #[derive(Debug, thiserror::Error)]
 pub enum EvalError {
@@ -100,7 +107,7 @@ impl BrowserBridge {
         transport: Arc<dyn ExtensionTransport>,
     ) -> Option<Arc<dyn ExtensionTransport>> {
         let mut slot = self.transport.write().await;
-        std::mem::replace(&mut *slot, Some(transport))
+        (*slot).replace(transport)
     }
 
     /// Detach the given transport — but only if it's still the registered one.
@@ -168,6 +175,43 @@ impl BrowserBridge {
         if let Err(e) = transport.send_text(frame).await {
             self.pending.lock().await.remove(&id);
             // The transport is dead — clear it so /status reflects reality.
+            self.detach_transport(&transport).await;
+            return Err(EvalError::SendFailed(e));
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => Err(EvalError::Disconnected),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err(EvalError::Timeout(timeout.as_secs()))
+            }
+        }
+    }
+
+    pub async fn get_cookies(
+        &self,
+        host: &str,
+        timeout: Duration,
+    ) -> Result<EvalResult, EvalError> {
+        let transport = {
+            let guard = self.transport.read().await;
+            guard.as_ref().cloned().ok_or(EvalError::NotConnected)?
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id.clone(), tx);
+
+        let frame = serde_json::to_string(&WsCookieRequest {
+            id: &id,
+            action: "get_cookies",
+            host,
+        })
+        .expect("serialize cookie request");
+
+        if let Err(e) = transport.send_text(frame).await {
+            self.pending.lock().await.remove(&id);
             self.detach_transport(&transport).await;
             return Err(EvalError::SendFailed(e));
         }

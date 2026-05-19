@@ -35,11 +35,11 @@ enabled = true
 # add any non-secret environment variables here
 # Default Vertex AI region - us-east5 has Claude models
 VERTEX_REGION = "us-east5"
-# Transcription A/B/C test: 60% Deepgram, 20% Parakeet, 20% Whisper
-# Dual-send 10% of requests to ALL providers for WER dataset building
-DEEPGRAM_TRAFFIC_PCT = "20"
+# Transcription A/B/C test: temporarily route 100% to Deepgram while
+# self-hosted transcription tunnels are unhealthy.
+DEEPGRAM_TRAFFIC_PCT = "100"
 WHISPER_TRAFFIC_PCT = "0"
-PARAKEET_TRAFFIC_PCT = "80"
+PARAKEET_TRAFFIC_PCT = "0"
 DUAL_SEND_PCT = "0"
 PARAKEET_URL = "https://audio.screenpi.pe"
 WHISPER_URL = ""
@@ -148,4 +148,3 @@ bindings = [
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["RateLimiter"]
-

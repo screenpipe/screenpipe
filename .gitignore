@@ -41,10 +41,6 @@ onnxruntime-win-x64*/
 # JavaScript stuff
 node_modules/
 
-
-cn 
-
-
 # Python stuff
 venv/
 app.py

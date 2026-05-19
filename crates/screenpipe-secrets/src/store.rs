@@ -190,6 +190,62 @@ impl SecretStore {
 
         Ok(count)
     }
+
+    /// Decrypt all encrypted secrets back to base64/plaintext rows.
+    /// Called before disabling keychain encryption so CLI/app transitions do
+    /// not strand older encrypted OAuth tokens behind a removed opt-in flag.
+    pub async fn decrypt_encrypted_secrets(&self) -> Result<usize> {
+        let enc_key = self
+            .key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("cannot decrypt secrets without an encryption key"))?;
+
+        let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
+            sqlx::query_as("SELECT key, value, nonce FROM secrets")
+                .fetch_all(&self.pool)
+                .await
+                .context("failed to fetch secrets for decryption")?;
+
+        let mut count = 0;
+        for (secret_key, stored_value, nonce) in rows {
+            if nonce.iter().all(|&b| b == 0) {
+                continue; // already plaintext
+            }
+
+            let nonce_arr: [u8; 12] = nonce
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid nonce length"))?;
+            let plaintext = crypto::decrypt(&stored_value, &nonce_arr, enc_key)
+                .with_context(|| format!("failed to decrypt secret '{}'", secret_key))?;
+            let encoded = BASE64.encode(&plaintext).into_bytes();
+            let zero_nonce = vec![0u8; 12];
+
+            sqlx::query(
+                "UPDATE secrets SET value = ?, nonce = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = ?",
+            )
+            .bind(&encoded)
+            .bind(&zero_nonce)
+            .bind(&secret_key)
+            .execute(&self.pool)
+            .await
+            .context("failed to update secret during decryption")?;
+
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
+    /// Count rows that still require the keychain key to read.
+    pub async fn encrypted_secret_count(&self) -> Result<usize> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM secrets WHERE hex(nonce) != '000000000000000000000000'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count encrypted secrets")?;
+        Ok(row.0.max(0) as usize)
+    }
 }
 
 #[cfg(test)]
@@ -362,5 +418,35 @@ mod tests {
         // Re-encrypt again should be a no-op (already encrypted)
         let count2 = enc_store.reencrypt_unencrypted_secrets(&key).await.unwrap();
         assert_eq!(count2, 0);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_encrypted_secrets() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+
+        let key = [11u8; 32];
+        let enc_store = SecretStore::new(pool.clone(), Some(key)).await.unwrap();
+        enc_store.set("a", b"alpha").await.unwrap();
+        enc_store.set("b", b"bravo").await.unwrap();
+
+        assert_eq!(enc_store.encrypted_secret_count().await.unwrap(), 2);
+
+        let count = enc_store.decrypt_encrypted_secrets().await.unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(enc_store.encrypted_secret_count().await.unwrap(), 0);
+
+        let plain_store = SecretStore::new(pool.clone(), None).await.unwrap();
+        assert_eq!(plain_store.get("a").await.unwrap().unwrap(), b"alpha");
+        assert_eq!(plain_store.get("b").await.unwrap().unwrap(), b"bravo");
+
+        let count2 = enc_store.decrypt_encrypted_secrets().await.unwrap();
+        assert_eq!(count2, 0);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_encrypted_secrets_requires_key() {
+        let store = make_store(None).await;
+        let result = store.decrypt_encrypted_secrets().await;
+        assert!(result.is_err());
     }
 }

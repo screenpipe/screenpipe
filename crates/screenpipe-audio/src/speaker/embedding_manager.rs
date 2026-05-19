@@ -6,10 +6,14 @@ use anyhow::{bail, Result};
 use ndarray::Array1;
 use std::collections::HashMap;
 
+const MAX_SPEAKER_EXAMPLES: usize = 10;
+
 #[derive(Debug, Clone)]
 pub struct EmbeddingManager {
     max_speakers: usize,
     speakers: HashMap<usize, Array1<f32>>,
+    speaker_examples: HashMap<usize, Vec<Array1<f32>>>,
+    speaker_counts: HashMap<usize, usize>,
     next_speaker_id: usize,
 }
 
@@ -18,6 +22,8 @@ impl EmbeddingManager {
         Self {
             max_speakers,
             speakers: HashMap::new(),
+            speaker_examples: HashMap::new(),
+            speaker_counts: HashMap::new(),
             next_speaker_id: 1,
         }
     }
@@ -38,7 +44,8 @@ impl EmbeddingManager {
         let mut best_similarity = threshold;
 
         for (&speaker_id, speaker_embedding) in &self.speakers {
-            let similarity = Self::cosine_similarity(&embedding_array, speaker_embedding);
+            let similarity =
+                self.best_speaker_similarity(speaker_id, &embedding_array, speaker_embedding);
             if similarity > best_similarity {
                 best_speaker_id = Some(speaker_id);
                 best_similarity = similarity;
@@ -46,7 +53,10 @@ impl EmbeddingManager {
         }
 
         match best_speaker_id {
-            Some(id) => Some(id),
+            Some(id) => {
+                self.remember_speaker_embedding(id, &embedding_array);
+                Some(id)
+            }
             None if self.speakers.len() < self.max_speakers => {
                 Some(self.add_speaker(embedding_array))
             }
@@ -81,6 +91,8 @@ impl EmbeddingManager {
     /// Used between meetings to prevent cross-meeting speaker contamination.
     pub fn clear_speakers(&mut self) {
         self.speakers.clear();
+        self.speaker_examples.clear();
+        self.speaker_counts.clear();
         self.next_speaker_id = 1;
     }
 
@@ -89,16 +101,76 @@ impl EmbeddingManager {
     /// Seeded speakers count against the max_speakers limit.
     pub fn seed_speaker(&mut self, embedding: Array1<f32>) -> usize {
         let id = self.next_speaker_id;
-        self.speakers.insert(id, embedding);
+        self.speakers.insert(id, embedding.clone());
+        self.speaker_examples.insert(id, vec![embedding]);
+        self.speaker_counts.insert(id, 1);
         self.next_speaker_id += 1;
         id
     }
 
     fn add_speaker(&mut self, embedding: Array1<f32>) -> usize {
         let speaker_id = self.next_speaker_id;
-        self.speakers.insert(speaker_id, embedding);
+        self.speakers.insert(speaker_id, embedding.clone());
+        self.speaker_examples.insert(speaker_id, vec![embedding]);
+        self.speaker_counts.insert(speaker_id, 1);
         self.next_speaker_id += 1;
         speaker_id
+    }
+
+    fn best_speaker_similarity(
+        &self,
+        speaker_id: usize,
+        embedding: &Array1<f32>,
+        speaker_embedding: &Array1<f32>,
+    ) -> f32 {
+        let mut best_similarity = Self::cosine_similarity(embedding, speaker_embedding);
+
+        if let Some(examples) = self.speaker_examples.get(&speaker_id) {
+            for example in examples {
+                best_similarity = best_similarity.max(Self::cosine_similarity(embedding, example));
+            }
+        }
+
+        best_similarity
+    }
+
+    fn remember_speaker_embedding(&mut self, speaker_id: usize, embedding: &Array1<f32>) {
+        self.update_speaker_embedding(speaker_id, embedding);
+        self.add_speaker_example(speaker_id, embedding.clone());
+    }
+
+    fn update_speaker_embedding(&mut self, speaker_id: usize, embedding: &Array1<f32>) {
+        if let Some(current) = self.speakers.get_mut(&speaker_id) {
+            let count = self.speaker_counts.entry(speaker_id).or_insert(1);
+            let n = (*count).min(50) as f32;
+            for (existing, incoming) in current.iter_mut().zip(embedding.iter()) {
+                *existing = ((*existing * n) + incoming) / (n + 1.0);
+            }
+            *count += 1;
+        }
+    }
+
+    fn add_speaker_example(&mut self, speaker_id: usize, embedding: Array1<f32>) {
+        let examples = self.speaker_examples.entry(speaker_id).or_default();
+        if examples.len() < MAX_SPEAKER_EXAMPLES {
+            examples.push(embedding);
+        } else {
+            let centroid = self.speakers.get(&speaker_id);
+            let replace_idx = centroid
+                .and_then(|centroid| {
+                    examples
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| {
+                            Self::cosine_similarity(a, centroid)
+                                .partial_cmp(&Self::cosine_similarity(b, centroid))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(idx, _)| idx)
+                })
+                .unwrap_or(0);
+            examples[replace_idx] = embedding;
+        }
     }
 
     /// Find the closest existing speaker to the given embedding (ignores threshold).
@@ -232,5 +304,34 @@ mod tests {
         let id = mgr.seed_speaker(Array1::from_vec(vec![0.0, 0.0, 1.0, 0.0]));
         assert_eq!(id, 1); // IDs reset
         assert_eq!(mgr.speaker_count(), 1);
+    }
+
+    #[test]
+    fn test_matching_updates_speaker_centroid() {
+        let mut mgr = EmbeddingManager::new(100);
+
+        let id = mgr.search_speaker(vec![1.0, 0.0, 0.0, 0.0], 0.9).unwrap();
+        let matched = mgr.search_speaker(vec![1.0, 0.5, 0.0, 0.0], 0.5).unwrap();
+
+        assert_eq!(matched, id);
+        let centroid = mgr.get_all_speakers().get(&id).unwrap();
+        assert!(
+            centroid[1] > 0.0,
+            "matched embeddings should adapt the in-memory centroid"
+        );
+    }
+
+    #[test]
+    fn test_matching_uses_recent_examples_not_only_centroid() {
+        let mut mgr = EmbeddingManager::new(100);
+
+        let id = mgr.search_speaker(vec![1.0, 0.0], 0.7).unwrap();
+        assert_eq!(mgr.search_speaker(vec![0.8, 0.6], 0.7), Some(id));
+
+        assert_eq!(
+            mgr.search_speaker(vec![0.4, 0.9], 0.7),
+            Some(id),
+            "recent speaker examples should prevent fragmentation when the centroid is not enough"
+        );
     }
 }

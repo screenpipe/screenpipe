@@ -53,6 +53,10 @@ import { parsePipeSessionId } from "@/lib/events/types";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
+import {
+  PipeActivityIndicator,
+  formatPipeElapsed,
+} from "@/components/pipe-activity-indicator";
 import { getApiBaseUrl, localFetch } from "@/lib/api";
 import {
   isNotificationsDenied,
@@ -1700,6 +1704,11 @@ export function PipesSection() {
             const isRunning = pipe.is_running || runningPipe === pipe.config.name;
             const runningExec = recentExecs.find((e) => e.status === "running");
             const lastExec = recentExecs[0];
+            const runningLabel = runningExec?.started_at
+              ? formatPipeElapsed(runningExec.started_at)
+              : runningPipe === pipe.config.name
+                ? "starting"
+                : "now";
             const hasMissingConnections = (pipe.config.connections ?? []).some((id) => {
               // support instance keys like "notion:crm" — match on base id
               const baseId = id.includes(":") ? id.split(":")[0] : id;
@@ -1827,12 +1836,21 @@ export function PipesSection() {
                 </span>
 
                 {/* Last run time */}
-                <span className="text-xs text-muted-foreground shrink-0 w-20 text-right font-mono">
-                  {isRunning && runningExec?.started_at ? (
-                    <span className="flex items-center justify-end gap-1">
-                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                      <ElapsedTimer startedAt={runningExec.started_at} />
-                    </span>
+                <span className="text-xs text-muted-foreground shrink-0 w-24 text-right font-mono">
+                  {isRunning ? (
+                    <PipeActivityIndicator
+                      kind="running"
+                      label={runningLabel}
+                      className="w-full"
+                      ariaLabel={`running ${runningLabel ?? "now"}`}
+                    />
+                  ) : lastStatus === "error" ? (
+                    <PipeActivityIndicator
+                      kind="error"
+                      label={lastExec?.started_at ? relativeTime(lastExec.started_at) : "failed"}
+                      className="w-full"
+                      ariaLabel="last run failed"
+                    />
                   ) : lastExec?.started_at ? (
                     relativeTime(lastExec.started_at)
                   ) : (

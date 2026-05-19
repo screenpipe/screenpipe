@@ -171,16 +171,16 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                     match window.is_visible() {
                         Ok(true) if !is_minimized => {
                             info!("window '{}' is visible (not minimized), hiding it", label);
-                            hide_main_window(app)
+                            hide_main_window(app.clone())
                         }
                         _ => {
                             info!("window '{}' not visible or minimized, showing it", label);
-                            show_main_window(app, false)
+                            show_main_window(app.clone())
                         }
                     }
                 } else {
                     info!("main window not found for mode '{}', creating it", mode);
-                    show_main_window(app, false)
+                    show_main_window(app.clone())
                 }
             }
         });
@@ -277,7 +277,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         let _ = app.run_on_main_thread(move || {
             let app = &app_for_closure;
             info!("search shortcut triggered");
-            hide_main_window(app);
+            hide_main_window(app.clone());
             let _ = ShowRewindWindow::Search { query: None }.show(app);
         });
     })

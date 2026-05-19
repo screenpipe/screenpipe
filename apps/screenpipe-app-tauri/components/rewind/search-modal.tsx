@@ -10,7 +10,12 @@ import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { listConversations, type ConversationMeta } from "@/lib/chat-storage";
+import {
+  CHAT_HISTORY_INITIAL_LIMIT,
+  listConversations,
+  searchConversations,
+  type ConversationMeta,
+} from "@/lib/chat-storage";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -132,6 +137,20 @@ const CHAT_BUCKET_LABELS: Record<string, string> = {
   older: "older",
 };
 const CHAT_BUCKET_ORDER = ["today", "yesterday", "week", "older"] as const;
+
+function sanitizeFts5Query(query: string): string {
+  return query
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.replace(/[\\"]/g, "").trim())
+    .filter(Boolean)
+    .map((token) => `"${token}"`)
+    .join(" ");
+}
+
+function escapeSqlString(value: string): string {
+  return value.replace(/'/g, "''");
+}
 
 function useSuggestions(isOpen: boolean) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -448,6 +467,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [chatResults, setChatResults] = useState<ConversationMeta[]>([]);
   const [isLoadingChats, setIsLoadingChats] = useState(false);
   const [selectedChatIndex, setSelectedChatIndex] = useState(0);
+  const chatSearchRequestRef = useRef(0);
+  const recentChatRequestRef = useRef(0);
   // Recent chats shown in the suggestions area (loaded on open, independent of chats tab)
   const [recentChats, setRecentChats] = useState<ConversationMeta[]>([]);
 
@@ -471,7 +492,36 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const TRANSCRIPTION_PAGE_SIZE = 30;
 
   const debouncedQuery = useDebounce(query, 250);
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const { suggestions, isLoading: suggestionsLoading } = useSuggestions(isOpen);
+  const loadChats = useCallback(async (q: string) => {
+    const requestId = ++chatSearchRequestRef.current;
+    setIsLoadingChats(true);
+    try {
+      const options = {
+        limit: CHAT_HISTORY_INITIAL_LIMIT,
+        includeHidden: false,
+        kind: "chat" as const,
+      };
+      const chats = q.trim()
+        ? await searchConversations(q, options)
+        : await listConversations(options);
+      if (chatSearchRequestRef.current === requestId) {
+        setChatResults(chats);
+        setSelectedChatIndex(0);
+      }
+    } catch {
+      if (chatSearchRequestRef.current === requestId) {
+        setChatResults([]);
+        setSelectedChatIndex(0);
+      }
+    } finally {
+      if (chatSearchRequestRef.current === requestId) {
+        setIsLoadingChats(false);
+      }
+    }
+  }, []);
 
   const {
     searchResults,
@@ -533,8 +583,15 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     setFacetsLoading(true);
     let pending = 3;
     const onFacetDone = () => { pending--; if (pending === 0 && !cancelled) setFacetsLoading(false); };
-    const escaped = q.replace(/"/g, '""');
-    const ftsQuery = q.split(/\s+/).map(w => `"${w.replace(/"/g, '""')}"`).join(" OR ");
+    const ftsQuery = sanitizeFts5Query(q);
+    if (!ftsQuery) {
+      setFacetApps([]);
+      setFacetDomains([]);
+      setFacetTimeRanges([]);
+      setFacetsLoading(false);
+      return;
+    }
+    const escapedFtsQuery = escapeSqlString(ftsQuery);
 
     // Fire all three facet queries in parallel
     const fetchFacet = async (sql: string) => {
@@ -551,7 +608,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     fetchFacet(
       `SELECT app_name as app, COUNT(*) as cnt
        FROM frames_fts
-       WHERE frames_fts MATCH '${escaped}'
+       WHERE frames_fts MATCH '${escapedFtsQuery}'
        AND app_name != ''
        GROUP BY app_name ORDER BY cnt DESC LIMIT 15`
     ).then((rows: { app: string; cnt: number }[]) => {
@@ -564,7 +621,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       `SELECT f.browser_url as url, COUNT(*) as cnt
        FROM frames_fts
        JOIN frames f ON f.id = frames_fts.rowid
-       WHERE frames_fts MATCH '${escaped}'
+       WHERE frames_fts MATCH '${escapedFtsQuery}'
        AND f.browser_url IS NOT NULL AND f.browser_url != ''
        GROUP BY f.browser_url ORDER BY cnt DESC LIMIT 200`
     ).then((rows: { url: string; cnt: number }[]) => {
@@ -585,7 +642,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       `SELECT DATE(f.timestamp) as d, MIN(f.timestamp) as ts, COUNT(*) as cnt
        FROM frames_fts
        JOIN frames f ON f.id = frames_fts.rowid
-       WHERE frames_fts MATCH '${escaped}'
+       WHERE frames_fts MATCH '${escapedFtsQuery}'
        GROUP BY DATE(f.timestamp)
        ORDER BY d DESC LIMIT 30`
     ).then((rows: { d: string; ts: string; cnt: number }[]) => {
@@ -687,24 +744,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const filteredSpeakerTranscriptionsRef = useRef(filteredSpeakerTranscriptions);
   filteredSpeakerTranscriptionsRef.current = filteredSpeakerTranscriptions;
 
-  // Load chats when switching to chats tab — skip if already loaded on open
+  // Load chats when switching to chats tab. Typing a query searches the full
+  // on-disk archive; empty state stays capped to recent chats.
   useEffect(() => {
-    if (contentFilter !== "chats" || chatResults.length > 0) return;
-    setIsLoadingChats(true);
-    setSelectedChatIndex(0);
-    listConversations()
-      .then((all) => setChatResults(all.filter((c) => !c.hidden && c.kind === "chat")))
-      .catch(() => {})
-      .finally(() => setIsLoadingChats(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contentFilter]);
+    if (!isOpen || isTagSearch || isPeopleSearch) return;
+    const q = debouncedQuery.trim();
+    if (contentFilter === "chats" || q) {
+      void loadChats(q);
+    }
+  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats]);
 
-  // Filtered chats by query
+  // Chat results are already bounded / searched in chat-storage.
   const filteredChats = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase();
-    if (!q) return chatResults;
-    return chatResults.filter((c) => c.title.toLowerCase().includes(q));
-  }, [chatResults, debouncedQuery]);
+    return chatResults;
+  }, [chatResults]);
 
   // Refs for chat keyboard navigation (avoids re-registering the keydown effect)
   const filteredChatsRef = useRef(filteredChats);
@@ -736,19 +789,43 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // and the recent chats strip in the empty state
   useEffect(() => {
     if (!isOpen) return;
-    listConversations()
+    const requestId = ++recentChatRequestRef.current;
+    if (!queryRef.current.trim()) {
+      setIsLoadingChats(true);
+    }
+    listConversations({
+      limit: CHAT_HISTORY_INITIAL_LIMIT,
+      includeHidden: false,
+      kind: "chat",
+    })
       .then((all) => {
-        const chats = all.filter((c) => !c.hidden && c.kind === "chat");
-        setChatResults(chats);
-        setRecentChats(chats.slice(0, 5));
+        if (recentChatRequestRef.current !== requestId) return;
+        setRecentChats(all.slice(0, 5));
+        if (!queryRef.current.trim()) {
+          setChatResults(all);
+          setSelectedChatIndex(0);
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (recentChatRequestRef.current === requestId && !queryRef.current.trim()) {
+          setChatResults([]);
+          setSelectedChatIndex(0);
+        }
+      })
+      .finally(() => {
+        if (recentChatRequestRef.current === requestId && !queryRef.current.trim()) {
+          setIsLoadingChats(false);
+        }
+      });
   }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedIndex(0);
-      setQuery("");
+      const initialQuery = standalone
+        ? new URLSearchParams(window.location.search).get("q") ?? ""
+        : "";
+      setQuery(initialQuery);
       resetSearch();
       setSearchEpoch(e => e + 1);
       clearHighlight();
@@ -767,7 +844,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setTranscriptionOffset(0);
       setHasMoreTranscriptions(true);
     }
-  }, [isOpen, resetSearch]);
+  }, [isOpen, resetSearch, standalone]);
 
   // Perform search when query changes
   useEffect(() => {

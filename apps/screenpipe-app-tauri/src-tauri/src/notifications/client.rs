@@ -21,10 +21,21 @@ pub fn send_typed(
     notification_type: &'static str,
     auto_dismiss_ms: Option<u64>,
 ) {
+    send_typed_with_actions(title, body, notification_type, auto_dismiss_ms, Vec::new());
+}
+
+pub fn send_typed_with_actions(
+    title: impl Into<String>,
+    body: impl Into<String>,
+    notification_type: &'static str,
+    auto_dismiss_ms: Option<u64>,
+    actions: Vec<serde_json::Value>,
+) {
     let mut payload = json!({
         "title": title.into(),
         "body": body.into(),
         "type": notification_type,
+        "actions": actions,
     });
     if let Some(ms) = auto_dismiss_ms {
         payload["autoDismissMs"] = json!(ms);

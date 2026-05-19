@@ -10,6 +10,7 @@ use crate::speaker::embedding_manager::EmbeddingManager;
 use crate::speaker::prepare_segments;
 use crate::speaker::segment::SpeechSegment;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
+use crate::transcription::deepgram::DeepgramTranscriptionConfig;
 use crate::transcription::engine::TranscriptionSession;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
 use crate::transcription::whisper::batch::process_with_whisper;
@@ -27,6 +28,8 @@ use tracing::error;
 use whisper_rs::WhisperState;
 
 use crate::{AudioInput, TranscriptionResult};
+
+use super::TranscriptionOutput;
 
 pub const SAMPLE_RATE: u32 = 16000;
 
@@ -112,7 +115,7 @@ pub async fn stt_sync(
     sample_rate: u32,
     device: &str,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
-    deepgram_api_key: Option<String>,
+    deepgram_config: Option<DeepgramTranscriptionConfig>,
     openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     whisper_state: &mut WhisperState,
@@ -128,7 +131,7 @@ pub async fn stt_sync(
         sample_rate,
         &device,
         audio_transcription_engine,
-        deepgram_api_key,
+        deepgram_config,
         openai_compatible_config,
         languages,
         whisper_state,
@@ -144,7 +147,7 @@ pub async fn stt(
     sample_rate: u32,
     device: &str,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
-    deepgram_api_key: Option<String>,
+    deepgram_config: Option<DeepgramTranscriptionConfig>,
     openai_compatible_config: Option<OpenAICompatibleConfig>,
     languages: Vec<Language>,
     whisper_state: &mut WhisperState,
@@ -170,10 +173,12 @@ pub async fn stt(
             );
             Ok(String::new())
         } else {
-            let api_key = deepgram_api_key.unwrap_or_default();
+            let config = deepgram_config
+                .filter(DeepgramTranscriptionConfig::is_ready)
+                .ok_or_else(|| anyhow::anyhow!("Deepgram transcription config is missing"))?;
 
             match transcribe_with_deepgram(
-                &api_key,
+                &config,
                 audio,
                 device,
                 sample_rate,
@@ -354,25 +359,30 @@ pub async fn run_stt(
     let audio = segment.samples.clone();
     let sample_rate = segment.sample_rate;
     match session
-        .transcribe(&audio, sample_rate, &device.to_string())
+        .transcribe_detailed(&audio, sample_rate, &device.to_string())
         .await
     {
-        Ok(transcription) => Ok(TranscriptionResult {
-            input: AudioInput {
-                data: Arc::new(audio),
-                sample_rate,
-                channels: 1,
-                device: device.clone(),
-                capture_timestamp: timestamp,
-            },
-            transcription: Some(transcription),
-            path,
-            timestamp,
-            error: None,
-            speaker_embedding: segment.embedding.clone(),
-            start_time: segment.start,
-            end_time: segment.end,
-        }),
+        Ok(output) => {
+            let diarization_segments = offset_diarization_segments(output, segment.start);
+            Ok(TranscriptionResult {
+                input: AudioInput {
+                    data: Arc::new(audio),
+                    sample_rate,
+                    channels: 1,
+                    device: device.clone(),
+                    capture_timestamp: timestamp,
+                },
+                transcription: Some(diarization_segments.transcription),
+                path,
+                timestamp,
+                error: None,
+                speaker_embedding: segment.embedding.clone(),
+                start_time: segment.start,
+                end_time: segment.end,
+                diarization_provider: diarization_segments.diarization_provider,
+                diarization_segments: diarization_segments.diarization_segments,
+            })
+        }
         Err(e) => {
             error!("STT error for input {}: {:?}", device, e);
             Ok(TranscriptionResult {
@@ -390,7 +400,25 @@ pub async fn run_stt(
                 speaker_embedding: Vec::new(),
                 start_time: segment.start,
                 end_time: segment.end,
+                diarization_provider: None,
+                diarization_segments: Vec::new(),
             })
         }
     }
+}
+
+fn offset_diarization_segments(
+    mut output: TranscriptionOutput,
+    offset_secs: f64,
+) -> TranscriptionOutput {
+    if offset_secs == 0.0 {
+        return output;
+    }
+
+    for segment in &mut output.diarization_segments {
+        segment.start_time += offset_secs;
+        segment.end_time += offset_secs;
+    }
+
+    output
 }

@@ -19,6 +19,7 @@ toml = "0.8"
 clap = { version = "4.3", features = ["derive"] }
 hound = "3.5"
 tokio = { workspace = true }
+chrono = { version = "0.4.31", features = ["serde"] }
 
 # The whole point of this crate: drive the screenpipe-audio diarization
 # pipeline using only public API. We pull in screenpipe-audio for
@@ -30,6 +31,8 @@ tokio = { workspace = true }
 # etc.) — that's intentional. The eval is a binary-only consumer; nothing
 # in the prod tree depends on this crate.
 screenpipe-audio = { path = "../screenpipe-audio" }
+screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-db = { path = "../screenpipe-db" }
 
 [dev-dependencies]
 tempfile = "3.3.0"
@@ -43,5 +46,13 @@ name = "screenpipe-eval-compose"
 path = "src/bin/compose_fixture.rs"
 
 [[bin]]
+name = "screenpipe-eval-screenpipe-fixtures"
+path = "src/bin/screenpipe_fixtures.rs"
+
+[[bin]]
 name = "screenpipe-eval-transcription"
 path = "src/bin/eval_transcription.rs"
+
+[[bin]]
+name = "screenpipe-eval-pipeline-replay"
+path = "src/bin/pipeline_replay.rs"

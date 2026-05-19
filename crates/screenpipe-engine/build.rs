@@ -6,7 +6,7 @@ fn link_onnx() {
     if arch == "aarch64" {
         return;
     }
-    let pkg = "onnxruntime-win-x64-1.19.2";
+    let pkg = "onnxruntime-win-x64-1.22.0";
     println!(
         "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
         pkg

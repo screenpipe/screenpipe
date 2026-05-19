@@ -34,6 +34,7 @@ pub struct CalendarEvent {
     pub end_local: DateTime<Local>,
     pub attendees: Vec<String>,
     pub location: Option<String>,
+    pub meeting_url: Option<String>,
     pub calendar_name: String,
     pub is_all_day: bool,
 }
@@ -139,6 +140,7 @@ impl ScreenpipeCalendar {
                 .ok()
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
+            let meeting_url = extract_meeting_url(location.as_deref());
             let is_all_day = appt.AllDay().unwrap_or(false);
             let id = appt.LocalId().map(|s| s.to_string()).unwrap_or_default();
 
@@ -193,6 +195,7 @@ impl ScreenpipeCalendar {
                 end_local,
                 attendees,
                 location,
+                meeting_url,
                 calendar_name,
                 is_all_day,
             });
@@ -233,4 +236,56 @@ fn win_datetime_to_utc(dt: &WinDateTime) -> DateTime<Utc> {
     let secs = unix_ticks_100ns / 10_000_000;
     let nanos = ((unix_ticks_100ns % 10_000_000) * 100) as u32;
     Utc.timestamp_opt(secs, nanos).unwrap()
+}
+
+fn normalize_meeting_url(raw: String) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
+        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let is_known_meeting = lower.contains("meet.google.com/")
+        || lower.contains("zoom.us/")
+        || lower.contains("teams.microsoft.com/")
+        || lower.contains("teams.live.com/")
+        || lower.contains("webex.com/");
+
+    if !is_known_meeting {
+        return None;
+    }
+
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(trimmed)
+    } else {
+        Some(format!("https://{}", trimmed.trim_start_matches('/')))
+    }
+}
+
+fn extract_meeting_url(text: Option<&str>) -> Option<String> {
+    let text = text?;
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+        .find_map(|token| normalize_meeting_url(token.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_known_meeting_urls() {
+        assert_eq!(
+            extract_meeting_url(Some("meet.google.com/abc-defg-hij")),
+            Some("https://meet.google.com/abc-defg-hij".to_string())
+        );
+        assert_eq!(
+            extract_meeting_url(Some("https://teams.microsoft.com/l/meetup-join/abc;")),
+            Some("https://teams.microsoft.com/l/meetup-join/abc".to_string())
+        );
+        assert!(extract_meeting_url(Some("conference room")).is_none());
+    }
 }

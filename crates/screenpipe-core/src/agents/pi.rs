@@ -143,13 +143,52 @@ impl PiExecutor {
         self
     }
 
+    /// User policy: when the marker file
+    /// `~/.screenpipe/cloud_media_analysis.disabled` exists, the
+    /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
+    /// confidential-enclave block. Default (no marker) = enabled, so
+    /// fresh installs ship the capability documented and Pi knows to
+    /// call `api.screenpi.pe` with `model: "gemma4-e4b"` for audio /
+    /// video / image analysis.
+    ///
+    /// Gating happens at install time (here) rather than by mutating
+    /// the rendered SKILL.md after the fact — those copies get
+    /// overwritten on every Pi run, so post-install edits don't stick.
+    fn cloud_media_analysis_enabled() -> bool {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return true,
+        };
+        !home
+            .join(".screenpipe")
+            .join("cloud_media_analysis.disabled")
+            .exists()
+    }
+
+    fn render_screenpipe_api_skill() -> String {
+        let mut s = String::from(include_str!("../../assets/skills/screenpipe-api/SKILL.md"));
+        if Self::cloud_media_analysis_enabled() {
+            // Trim trailing whitespace before appending so we don't
+            // accumulate blank lines on rebuild.
+            while s.ends_with(char::is_whitespace) {
+                s.pop();
+            }
+            s.push('\n');
+            s.push('\n');
+            s.push_str(
+                include_str!("../../assets/skills/screenpipe-api/cloud_media_analysis_block.md")
+                    .trim_end(),
+            );
+            s.push('\n');
+        }
+        s
+    }
+
     /// Ensure screenpipe skills exist in `project_dir/.pi/skills/`.
     pub fn ensure_screenpipe_skill(project_dir: &Path) -> Result<()> {
+        let api_skill = Self::render_screenpipe_api_skill();
         let skills: &[(&str, &str)] = &[
-            (
-                "screenpipe-api",
-                include_str!("../../assets/skills/screenpipe-api/SKILL.md"),
-            ),
+            ("screenpipe-api", api_skill.as_str()),
             (
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
@@ -226,11 +265,12 @@ impl PiExecutor {
         use crate::pipes::permissions::PipePermissions;
         let perms = PipePermissions::from_config(config);
 
+        let api_skill = Self::render_screenpipe_api_skill();
         #[allow(clippy::type_complexity)]
         let all_skills: &[(&str, &str, Box<dyn Fn(&PipePermissions) -> bool>)] = &[
             (
                 "screenpipe-api",
-                include_str!("../../assets/skills/screenpipe-api/SKILL.md"),
+                api_skill.as_str(),
                 Box::new(|_| true), // always installed — unified API skill
             ),
             (
@@ -1907,11 +1947,13 @@ mod tests {
     #[test]
     fn test_lossy_utf8_handles_invalid_bytes() {
         // Simulate raw bytes from a pipe: "Hi" + 0xFF 0xFE (invalid UTF-8) + newline + "OK" + newline
-        let raw_bytes: &[u8] = b"Hi\xff\xfe\nOK\n";
+        let mut raw_bytes = b"Hi".to_vec();
+        raw_bytes.extend([0xff, 0xfe, b'\n']);
+        raw_bytes.extend_from_slice(b"OK\n");
 
         // Strict UTF-8 should fail
         assert!(
-            std::str::from_utf8(raw_bytes).is_err(),
+            std::str::from_utf8(&raw_bytes).is_err(),
             "raw bytes should not be valid UTF-8"
         );
 

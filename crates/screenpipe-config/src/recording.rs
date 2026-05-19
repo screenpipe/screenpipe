@@ -62,6 +62,17 @@ pub struct RecordingSettings {
     #[serde(rename = "transcriptionMode")]
     pub transcription_mode: String,
 
+    /// Stream live notes only for manually-started live meetings. This is
+    /// separate from 24/7 background transcription: the recorder still writes
+    /// durable chunks, while this powers the low-latency meeting note UI.
+    #[serde(rename = "meetingLiveTranscriptionEnabled")]
+    pub meeting_live_transcription_enabled: bool,
+
+    /// Provider for manually-started live notes. Defaults to the selected audio
+    /// transcription engine so local/custom engines work without Cloud.
+    #[serde(rename = "meetingLiveTranscriptionProvider")]
+    pub meeting_live_transcription_provider: String,
+
     /// Audio device names/IDs to capture from.
     #[serde(rename = "audioDevices")]
     pub audio_devices: Vec<String>,
@@ -87,6 +98,11 @@ pub struct RecordingSettings {
         default = "default_experimental_coreaudio_system_audio"
     )]
     pub experimental_coreaudio_system_audio: bool,
+
+    /// Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
+    /// Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
+    #[serde(rename = "windowsInputAecEnabled", default)]
+    pub windows_input_aec_enabled: bool,
 
     /// Duration of each audio chunk in seconds before transcription.
     /// Stored as i32 to match existing store.bin schema (cast to u64 by engine).
@@ -136,6 +152,46 @@ pub struct RecordingSettings {
     /// native resolution). Default: 1920.
     #[serde(rename = "maxSnapshotWidth", default = "default_max_snapshot_width")]
     pub max_snapshot_width: u32,
+
+    /// Skip the background JPEG->MP4 snapshot compaction worker.
+    /// Use when the MP4 timeline UI is not used, e.g. task-mining tools
+    /// that consume accessibility_text / ui_events only.
+    /// Side effect: JPEGs are not compacted, so disk usage depends on retention.
+    #[serde(rename = "disableSnapshotCompaction", default)]
+    pub disable_snapshot_compaction: bool,
+
+    /// Skip the v2 meeting detector watcher (5s-interval process / AX scan).
+    /// Use when meeting detection is not consumed (task-mining, headless analysis,
+    /// agents that read accessibility_text and ui_events only) — avoids the
+    /// constant process enumeration + AX tree walk cost.
+    /// Side effect: meeting-related DB rows are not generated; the audio pipeline's
+    /// in_meeting override flag stays false.
+    #[serde(rename = "disableMeetingDetector", default)]
+    pub disable_meeting_detector: bool,
+
+    // ── Mitsukeru fork: event-driven capture overrides ─────────────────
+    // ミツケル拡張：PowerProfile に依らず個別パラメータを直接指定するための上書き値。
+    // None の場合は通常通り PowerProfile が決定。デスクトップ常時記録のような用途で
+    // 「AC 電源だが Balanced 相当の頻度に固定したい」ケースに対応する。
+    /// Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "idleCaptureIntervalMs", default)]
+    pub idle_capture_interval_ms: Option<u64>,
+
+    /// Override `EventDrivenCaptureConfig::visual_check_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "visualCheckIntervalMs", default)]
+    pub visual_check_interval_ms: Option<u64>,
+
+    /// Override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "visualChangeThreshold", default)]
+    pub visual_change_threshold: Option<f64>,
+
+    /// Override `EventDrivenCaptureConfig::min_capture_interval_ms` (milliseconds).
+    /// None = follow active PowerProfile.
+    #[serde(rename = "minCaptureIntervalMs", default)]
+    pub min_capture_interval_ms: Option<u64>,
 
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
@@ -347,6 +403,14 @@ impl RecordingSettings {
             Some(id)
         }
     }
+
+    /// Returns the display name/email used to label the local microphone speaker.
+    pub fn effective_user_name(&self) -> Option<&str> {
+        self.user_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }
 }
 
 impl Default for RecordingSettings {
@@ -356,9 +420,12 @@ impl Default for RecordingSettings {
             audio_transcription_engine: crate::best_engine_for_platform(crate::detect_tier())
                 .to_string(),
             transcription_mode: "batch".to_string(),
+            meeting_live_transcription_enabled: true,
+            meeting_live_transcription_provider: "selected-engine".to_string(),
             audio_devices: vec![],
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
+            windows_input_aec_enabled: false,
             audio_chunk_duration: 30,
             deepgram_api_key: String::new(),
             filter_music: false,
@@ -369,6 +436,12 @@ impl Default for RecordingSettings {
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
             max_snapshot_width: default_max_snapshot_width(),
+            disable_snapshot_compaction: false,
+            disable_meeting_detector: false,
+            idle_capture_interval_ms: None,
+            visual_check_interval_ms: None,
+            visual_change_threshold: None,
+            min_capture_interval_ms: None,
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],

@@ -1,7 +1,7 @@
 ---
-title: "connect Slack, Notion, Gmail, and 45+ apps to screenpipe"
+title: "connect Slack, Notion, Gmail, and more apps to screenpipe"
 sidebarTitle: "connections"
-description: "Connect 45+ apps to screenpipe — Slack, Notion, Gmail, Obsidian, Toggl, HubSpot, Salesforce, and more — giving your AI agents your full context."
+description: "Connect apps to screenpipe — Slack, Notion, Gmail, Obsidian, HubSpot, Salesforce, Zoom, PostHog, and Sentry — to give AI agents structured context."
 icon: "plug"
 ---
 
@@ -11,15 +11,31 @@ icon: "plug"
 
 screenpipe captures your screen and audio by default. but you can also connect your apps directly — this gives pipes and AI agents richer, structured data from the source.
 
+<Tip>
+for the complete registry, auth patterns, multi-account examples, and proxy test calls, use the [connection reference](/connection-reference).
+</Tip>
+
 ## how to connect apps
 
 open screenpipe → click **settings** (gear icon, bottom of sidebar) → scroll to **Data & Privacy** → click **Connections**.
 
 you'll see all available integrations. click one to configure credentials or start an OAuth flow.
 
+### finding API keys & credentials
+
+for integrations that require API keys or other credentials, screenpipe provides **help links** next to each field:
+
+- look for the **?** icon next to the field label (e.g., "API Key")
+- hover over it to see "Learn how to find your API Key for this integration"
+- click **Open guide →** to jump directly to that app's settings page
+
+this takes you straight to where you need to be — no more hunting through docs.
+
+**oauth integrations** (Slack, Notion, Gmail, etc.) skip the API key step entirely — just click the big "Connect with [App]" button and approve access in your browser.
+
 <Tip>some pipes require specific connections. when you install a pipe that needs a connection (like Notion or Toggl), screenpipe will prompt you to configure it automatically.</Tip>
 
-## available integrations (45+)
+## available integrations
 
 ### communication
 | app | description |
@@ -31,12 +47,16 @@ you'll see all available integrations. click one to configure credentials or sta
 | **Telegram** | access Telegram messages |
 | **WhatsApp** | access WhatsApp conversations |
 | **Microsoft Teams** | access Teams messages and channels |
+| **Zoom** | access Zoom meeting metadata and cloud recordings |
 
 ### productivity & project management
 | app | description |
 |-----|-------------|
 | **Notion** | read and write to Notion databases and pages |
 | **Obsidian** | sync daily logs, meeting notes, and journals to your vault |
+| **Google Calendar** | enrich meetings with attendees and schedule context |
+| **Google Docs** | read and write Google Docs through OAuth |
+| **Google Sheets** | query spreadsheet metadata and values |
 | **Linear** | access issues and projects |
 | **Todoist** | manage tasks and projects |
 | **Asana** | access tasks and projects |
@@ -71,6 +91,8 @@ you'll see all available integrations. click one to configure credentials or sta
 | **Sentry** | access error tracking and alerts |
 | **Vercel** | access deployment data |
 | **Stripe** | access payment and subscription data |
+| **PostHog** | access product analytics and event data |
+| **Supabase** | access projects, storage, and edge functions |
 
 ### automation platforms
 | app | description |
@@ -97,12 +119,16 @@ you'll see all available integrations. click one to configure credentials or sta
 | **Glean** | connect enterprise knowledge |
 | **Granola** | sync meeting notes |
 | **Limitless** | sync Limitless data |
+| **Fireflies.ai** | pull meeting transcripts and action items |
+| **Otter.ai** | connect cloud meeting transcripts |
+| **Bee** | connect Bee wearable captures |
 
 ### other
 | app | description |
 |-----|-------------|
 | **Brex** | access financial data |
 | **Microsoft 365** | access Office apps data |
+| **QuickBooks Online** | access company accounting data |
 
 ## multi-account support
 
@@ -112,6 +138,18 @@ you can connect multiple accounts for the same app using instance names. for exa
 - `notion:personal` — your personal workspace
 
 this is configured in the connections UI when adding a new integration.
+
+## use connections from pipes
+
+connections can expose a local proxy endpoint so pipes can call third-party APIs without putting secrets in the prompt:
+
+```bash
+curl "http://localhost:3030/connections/gmail/proxy/users/me/profile"
+curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
+curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
+```
+
+see [connection reference](/connection-reference) and [pipe debugging](/pipe-debugging) for safe proxy patterns.
 
 ## AI tool connections (MCP)
 
@@ -133,7 +171,7 @@ without connections, screenpipe captures what's visible on your screen. with con
 
 | without connections | with connections |
 |---|---|
-| sees email text via OCR when Gmail is open | gets full email threads, senders, timestamps via API |
+| sees email text through accessibility capture when Gmail is open | gets full email threads, senders, timestamps via API |
 | sees calendar when you look at it | knows your full schedule, upcoming meetings, attendees |
 | sees Notion pages via screen capture | reads and writes to Notion databases directly |
 | sees CRM data when you open it | auto-syncs contacts and deals after every call |
@@ -142,7 +180,8 @@ this makes pipes significantly more accurate and useful.
 
 ## privacy & security
 
-- OAuth connections use standard OAuth flows — screenpipe stores tokens locally in your secure store (`~/.screenpipe/store.bin`)
+- OAuth connections use standard OAuth flows — screenpipe stores tokens locally in your secure store when available
+- CLI-like environments can fall back to local `~/.screenpipe/connections.json`
 - connected app data stays on your device
 - you can disconnect any app at any time in **settings → connections**
 - screenpipe never sends your connected app data to our servers

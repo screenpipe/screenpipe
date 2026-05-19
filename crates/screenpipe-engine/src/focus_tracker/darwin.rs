@@ -35,9 +35,9 @@
 //! practice because the controller is only torn down on settings change
 //! and the leak is a few KB).
 
-use super::{FocusEvent, FocusTracker};
+use super::{FocusEvent, FocusTracker, MonitorIdentity};
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -84,9 +84,9 @@ fn cursor_location() -> Option<(f64, f64)> {
 /// Rectangular bounds of a monitor for point-in-rect testing. Plain struct
 /// so the pure pick logic can be exercised in tests without needing access
 /// to `SafeMonitor`'s private test constructor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct MonitorRect {
-    id: u32,
+    identity: MonitorIdentity,
     x: f64,
     y: f64,
     w: f64,
@@ -97,10 +97,10 @@ struct MonitorRect {
 ///
 /// `[x, x+w)` / `[y, y+h)` is half-open so adjacent monitors don't overlap
 /// at the seam.
-fn pick_monitor(rects: &[MonitorRect], x: f64, y: f64) -> Option<u32> {
+fn pick_monitor(rects: &[MonitorRect], x: f64, y: f64) -> Option<MonitorIdentity> {
     rects.iter().find_map(|r| {
         if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h {
-            Some(r.id)
+            Some(r.identity.clone())
         } else {
             None
         }
@@ -116,11 +116,11 @@ fn monitor_for_point(
     monitors: &[screenpipe_screen::monitor::SafeMonitor],
     x: f64,
     y: f64,
-) -> Option<u32> {
+) -> Option<MonitorIdentity> {
     let rects: Vec<MonitorRect> = monitors
         .iter()
         .map(|m| MonitorRect {
-            id: m.id(),
+            identity: MonitorIdentity::from_monitor(m),
             x: m.x() as f64,
             y: m.y() as f64,
             w: m.width() as f64,
@@ -134,10 +134,8 @@ fn monitor_for_point(
 /// poll. Kept in an `Arc` so both can update it without reach-around.
 struct Inner {
     tx: broadcast::Sender<FocusEvent>,
-    /// Last known focused monitor id. `0` encodes "unknown" (monitor ids from
-    /// sck-rs / xcap are platform-assigned non-zero display ids, so 0 is a
-    /// safe sentinel).
-    current: AtomicU32,
+    /// Last known focused monitor identity, or None when unknown.
+    current: Mutex<Option<MonitorIdentity>>,
     stop_flag: AtomicBool,
     /// Latch: if we've already emitted `Unknown`, don't re-spam until we
     /// resolve a valid monitor again. Protected by a Mutex because it's
@@ -155,13 +153,23 @@ impl Inner {
         let resolved = cursor_location().and_then(|(x, y)| monitor_for_point(monitors, x, y));
 
         match resolved {
-            Some(id) => {
-                let prev = self.current.load(Ordering::Relaxed);
-                if prev != id {
-                    self.current.store(id, Ordering::Relaxed);
+            Some(identity) => {
+                let changed = self
+                    .current
+                    .lock()
+                    .map(|mut current| {
+                        if current.as_ref() == Some(&identity) {
+                            false
+                        } else {
+                            *current = Some(identity.clone());
+                            true
+                        }
+                    })
+                    .unwrap_or(false);
+                if changed {
                     // Ignore send errors — no subscribers is fine.
-                    let _ = self.tx.send(FocusEvent::Focused(id));
-                    debug!("focus tracker: focused monitor -> {}", id);
+                    let _ = self.tx.send(FocusEvent::Focused(identity.clone()));
+                    debug!("focus tracker: focused monitor -> {:?}", identity);
                 }
                 if let Ok(mut u) = self.unknown_emitted.lock() {
                     *u = false;
@@ -181,7 +189,9 @@ impl Inner {
                 };
                 if emit {
                     let _ = self.tx.send(FocusEvent::Unknown);
-                    self.current.store(0, Ordering::Relaxed);
+                    if let Ok(mut current) = self.current.lock() {
+                        *current = None;
+                    }
                     debug!("focus tracker: cursor not on any known monitor");
                 }
             }
@@ -199,7 +209,7 @@ impl DarwinFocusTracker {
         let (tx, _) = broadcast::channel::<FocusEvent>(16);
         let inner = Arc::new(Inner {
             tx,
-            current: AtomicU32::new(0),
+            current: Mutex::new(None),
             stop_flag: AtomicBool::new(false),
             unknown_emitted: Mutex::new(false),
         });
@@ -326,13 +336,8 @@ fn run_workspace_observer(inner: Arc<Inner>) {
 }
 
 impl FocusTracker for DarwinFocusTracker {
-    fn current(&self) -> Option<u32> {
-        let v = self.inner.current.load(Ordering::Relaxed);
-        if v == 0 {
-            None
-        } else {
-            Some(v)
-        }
+    fn current(&self) -> Option<MonitorIdentity> {
+        self.inner.current.lock().ok()?.clone()
     }
 
     fn subscribe(&self) -> broadcast::Receiver<FocusEvent> {
@@ -361,14 +366,14 @@ mod tests {
     fn pick_monitor_basic_bounds() {
         let monitors = vec![
             MonitorRect {
-                id: 1,
+                identity: MonitorIdentity::runtime_id(1),
                 x: 0.0,
                 y: 0.0,
                 w: 1920.0,
                 h: 1080.0,
             },
             MonitorRect {
-                id: 2,
+                identity: MonitorIdentity::runtime_id(2),
                 x: 1920.0,
                 y: 0.0,
                 w: 1920.0,
@@ -376,10 +381,19 @@ mod tests {
             },
         ];
 
-        assert_eq!(pick_monitor(&monitors, 100.0, 100.0), Some(1));
-        assert_eq!(pick_monitor(&monitors, 2000.0, 100.0), Some(2));
+        assert_eq!(
+            pick_monitor(&monitors, 100.0, 100.0),
+            Some(MonitorIdentity::runtime_id(1))
+        );
+        assert_eq!(
+            pick_monitor(&monitors, 2000.0, 100.0),
+            Some(MonitorIdentity::runtime_id(2))
+        );
         // Left edge of m2 is inclusive; right edge of m1 is exclusive.
-        assert_eq!(pick_monitor(&monitors, 1920.0, 500.0), Some(2));
+        assert_eq!(
+            pick_monitor(&monitors, 1920.0, 500.0),
+            Some(MonitorIdentity::runtime_id(2))
+        );
         assert_eq!(pick_monitor(&monitors, 500.0, 5000.0), None);
         assert_eq!(pick_monitor(&monitors, -5.0, -5.0), None);
     }

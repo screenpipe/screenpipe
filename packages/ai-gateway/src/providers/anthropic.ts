@@ -14,6 +14,31 @@ import type {
 	ContentBlockParam,
 } from '@anthropic-ai/sdk/resources';
 
+function nonEmptyText(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	return value.trim().length > 0 ? value : null;
+}
+
+function safeJson(value: unknown): string {
+	if (typeof value === 'string') return value;
+	try {
+		return JSON.stringify(value ?? {});
+	} catch {
+		return '{}';
+	}
+}
+
+function safeToolInput(value: unknown): Record<string, any> {
+	if (typeof value === 'string') {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return {};
+		}
+	}
+	return (value && typeof value === 'object') ? value as Record<string, any> : {};
+}
+
 export class AnthropicProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -265,7 +290,7 @@ export class AnthropicProvider implements AIProvider {
 					content: [{
 						type: 'tool_result',
 						tool_use_id: sanitizeToolUseId((msg as any).tool_call_id),
-						content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+						content: nonEmptyText(typeof msg.content === 'string' ? msg.content : safeJson(msg.content)) ?? '[empty tool result]',
 					}] as any,
 				});
 				continue;
@@ -279,15 +304,16 @@ export class AnthropicProvider implements AIProvider {
 					if (text) content.push({ type: 'text', text });
 				}
 				for (const tc of (msg as any).tool_calls) {
+					const name = tc.function?.name || tc.name;
+					if (!name) continue;
 					content.push({
 						type: 'tool_use',
 						id: sanitizeToolUseId(tc.id),
-						name: tc.function?.name || tc.name,
-						input: typeof tc.function?.arguments === 'string'
-							? JSON.parse(tc.function.arguments)
-							: tc.function?.arguments || {},
+						name,
+						input: safeToolInput(tc.function?.arguments ?? tc.input),
 					});
 				}
+				if (content.length === 0) continue;
 				result.push({
 					role: 'assistant',
 					content: content as any,
@@ -297,83 +323,84 @@ export class AnthropicProvider implements AIProvider {
 
 			// Regular user/assistant messages
 			const content: ContentBlockParam[] = Array.isArray(msg.content)
-				? msg.content.map((part) => {
+				? msg.content.flatMap((part): ContentBlockParam[] => {
+						if (part.type === 'text') {
+							const text = nonEmptyText(part.text);
+							return text ? [{ type: 'text', text } as TextBlock] : [];
+						}
 						// Handle OpenAI vision format (image_url)
 						if (part.type === 'image_url' && part.image_url?.url) {
 							const url = part.image_url.url;
 							const dataUrlMatch = url.match(/^data:([^;]+);base64,(.+)$/);
 							if (dataUrlMatch) {
-								return {
+								return [{
 									type: 'image',
 									source: {
 										type: 'base64',
 										media_type: dataUrlMatch[1] as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
 										data: dataUrlMatch[2],
 									},
-								} as ImageBlockParam;
+								} as ImageBlockParam];
 							}
-							return {
+							return [{
 								type: 'text',
 								text: `[Image URL: ${url}]`,
-							} as TextBlock;
+							} as TextBlock];
 						}
 						// Handle Pi native format: { type: "image", data: "base64...", mimeType: "image/png" }
 						if (part.type === 'image' && part.data && part.mimeType) {
-							return {
+							return [{
 								type: 'image',
 								source: {
 									type: 'base64',
 									media_type: part.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
 									data: part.data as string,
 								},
-							} as ImageBlockParam;
+							} as ImageBlockParam];
 						}
 						// Handle Anthropic native format (from Pi agent)
 						// Normalize mediaType (camelCase) to media_type (snake_case)
 						if (part.type === 'image' && part.source?.type === 'base64') {
-							return {
+							return [{
 								type: 'image',
 								source: {
 									type: 'base64',
 									media_type: part.source.media_type || part.source.mediaType || 'image/png',
 									data: part.source.data,
 								},
-							} as ImageBlockParam;
+							} as ImageBlockParam];
 						}
 						// Legacy format support
 						if (part.type === 'image' && part.image?.url) {
 							const url = part.image.url;
 							const dataUrlMatch = url.match(/^data:([^;]+);base64,(.+)$/);
 							if (dataUrlMatch) {
-								return {
+								return [{
 									type: 'image',
 									source: {
 										type: 'base64',
 										media_type: dataUrlMatch[1] as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
 										data: dataUrlMatch[2],
 									},
-								} as ImageBlockParam;
+								} as ImageBlockParam];
 							}
-							return {
+							return [{
 								type: 'image',
 								source: {
 									type: 'base64',
 									media_type: 'image/jpeg',
 									data: url,
 								},
-							} as ImageBlockParam;
+							} as ImageBlockParam];
 						}
-						return {
-							type: 'text',
-							text: part.text || '',
-						} as TextBlock;
+						return [];
 				  })
-				: [
-						{
-							type: 'text',
-							text: msg.content as string,
-						},
-				  ];
+				: (() => {
+						const text = nonEmptyText(msg.content);
+						return text ? [{ type: 'text', text } as TextBlock] : [];
+				  })();
+
+			if (content.length === 0) continue;
 
 			result.push({
 				role: msg.role === 'user' ? 'user' : 'assistant',

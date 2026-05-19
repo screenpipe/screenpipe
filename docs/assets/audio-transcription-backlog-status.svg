@@ -1,0 +1,122 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="760" fill="#050505"/>
+  <rect x="36" y="34" width="1128" height="692" rx="18" fill="#0A0A0A" stroke="#FFFFFF" stroke-opacity="0.26"/>
+
+  <rect x="64" y="62" width="214" height="636" rx="14" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.14"/>
+  <text x="88" y="108" fill="#FFFFFF" font-size="22" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">settings</text>
+  <text x="88" y="166" fill="#FFFFFF" fill-opacity="0.44" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">app</text>
+  <text x="98" y="207" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">display</text>
+  <text x="98" y="247" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">general</text>
+  <text x="98" y="287" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">ai models</text>
+  <rect x="82" y="314" width="172" height="42" rx="10" fill="#FFFFFF"/>
+  <text x="98" y="341" fill="#050505" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">recording</text>
+  <text x="98" y="392" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">shortcuts</text>
+  <text x="88" y="454" fill="#FFFFFF" fill-opacity="0.44" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">data</text>
+  <text x="98" y="496" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">usage</text>
+  <text x="98" y="536" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">privacy</text>
+  <text x="98" y="576" fill="#FFFFFF" fill-opacity="0.56" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">storage</text>
+
+  <rect x="308" y="62" width="828" height="636" rx="14" fill="#0D0D0D" stroke="#FFFFFF" stroke-opacity="0.14"/>
+  <rect x="308" y="62" width="828" height="74" rx="14" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <text x="342" y="107" fill="#FFFFFF" font-size="24" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">recording</text>
+  <text x="342" y="166" fill="#FFFFFF" fill-opacity="0.58" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Screen and audio recording preferences</text>
+
+  <text x="342" y="219" fill="#FFFFFF" fill-opacity="0.5" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700">audio</text>
+
+  <rect x="342" y="242" width="760" height="68" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="374" y="274" fill="#FFFFFF" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">audio recording</text>
+  <text x="374" y="295" fill="#FFFFFF" fill-opacity="0.52" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Capture audio from microphone and system</text>
+  <rect x="1010" y="263" width="58" height="26" rx="13" fill="#FFFFFF"/>
+  <circle cx="1055" cy="276" r="10" fill="#050505"/>
+
+  <rect x="342" y="326" width="760" height="76" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="374" y="360" fill="#FFFFFF" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">transcription engine</text>
+  <rect x="776" y="345" width="34" height="34" rx="8" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.26"/>
+  <path d="M787 354H799M787 361H799M787 368H795" stroke="#FFFFFF" stroke-opacity="0.82" stroke-width="2" stroke-linecap="round"/>
+  <rect x="800" y="336" width="32" height="20" rx="10" fill="#FFFFFF"/>
+  <text x="807" y="350" fill="#050505" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="900">18</text>
+  <rect x="822" y="345" width="246" height="34" rx="8" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <text x="846" y="367" fill="#FFFFFF" fill-opacity="0.78" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Whisper Turbo (fast)</text>
+
+  <rect x="342" y="422" width="760" height="88" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="374" y="456" fill="#FFFFFF" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">live meeting notes</text>
+  <text x="374" y="480" fill="#FFFFFF" fill-opacity="0.52" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Meeting-only live captions, separate from background transcription</text>
+  <rect x="1010" y="452" width="58" height="26" rx="13" fill="#FFFFFF" fill-opacity="0.18"/>
+  <circle cx="1023" cy="465" r="10" fill="#FFFFFF" fill-opacity="0.9"/>
+
+  <rect x="342" y="530" width="760" height="76" rx="10" fill="#080808" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="374" y="564" fill="#FFFFFF" font-size="17" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">batch transcription</text>
+  <text x="374" y="588" fill="#FFFFFF" fill-opacity="0.52" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Longer audio chunks for better transcription quality</text>
+  <rect x="1010" y="554" width="58" height="26" rx="13" fill="#FFFFFF" fill-opacity="0.18"/>
+  <circle cx="1023" cy="567" r="10" fill="#FFFFFF" fill-opacity="0.9"/>
+
+  <rect x="0" y="0" width="1200" height="760" fill="#000000" fill-opacity="0.52"/>
+  <rect x="230" y="122" width="740" height="516" rx="14" fill="#0B0B0B" stroke="#FFFFFF" stroke-opacity="0.28"/>
+  <text x="266" y="174" fill="#FFFFFF" font-size="22" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">background transcription backlog</text>
+  <text x="266" y="204" fill="#FFFFFF" fill-opacity="0.56" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Audio chunks waiting for background transcription reconciliation.</text>
+
+  <rect x="266" y="232" width="190" height="58" rx="6" fill="#070707" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="286" y="256" fill="#FFFFFF" fill-opacity="0.54" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">waiting</text>
+  <text x="286" y="278" fill="#FFFFFF" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">18</text>
+  <rect x="476" y="232" width="190" height="58" rx="6" fill="#070707" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="496" y="256" fill="#FFFFFF" fill-opacity="0.54" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">oldest</text>
+  <text x="496" y="278" fill="#FFFFFF" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">24m</text>
+  <rect x="686" y="232" width="218" height="58" rx="6" fill="#070707" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <text x="706" y="256" fill="#FFFFFF" fill-opacity="0.54" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">worker</text>
+  <text x="706" y="278" fill="#FFFFFF" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="800">running</text>
+
+  <rect x="266" y="318" width="638" height="220" rx="4" fill="#050505" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <rect x="266" y="318" width="638" height="36" fill="#121212"/>
+  <line x1="266" y1="354" x2="904" y2="354" stroke="#FFFFFF" stroke-opacity="0.16"/>
+  <line x1="342" y1="318" x2="342" y2="538" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <line x1="420" y1="318" x2="420" y2="538" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <line x1="552" y1="318" x2="552" y2="538" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <line x1="730" y1="318" x2="730" y2="538" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <line x1="808" y1="318" x2="808" y2="538" stroke="#FFFFFF" stroke-opacity="0.12"/>
+
+  <text x="282" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">chunk</text>
+  <text x="358" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">age</text>
+  <text x="436" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">captured</text>
+  <text x="568" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">file</text>
+  <text x="746" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">status</text>
+  <text x="824" y="341" fill="#FFFFFF" fill-opacity="0.55" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">actions</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+    <text x="282" y="382" fill="#FFFFFF">39102</text>
+    <text x="358" y="382" fill="#FFFFFF">24m</text>
+    <text x="436" y="382" fill="#FFFFFF" fill-opacity="0.64">7:18 AM</text>
+    <text x="568" y="382" fill="#FFFFFF" fill-opacity="0.64">mic_0718.wav</text>
+    <rect x="746" y="366" width="52" height="22" rx="11" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <text x="758" y="382" fill="#FFFFFF" fill-opacity="0.72">wait</text>
+    <rect x="824" y="362" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M835 370L845 376L835 382V370Z" fill="#FFFFFF" fill-opacity="0.86"/>
+    <rect x="860" y="362" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M870 370H878M872 370V382M876 370V382M870 382H878" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="1.5" stroke-linecap="round"/>
+
+    <text x="282" y="424" fill="#FFFFFF">39103</text>
+    <text x="358" y="424" fill="#FFFFFF">23m</text>
+    <text x="436" y="424" fill="#FFFFFF" fill-opacity="0.64">7:19 AM</text>
+    <text x="568" y="424" fill="#FFFFFF" fill-opacity="0.64">system_0719.wav</text>
+    <rect x="746" y="408" width="52" height="22" rx="11" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <text x="758" y="424" fill="#FFFFFF" fill-opacity="0.72">wait</text>
+    <rect x="824" y="404" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M835 412L845 418L835 424V412Z" fill="#FFFFFF" fill-opacity="0.86"/>
+    <rect x="860" y="404" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M870 412H878M872 412V424M876 412V424M870 424H878" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="1.5" stroke-linecap="round"/>
+
+    <text x="282" y="466" fill="#FFFFFF">39104</text>
+    <text x="358" y="466" fill="#FFFFFF">22m</text>
+    <text x="436" y="466" fill="#FFFFFF" fill-opacity="0.64">7:20 AM</text>
+    <text x="568" y="466" fill="#FFFFFF" fill-opacity="0.64">mic_0720.wav</text>
+    <rect x="746" y="450" width="52" height="22" rx="11" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <text x="758" y="466" fill="#FFFFFF" fill-opacity="0.72">wait</text>
+    <rect x="824" y="446" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M835 454L845 460L835 466V454Z" fill="#FFFFFF" fill-opacity="0.86"/>
+    <rect x="860" y="446" width="28" height="28" rx="6" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.22"/>
+    <path d="M870 454H878M872 454V466M876 454V466M870 466H878" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+
+  <text x="266" y="577" fill="#FFFFFF" fill-opacity="0.48" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">A small icon keeps settings compact; the modal handles row-level review and cleanup.</text>
+  <rect x="812" y="558" width="92" height="34" rx="8" fill="#111111" stroke="#FFFFFF" stroke-opacity="0.24"/>
+  <text x="836" y="580" fill="#FFFFFF" fill-opacity="0.78" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">refresh</text>
+</svg>

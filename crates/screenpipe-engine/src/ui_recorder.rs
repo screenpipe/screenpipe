@@ -115,6 +115,9 @@ impl UiRecorderConfig {
             }
         }
 
+        config.ignored_windows = self.ignored_windows.clone();
+        config.included_windows = self.included_windows.clone();
+
         config
     }
 }

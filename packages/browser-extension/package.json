@@ -1,6 +1,6 @@
 {
   "name": "@screenpipe/browser-extension",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "scripts": {
     "build": "bun build src/worker.ts src/options.ts src/popup.ts --outdir dist --target browser --format esm",

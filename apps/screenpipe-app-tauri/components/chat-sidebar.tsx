@@ -26,38 +26,97 @@
  *   │                        │         │ writes status/preview to store │
  *   └────────────────────────┘         └────────────────────────────────┘
  *
- * Pin / close persist to the conversation's JSON file on disk so the state
- * survives app restart. Close is non-destructive (sets `hidden: true`);
- * a separate "delete forever" action would unlink the file.
+ * Pin / archive persist to the conversation's JSON file on disk so the state
+ * survives app restart. Delete removes the file.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity, MessageSquare } from "lucide-react";
+import {
+  Pin,
+  Archive,
+  Undo2,
+  Trash2,
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  X,
+  MoreVertical,
+  Pencil,
+} from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
 import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
+  PipeActivityIndicator,
+  formatPipeCountdown,
+  formatPipeElapsed,
+} from "@/components/pipe-activity-indicator";
+import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { updateConversationFlags } from "@/lib/chat-storage";
+import { deleteConversationFile, updateConversationFlags } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
 import { commands } from "@/lib/utils/tauri";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface ChatSidebarProps {
   className?: string;
+  onViewAll?: () => void;
+}
+
+function readCollapsedPref(key: string, defaultValue = false): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v == null) return defaultValue;
+    return v === "true";
+  } catch {
+    return defaultValue;
+  }
+}
+
+function useCollapsedPref(key: string, defaultValue = false) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key, defaultValue));
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem(key, String(v));
+    } catch {
+      // ignore
+    }
+  };
+  return [collapsed, setCollapsed] as const;
 }
 
 function useVisibleChatSections(): {
   pinned: SessionRecord[];
   recents: SessionRecord[];
+  archived: SessionRecord[];
 } {
   const sessions = useOrderedSessions();
   const runningPipes = useRunningPipes();
@@ -73,13 +132,18 @@ function useVisibleChatSections(): {
   return useMemo(() => {
     const pinned: SessionRecord[] = [];
     const recents: SessionRecord[] = [];
+    const archived: SessionRecord[] = [];
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
       if (s.draft) continue;
+      if (s.hidden) {
+        archived.push(s);
+        continue;
+      }
       (s.pinned ? pinned : recents).push(s);
     }
-    return { pinned, recents };
+    return { pinned, recents, archived };
   }, [sessions, liveScheduledSids]);
 }
 
@@ -97,11 +161,12 @@ function useQueueDepths(): Map<string, number> {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     (async () => {
-      const u = await listen<{ sessionId: string; queued: { id: string }[] }>(
+      const u = await listen<{ sessionId?: string; session_id?: string; queued?: { id: string }[] }>(
         "pi-queue-changed",
         (e) => {
           if (cancelled) return;
-          const { sessionId, queued } = e.payload;
+          const { sessionId, queued } = normalizeQueueEventPayload(e.payload);
+          if (!sessionId) return;
           setDepths((prev) => {
             const next = new Map(prev);
             const count = queued?.length ?? 0;
@@ -128,10 +193,12 @@ function useQueueDepths(): Map<string, number> {
  * vertical scroll for the conversation list. Does NOT add a width / border /
  * background — those belong to the parent.
  */
-export function ChatSidebar({ className }: ChatSidebarProps) {
+export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const currentId = useChatStore((s) => s.currentId);
+  const diskHydrated = useChatStore((s) => s.diskHydrated);
   const actions = useChatActions();
   const queueDepths = useQueueDepths();
+  const [openConversationMenuId, setOpenConversationMenuId] = useState<string | null>(null);
 
   // Sync currentId from standalone-chat. Whenever the chat panel switches
   // its piSessionIdRef (new chat, prefill auto-send, history click in the
@@ -179,9 +246,30 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     void refetchUpcoming();
   };
 
-  const { pinned, recents } = useVisibleChatSections();
+  const { pinned, recents, archived } = useVisibleChatSections();
+  const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+
+  const hasScheduledSlice = upcomingPipes.length > 0 || runningPipes.length > 0;
+  const [pinnedCollapsed, setPinnedCollapsed] = useCollapsedPref(
+    "screenpipe:pinned-collapsed",
+    true
+  );
+  const [recentsCollapsed, setRecentsCollapsed] = useCollapsedPref("screenpipe:recents-collapsed");
+  const [archivedCollapsed, setArchivedCollapsed] = useCollapsedPref(
+    "screenpipe:closed-collapsed",
+    true
+  );
+  const [scheduledCollapsed, setScheduledCollapsed] = useCollapsedPref("screenpipe:scheduled-collapsed");
+  const [upcomingCollapsed, setUpcomingCollapsed] = useCollapsedPref("screenpipe:upcoming-collapsed");
+
+  const openAllCollapsed = recentsCollapsed && (archived.length === 0 || archivedCollapsed);
+  const recentsLoading = !diskHydrated && recents.length === 0;
 
   const handleSelect = (id: string) => {
+    setOpenConversationMenuId(null);
     // No early return for id === currentId. Two reasons:
     //   1. The user may be on a non-home section (Pipes/Memories/...);
     //      currentId is cleared in that case, but even if it weren't,
@@ -194,16 +282,15 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     emit("chat-load-conversation", { conversationId: id });
   };
 
-  const handleClose = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    // Abort the Pi process first. Otherwise a still-streaming Pi keeps
-    // emitting events for `id`, and pi-event-router's lazy-create branch
-    // resurrects the row in the sidebar a beat after the user closed it.
+  const handleArchive = async (id: string) => {
+    // Stop any active session first to avoid immediate row resurrection
+    // from trailing stream events.
     commands.piAbort(id).catch(() => {});
-    actions.drop(id);
-    // If the user closed the chat they were viewing, tell standalone-chat
-    // to clear the panel. Otherwise the panel would keep showing a
-    // conversation that no longer exists in the sidebar.
+    actions.patch(id, { hidden: true, unread: false });
+    // Archiving should tuck chats away immediately; users can reopen
+    // the bucket manually when they want to review archived items.
+    setArchivedCollapsed(true);
+    // Move the panel off a chat that just left the visible list.
     if (id === currentId) {
       const fresh = crypto.randomUUID();
       actions.upsert({
@@ -221,21 +308,65 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       actions.setCurrent(fresh);
       emit("chat-load-conversation", { conversationId: fresh });
     }
-    // Persist hidden=true to disk so the close survives restart. Failures
-    // here are best-effort — if the file doesn't exist (session never
-    // saved) the in-memory drop is enough; if the disk write fails (perm,
-    // disk full) the sidebar will re-show the row on next launch which is
-    // not great but recoverable by closing again. We don't surface an
-    // error toast for this — too low-stakes.
+    // Best-effort persistence for restart durability.
     try {
       await updateConversationFlags(id, { hidden: true });
     } catch {
-      // intentional — see comment above
+      // ignore
+    }
+    try {
+      await emit("chat-visibility-changed", { id, hidden: true });
+    } catch {
+      // ignore
     }
   };
 
-  const handleTogglePin = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
+  const handleUnarchive = async (id: string) => {
+    actions.patch(id, { hidden: false, unread: false });
+    try {
+      await updateConversationFlags(id, { hidden: false });
+    } catch {
+      // ignore
+    }
+    try {
+      await emit("chat-visibility-changed", { id, hidden: false });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteConfirmed = async (id: string) => {
+    actions.drop(id);
+    try {
+      await deleteConversationFile(id);
+    } catch {
+      // ignore
+    }
+    try {
+      await emit("chat-deleted", { id });
+    } catch {
+      // ignore
+    }
+    if (id === currentId) {
+      const fresh = crypto.randomUUID();
+      actions.upsert({
+        id: fresh,
+        title: "new chat",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+        draft: true,
+      });
+      actions.setCurrent(fresh);
+      emit("chat-load-conversation", { conversationId: fresh });
+    }
+  };
+
+  const handleTogglePin = async (id: string) => {
     const session = useChatStore.getState().sessions[id];
     if (!session) return;
     const next = !session.pinned;
@@ -247,72 +378,261 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
-  // Layout contract:
-  //   - Scheduled (pipe runs): only renders when something's running;
-  //     own collapsible scroll viewport capped at ~25% so it never
-  //     squeezes recents off-screen.
-  //   - Pinned (chats): non-scrolling. Few rows in practice.
-  //   - Recents: fixed collapsible header; rows fill the rest and
-  //     scroll. flex-1 + min-h-0 is what makes the inner overflow-y-auto
-  //     actually work without leaking past the sidebar bottom.
-  // Collapse state for both Scheduled and Recents persists in
-  // localStorage — "I closed it, leave it closed" across reloads.
+  const handleRenameRequest = (id: string) => {
+    const session = useChatStore.getState().sessions[id];
+    setRenamingSessionId(id);
+    setRenameTitle(session?.title || "");
+  };
+
+  const handleRenameConfirmed = async (id: string, nextTitleRaw: string) => {
+    const nextTitle = nextTitleRaw.trim() || "untitled";
+    actions.patch(id, { title: nextTitle });
+    try {
+      await updateConversationFlags(id, { title: nextTitle });
+    } catch {
+      // best-effort persistence — UI already updated
+    }
+  };
+
   return (
     // px-2 cancels the parent wrapper's -mx-2 (used to make the
     // border-t span the full sidebar width). Without this the chat
     // rows + section headers sit 8px left of the main nav items
     // (Timeline / Memories / ...) and look misaligned.
     <div
-      className={cn("flex flex-col min-h-0 text-sm px-2", className)}
+      className={cn(
+        "flex flex-col min-h-0 text-sm px-2 overflow-y-auto overflow-x-hidden scrollbar-minimal",
+        className
+      )}
       data-testid="chat-sidebar"
+      onScroll={() => {
+        // Scrolling should dismiss any open row menu to avoid hover/focus glitches.
+        if (openConversationMenuId) setOpenConversationMenuId(null);
+      }}
     >
-      {upcomingPipes.length > 0 && (
-        <CollapsibleUpcoming
-          pipes={upcomingPipes}
-          onCancel={handleCancelUpcoming}
-        />
-      )}
+      <div className="flex-1 min-h-0 flex flex-col gap-1">
+        {hasScheduledSlice && (
+          <div
+            className="flex flex-col shrink-0"
+          >
+            {upcomingPipes.length > 0 && (
+              <div
+                className="flex flex-col shrink-0"
+              >
+                <Section
+                  title="upcoming"
+                  count={upcomingPipes.length}
+                  collapsed={upcomingCollapsed}
+                  onCollapsedChange={setUpcomingCollapsed}
+                  bodyClassName=""
+                >
+                  {upcomingPipes.map((p) => (
+                    <UpcomingRow key={p.pipeName} pipe={p} onCancel={handleCancelUpcoming} />
+                  ))}
+                </Section>
+              </div>
+            )}
+            {runningPipes.length > 0 && (
+              <div
+                className="flex flex-col shrink-0"
+              >
+                <Section
+                  title="scheduled"
+                  count={runningPipes.length}
+                  collapsed={scheduledCollapsed}
+                  onCollapsedChange={setScheduledCollapsed}
+                  bodyClassName=""
+                >
+                  {runningPipes.map((p) => (
+                    <ScheduledRow key={p.pipeName} pipe={p} />
+                  ))}
+                </Section>
+              </div>
+            )}
+          </div>
+        )}
 
-      {runningPipes.length > 0 && (
-        <CollapsibleScheduled pipes={runningPipes} />
-      )}
+        <div className="min-h-0 flex flex-col flex-1">
+          {pinned.length > 0 && (
+            <div className="shrink-0">
+              <Section
+                title="pinned"
+                tone="default"
+                collapsed={pinnedCollapsed}
+                onCollapsedChange={setPinnedCollapsed}
+                bodyClassName=""
+              >
+                {pinned.map((s) => (
+                  <SidebarChatRow
+                    key={s.id}
+                    session={s}
+                    isCurrent={s.id === currentId}
+                    tone="default"
+                    queuedCount={queueDepths.get(s.id) ?? 0}
+                    onSelect={handleSelect}
+                    onArchive={handleArchive}
+                    onUnarchive={handleUnarchive}
+                    onDeleteRequest={setDeletingSessionId}
+                    onTogglePin={handleTogglePin}
+                    onRenameRequest={handleRenameRequest}
+                    openConversationMenuId={openConversationMenuId}
+                    setOpenConversationMenuId={setOpenConversationMenuId}
+                  />
+                ))}
+              </Section>
+            </div>
+          )}
 
-      {pinned.length > 0 && (
-        <ChatSection title="pinned">
-          {pinned.map((s) => (
-            <SidebarChatRow
-              key={s.id}
-              session={s}
-              isCurrent={s.id === currentId}
-              queuedCount={queueDepths.get(s.id) ?? 0}
-              onSelect={handleSelect}
-              onClose={handleClose}
-              onTogglePin={handleTogglePin}
-            />
-          ))}
-        </ChatSection>
-      )}
+          <div className="group/recents min-h-0 flex flex-col flex-1">
+            <Section
+              title="recents"
+              collapsed={recentsCollapsed}
+              onCollapsedChange={setRecentsCollapsed}
+              headerAction={
+                <span
+                  role="button"
+                  tabIndex={onViewAll ? 0 : -1}
+                  className={cn(
+                    "ml-auto inline-flex items-center gap-0.5 select-none",
+                    "text-[10px] uppercase tracking-wider transition-colors",
+                    "opacity-0 group-hover/recents:opacity-100",
+                    recentsCollapsed && "hidden",
+                    onViewAll
+                      ? "text-muted-foreground/70 hover:text-muted-foreground cursor-pointer"
+                      : "text-muted-foreground/30 cursor-default"
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!onViewAll) return;
+                    onViewAll();
+                  }}
+                  onKeyDown={(e) => {
+                    if (!onViewAll) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onViewAll();
+                    }
+                  }}
+                  aria-disabled={!onViewAll}
+                >
+                  View all <ChevronRight className="h-3 w-3" aria-hidden />
+                </span>
+              }
+              bodyClassName=""
+            >
+              {recentsLoading ? (
+                <div className="px-2.5 py-2 space-y-1.5">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-6 w-full rounded-md" />
+                  ))}
+                </div>
+              ) : recentsLimited.length === 0 ? (
+                <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
+                  {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
+                </div>
+              ) : (
+                recentsLimited.map((s) => (
+                  <SidebarChatRow
+                    key={s.id}
+                    session={s}
+                    isCurrent={s.id === currentId}
+                    queuedCount={queueDepths.get(s.id) ?? 0}
+                    onSelect={handleSelect}
+                    onArchive={handleArchive}
+                    onUnarchive={handleUnarchive}
+                    onDeleteRequest={setDeletingSessionId}
+                    onTogglePin={handleTogglePin}
+                    onRenameRequest={handleRenameRequest}
+                    openConversationMenuId={openConversationMenuId}
+                    setOpenConversationMenuId={setOpenConversationMenuId}
+                  />
+                ))
+              )}
+            </Section>
+          </div>
+        </div>
+      </div>
 
-      <CollapsibleRecents
-        empty={recents.length === 0}
-        emptyText={
-          pinned.length === 0
-            ? "no chats yet — click + to start"
-            : "no recent chats"
-        }
+      <Dialog
+        open={!!deletingSessionId}
+        onOpenChange={(open) => {
+          if (!open) setDeletingSessionId(null);
+        }}
       >
-        {recents.map((s) => (
-          <SidebarChatRow
-            key={s.id}
-            session={s}
-            isCurrent={s.id === currentId}
-            queuedCount={queueDepths.get(s.id) ?? 0}
-            onSelect={handleSelect}
-            onClose={handleClose}
-            onTogglePin={handleTogglePin}
-          />
-        ))}
-      </CollapsibleRecents>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete chat</DialogTitle>
+            <DialogDescription>Delete this chat? This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingSessionId(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                const id = deletingSessionId;
+                setDeletingSessionId(null);
+                if (!id) return;
+                await handleDeleteConfirmed(id);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!renamingSessionId}
+        onOpenChange={(open) => {
+          if (!open) setRenamingSessionId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename chat</DialogTitle>
+            <DialogDescription>Give this chat a new title.</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <input
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const id = renamingSessionId;
+                  if (!id) return;
+                  setRenamingSessionId(null);
+                  void handleRenameConfirmed(id, renameTitle);
+                }
+              }}
+              autoFocus
+              className={cn(
+                "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
+                "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+              )}
+              placeholder="Chat title"
+              aria-label="Chat title"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenamingSessionId(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                const id = renamingSessionId;
+                setRenamingSessionId(null);
+                if (!id) return;
+                await handleRenameConfirmed(id, renameTitle);
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -325,22 +645,32 @@ export function CollapsedChatSidebarButton({
   isTranslucent: boolean;
 }) {
   const currentId = useChatStore((s) => s.currentId);
-  const { pinned, recents } = useVisibleChatSections();
+  const { pinned, recents, archived } = useVisibleChatSections();
+  const diskHydrated = useChatStore((s) => s.diskHydrated);
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [suppressTooltip, setSuppressTooltip] = useState(false);
-  const [activeTab, setActiveTab] = useState<"recents" | "pinned">("recents");
-  const visiblePinned = pinned;
-  const visibleRecents = recents;
-  const emptyText = visiblePinned.length === 0
+  const [tab, setTab] = useState<"pinned" | "recents" | "archived">(() => {
+    if (pinned.length > 0) return "pinned";
+    if (recents.length > 0) return "recents";
+    return "archived";
+  });
+  const emptyText = pinned.length === 0
     ? "no chats yet — click + to start"
     : "no recent chats";
+  const recentsTabLoading = !diskHydrated && recents.length === 0;
+  const isLoadingChats =
+    !diskHydrated && pinned.length === 0 && recents.length === 0;
 
   useEffect(() => {
-    if (visiblePinned.length === 0 && activeTab === "pinned") {
-      setActiveTab("recents");
+    if (tab === "pinned" && pinned.length === 0) {
+      setTab(recents.length > 0 ? "recents" : "archived");
+    } else if (tab === "recents" && recents.length === 0) {
+      setTab(pinned.length > 0 ? "pinned" : "archived");
+    } else if (tab === "archived" && archived.length === 0) {
+      setTab(pinned.length > 0 ? "pinned" : "recents");
     }
-  }, [visiblePinned.length, activeTab]);
+  }, [archived.length, pinned.length, recents.length, tab]);
 
   const handleSelect = (id: string) => {
     setOpen(false);
@@ -401,81 +731,67 @@ export function CollapsedChatSidebarButton({
         sideOffset={8}
         className="w-64 p-0 rounded-none shadow-none"
       >
-        {visiblePinned.length === 0 && visibleRecents.length === 0 ? (
+        {isLoadingChats ? (
+          <div className="py-1" aria-busy="true" data-testid="collapsed-chat-sidebar-skeleton">
+            <ChatRowsSkeleton rows={4} />
+          </div>
+        ) : pinned.length === 0 && recents.length === 0 && archived.length === 0 ? (
           <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
             {emptyText}
           </div>
         ) : (
           <Tabs
-            value={activeTab}
-            onValueChange={(value) => setActiveTab(value as "recents" | "pinned")}
+            value={tab}
+            onValueChange={(v) => setTab(v as typeof tab)}
             className="w-full"
           >
-            <TabsList
-              className={cn(
-                "grid w-full h-8 rounded-none bg-transparent border-b border-border p-0",
-                visiblePinned.length > 0 ? "grid-cols-2" : "grid-cols-1"
-              )}
-            >
+            <TabsList className="grid w-full grid-cols-3 h-8 rounded-none bg-transparent border-b border-border p-0">
+              <TabsTrigger
+                value="pinned"
+                disabled={pinned.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+              >
+                Pinned
+              </TabsTrigger>
               <TabsTrigger
                 value="recents"
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
+                disabled={recents.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
               >
-                recents
+                Recents
               </TabsTrigger>
-              {visiblePinned.length > 0 && (
-                <TabsTrigger
-                  value="pinned"
-                  className="rounded-none border-b-2 border-transparent data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none text-[10px] uppercase tracking-wider px-3 h-8"
-                >
-                  pinned
-                </TabsTrigger>
-              )}
+              <TabsTrigger
+                value="archived"
+                disabled={archived.length === 0}
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+              >
+                Archived
+              </TabsTrigger>
             </TabsList>
+
+            <TabsContent value="pinned" className="mt-0">
+              <CompactDrawerList
+                items={pinned}
+                currentId={currentId}
+                onSelect={handleSelect}
+              />
+            </TabsContent>
             <TabsContent value="recents" className="mt-0">
-              {visibleRecents.length === 0 ? (
+              {recentsTabLoading ? (
+                <div className="py-1" aria-busy="true">
+                  <ChatRowsSkeleton rows={4} />
+                </div>
+              ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {visiblePinned.length === 0 ? emptyText : "no recent chats"}
+                  {pinned.length === 0 ? emptyText : "no recent chats"}
                 </div>
               ) : (
-                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
-                  <div className="flex flex-col py-1">
-                    {visibleRecents.map((session) => (
-                      <SidebarChatRow
-                        key={session.id}
-                        session={session}
-                        isCurrent={session.id === currentId}
-                        queuedCount={0}
-                        onSelect={handleSelect}
-                        onClose={() => {}}
-                        onTogglePin={() => {}}
-                        showActions={false}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <CompactDrawerList items={recents} currentId={currentId} onSelect={handleSelect} />
               )}
             </TabsContent>
-            {visiblePinned.length > 0 && (
-              <TabsContent value="pinned" className="mt-0">
-                <div className="max-h-52 overflow-y-auto overflow-x-hidden scrollbar-minimal">
-                  <div className="flex flex-col py-1">
-                    {visiblePinned.map((session) => (
-                      <SidebarChatRow
-                        key={session.id}
-                        session={session}
-                        isCurrent={session.id === currentId}
-                        queuedCount={0}
-                        onSelect={handleSelect}
-                        onClose={() => {}}
-                        onTogglePin={() => {}}
-                        showActions={false}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </TabsContent>
-            )}
+            <TabsContent value="archived" className="mt-0">
+              <CompactDrawerList items={archived} currentId={currentId} onSelect={handleSelect} />
+            </TabsContent>
           </Tabs>
         )}
       </PopoverContent>
@@ -483,64 +799,68 @@ export function CollapsedChatSidebarButton({
   );
 }
 
-/** Recents container with a fixed (non-scrolling) header and a
- *  scrollable body underneath. Click the header to collapse. */
-function CollapsibleRecents({
-  empty,
-  emptyText,
-  children,
+function CompactDrawerList({
+  items,
+  currentId,
+  onSelect,
 }: {
-  empty: boolean;
-  emptyText: string;
-  children: React.ReactNode;
+  items: SessionRecord[];
+  currentId: string | null;
+  onSelect: (id: string) => void;
 }) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:recents-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:recents-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
   return (
-    <div className="flex flex-col flex-1 min-h-0 mb-2">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-recents"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
-          recents
-        </span>
-      </button>
-      {!collapsed && (
+    <div className="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-minimal">
+      <div className="flex flex-col py-1">
+        {items.map((session) => (
+          <SidebarChatRow
+            key={session.id}
+            session={session}
+            isCurrent={session.id === currentId}
+            queuedCount={0}
+            onSelect={onSelect}
+            onArchive={() => {}}
+            onUnarchive={() => {}}
+            onDeleteRequest={() => {}}
+            onTogglePin={() => {}}
+            onRenameRequest={() => {}}
+            showActions={false}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const CHAT_ROW_SKELETON_WIDTHS = [
+  "w-[82%]",
+  "w-[68%]",
+  "w-[88%]",
+  "w-[58%]",
+  "w-[74%]",
+  "w-[64%]",
+] as const;
+
+function ChatRowsSkeleton({ rows }: { rows: number }) {
+  return (
+    <div
+      className="flex flex-col"
+      aria-hidden
+      data-testid="chat-sidebar-recents-skeleton"
+    >
+      {Array.from({ length: rows }).map((_, index) => (
         <div
-          id="chat-sidebar-recents"
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
+          key={index}
+          className="flex items-center gap-2 px-2.5 py-1 rounded-md select-none"
         >
-          {empty ? (
-            <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-              {emptyText}
-            </div>
-          ) : (
-            <div className="flex flex-col">{children}</div>
-          )}
+          <span className="h-1.5 w-1.5 rounded-full border border-muted-foreground/25 bg-transparent animate-pulse shrink-0" />
+          <Skeleton
+            className={cn(
+              "h-3 rounded-sm bg-muted-foreground/15",
+              CHAT_ROW_SKELETON_WIDTHS[index % CHAT_ROW_SKELETON_WIDTHS.length]
+            )}
+          />
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -548,8 +868,8 @@ function CollapsibleRecents({
 /** Scheduled (live pipe runs) container — own collapsible scroll
  *  viewport capped at ~25% of available height so even with many
  *  pipes running it never squeezes recents off the screen. Header
- *  shows the count + a tiny live dot so it's obvious at a glance
- *  that something is running in the background. */
+ *  shows the count + activity ring so it's obvious at a glance that
+ *  something is running in the background. */
 function CollapsibleScheduled({
   pipes,
 }: {
@@ -592,17 +912,13 @@ function CollapsibleScheduled({
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
           scheduled
         </span>
-        {/* Live dot + count — subtle "this section is alive". */}
-        <span
-          className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-          aria-hidden
-        >
-          <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-          <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
-        </span>
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {pipes.length}
-        </span>
+        <PipeActivityIndicator
+          kind="running"
+          label={pipes.length}
+          className="shrink-0"
+          labelClassName="text-muted-foreground/60"
+          ariaLabel={`${pipes.length} running pipe${pipes.length === 1 ? "" : "s"}`}
+        />
       </button>
       {!collapsed && (
         <div
@@ -624,15 +940,6 @@ function CollapsibleScheduled({
   );
 }
 
-function formatElapsed(startedAt?: string): string | null {
-  if (!startedAt) return null;
-  const ms = Date.now() - Date.parse(startedAt);
-  if (Number.isNaN(ms) || ms < 0) return null;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
-  return `${Math.floor(ms / 3600_000)}h`;
-}
-
 function ScheduledRow({
   pipe,
 }: {
@@ -647,7 +954,7 @@ function ScheduledRow({
     const id = setInterval(() => force((n) => n + 1), 60_000);
     return () => clearInterval(id);
   }, [pipe.startedAt]);
-  const elapsed = formatElapsed(pipe.startedAt);
+  const elapsed = formatPipeElapsed(pipe.startedAt);
   // Click → emit watch_pipe so standalone-chat opens the pipe execution
   // and starts streaming its output. The page-level listener flips the
   // active section to home if the user is on Pipes/Memories/etc.
@@ -683,50 +990,23 @@ function ScheduledRow({
       title={`pipe: ${pipe.pipeName}`}
       data-testid={`scheduled-row-${pipe.pipeName}`}
     >
-      {/* Steady live dot — same visual language as chat rows */}
-      <span
-        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-        aria-label="running"
-      >
-        <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-        <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
-      </span>
       <span className="truncate flex-1 text-xs">
         {pipe.title || pipe.pipeName}
       </span>
-      {elapsed && (
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0">
-          {elapsed}
-        </span>
-      )}
+      <PipeActivityIndicator
+        kind="running"
+        label={elapsed ?? "now"}
+        className="shrink-0"
+        ariaLabel={`running ${elapsed ?? "now"}`}
+      />
     </div>
   );
-}
-
-/** Format the gap until a future ISO timestamp as a compact "in 2d 4h"
- *  / "in 18h" / "in 12m" / "in 30s" string. Returns null if the time has
- *  already passed (caller should drop the row). */
-function formatCountdown(runAt: string): string | null {
-  const ms = Date.parse(runAt) - Date.now();
-  if (Number.isNaN(ms) || ms <= 0) return null;
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) {
-    const remM = m - h * 60;
-    return remM > 0 ? `in ${h}h ${remM}m` : `in ${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  const remH = h - d * 24;
-  return remH > 0 ? `in ${d}d ${remH}h` : `in ${d}d`;
 }
 
 /** Sidebar section for one-off pipes (`schedule: at <iso>`) that haven't
  *  fired yet. Mirrors `CollapsibleScheduled` visually but shows a
  *  countdown ("in 2d 4h") instead of an elapsed badge, and uses a steady
- *  (non-pulsing) clock-style dot to differentiate from running pipes. */
+ *  clock icon to differentiate from running pipes. */
 function CollapsibleUpcoming({
   pipes,
   onCancel,
@@ -766,9 +1046,13 @@ function CollapsibleUpcoming({
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
           upcoming
         </span>
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {pipes.length}
-        </span>
+        <PipeActivityIndicator
+          kind="upcoming"
+          label={pipes.length}
+          className="shrink-0"
+          labelClassName="text-muted-foreground/60"
+          ariaLabel={`${pipes.length} upcoming pipe${pipes.length === 1 ? "" : "s"}`}
+        />
       </button>
       {!collapsed && (
         <div
@@ -801,7 +1085,7 @@ function UpcomingRow({
     const id = setInterval(() => force((n) => n + 1), 60_000);
     return () => clearInterval(id);
   }, []);
-  const countdown = formatCountdown(pipe.runAt);
+  const countdown = formatPipeCountdown(pipe.runAt);
   // Auto-hide rows whose run-time has just passed (next poll will drop
   // the pipe from the list once the auto-disable kicks in server-side,
   // but we don't want a visible row showing "in 0s" stuck on screen).
@@ -814,23 +1098,18 @@ function UpcomingRow({
       title={`scheduled for ${absLabel} — pipe: ${pipe.pipeName}`}
       data-testid={`upcoming-row-${pipe.pipeName}`}
     >
-      {/* Hollow dot — distinguishes "queued for the future" from
-          "running now" (which uses a filled, pulsing dot). */}
-      <span
-        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-        aria-label="upcoming"
-      >
-        <span className="relative h-1.5 w-1.5 rounded-full border border-foreground/60" />
-      </span>
       <span className="truncate flex-1 text-xs">
         {pipe.title || pipe.pipeName}
       </span>
       {/* Countdown swaps out for the cancel button on hover — keeps the row
           height stable (no layout shift) and avoids surfacing a destructive
           action until the user clearly intends to interact. */}
-      <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0 group-hover:hidden">
-        {countdown}
-      </span>
+      <PipeActivityIndicator
+        kind="upcoming"
+        label={countdown}
+        className="shrink-0 group-hover:hidden"
+        ariaLabel={countdown ? `scheduled ${countdown}` : "scheduled"}
+      />
       <button
         type="button"
         onClick={(e) => {
@@ -848,24 +1127,93 @@ function UpcomingRow({
   );
 }
 
-export function ChatSection({
+function Section({
   title,
-  action,
+  count,
+  tone = "default",
+  collapsed,
+  onCollapsedChange,
+  headerAction,
+  bodyClassName,
+  onBodyScroll,
   children,
 }: {
   title: string;
-  action?: React.ReactNode;
+  count?: number;
+  tone?: "default" | "subtle";
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
+  headerAction?: React.ReactNode;
+  bodyClassName: string;
+  onBodyScroll?: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <div className="mb-2">
-      <div className="px-2.5 py-1.5 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
-          {title}
+    <div className="flex flex-col min-h-0">
+      <button
+        type="button"
+        onClick={() => onCollapsedChange(!collapsed)}
+        className={cn(
+          // Light header row — avoid the "boxed section" look.
+          "group/section shrink-0 px-2.5 py-1 flex items-center gap-1 rounded-sm text-left",
+          tone === "subtle" ? "hover:bg-muted/10" : "hover:bg-muted/15"
+        )}
+        aria-expanded={!collapsed}
+      >
+        <span
+          className={cn(
+            "text-[10px] uppercase tracking-wider flex-1",
+            tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+            "group-hover/section:text-muted-foreground group-focus-within/section:text-muted-foreground"
+          )}
+        >
+          <span className="inline-flex items-center gap-1">
+            <span>{title}</span>
+            <span
+              className={cn(
+                "inline-flex items-center transition-opacity",
+                // Hidden by default; appears on hover/focus of the section group.
+                "opacity-0 group-hover/section:opacity-100 group-focus-visible/section:opacity-100"
+              )}
+              aria-hidden
+            >
+              {collapsed ? (
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3",
+                    tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+                    "group-hover/section:text-muted-foreground group-focus-visible/section:text-muted-foreground"
+                  )}
+                />
+              ) : (
+                <ChevronDown
+                  className={cn(
+                    "h-3 w-3",
+                    tone === "subtle" ? "text-muted-foreground/55" : "text-muted-foreground/70",
+                    "group-hover/section:text-muted-foreground group-focus-visible/section:text-muted-foreground"
+                  )}
+                />
+              )}
+            </span>
+          </span>
         </span>
-        {action}
-      </div>
-      <div className="flex flex-col">{children}</div>
+        {headerAction}
+        {count !== undefined && (
+          <span
+            className={cn(
+              "text-[10px] tabular-nums",
+              tone === "subtle" ? "text-muted-foreground/40" : "text-muted-foreground/60"
+            )}
+          >
+            {count}
+          </span>
+        )}
+      </button>
+      {!collapsed && (
+        <div className={bodyClassName} onScroll={onBodyScroll}>
+          <div className="flex flex-col">{children}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -873,14 +1221,18 @@ export function ChatSection({
 interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
-  /** Number of follow-up prompts queued for this session at the rust level.
-   *  > 0 → render an unobtrusive `↑N` badge so the user can spot pending
-   *  work in chats they've navigated away from. */
+  disableHover?: boolean;
+  tone?: "default" | "subtle";
   queuedCount: number;
   onSelect: (id: string) => void;
-  onClose: (e: React.MouseEvent, id: string) => Promise<void> | void;
-  onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onArchive: (id: string) => Promise<void> | void;
+  onUnarchive: (id: string) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
+  onTogglePin: (id: string) => Promise<void> | void;
+  onRenameRequest: (id: string) => void;
   showActions?: boolean;
+  openConversationMenuId?: string | null;
+  setOpenConversationMenuId?: (id: string | null) => void;
 }
 
 /**
@@ -892,15 +1244,12 @@ interface ChatRowProps {
  * (That's why "delete chat doesn't work" — the X click was eaten by the
  * outer button.)
  *
- * Left-side status indicator — minimalist, monochrome (no brand colors;
- * screenpipe is black/white):
- *   ●  filled foreground dot + slow pulse  → streaming/thinking/tool
- *   ●  filled foreground dot               → unread (new content)
- *   ⚠  alert icon, red (single exception)  → error
- *   ○  hollow ring                         → idle (default)
- *
- * Animation is a custom ~1.6s pulse — slow + soft so it sits in the
- * peripheral vision without pulling focus.
+ * Left-side bullet stays stable; the right-side status slot carries
+ * exactly one signal:
+ *   loading dot → streaming/thinking/tool/queued
+ *   unread dot  → new content
+ *   compact age → idle/read
+ *   ⚠           → error
  *
  * No preview line below the title. The title alone is what the user
  * picks chats by; partial Pi tokens leaking into the row read as noise.
@@ -908,11 +1257,18 @@ interface ChatRowProps {
 export function SidebarChatRow({
   session,
   isCurrent,
+  disableHover = false,
+  tone = "default",
   queuedCount,
   onSelect,
-  onClose,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
   onTogglePin,
+  onRenameRequest,
   showActions = true,
+  openConversationMenuId,
+  setOpenConversationMenuId,
 }: ChatRowProps) {
   const isLive =
     session.status === "streaming" ||
@@ -920,152 +1276,267 @@ export function SidebarChatRow({
     session.status === "tool";
   const isError = session.status === "error";
   const isUnread = session.unread && !isCurrent;
+  const canShowActions = showActions && !disableHover;
+  const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
+  const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
+  const age = formatCompactAge(activityAt, now);
+  const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
+  const menuOpen = openConversationMenuId === session.id;
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onSelect(session.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect(session.id);
-        }
-      }}
       className={cn(
-        "group relative flex flex-col items-stretch text-left px-2.5 py-1 rounded-md cursor-pointer select-none",
+        "group relative flex items-center gap-2 px-2.5 py-1 rounded-md select-none",
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
-          : "text-muted-foreground hover:bg-muted/40"
+          : disableHover
+            ? tone === "subtle"
+              ? "text-muted-foreground/75"
+              : "text-muted-foreground"
+            : tone === "subtle"
+              ? "text-muted-foreground/75 hover:bg-muted/12"
+              : "text-muted-foreground hover:bg-muted/20"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
     >
-      <div className="flex items-center gap-2 min-w-0">
-        {/* Left-side status indicator. One slot, four states, no jitter
-            between them (same outer dimensions). */}
-        <StatusDot
-          isLive={isLive}
-          isError={isError}
-          isUnread={isUnread}
-          status={session.status}
-        />
+      <button
+        type="button"
+        className="min-w-0 flex-1 flex items-center gap-2 text-left"
+        onClick={() => {
+          setOpenConversationMenuId?.(null);
+          onSelect(session.id);
+        }}
+      >
+        <RowBullet />
         <span
           className={cn(
-            "truncate flex-1 text-xs",
+            "truncate flex-1 text-xs font-normal",
             isUnread
-              ? "font-semibold text-foreground"
+              ? "font-medium text-foreground"
               : isCurrent
                 ? "text-foreground/80"
+                : tone === "subtle"
+                  ? "text-muted-foreground/70"
                 : "text-muted-foreground"
           )}
         >
           {session.title || "untitled"}
         </span>
-        {/* Queued-prompts badge — only visible when this session has rust-side
-            queued items waiting. Hidden on hover so it doesn't fight the
-            pin/close buttons for the same slot. */}
-        {queuedCount > 0 && showActions && (
+        <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span
-            className="group-hover:hidden inline-flex items-center gap-0.5 px-1 text-[10px] font-mono text-muted-foreground/80 shrink-0"
-            title={`${queuedCount} queued`}
+            className={cn(
+              "absolute inset-y-0 right-0 flex items-center justify-end transition-opacity duration-150",
+              canSwapAgeForMenu && "group-hover:opacity-0",
+              menuOpen && "opacity-0"
+            )}
           >
-            ↑{queuedCount}
-          </span>
-        )}
-        {/* hover-only actions — REAL <button>s now (was <span role=button>
-            inside the outer <button>, which is invalid nested-button HTML
-            and made the X click silently no-op on close). */}
-        <span
-          className={cn(
-            "shrink-0",
-            showActions ? "hidden group-hover:inline-flex items-center gap-0.5" : "hidden"
-          )}
-        >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void onTogglePin(e, session.id);
-            }}
-            className="p-0.5 rounded hover:bg-muted"
-            title={session.pinned ? "unpin" : "pin"}
-            aria-label={session.pinned ? "unpin" : "pin"}
-          >
-            <Pin
-              className={cn(
-                "h-3 w-3",
-                session.pinned
-                  ? "text-foreground fill-current"
-                  : "text-muted-foreground"
-              )}
+            <RowRightSignal
+              isLive={isLive}
+              isError={isError}
+              isUnread={isUnread}
+              queuedCount={queuedCount}
+              status={session.status}
+              age={age}
             />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void onClose(e, session.id);
-            }}
-            className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-            title="close"
-            aria-label="close"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          </span>
         </span>
-      </div>
+      </button>
+
+      {canShowActions && (
+        <div className="shrink-0 relative h-5 w-5">
+          <DropdownMenu
+            open={menuOpen}
+            onOpenChange={(open) => {
+              setOpenConversationMenuId?.(open ? session.id : null);
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "absolute inset-0 p-0.5 rounded hover:bg-muted transition-opacity duration-150",
+                  menuOpen
+                    ? "opacity-100 visible"
+                    : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
+                )}
+                aria-label="conversation actions"
+              >
+                <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              alignOffset={2}
+              side="bottom"
+              sideOffset={4}
+              collisionPadding={8}
+              className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  void onTogglePin(session.id);
+                }}
+              >
+                <Pin className="h-3 w-3 text-muted-foreground" />
+                {session.pinned ? "Unpin" : "Pin"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  onRenameRequest(session.id);
+                }}
+              >
+                <Pencil className="h-3 w-3 text-muted-foreground" />
+                Rename
+              </DropdownMenuItem>
+              {!session.hidden ? (
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onArchive(session.id);
+                  }}
+                >
+                  <Archive className="h-3 w-3 text-muted-foreground" />
+                  Archive
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onUnarchive(session.id);
+                  }}
+                >
+                  <Undo2 className="h-3 w-3 text-muted-foreground" />
+                  Unarchive
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator className="my-1 bg-border/70" />
+              <DropdownMenuItem
+                className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+                onSelect={(e) => {
+                  e.stopPropagation();
+                  onDeleteRequest(session.id);
+                }}
+              >
+                <Trash2 className="h-3 w-3 text-destructive" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
     </div>
   );
 }
 
-/** Status indicator dot — 8px hit-target, 6px visual, single-slot so the
- *  row layout doesn't shift between states. */
-function StatusDot({
-  isLive,
-  isError,
-  isUnread,
-  status,
-}: {
-  isLive: boolean;
-  isError: boolean;
-  isUnread: boolean;
-  status: string;
-}) {
-  if (isError) {
-    return (
-      <AlertCircle
-        className="h-3 w-3 text-red-500 shrink-0"
-        aria-label="error"
-      />
-    );
-  }
-  if (isLive) {
-    return (
-      <span
-        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
-        aria-label={status}
-      >
-        {/* outer halo — slow gentle pulse, monochrome */}
-        <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-        {/* inner dot — solid foreground */}
-        <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
-      </span>
-    );
-  }
-  if (isUnread) {
-    return (
-      <span
-        className="h-1.5 w-1.5 rounded-full bg-foreground shrink-0"
-        aria-label="unread"
-      />
-    );
-  }
-  // idle — hollow ring (matches Claude's pattern)
+/** Stable left-side bullet. State belongs in the right slot so each row
+ *  reads as one clear signal instead of two competing indicators. */
+function RowBullet() {
   return (
     <span
       className="h-1.5 w-1.5 rounded-full border border-muted-foreground/40 shrink-0"
       aria-hidden
     />
   );
+}
+
+function RowRightSignal({
+  isLive,
+  isError,
+  isUnread,
+  queuedCount,
+  status,
+  age,
+}: {
+  isLive: boolean;
+  isError: boolean;
+  isUnread: boolean;
+  queuedCount: number;
+  status: string;
+  age: string | null;
+}) {
+  const content = (() => {
+    if (isError) {
+      return (
+        <AlertCircle
+          className="h-3 w-3 text-red-500"
+          aria-label="error"
+        />
+      );
+    }
+    if (isLive) {
+      return <LiveSignal ariaLabel={status} />;
+    }
+    if (queuedCount > 0) {
+      return <LiveSignal ariaLabel={`${queuedCount} queued`} />;
+    }
+    if (isUnread) {
+      return (
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-foreground"
+          aria-label="unread"
+        />
+      );
+    }
+    if (age) {
+      return (
+        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+          {age}
+        </span>
+      );
+    }
+    return null;
+  })();
+
+  if (!content) return null;
+
+  return <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>;
+}
+
+function LiveSignal({ ariaLabel = "loading" }: { ariaLabel?: string }) {
+  return (
+    <span
+      className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+      aria-label={ariaLabel}
+    >
+      <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
+      <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
+    </span>
+  );
+}
+
+function useMinuteTick(enabled = true): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, [enabled]);
+  return now;
+}
+
+function formatCompactAge(timestamp?: number, now = Date.now()): string | null {
+  if (!timestamp || !Number.isFinite(timestamp)) return null;
+  const ms = Math.max(0, now - timestamp);
+  if (ms < 60_000) return "now";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w`;
+  if (days < 365) return `${Math.max(1, Math.floor(days / 30))}mo`;
+  return `${Math.floor(days / 365)}y`;
 }

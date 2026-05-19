@@ -4,10 +4,10 @@
 
 //! AI preset store IO + validation.
 //!
-//! Reads/writes presets in `~/.screenpipe/store.bin` (plain JSON despite the
-//! `.bin` suffix). The desktop app owns the schema; this module touches only
-//! the keys it knows about and round-trips the rest verbatim so the app's
-//! private state survives a CLI write.
+//! Reads/writes presets in `~/.screenpipe/store.bin` (plain JSON or the
+//! app-encrypted `SPSTORE1` form). The desktop app owns the schema; this module
+//! touches only the keys it knows about and round-trips the rest verbatim so the
+//! app's private state survives a CLI write.
 //!
 //! Concurrency: writes are atomic (tempfile in same dir + rename). If the
 //! desktop app is running and saves at the same instant, the last writer wins
@@ -17,7 +17,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+
+use super::store_file::{read_store, write_store};
 
 // ---------------------------------------------------------------------------
 // Provider model
@@ -115,77 +116,6 @@ pub struct PresetPatch {
     /// If `Some(true)`, become the default (others unset). `Some(false)` clears
     /// this preset's default flag. `None` leaves untouched.
     pub set_default: Option<bool>,
-}
-
-// ---------------------------------------------------------------------------
-// Storage location + low-level IO
-// ---------------------------------------------------------------------------
-
-pub fn store_path() -> PathBuf {
-    screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin")
-}
-
-/// Read the store. Always returns a JSON object. If the file is missing or
-/// empty, returns `{}`. If the file is present but not a JSON object, errors
-/// out instead of silently overwriting — preserves whatever the user has.
-fn read_store() -> Result<Value> {
-    let path = store_path();
-    if !path.exists() {
-        return Ok(json!({}));
-    }
-    let content =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    if content.trim().is_empty() {
-        return Ok(json!({}));
-    }
-    let parsed: Value = serde_json::from_str(&content)
-        .with_context(|| format!("parsing {} as JSON", path.display()))?;
-    if !parsed.is_object() {
-        bail!(
-            "{} exists but is not a JSON object (got {}). Refusing to overwrite — \
-             move it aside and re-run.",
-            path.display(),
-            type_name_for(&parsed)
-        );
-    }
-    Ok(parsed)
-}
-
-fn type_name_for(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-/// Atomically write the store back. Preserves 0o600 perms on Unix.
-fn write_store(store: &Value) -> Result<()> {
-    use std::io::Write;
-    let path = store_path();
-    let dir = path
-        .parent()
-        .ok_or_else(|| anyhow!("cannot resolve parent of {}", path.display()))?;
-    std::fs::create_dir_all(dir)?;
-
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("creating temp file in {}", dir.display()))?;
-    let serialized = serde_json::to_string_pretty(store)?;
-    tmp.write_all(serialized.as_bytes())?;
-    tmp.flush()?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600));
-    }
-
-    tmp.persist(&path)
-        .with_context(|| format!("renaming temp file to {}", path.display()))?;
-    Ok(())
 }
 
 /// Borrow the `settings.aiPresets` array, creating the path if missing.
@@ -809,15 +739,5 @@ mod tests {
     #[test]
     fn frontmatter_no_frontmatter() {
         assert!(!frontmatter_references_preset("just text", "x"));
-    }
-
-    #[test]
-    fn type_name_categorises_value() {
-        assert_eq!(type_name_for(&Value::Null), "null");
-        assert_eq!(type_name_for(&json!(true)), "boolean");
-        assert_eq!(type_name_for(&json!(1)), "number");
-        assert_eq!(type_name_for(&json!("x")), "string");
-        assert_eq!(type_name_for(&json!([])), "array");
-        assert_eq!(type_name_for(&json!({})), "object");
     }
 }

@@ -89,13 +89,13 @@ fn install_onnxruntime() {
     let arch = arch_var.as_deref().unwrap_or("x86_64");
     let (pkg_name, zip_name) = if arch == "aarch64" {
         (
-            "onnxruntime-win-arm64-1.19.2",
-            "onnxruntime-win-arm64-1.19.2.zip",
+            "onnxruntime-win-arm64-1.22.0",
+            "onnxruntime-win-arm64-1.22.0.zip",
         )
     } else {
         (
-            "onnxruntime-win-x64-1.19.2",
-            "onnxruntime-win-x64-1.19.2.zip",
+            "onnxruntime-win-x64-1.22.0",
+            "onnxruntime-win-x64-1.22.0.zip",
         )
     };
     let target_dir = Path::new("../../apps/screenpipe-app-tauri/src-tauri").join(pkg_name);
@@ -113,7 +113,7 @@ fn install_onnxruntime() {
     // Command keeps the build script free of any TLS dep.
     if !target_dir.join("lib").join("onnxruntime.lib").exists() {
         let url = format!(
-            "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/{}",
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/{}",
             zip_name
         );
         let status = Command::new("curl")

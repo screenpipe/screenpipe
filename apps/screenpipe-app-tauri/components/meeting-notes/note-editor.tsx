@@ -105,9 +105,19 @@ export function NoteEditor({
         class: PROSE_CLASSES,
         "data-testid": "note-editor",
       },
+      // Keep the caret comfortably in view after Enter / typing near the
+      // viewport edge. ProseMirror walks up parent scroll containers, so this
+      // works for the outer overflow-y-auto wrapper too.
+      scrollThreshold: { top: 80, bottom: 96, left: 0, right: 0 },
+      scrollMargin: { top: 80, bottom: 96, left: 0, right: 0 },
     },
     onUpdate({ editor }) {
       onChangeRef.current(getMarkdown(editor));
+    },
+    onSelectionUpdate({ editor }) {
+      // Belt-and-braces: arrow-key navigation and programmatic selection
+      // changes don't always flag scrollIntoView, so nudge it ourselves.
+      editor.commands.scrollIntoView();
     },
   });
 

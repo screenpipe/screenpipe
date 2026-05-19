@@ -4,6 +4,7 @@
 
 use crate::commands::show_main_window;
 use crate::get_store;
+use crate::window::ShowRewindWindow;
 use axum::body::Bytes;
 use axum::response::IntoResponse;
 use axum::{
@@ -90,6 +91,8 @@ struct FocusPayload {
     args: Vec<String>,
     #[serde(default)]
     deep_link_url: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
 async fn handle_focus(
@@ -97,11 +100,15 @@ async fn handle_focus(
     Json(payload): Json<FocusPayload>,
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!(
-        "Received focus request from second instance: args={:?}, deep_link={:?}",
-        payload.args, payload.deep_link_url
+        "Received focus request: args={:?}, deep_link={:?}, target={:?}",
+        payload.args, payload.deep_link_url, payload.target
     );
 
-    show_main_window(&state.app_handle, false);
+    if payload.target.as_deref() == Some("browser_pairing") {
+        let _ = (ShowRewindWindow::Home { page: None }).show(&state.app_handle);
+    } else {
+        show_main_window(state.app_handle.clone());
+    }
 
     if let Some(url) = payload.deep_link_url {
         let _ = state.app_handle.emit("deep-link-received", url);
@@ -345,9 +352,21 @@ async fn handle_auth(
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
     info!(
         "received auth data: token={}, email={}, user_id={}",
-        if payload.token.is_some() { "present" } else { "absent" },
-        if payload.email.is_some() { "present" } else { "absent" },
-        if payload.user_id.is_some() { "present" } else { "absent" },
+        if payload.token.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        if payload.email.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        if payload.user_id.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
     );
 
     let store = get_store(&state.app_handle, None).unwrap();

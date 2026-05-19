@@ -21,6 +21,7 @@ const defaultPrefs = {
   pipeSuggestions: true,
   pipeNotifications: true,
   displayChanges: true,
+  meetingLiveNotes: true,
   mutedPipes: [] as string[],
 };
 
@@ -159,6 +160,20 @@ export function NotificationsSettings() {
           <Switch
             checked={prefs.displayChanges ?? true}
             onCheckedChange={(v) => updatePref("displayChanges", v)}
+          />
+        </div>
+
+        {/* Meeting live notes */}
+        <div className="flex items-center justify-between py-3 border-b border-border">
+          <div>
+            <p className="text-sm font-medium">Meeting live notes</p>
+            <p className="text-xs text-muted-foreground">
+              Prompt to open a live note when a meeting is detected
+            </p>
+          </div>
+          <Switch
+            checked={prefs.meetingLiveNotes ?? true}
+            onCheckedChange={(v) => updatePref("meetingLiveNotes", v)}
           />
         </div>
       </div>

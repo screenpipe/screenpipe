@@ -36,6 +36,33 @@ export class UpstreamError extends Error {
 	}
 }
 
+function nonEmptyText(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	return value.trim().length > 0 ? value : null;
+}
+
+function safeJson(value: unknown): string {
+	if (typeof value === 'string') return value;
+	try {
+		return JSON.stringify(value ?? {});
+	} catch {
+		return '{}';
+	}
+}
+
+export async function parseVertexMaasJsonResponse(response: Response, model: string): Promise<any> {
+	const text = await response.text();
+	if (!text.trim()) {
+		throw new UpstreamError(`Vertex MaaS returned an empty response body (${model})`, 502);
+	}
+	try {
+		return JSON.parse(text);
+	} catch (error: any) {
+		const msg = error?.message ? `: ${error.message}` : '';
+		throw new UpstreamError(`Vertex MaaS returned invalid JSON (${model})${msg}`, 502);
+	}
+}
+
 async function fetchWithRetry(url: string, init: RequestInit, label: string): Promise<Response> {
 	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
 		const response = await fetch(url, init);
@@ -251,7 +278,7 @@ export class VertexMaasProvider implements AIProvider {
 			);
 		}
 
-		const result = await response.json();
+		const result = await parseVertexMaasJsonResponse(response, resolved.vertexId);
 		promoteReasoningToContent(result);
 		return new Response(JSON.stringify(result), {
 			headers: { 'Content-Type': 'application/json' },
@@ -305,43 +332,62 @@ export class VertexMaasProvider implements AIProvider {
 	formatMessages(messages: Message[]): any[] {
 		return messages.map((msg) => ({
 			role: msg.role,
-			content: Array.isArray(msg.content)
-				? msg.content
-						// Vertex MaaS rejects `type: 'thinking'` / `'redacted_thinking'`
-						// content blocks with `400 INVALID_ARGUMENT: Unrecognized 'type'
-						// field in an object element of an array 'content' field`
-						// (SCREENPIPE-AI-PROXY-C). Clients echoing prior assistant
-						// turns can include them; strip before sending. The actual
-						// answer text travels in a sibling `{type:'text'}` block, so
-						// dropping the thinking block doesn't lose the response.
-						// Cast to any: our `MessagePart` union doesn't list these
-						// types (they're Anthropic-specific) but clients send them.
-						.filter((part) => {
-							const t = (part as any)?.type;
-							return t !== 'thinking' && t !== 'redacted_thinking';
-						})
-						.map((part) => {
-							if (part.type === 'text') return { type: 'text', text: part.text || '' };
-							// OpenAI image_url format passthrough
-							if (part.type === 'image_url' && part.image_url?.url) {
-								return { type: 'image_url', image_url: { url: part.image_url.url } };
-							}
-							// Pi native format: { type: "image", data, mimeType }
-							if (part.type === 'image' && part.data && part.mimeType) {
-								return { type: 'image_url', image_url: { url: `data:${part.mimeType};base64,${part.data}` } };
-							}
-							// Anthropic base64 format
-							if (part.type === 'image' && part.source?.type === 'base64') {
-								const mt = part.source.media_type || part.source.mediaType || 'image/png';
-								return { type: 'image_url', image_url: { url: `data:${mt};base64,${part.source.data}` } };
-							}
-							return part;
-						})
-				: msg.content,
-			...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+			...this.formatMessageContent(msg),
 			...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
 			...(msg.name && { name: msg.name }),
 		}));
+	}
+
+	private formatMessageContent(msg: Message): { content: any; tool_calls?: any[] } {
+		if (!Array.isArray(msg.content)) {
+			return { content: nonEmptyText(msg.content) ?? '' };
+		}
+
+		const content: any[] = [];
+		const toolCalls: any[] = [...((msg as any).tool_calls ?? [])];
+
+		for (const part of msg.content as any[]) {
+			const type = part?.type;
+			if (type === 'text') {
+				const text = nonEmptyText(part.text);
+				if (text) content.push({ type: 'text', text });
+				continue;
+			}
+			if (type === 'image_url' && part.image_url?.url) {
+				content.push({ type: 'image_url', image_url: { url: part.image_url.url } });
+				continue;
+			}
+			if (type === 'image' && part.data && part.mimeType) {
+				content.push({ type: 'image_url', image_url: { url: `data:${part.mimeType};base64,${part.data}` } });
+				continue;
+			}
+			if (type === 'image' && part.source?.type === 'base64') {
+				const mt = part.source.media_type || part.source.mediaType || 'image/png';
+				content.push({ type: 'image_url', image_url: { url: `data:${mt};base64,${part.source.data}` } });
+				continue;
+			}
+			if (type === 'tool_use' && msg.role === 'assistant' && part.name) {
+				toolCalls.push({
+					id: part.id || `call_${toolCalls.length + 1}`,
+					type: 'function',
+					function: {
+						name: part.name,
+						arguments: safeJson(part.input ?? {}),
+					},
+				});
+				continue;
+			}
+			if (type === 'tool_result') {
+				const text = nonEmptyText(typeof part.content === 'string' ? part.content : safeJson(part.content));
+				if (text) content.push({ type: 'text', text });
+			}
+		}
+
+		const formatted: { content: any; tool_calls?: any[] } = {
+			content: content.length > 0 ? content : toolCalls.length > 0 ? null : '',
+		};
+		if (toolCalls.length > 0) formatted.tool_calls = toolCalls;
+		return formatted;
 	}
 
 	formatResponse(response: any): any {

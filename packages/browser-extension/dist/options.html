@@ -49,7 +49,6 @@
         font-size: 13px;
         padding: 8px 10px;
         border: 1px solid #ccc;
-        border-radius: 4px;
         background: transparent;
         color: inherit;
       }
@@ -61,6 +60,7 @@
       }
       .actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
         margin-top: 8px;
       }
@@ -70,9 +70,15 @@
         font-weight: 500;
         padding: 7px 14px;
         border: 1px solid #bbb;
-        border-radius: 4px;
         background: #f6f6f6;
         cursor: pointer;
+      }
+      button[hidden] {
+        display: none;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
       }
       button:hover {
         background: #eee;
@@ -106,7 +112,6 @@
         margin-top: 18px;
         font-size: 13px;
         padding: 10px 12px;
-        border-radius: 4px;
         border: 1px solid transparent;
         min-height: 1.5em;
       }
@@ -116,17 +121,47 @@
       #status[data-state="saving"] {
         color: #555;
       }
+      #status[data-state="pairing"],
       #status[data-state="ok"] {
-        background: rgba(0, 150, 0, 0.08);
-        border-color: rgba(0, 150, 0, 0.3);
-        color: #0b8a3e;
+        background: rgba(128, 128, 128, 0.08);
+        border-color: rgba(128, 128, 128, 0.4);
+        color: inherit;
       }
       #status[data-state="auth_required"],
       #status[data-state="server_down"],
+      #status[data-state="denied"],
       #status[data-state="error"] {
-        background: rgba(220, 0, 0, 0.06);
-        border-color: rgba(220, 0, 0, 0.3);
-        color: #c22;
+        background: rgba(128, 128, 128, 0.06);
+        border-color: rgba(128, 128, 128, 0.4);
+        color: inherit;
+      }
+      .panel {
+        border: 1px solid #ccc;
+        padding: 14px;
+        margin: 18px 0;
+      }
+      @media (prefers-color-scheme: dark) {
+        .panel {
+          border-color: #444;
+        }
+      }
+      #pair-details {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #888;
+      }
+      #pair-details summary {
+        cursor: pointer;
+      }
+      #pair-code {
+        margin-top: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      #manual-setup[hidden],
+      #pair-details[hidden] {
+        display: none;
       }
       footer {
         margin-top: 32px;
@@ -141,32 +176,52 @@
   <body>
     <h1>Screenpipe Browser Bridge</h1>
     <p class="subtitle">
-      Lets the screenpipe app execute JavaScript in your browser tabs (used by
-      pipes that read or fill web pages).
+      Lets the screenpipe app use your open browser tabs when an agent needs web
+      context. Your data stays local.
     </p>
 
-    <div class="field">
-      <label for="token">API token</label>
-      <input id="token" type="password" placeholder="paste your screenpipe API token" autocomplete="off" spellcheck="false" />
-      <span class="help">
-        In screenpipe: Settings → Privacy → Security → "Require API
-        Authentication" — click the eye icon to reveal, then the copy icon.
-        Or run <code>screenpipe auth token</code> in a terminal.
-      </span>
+    <div class="panel">
+      <div class="field">
+        <label id="connection-title">connect screenpipe</label>
+        <span id="connection-help" class="help">
+          click connect, then approve the request in the screenpipe desktop app.
+          no API token copy/paste needed.
+        </span>
+      </div>
+
+      <div class="actions">
+        <button id="connect" class="primary" type="button">Connect to Screenpipe</button>
+        <button id="advanced-toggle" type="button">Manual setup</button>
+      </div>
+      <details id="pair-details" hidden>
+        <summary>verify request</summary>
+        <div id="pair-code"></div>
+      </details>
     </div>
 
-    <div class="field">
-      <label for="baseUrl">screenpipe server URL</label>
-      <input id="baseUrl" type="text" value="http://127.0.0.1:3030" spellcheck="false" />
-      <span class="help">
-        Default is <code>http://127.0.0.1:3030</code>. Only change this if you
-        run screenpipe on a different host or port.
-      </span>
-    </div>
+    <div id="manual-setup" hidden>
+      <div class="field">
+        <label for="token">API token</label>
+        <input id="token" type="password" placeholder="paste your screenpipe API token" autocomplete="off" spellcheck="false" />
+        <span class="help">
+          Advanced only. In screenpipe: Settings → Privacy → API Authentication
+          → reveal and copy the key. Or run <code>screenpipe auth token</code>.
+        </span>
+      </div>
 
-    <div class="actions">
-      <button id="save" class="primary" type="button">Save &amp; test</button>
-      <button id="test" type="button">Test connection</button>
+      <div class="field">
+        <label for="baseUrl">screenpipe server URL</label>
+        <input id="baseUrl" type="text" value="http://127.0.0.1:3030" spellcheck="false" />
+        <span class="help">
+          Default is <code>http://127.0.0.1:3030</code>. Only change this if you
+          run screenpipe on a different host or port.
+        </span>
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">Save &amp; test</button>
+        <button id="test" type="button">Test connection</button>
+      </div>
     </div>
 
     <div id="status" data-state="idle"></div>

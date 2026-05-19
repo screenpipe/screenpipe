@@ -17,7 +17,7 @@ cloud archive encrypts your old screenpipe data and uploads it to the cloud, the
     your token is used to derive an encryption key locally using argon2id. data is encrypted with chacha20-poly1305 before upload — the same encryption used by cloud sync.
   </Step>
   <Step title="encrypted data is uploaded in chunks">
-    screenpipe uploads data in small batches (up to 500 records at a time) every 5 minutes. this includes screen captures, ocr text, audio transcriptions, accessibility data, and ui events.
+    screenpipe uploads data in small batches (up to 500 records at a time) every 5 minutes. this includes screen captures, accessibility text, OCR fallback text, audio transcriptions, and ui events.
   </Step>
   <Step title="local data is cleaned up">
     after each chunk is confirmed uploaded, the corresponding local data and media files are deleted to free disk space.
@@ -30,8 +30,8 @@ cloud archive encrypts your old screenpipe data and uploads it to the cloud, the
   <Card title="screen captures" icon="display">
     frame metadata, app names, window titles, browser urls
   </Card>
-  <Card title="ocr text" icon="text">
-    extracted text from screen recordings
+  <Card title="screen text" icon="text">
+    accessibility text and OCR fallback text from screen recordings
   </Card>
   <Card title="audio transcriptions" icon="microphone">
     transcribed speech with speaker and device info

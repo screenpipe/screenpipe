@@ -11,16 +11,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, getStore } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { localFetch } from "@/lib/api";
-import { writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
+import { exists, writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
@@ -81,13 +82,15 @@ async function findClaudeExeOnWindows(): Promise<string | null> {
     ];
     for (const p of candidates) {
       try {
-        const check = Command.create("cmd", ["/c", "dir", "/b", p]);
-        const result = await check.execute();
-        if (result.code === 0) return p;
+        if (await exists(p)) return p;
       } catch { continue; }
     }
   } catch { /* ignore */ }
   return null;
+}
+
+async function openWindowsShellTarget(target: string): Promise<void> {
+  await invoke("open_windows_shell_target", { target });
 }
 
 import {
@@ -252,7 +255,15 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
-export function IntegrationIcon({ icon }: { icon: string }) {
+export function IntegrationIcon({
+  icon,
+  className = "w-10 h-10 bg-muted rounded-xl flex items-center justify-center",
+  fallbackClassName = "h-5 w-5 text-muted-foreground",
+}: {
+  icon: string;
+  className?: string;
+  fallbackClassName?: string;
+}) {
   const icons: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
@@ -447,8 +458,8 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     ),
   };
   return (
-    <div className="w-10 h-10 bg-muted rounded-xl flex items-center justify-center">
-      {icons[icon] || <Send className="h-5 w-5 text-muted-foreground" />}
+    <div className={className}>
+      {icons[icon] || <Send className={fallbackClassName} />}
     </div>
   );
 }
@@ -524,9 +535,9 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
     if (os === "windows") {
       // Check for MSIX package folder first, then fall back to traditional exe search
       homeDir().then(home => join(home, "AppData", "Local", "Packages", "Claude_pzs8sxrjxfjjc"))
-        .then(msixDir => Command.create("cmd", ["/c", "if", "exist", msixDir, "echo", "yes"]).execute())
-        .then(r => {
-          if (r.stdout.trim() === "yes") { setClaudeAppInstalled(true); return; }
+        .then(msixDir => exists(msixDir))
+        .then(isMsixInstalled => {
+          if (isMsixInstalled) { setClaudeAppInstalled(true); return; }
           return findClaudeExeOnWindows().then(exe => setClaudeAppInstalled(!!exe));
         })
         .catch(() => setClaudeAppInstalled(false));
@@ -574,11 +585,13 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
       if (os === "macos") await Command.create("open", ["-a", "Claude"]).execute();
       else if (os === "windows") {
         // Try MSIX launch via Windows shell app launcher first
-        const msixResult = await Command.create("cmd", ["/c", "start", "", "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude"]).execute().catch(() => null);
-        if (msixResult?.code === 0) return;
+        const msixOpened = await openWindowsShellTarget("shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude")
+          .then(() => true)
+          .catch(() => false);
+        if (msixOpened) return;
         // Fall back to traditional exe path
         const exe = await findClaudeExeOnWindows();
-        if (exe) await Command.create("cmd", ["/c", "start", "", exe]).execute();
+        if (exe) await openWindowsShellTarget(exe);
         else await openUrl("https://claude.ai/download");
       } else await openUrl("https://claude.ai/download");
     } catch { await openUrl("https://claude.ai/download"); }
@@ -649,7 +662,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
     try {
       const os = platform();
       if (os === "macos") await Command.create("open", ["-a", "Cursor"]).execute();
-      else if (os === "windows") await Command.create("cmd", ["/c", "start", "", "cursor"]).execute();
+      else if (os === "windows") await openWindowsShellTarget("cursor");
       else await openUrl("https://cursor.com");
     } catch { await openUrl("https://cursor.com"); }
   };
@@ -710,7 +723,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
     try {
       const os = platform();
       if (os === "macos") await Command.create("open", ["-a", "Codex"]).execute();
-      else if (os === "windows") await Command.create("cmd", ["/c", "start", "", "Codex"]).execute();
+      else if (os === "windows") await openWindowsShellTarget("Codex");
       else await openUrl("https://chatgpt.com/codex");
     } catch { await openUrl("https://chatgpt.com/codex"); }
   };
@@ -1081,7 +1094,7 @@ function WhatsAppPanel() {
 
   const handleDisconnect = async () => {
     await localFetch("/connections/whatsapp/disconnect", { method: "POST" });
-    apiCache.invalidate("connections/list");
+    notifyConnectionsUpdated();
     setStatus("idle");
     setQr(null);
     setInfo(null);
@@ -1187,11 +1200,27 @@ function ChatGptPanel() {
 // Generic OAuth panel — used for any integration with is_oauth: true
 // ---------------------------------------------------------------------------
 
-function OAuthPanel({ integrationId, integrationName }: { integrationId: string; integrationName: string }) {
+interface OAuthAccount {
+  instance: string | null;
+  displayName: string | null;
+}
+
+function OAuthPanel({
+  integrationId,
+  integrationName,
+  onConnected,
+  onDisconnected,
+}: {
+  integrationId: string;
+  integrationName: string;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+}) {
   const { settings } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
-  const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
-  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading">("idle");
+  const [accounts, setAccounts] = useState<OAuthAccount[]>([]);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
   // Ref guard so a cancelled or timed-out connect attempt doesn't update state after cancel.
   const connectingRef = useRef(false);
 
@@ -1200,18 +1229,25 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       // Try list instances first for richer info
       const listRes = await commands.oauthListInstances(integrationId);
       if (listRes.status === "ok" && listRes.data.length > 0) {
-        setStatus("connected");
-        setDisplayName(listRes.data.map(i => i.display_name || i.instance).filter(Boolean).join(", ") || null);
+        setAccounts(
+          listRes.data.map((i) => ({
+            instance: i.instance ?? null,
+            displayName: i.display_name ?? null,
+          }))
+        );
         return;
       }
     } catch { /* fallback below */ }
     try {
       const res = await commands.oauthStatus(integrationId, null);
       if (res.status === "ok" && res.data.connected) {
-        setStatus("connected");
-        setDisplayName(res.data.display_name ?? null);
+        setAccounts([{ instance: null, displayName: res.data.display_name ?? null }]);
+      } else {
+        setAccounts([]);
       }
-    } catch { /* ignore */ }
+    } catch {
+      setAccounts([]);
+    }
   }, [integrationId]);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
@@ -1223,8 +1259,9 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       const res = await commands.oauthConnect(integrationId, null);
       if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
-        setStatus("connected");
         await fetchStatus();
+        notifyConnectionsUpdated();
+        onConnected?.();
       } else {
         setStatus("idle");
       }
@@ -1232,6 +1269,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       if (connectingRef.current) setStatus("idle");
     } finally {
       connectingRef.current = false;
+      setStatus("idle");
     }
   };
 
@@ -1246,23 +1284,58 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
     setStatus("idle");
   };
 
-  const handleDisconnect = async () => {
-    await commands.oauthDisconnect(integrationId, null);
-    setStatus("idle");
-    setDisplayName(null);
+  const handleDisconnect = async (instance: string | null) => {
+    const key = instance ?? "__default__";
+    setDisconnecting(key);
+    const remainingAccounts = accounts.filter(account => (account.instance ?? "__default__") !== key);
+    try {
+      await commands.oauthDisconnect(integrationId, instance ?? null);
+      setAccounts(remainingAccounts);
+      await fetchStatus();
+      notifyConnectionsUpdated();
+      if (remainingAccounts.length === 0) {
+        onDisconnected?.();
+      } else {
+        onConnected?.();
+      }
+    } finally {
+      setDisconnecting(null);
+    }
   };
+
+  const connected = accounts.length > 0;
 
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         Connect your {integrationName} account. AI can act on your behalf once connected.
       </p>
+      {connected && (
+        <div className="space-y-2">
+          {accounts.map((account) => {
+            const key = account.instance ?? "__default__";
+            const isDisconnecting = disconnecting === key;
+            return (
+              <div key={key} className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs">
+                <span className="text-muted-foreground truncate">
+                  {account.displayName || account.instance || "default account"}
+                </span>
+                <Button
+                  onClick={() => handleDisconnect(account.instance)}
+                  disabled={isDisconnecting}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 shrink-0 text-muted-foreground hover:text-destructive"
+                >
+                  {isDisconnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
-        {status === "connected" ? (
-          <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect{displayName ? ` (${displayName})` : ""}
-          </Button>
-        ) : !isPro ? (
+        {!isPro && !connected ? (
           <div className="flex flex-col gap-1.5">
             <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap opacity-60">
               <Lock className="h-3 w-3" />pro required
@@ -1285,16 +1358,12 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
           </div>
         ) : (
           <Button onClick={handleConnect} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
-            <LogIn className="h-3 w-3" />connect with {integrationName}
+            {connected
+              ? (<><Plus className="h-3 w-3" />add another account</>)
+              : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
           </Button>
         )}
       </div>
-      {status === "connected" && displayName && (
-        <div className="p-3 bg-muted border border-border rounded-lg">
-          <p className="text-xs font-medium text-foreground">connected</p>
-          <p className="text-xs text-muted-foreground">{displayName}</p>
-        </div>
-      )}
     </div>
   );
 }
@@ -1393,7 +1462,7 @@ export function ConnectionCredentialForm({
       userDisconnectedRef.current = false; // allow future syncs after reconnect
       setStatus("idle");
       setIsSaved(true);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
     } catch (e: any) {
@@ -1412,7 +1481,7 @@ export function ConnectionCredentialForm({
       setIsSaved(false);
       setStatus("idle");
       setError(null);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       onDisconnect?.();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -1435,7 +1504,7 @@ export function ConnectionCredentialForm({
                       <HelpCircle className="h-3 w-3" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="left" sideOffset={4} className="text-xs max-w-[220px] space-y-1">
+                  <TooltipContent side="top" align="start" alignOffset={8} sideOffset={8} className="text-xs max-w-[220px] space-y-1">
                     <p>Learn how to find your {field.label.toLowerCase()} for this integration.</p>
                     <button onClick={() => openUrl(field.help_url)} className="underline hover:text-primary cursor-pointer">
                       Open guide →
@@ -1559,7 +1628,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       setConnectedPath(vaultPath);
       setManualPath("");
       setStatus("idle");
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: "obsidian" });
       onConnected?.();
     } catch (e: any) {
@@ -1577,7 +1646,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       setManualPath("");
       setStatus("idle");
       setError(null);
-      apiCache.invalidate("connections/list");
+      notifyConnectionsUpdated();
       onDisconnected?.();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -1671,10 +1740,9 @@ interface InstanceData {
   credentials: Record<string, string>;
 }
 
-function ApiIntegrationPanel({ integration, onRefresh, onDisconnected }: {
+function ApiIntegrationPanel({ integration, onRefresh }: {
   integration: IntegrationInfo;
   onRefresh: () => void;
-  onDisconnected?: () => void;
 }) {
   const [instances, setInstances] = useState<InstanceData[]>([]);
   const [instancesLoaded, setInstancesLoaded] = useState(false);
@@ -1725,7 +1793,6 @@ function ApiIntegrationPanel({ integration, onRefresh, onDisconnected }: {
   const refreshAll = (disconnected = false) => {
     if (disconnected) {
       setDefaultCreds({});
-      onDisconnected?.();
     }
     onRefresh();
     // Re-fetch instances
@@ -1817,7 +1884,12 @@ function ApiIntegrationPanel({ integration, onRefresh, onDisconnected }: {
 // Main connections section
 // ---------------------------------------------------------------------------
 
-export function ConnectionsSection() {
+interface ConnectionsSectionProps {
+  focusConnectionId?: string | null;
+  focusRequestId?: number;
+}
+
+export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
@@ -1832,11 +1904,17 @@ export function ConnectionsSection() {
     setSelected(pending);
   }, []);
 
+  useEffect(() => {
+    if (!focusRequestId) return;
+    setSelected(focusConnectionId || null);
+  }, [focusConnectionId, focusRequestId]);
+
   // Hardcoded connection status
   const [claudeInstalled, setClaudeInstalled] = useState(false);
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
+  const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
   const [calendarUserDisconnected, setCalendarUserDisconnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
 
@@ -1865,6 +1943,13 @@ export function ConnectionsSection() {
     commands.oauthStatus("google-calendar", null).then(res => {
       setGoogleCalendarConnected(res.status === "ok" && res.data.connected);
     }).catch(() => {});
+    if (typeof window !== "undefined" && platform() === "macos") {
+      commands.getBrowsersAutomationStatus().then(statuses => {
+        setBrowserUrlConnected(
+          statuses.length > 0 && statuses.every(b => b.status === "granted")
+        );
+      }).catch(() => setBrowserUrlConnected(false));
+    }
   }, []);
 
   useEffect(() => { refreshStatus(); }, [selected, refreshStatus]);
@@ -1887,6 +1972,7 @@ export function ConnectionsSection() {
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
           setIntegrationsLoaded(true);
+          notifyConnectionsUpdated({ invalidateCache: false });
           // Track active connections as user property (IDs only, no credentials)
           const connected = data.data
             .filter((i: any) => i.connected)
@@ -1906,6 +1992,12 @@ export function ConnectionsSection() {
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
+  const refreshIntegrationConnection = useCallback((id: string, connected: boolean) => {
+    setIntegrations(prev => prev.map(i => i.id === id ? { ...i, connected } : i));
+    notifyConnectionsUpdated();
+    fetchIntegrations();
+  }, [fetchIntegrations]);
+
   // Build unified tile list
   const allTiles: ConnectionTile[] = useMemo(() => {
     const hardcoded: ConnectionTile[] = [
@@ -1916,7 +2008,7 @@ export function ConnectionsSection() {
       { id: "warp", name: "Warp", icon: "warp", connected: false },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },
       ...(os === "macos" ? [
-        { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: false },
+        { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: browserUrlConnected },
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
       ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
@@ -1957,7 +2049,7 @@ export function ConnectionsSection() {
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     return [...hardcoded, ...apiTiles];
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return allTiles;
@@ -1985,13 +2077,17 @@ export function ConnectionsSection() {
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
       case "user-browser": return <UserBrowserCard />;
-      case "browser-url": return <BrowserUrlCard />;
+      case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
-      case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
+      case "apple-calendar": return <CalendarCard onConnectionChange={() => {
+        refreshCalendarTile();
+        notifyConnectionsUpdated();
+        fetchIntegrations();
+      }} />;
       case "google-calendar": return <GoogleCalendarCard
         onConnected={() => setGoogleCalendarConnected(true)}
-        onDisconnected={() => { setGoogleCalendarConnected(false); apiCache.invalidate("connections/list"); }}
+        onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
       case "gmail": return <GmailCard />;
@@ -2005,22 +2101,26 @@ export function ConnectionsSection() {
       case "msty": return <MstyPanel />;
       case "warp": return <WarpPanel />;
       case "obsidian": return <ObsidianPanel
-        onConnected={() => { apiCache.invalidate("connections/list"); fetchIntegrations(); }}
+        onConnected={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
         onDisconnected={() => {
           setIntegrations(prev => prev.map(i => i.id === "obsidian" ? { ...i, connected: false } : i));
-          apiCache.invalidate("connections/list");
+          notifyConnectionsUpdated();
           fetchIntegrations();
         }}
       />;
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
-            return <OAuthPanel integrationId={selectedIntegration.id} integrationName={selectedIntegration.name} />;
+            return <OAuthPanel
+              integrationId={selectedIntegration.id}
+              integrationName={selectedIntegration.name}
+              onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
+              onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
+            />;
           }
           return <ApiIntegrationPanel
             integration={selectedIntegration}
             onRefresh={fetchIntegrations}
-            onDisconnected={() => setIntegrations(prev => prev.map(i => i.id === selectedIntegration.id ? { ...i, connected: false } : i))}
           />;
         }
         // Fall-through: hardcoded tile but the API hasn't returned (or returned without
@@ -2043,7 +2143,7 @@ export function ConnectionsSection() {
               size="sm"
               variant="outline"
               className="h-7 text-xs gap-1.5 normal-case font-sans tracking-normal"
-              onClick={() => { apiCache.invalidate("connections/list"); fetchIntegrations(); }}
+              onClick={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
             >
               <Loader2 className="h-3 w-3" />
               retry

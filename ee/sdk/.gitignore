@@ -1,0 +1,31 @@
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bun-debug.log*
+
+# Node installs and local package-manager output
+node_modules/
+npm/
+examples/*/node_modules/
+examples/*/package-lock.json
+
+# Native build output
+target/
+.build/
+*.node
+tauri/rust/target/
+examples/swift-app/.build/
+examples/tauri-app/dist/
+examples/tauri-app/src-tauri/target/
+examples/tauri-app/src-tauri/gen/
+
+# Local recordings
+screenpipe-*.mp4

@@ -18,6 +18,15 @@ const env = (sessionId: string, type = "text_delta", source: "pi" | "pipe" = "pi
   event: { type, delta: "hi" },
 });
 
+const textDeltaEnv = (sessionId: string, delta: string): AgentEventEnvelope => ({
+  source: "pi",
+  sessionId,
+  event: {
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", delta },
+  },
+});
+
 beforeEach(() => {
   __testing.reset();
 });
@@ -170,5 +179,37 @@ describe("dispatch safety", () => {
     // Both handlers run; fast finishes before slow because Promise.all
     // doesn't serialize them.
     expect(order).toEqual(["fast", "slow"]);
+  });
+});
+
+describe("text_delta batching", () => {
+  it("coalesces adjacent assistant text deltas", async () => {
+    const seen: string[] = [];
+    registerDefault((envelope) => {
+      seen.push(envelope.event.assistantMessageEvent?.delta ?? "");
+    });
+
+    await __testing.dispatchEvent(textDeltaEnv("a", "hel"));
+    await __testing.dispatchEvent(textDeltaEnv("a", "lo"));
+
+    expect(seen).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(seen).toEqual(["hello"]);
+  });
+
+  it("flushes pending text before non-text events", async () => {
+    const seen: string[] = [];
+    registerDefault((envelope) => {
+      seen.push(envelope.event.assistantMessageEvent?.delta ?? envelope.event.type ?? "");
+    });
+
+    await __testing.dispatchEvent(textDeltaEnv("a", "hi"));
+    await __testing.dispatchEvent({
+      source: "pi",
+      sessionId: "a",
+      event: { type: "agent_end" },
+    });
+
+    expect(seen).toEqual(["hi", "agent_end"]);
   });
 });

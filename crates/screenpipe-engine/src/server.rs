@@ -41,14 +41,15 @@ use crate::{
         },
         meetings::{
             bulk_delete_meetings_handler, delete_meeting_handler, get_meeting_handler,
-            list_meetings_handler, meeting_status_handler, merge_meetings_handler,
-            split_meeting_handler, start_meeting_handler, stop_meeting_handler,
-            update_meeting_handler,
+            get_meeting_transcript_handler, list_meetings_handler, meeting_status_handler,
+            merge_meetings_handler, split_meeting_handler, start_meeting_handler,
+            stop_meeting_handler, update_meeting_handler,
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
             list_memories_handler, list_memory_tags_handler, update_memory_handler,
         },
+        retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
             delete_speaker_handler, get_similar_speakers_handler, get_unnamed_speakers_handler,
@@ -188,6 +189,12 @@ pub struct AppState {
     pub api_auth: bool,
     /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
     pub api_auth_key: Option<String>,
+    /// Cloud JWT (Clerk) used to authenticate proxied requests to api.screenpi.pe.
+    /// Held in a RwLock so the desktop shell can refresh it after login/logout
+    /// without rebuilding the server. The pi-agent's bash deliberately can't see
+    /// this token — agent calls localhost/v1/chat/completions and the server
+    /// signs the upstream request here. See routes/cloud_proxy.rs.
+    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
@@ -223,6 +230,8 @@ pub struct SCServer {
     pub api_auth: bool,
     /// API key for remote auth validation
     pub api_auth_key: Option<String>,
+    /// Cloud JWT for proxied /v1/chat/completions calls. See AppState::cloud_token.
+    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
@@ -260,8 +269,26 @@ impl SCServer {
             owned_browser: None,
             api_auth: false,
             api_auth_key: None,
+            cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
             secret_store: None,
         }
+    }
+
+    /// Set the cloud JWT used to authenticate proxied chat-completion calls
+    /// to api.screenpi.pe. Safe to call before or after `start()` — the route
+    /// reads the inner Arc on each request. Callers can also clone the Arc
+    /// directly (see `cloud_token_handle`) to update it from elsewhere.
+    pub fn with_cloud_token(self, token: Option<String>) -> Self {
+        if let Ok(mut guard) = self.cloud_token.try_write() {
+            *guard = token;
+        }
+        self
+    }
+
+    /// Clone the cloud-token handle so the desktop shell can refresh it
+    /// after the server has started (e.g. when settings.user.token changes).
+    pub fn cloud_token_handle(&self) -> Arc<tokio::sync::RwLock<Option<String>>> {
+        self.cloud_token.clone()
     }
 
     /// Set the pipe manager
@@ -512,6 +539,7 @@ impl SCServer {
             ),
             api_auth: self.api_auth,
             api_auth_key: self.api_auth_key.clone(),
+            cloud_token: self.cloud_token.clone(),
             secret_store: self.secret_store.clone(),
         });
 
@@ -580,9 +608,11 @@ impl SCServer {
             .post("/meetings/bulk-delete", bulk_delete_meetings_handler)
             .post("/meetings/start", start_meeting_handler)
             .post("/meetings/stop", stop_meeting_handler)
+            .get("/meetings/:id/transcript", get_meeting_transcript_handler)
             .get("/meetings/:id", get_meeting_handler)
             .delete("/meetings/:id", delete_meeting_handler)
             .put("/meetings/:id", update_meeting_handler)
+            .post("/meetings/:id/retranscribe", retranscribe_meeting_handler)
             .post("/meetings/:id/split", split_meeting_handler)
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
@@ -651,6 +681,16 @@ impl SCServer {
             .route("/audio/metrics", get(audio_metrics_handler))
             // Retranscribe/transcribe (not in OpenAPI spec — opaque Response / multipart)
             .route(
+                "/audio/reconciliation/backlog",
+                get(crate::routes::retranscribe::audio_reconciliation_backlog_handler),
+            )
+            .route(
+                "/audio/reconciliation/backlog/:audio_chunk_id",
+                axum::routing::delete(
+                    crate::routes::retranscribe::drop_audio_reconciliation_chunk_handler,
+                ),
+            )
+            .route(
                 "/audio/retranscribe",
                 axum::routing::post(crate::routes::retranscribe::retranscribe_handler),
             )
@@ -658,6 +698,15 @@ impl SCServer {
                 "/v1/audio/transcriptions",
                 axum::routing::post(crate::routes::transcribe::transcribe_handler)
                     .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)), // 250MB
+            )
+            // Local proxy → api.screenpi.pe/v1/chat/completions. Lets the
+            // pi-agent's bash do cloud media analysis without ever seeing the
+            // cloud JWT (which the wrapper unsets). Body limit bumped because
+            // requests embed base64'd audio/images.
+            .route(
+                "/v1/chat/completions",
+                axum::routing::post(crate::routes::cloud_proxy::chat_completions)
+                    .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)), // 50MB
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
@@ -799,6 +848,7 @@ impl SCServer {
                 self.secret_store.clone(),
                 app_state.browser_bridge.clone(),
                 app_state.browser_registry.clone(),
+                self.api_auth_key.clone(),
             ),
         );
 
@@ -919,6 +969,8 @@ impl SCServer {
                                 || path == "/ws/health"
                                 || path == "/audio/device/status"
                                 || path == "/connections/oauth/callback"
+                                || path == "/connections/browser/pair/start"
+                                || path == "/connections/browser/pair/status"
                                 || path.starts_with("/frames/")
                                 || path == "/notify"
                                 || path.starts_with("/pipes/store")

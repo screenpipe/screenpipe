@@ -335,30 +335,21 @@ function apply(sid: string, payload: AgentInnerEvent): void {
  *  post-hoc views render the same shape. */
 function reconstructFromAgentEnd(agentMessages: any[]): any[] {
   const out: any[] = [];
-  let toolBlocksFromAssistant: any[] = [];
   for (let i = 0; i < agentMessages.length; i++) {
     const m = agentMessages[i];
-    if (!m || (m.role !== "assistant" && m.role !== "user" && m.role !== "tool")) continue;
+    if (!m) continue;
 
-    if (m.role === "tool") {
+    const text = extractText(m.content);
+    if (isToolReturnMessage(m, text)) {
       // Tool result — splice its result text into the matching tool
       // block on the most recent assistant message.
-      if (out.length === 0) continue;
-      const last = out[out.length - 1];
-      if (!last.contentBlocks) continue;
-      const blocks = last.contentBlocks as any[];
       const toolCallId = m.toolCallId || m.tool_call_id;
-      const resultText = extractText(m.content);
-      for (const b of blocks) {
-        if (b.type === "tool" && b.toolCall?.id === toolCallId) {
-          b.toolCall.result = resultText.slice(0, 2000);
-          break;
-        }
-      }
+      attachToolResult(out, toolCallId, toolReturnResultText(text));
       continue;
     }
 
-    const text = extractText(m.content);
+    if (m.role !== "assistant" && m.role !== "user") continue;
+
     const tools = extractToolCalls(m.content || [], i);
     const blocks: any[] = [];
     if (text.trim()) blocks.push({ type: "text", text });
@@ -374,9 +365,7 @@ function reconstructFromAgentEnd(agentMessages: any[]): any[] {
       timestamp: Date.now(),
       ...(blocks.length ? { contentBlocks: blocks } : {}),
     });
-    if (m.role === "assistant") toolBlocksFromAssistant = tools;
   }
-  void toolBlocksFromAssistant;
   return out;
 }
 
@@ -406,6 +395,41 @@ function extractToolCalls(content: any[], idx: number): any[] {
     }
   }
   return out;
+}
+
+function isToolReturnMessage(message: any, text: string): boolean {
+  const role = message?.role;
+  if (role === "tool" || role === "toolResult") return true;
+  if (role !== "user" && role !== "assistant") return false;
+  return /^#{0,6}\s*Return of (?:functions\.)?[A-Za-z0-9_-]+:\d+\b/.test(text.trim());
+}
+
+function toolReturnResultText(text: string): string {
+  return text
+    .replace(/^#{0,6}\s*Return of (?:functions\.)?[A-Za-z0-9_-]+:\d+\s*/i, "")
+    .trim();
+}
+
+function attachToolResult(out: any[], toolCallId: string | undefined, resultText: string): void {
+  if (!resultText) return;
+  for (let i = out.length - 1; i >= 0; i--) {
+    const blocks = out[i]?.contentBlocks as any[] | undefined;
+    if (!Array.isArray(blocks)) continue;
+    const exact = toolCallId
+      ? blocks.find((b) => b.type === "tool" && b.toolCall?.id === toolCallId)
+      : undefined;
+    const fallback = [...blocks]
+      .reverse()
+      .find((b) => b.type === "tool" && !b.toolCall?.result);
+    const target = exact || fallback;
+    if (target?.toolCall) {
+      target.toolCall.result =
+        resultText.length > 2000
+          ? `${resultText.slice(0, 2000)}\n... (truncated)`
+          : resultText;
+      return;
+    }
+  }
 }
 
 // Test-only helpers — call into the writer without going through the

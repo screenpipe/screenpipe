@@ -175,6 +175,11 @@ pub struct AudioResultRaw {
     pub speaker_id: Option<i64>,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
+    pub diarization_mode: Option<String>,
+    pub diarization_speaker_label: Option<String>,
+    pub diarization_provider: Option<String>,
+    pub diarization_source: Option<String>,
+    pub diarization_confidence: Option<f64>,
 }
 
 #[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -182,6 +187,26 @@ pub struct Speaker {
     pub id: i64,
     pub name: String,
     pub metadata: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewDiarizationSegment {
+    pub provider_speaker_label: String,
+    pub speaker_id: Option<i64>,
+    pub source: String,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub confidence: Option<f64>,
+    pub overlap: bool,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplacementAudioTranscription {
+    pub transcription: String,
+    pub speaker_id: Option<i64>,
+    pub start_time: f64,
+    pub end_time: f64,
 }
 
 /// A persistent memory: fact, preference, decision, or insight.
@@ -229,6 +254,27 @@ pub struct MeetingRecord {
     pub created_at: String,
 }
 
+#[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingTranscriptSegment {
+    pub id: i64,
+    pub meeting_id: i64,
+    pub source: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub item_id: String,
+    pub device_name: String,
+    pub device_type: String,
+    pub audio_transcription_id: Option<i64>,
+    pub audio_chunk_id: Option<i64>,
+    pub audio_file_path: Option<String>,
+    pub speaker_id: Option<i64>,
+    pub speaker_name: Option<String>,
+    pub transcript: String,
+    pub captured_at: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ActiveSpeaker {
     pub speaker_id: i64,
@@ -255,8 +301,16 @@ pub struct AudioResult {
     pub device_name: String,
     pub device_type: DeviceType,
     pub speaker: Option<Speaker>,
+    pub speaker_label: Option<String>,
+    pub speaker_source: Option<String>,
+    pub speaker_confidence: Option<f64>,
+    pub speaker_provisional: bool,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
+    pub source: Option<String>,
+    pub meeting_id: Option<i64>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(OaSchema, Debug, Deserialize, PartialEq)]

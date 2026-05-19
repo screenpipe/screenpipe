@@ -141,6 +141,10 @@ pub(crate) struct DeviceStatusEntry {
 pub(crate) async fn audio_device_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Vec<DeviceStatusEntry>>, (StatusCode, JsonResponse<Value>)> {
+    if state.audio_disabled {
+        return Ok(JsonResponse(Vec::new()));
+    }
+
     let all_devices = list_audio_devices().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

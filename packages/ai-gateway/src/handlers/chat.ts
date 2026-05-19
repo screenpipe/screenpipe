@@ -129,6 +129,10 @@ async function tryModel(
     model = resolveModelAlias(model);
     const provider = createProvider(model, env);
     const reqBody = { ...body, model };
+    if (!provider.supportsTools) {
+      delete (reqBody as Partial<RequestBody>).tools;
+      delete (reqBody as Partial<RequestBody>).tool_choice;
+    }
 
     if (body.stream) {
       const stream = await provider.createStreamingCompletion(reqBody);

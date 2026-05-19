@@ -70,6 +70,8 @@ export interface SessionRecord {
   lastUserMessageAt?: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
+  /** Archived conversation hidden from recents. */
+  hidden?: boolean;
   /** True when there's new assistant activity (delta or completion) that
    *  the user hasn't seen yet. Set by the event router when content lands
    *  for a session that is NOT the currently-viewed one; cleared the
@@ -127,6 +129,8 @@ export interface SessionRecord {
 interface ChatStoreState {
   /** All known sessions, keyed by id. Includes both alive and on-disk-only. */
   sessions: Record<string, SessionRecord>;
+  /** True once the initial `~/.screenpipe/chats` scan has finished. */
+  diskHydrated: boolean;
   /** Currently FOCUSED session — i.e. the chat the user is actively
    *  looking at. Cleared when the user navigates away from the chat
    *  view (Pipes/Memories/...) so the sidebar row stops being
@@ -142,6 +146,8 @@ interface ChatStoreState {
 interface ChatStoreActions {
   /** Replace the whole map (used by the on-disk loader). */
   hydrateFromDisk: (records: SessionRecord[]) => void;
+  /** Mark the initial disk scan complete even when storage read fails. */
+  markDiskHydrated: () => void;
   /** Insert / overwrite a single session record. */
   upsert: (record: SessionRecord) => void;
   /** Patch fields on an existing record. No-op if id is unknown. */
@@ -235,6 +241,7 @@ export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
+  diskHydrated: false,
   currentId: null,
   panelSessionId: null,
   actions: {
@@ -254,13 +261,17 @@ export const useChatStore = create<ChatStore>((set) => ({
                 preview: r.preview,
                 messageCount: r.messageCount,
                 pinned: existing.pinned || r.pinned,
+                hidden: existing.hidden ?? r.hidden ?? false,
                 // updatedAt: take the larger so memory doesn't get clobbered
                 updatedAt: Math.max(existing.updatedAt, r.updatedAt),
               }
             : r;
         }
-        return { sessions: next };
+        return { sessions: next, diskHydrated: true };
       }),
+
+    markDiskHydrated: () =>
+      set((s) => (s.diskHydrated ? {} : { diskHydrated: true })),
 
     upsert: (record) =>
       set((s) => {

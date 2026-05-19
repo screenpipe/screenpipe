@@ -44,6 +44,13 @@ pub struct VisionManagerConfig {
     /// snapshot max width via `screenpipe_core::video::*`. Values: "low",
     /// "balanced" (default), "high", "max".
     pub video_quality: String,
+
+    /// Mitsukeru fork: overrides for `EventDrivenCaptureConfig`.
+    /// Each field is applied only when `Some(_)`. None = follow active PowerProfile.
+    pub idle_capture_interval_ms: Option<u64>,
+    pub visual_check_interval_ms: Option<u64>,
+    pub visual_change_threshold: Option<f64>,
+    pub min_capture_interval_ms: Option<u64>,
 }
 
 /// Status of the VisionManager
@@ -344,10 +351,24 @@ impl VisionManager {
         // Event-driven capture config — seed jpeg_quality from the user's
         // chosen videoQuality so power-profile updates can use it as the
         // baseline ceiling (`min(profile, baseline)`) at runtime.
-        let capture_config = EventDrivenCaptureConfig {
+        let mut capture_config = EventDrivenCaptureConfig {
             jpeg_quality: baseline_q,
             ..EventDrivenCaptureConfig::default()
         };
+        // Mitsukeru fork: apply per-parameter CLI / settings overrides if any.
+        // These force the value regardless of the active PowerProfile.
+        if let Some(v) = self.config.idle_capture_interval_ms {
+            capture_config.idle_capture_interval_ms = v;
+        }
+        if let Some(v) = self.config.visual_check_interval_ms {
+            capture_config.visual_check_interval_ms = v;
+        }
+        if let Some(v) = self.config.visual_change_threshold {
+            capture_config.visual_change_threshold = v;
+        }
+        if let Some(v) = self.config.min_capture_interval_ms {
+            capture_config.min_capture_interval_ms = v;
+        }
 
         // Subscribe to the shared broadcast channel so UI events reach this monitor
         let trigger_rx = self.trigger_tx.subscribe();
@@ -503,6 +524,10 @@ mod tests {
             pause_on_drm_content: false,
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),
+            idle_capture_interval_ms: None,
+            visual_check_interval_ms: None,
+            visual_change_threshold: None,
+            min_capture_interval_ms: None,
         };
         VisionManager::new(config, db, Handle::current())
     }

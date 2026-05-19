@@ -16,7 +16,6 @@ use screenpipe_audio::core::device::{
     default_input_device, default_output_device, parse_audio_device,
 };
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
 };
@@ -36,7 +35,6 @@ pub struct ServerCore {
     pub hot_frame_cache: Arc<HotFrameCache>,
     pub vision_metrics: Arc<screenpipe_screen::PipelineMetrics>,
     pub power_manager: Arc<PowerManagerHandle>,
-    pub meeting_detector: Option<Arc<MeetingDetector>>,
     pub pipe_manager: Arc<tokio::sync::Mutex<screenpipe_core::pipes::PipeManager>>,
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
     pub data_dir: PathBuf,
@@ -81,22 +79,10 @@ impl ServerCore {
             info!("Using Chinese HuggingFace mirror");
         }
 
-        // Deepgram proxy setup
-        if config.audio_transcription_engine == AudioTranscriptionEngine::Deepgram {
-            let has_personal_key = config
-                .deepgram_api_key
-                .as_ref()
-                .map_or(false, |k| !k.is_empty() && k != "default");
-            if has_personal_key {
-                std::env::remove_var("DEEPGRAM_API_URL");
-                std::env::remove_var("CUSTOM_DEEPGRAM_API_TOKEN");
-                info!("Using personal Deepgram API key for audio transcription");
-            } else if let Some(ref user_id) = config.user_id {
-                std::env::set_var("DEEPGRAM_API_URL", "https://api.screenpi.pe/v1/listen");
-                std::env::set_var("CUSTOM_DEEPGRAM_API_TOKEN", user_id);
-                info!("Using screenpipe cloud for audio transcription");
-            }
-        }
+        // Audio transcription provider config is passed directly into
+        // AudioManagerOptions. Do not use process env here: Deepgram used to
+        // read env via lazy_static, which made capture-level engine changes
+        // impossible after the first read.
 
         // --- Database ---
         let local_data_dir = config.data_dir.clone();
@@ -219,12 +205,6 @@ impl ServerCore {
             }
         }
 
-        let meeting_detector: Option<Arc<MeetingDetector>> = {
-            let detector = Arc::new(MeetingDetector::new());
-            info!("meeting detector enabled");
-            Some(detector)
-        };
-
         let openai_compatible_config =
             if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
                 Some(OpenAICompatibleConfig {
@@ -251,10 +231,6 @@ impl ServerCore {
             .to_audio_manager_builder(data_path.clone(), audio_devices)
             .transcription_mode(config.transcription_mode.clone())
             .openai_compatible_config(openai_compatible_config);
-
-        if let Some(ref detector) = meeting_detector {
-            audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
-        }
 
         crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
         let mut audio_manager = audio_manager_builder.build(db.clone()).await.map_err(|e| {
@@ -333,6 +309,17 @@ impl ServerCore {
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;
         server.api_auth_key = config.api_auth_key.clone();
+        // Cloud JWT for /v1/chat/completions proxy. config.user_id carries
+        // the Clerk JWT (despite the name — see line 96 where the same value
+        // is used as the cloud transcription bearer). Pi's bash deliberately
+        // can't see this token; the local proxy signs the upstream request.
+        if let Some(ref t) = config.user_id {
+            if !t.is_empty() {
+                if let Ok(mut g) = server.cloud_token.try_write() {
+                    *g = Some(t.clone());
+                }
+            }
+        }
         server.owned_browser = owned_browser;
 
         // Secret store — read-only keychain access on startup.
@@ -491,13 +478,24 @@ impl ServerCore {
         let backend = config.pii_backend.as_str();
         let use_tinfoil = matches!(backend, "tinfoil" | "cloud" | "enclave");
 
+        // Cloud Clerk JWT — same token used for the cloud transcription
+        // bearer (see line 96). Tinfoil's enclave is on the screenpipe
+        // cloud auth boundary, so the user's signed-in token is what
+        // authenticates redactor requests. Without this the worker logs
+        // "no api key — requests will be un-authenticated" on every
+        // restart even when the user is signed in.
+        let tinfoil_api_key = config
+            .user_id
+            .clone()
+            .filter(|s| !s.is_empty());
+
         // One shutdown signal, shared across both worker spawn paths and
         // stored on Self for `shutdown()` to fire on app quit.
         let redact_shutdown = Arc::new(Notify::new());
 
         if config.async_pii_redaction {
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
-            use screenpipe_redact::adapters::tinfoil::TinfoilRedactor;
+            use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
             use screenpipe_redact::worker::{Worker, WorkerConfig, ALL_TARGET_TABLES};
             use screenpipe_redact::Redactor;
@@ -517,8 +515,14 @@ impl ServerCore {
             // removal" toggle means. The 20260507 migration drops the
             // dead duplicate columns the old non-destructive mode used.
             if use_tinfoil {
-                info!("starting async text-PII reconciliation worker (backend=tinfoil)");
-                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async text-PII reconciliation worker (backend=tinfoil)"
+                );
+                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::new(TinfoilConfig {
+                    api_key: tinfoil_api_key.clone(),
+                    ..Default::default()
+                }));
                 let pipeline = Pipeline::regex_then_ai(ai, PipelineConfig::default());
                 let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;
                 let cfg = WorkerConfig {
@@ -563,23 +567,30 @@ impl ServerCore {
                         tables: ALL_TARGET_TABLES.to_vec(),
                         ..Default::default()
                     };
-                    let _ = Worker::new(pool, pipeline_arc, cfg)
-                        .spawn_with_shutdown(shutdown);
+                    let _ = Worker::new(pool, pipeline_arc, cfg).spawn_with_shutdown(shutdown);
                 });
             }
         }
 
         if config.async_image_pii_redaction {
             use screenpipe_redact::adapters::rfdetr::{RfdetrConfig, RfdetrRedactor};
-            use screenpipe_redact::adapters::tinfoil_image::TinfoilImageRedactor;
+            use screenpipe_redact::adapters::tinfoil_image::{
+                TinfoilImageConfig, TinfoilImageRedactor,
+            };
             use screenpipe_redact::image::worker::{ImageWorker, ImageWorkerConfig};
             use screenpipe_redact::ImageRedactor;
 
             let pool = db.pool.clone();
             if use_tinfoil {
-                info!("starting async image-PII worker (backend=tinfoil)");
+                info!(
+                    has_api_key = tinfoil_api_key.is_some(),
+                    "starting async image-PII worker (backend=tinfoil)"
+                );
                 let detector =
-                    Arc::new(TinfoilImageRedactor::from_env()) as Arc<dyn ImageRedactor>;
+                    Arc::new(TinfoilImageRedactor::new(TinfoilImageConfig {
+                        api_key: tinfoil_api_key.clone(),
+                        ..Default::default()
+                    })) as Arc<dyn ImageRedactor>;
                 let _ = ImageWorker::new(pool, detector, ImageWorkerConfig::default())
                     .spawn_with_shutdown(redact_shutdown.clone());
             } else {
@@ -591,14 +602,10 @@ impl ServerCore {
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
                             info!("starting async image-PII worker (backend=local)");
-                            let detector_arc =
-                                Arc::new(detector) as Arc<dyn ImageRedactor>;
-                            let _ = ImageWorker::new(
-                                pool,
-                                detector_arc,
-                                ImageWorkerConfig::default(),
-                            )
-                            .spawn_with_shutdown(shutdown);
+                            let detector_arc = Arc::new(detector) as Arc<dyn ImageRedactor>;
+                            let _ =
+                                ImageWorker::new(pool, detector_arc, ImageWorkerConfig::default())
+                                    .spawn_with_shutdown(shutdown);
                         }
                         Err(e) => {
                             warn!(
@@ -618,7 +625,6 @@ impl ServerCore {
             hot_frame_cache,
             vision_metrics,
             power_manager,
-            meeting_detector,
             pipe_manager: shared_pipe_manager,
             manual_meeting,
             data_dir: local_data_dir,

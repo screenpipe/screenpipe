@@ -24,11 +24,11 @@ mod ee_sync;
 mod imp {
     use super::ee_sync;
     use crate::recording::local_api_context_from_app;
-    use ee_sync::{
-        AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FrameRow, LocalApiClient,
-        SnapshotRow, UiEventRow,
-    };
     use base64::Engine;
+    use ee_sync::{
+        AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FrameRow, LocalApiClient, SnapshotRow,
+        UiEventRow,
+    };
     use serde::Deserialize;
     use std::sync::Arc;
     use tracing::{info, warn};
@@ -284,15 +284,10 @@ mod imp {
             Ok(out)
         }
 
-        async fn fetch_latest_snapshot(
-            &self,
-        ) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
+        async fn fetch_latest_snapshot(&self) -> Result<Option<SnapshotRow>, EnterpriseSyncError> {
             // Step 1: ask /search for the latest OCR frame to learn its
             // frame_id + timestamp + apparent app context.
-            let search_url = format!(
-                "{}/search?content_type=ocr&limit=1",
-                self.api_url_base
-            );
+            let search_url = format!("{}/search?content_type=ocr&limit=1", self.api_url_base);
             let resp = self
                 .auth(self.http.get(&search_url))
                 .send()
@@ -341,16 +336,11 @@ mod imp {
             let bytes_vec = bytes.to_vec();
             let encoded = tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
                 let img = image::load_from_memory(&bytes_vec).ok()?;
-                let resized = img.resize(
-                    320,
-                    180,
-                    image::imageops::FilterType::Triangle,
-                );
+                let resized = img.resize(320, 180, image::imageops::FilterType::Triangle);
                 let (w, h) = (resized.width(), resized.height());
                 let mut buf = Vec::with_capacity(40 * 1024);
                 let mut cursor = std::io::Cursor::new(&mut buf);
-                let encoder =
-                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
+                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 60);
                 resized.into_rgb8().write_with_encoder(encoder).ok()?;
                 Some((buf, w, h))
             })
@@ -398,9 +388,7 @@ mod imp {
         ) {
             Some(c) => c,
             None => {
-                info!(
-                    "enterprise sync: SCREENPIPE_ENTERPRISE_LICENSE_KEY not set, skipping"
-                );
+                info!("enterprise sync: SCREENPIPE_ENTERPRISE_LICENSE_KEY not set, skipping");
                 return None;
             }
         };
@@ -412,8 +400,10 @@ mod imp {
 
         let api = local_api_context_from_app(app);
         let api_url_base = api.url("");
-        let local: Arc<dyn LocalApiClient> =
-            Arc::new(ScreenpipeLocalClient::new(api_url_base, api.api_key.clone()));
+        let local: Arc<dyn LocalApiClient> = Arc::new(ScreenpipeLocalClient::new(
+            api_url_base,
+            api.api_key.clone(),
+        ));
 
         let (tx, rx) = tokio::sync::watch::channel(false);
         tauri::async_runtime::spawn(async move {

@@ -158,8 +158,7 @@ mod tests {
 
     #[test]
     fn handles_multiple_links() {
-        let out =
-            rewrite_file_links("[a](/x.md) and [b](https://y) and [c](/z.json)");
+        let out = rewrite_file_links("[a](/x.md) and [b](https://y) and [c](/z.json)");
         assert!(out.contains("screenpipe://view?path=%2Fx.md"));
         assert!(out.contains("https://y"));
         assert!(out.contains("screenpipe://view?path=%2Fz.json"));
@@ -179,10 +178,7 @@ mod tests {
 
     #[test]
     fn no_links() {
-        assert_eq!(
-            rewrite_file_links("just plain text"),
-            "just plain text"
-        );
+        assert_eq!(rewrite_file_links("just plain text"), "just plain text");
     }
 
     #[test]

@@ -393,7 +393,7 @@ pub async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
-            let capture_state = focus_controller.state(monitor_id);
+            let capture_state = focus_controller.state_for_monitor(&monitor);
 
             // Fires exactly once per focus-away transition, not every Cold
             // loop iteration, so the log line is meaningful and we don't

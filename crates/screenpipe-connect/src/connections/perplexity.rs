@@ -13,13 +13,13 @@ static DEF: IntegrationDef = IntegrationDef {
     name: "Perplexity",
     icon: "perplexity",
     category: Category::Productivity,
-    description: "Search the web with Perplexity AI. POST to https://api.perplexity.ai/chat/completions with Bearer token. Use model 'sonar' for web search.",
+    description: "Search the web with Perplexity AI. Uses the pplx API for web search and synthesis. Requires an API key from your Perplexity account. Proxy base: /connections/perplexity/proxy/. POST to /chat/completions with {\"model\": \"sonar\", \"messages\": [...]}.",
     fields: &[FieldDef {
         key: "api_key",
         label: "API Key",
         secret: true,
         placeholder: "pplx-...",
-        help_url: "https://docs.perplexity.ai",
+        help_url: "https://www.perplexity.ai/account/api/keys",
     }],
 };
 

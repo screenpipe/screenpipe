@@ -125,9 +125,9 @@ jobs:
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             export CFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
             export CXXFLAGS="-mcpu=apple-m1 -U__ARM_FEATURE_MATMUL_INT8"
-            cargo build --release --features metal,parakeet-mlx --target ${{ matrix.target }}
+            cargo build --release -p screenpipe-engine --bin screenpipe --features metal,parakeet-mlx --target ${{ matrix.target }}
           else
-            cargo build --release --features metal --target ${{ matrix.target }}
+            cargo build --release -p screenpipe-engine --bin screenpipe --features metal --target ${{ matrix.target }}
           fi
 
       - name: Upload debug symbols to Sentry
@@ -281,9 +281,9 @@ jobs:
         shell: pwsh
         run: |
           # Pre-download CPU onnxruntime so ort crate finds it via ORT_LIB_LOCATION
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip"
-          $zipFile = "onnxruntime-win-x64-1.19.2.zip"
-          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip"
+          $zipFile = "onnxruntime-win-x64-1.22.0.zip"
+          $extractDir = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0"
           Invoke-WebRequest -Uri $url -OutFile $zipFile
           if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
           7z x $zipFile -o"apps/screenpipe-app-tauri/src-tauri/" -y
@@ -341,12 +341,12 @@ jobs:
           GGML_AVX512_BF16: "OFF"
           CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX512_VBMI=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DCMAKE_C_FLAGS=/arch:AVX2 -DCMAKE_CXX_FLAGS=/arch:AVX2"
           ORT_STRATEGY: system
-          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          ORT_LIB_LOCATION: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0
           OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: |
-          cargo build --release --target x86_64-pc-windows-msvc
+          cargo build --release -p screenpipe-engine --bin screenpipe --target x86_64-pc-windows-msvc
 
       - name: Upload debug symbols to Sentry
         shell: powershell
@@ -386,7 +386,7 @@ jobs:
           # Copy onnxruntime.dll - try target dir first (ort copy-dylibs), fallback to ORT_LIB_LOCATION
           $ortDll = "target/x86_64-pc-windows-msvc/release/onnxruntime.dll"
           if (!(Test-Path $ortDll)) {
-            $ortDll = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib/onnxruntime.dll"
+            $ortDll = "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll"
           }
           Copy-Item $ortDll "$packageDir/bin/"
           # Copy OpenBLAS DLL(s) for qwen3-asr (libopenblas.dll or openblas.dll)
@@ -490,7 +490,7 @@ jobs:
 
       - name: Build CLI
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release -p screenpipe-engine --bin screenpipe --target ${{ matrix.target }}
 
       - name: Upload debug symbols to Sentry
         env:

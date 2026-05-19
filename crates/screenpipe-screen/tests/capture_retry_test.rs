@@ -30,14 +30,14 @@ enum CycleOutcome {
 /// `capture_fn` returns Ok(()) on success, Err on failure.
 /// `refresh_fn` is called between retries.
 /// Returns the outcome of a single capture cycle.
-fn run_capture_cycle<F: ?Sized, R: ?Sized>(
+fn run_capture_cycle<F, R>(
     capture_fn: &mut F,
     refresh_fn: &mut R,
     consecutive_failures: &mut u32,
 ) -> CycleOutcome
 where
-    F: FnMut() -> Result<(), String>,
-    R: FnMut() -> Result<(), String>,
+    F: FnMut() -> Result<(), String> + ?Sized,
+    R: FnMut() -> Result<(), String> + ?Sized,
 {
     let mut captured = false;
     let mut attempts_used = 0;
@@ -390,7 +390,7 @@ fn test_intermittent_failure_never_bails() {
 
     for _ in 0..100 {
         let n = cycle_num.fetch_add(1, Ordering::SeqCst);
-        let mut capture = if n % 2 == 0 {
+        let mut capture = if n.is_multiple_of(2) {
             Box::new(|| Err("fail".to_string())) as Box<dyn FnMut() -> Result<(), String>>
         } else {
             Box::new(|| Ok(())) as Box<dyn FnMut() -> Result<(), String>>

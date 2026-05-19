@@ -22,6 +22,20 @@ export function DeeplinkHandler() {
   const setPendingNavigation = useTimelineStore((s) => s.setPendingNavigation);
 
   useEffect(() => {
+    const emitMeetingNoteRouteWithRetries = async (
+      meetingId: number,
+      transcript: boolean,
+    ) => {
+      const payload = { meetingId, transcript };
+      for (const delayMs of [0, 250, 750, 1500]) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        await emit("navigate", { url: "/home?section=meetings" });
+        await emit("open-meeting-note", payload);
+      }
+    };
+
     // Shared deep-link URL processor used by both the native plugin callback
     // and the custom Tauri event from single-instance handoff.
     const processDeepLinkUrl = async (url: string) => {
@@ -211,6 +225,24 @@ export function DeeplinkHandler() {
           } catch (error) {
             console.error("Failed to navigate to frame:", error);
           }
+        }
+      }
+
+      // Handle meeting note deep links:
+      //   screenpipe://meeting/123?live=1
+      //   screenpipe://meeting?id=123
+      if (parsedUrl.host === "meeting" || parsedUrl.pathname?.startsWith("/meeting/")) {
+        const pathId =
+          parsedUrl.host === "meeting"
+            ? parsedUrl.pathname.replace(/^\/+/, "").split("/")[0]
+            : parsedUrl.pathname.replace(/^\/meeting\/?/, "").split("/")[0];
+        const meetingId = parsedUrl.searchParams.get("id") || pathId;
+        if (meetingId) {
+          const numericId = Number(meetingId);
+          if (!Number.isFinite(numericId)) return;
+          const transcript = parsedUrl.searchParams.get("live") !== "0";
+          await commands.showWindowActivated({ Home: { page: "meetings" } });
+          await emitMeetingNoteRouteWithRetries(numericId, transcript);
         }
       }
     };

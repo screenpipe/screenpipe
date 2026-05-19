@@ -78,6 +78,9 @@ libc = "0.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
+# Linux debug examples are compiled by `cargo clippy --all-targets` on every
+# developer OS, so keep their D-Bus dependency available outside Linux too.
+zbus = { version = "5", features = ["blocking"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 libc = "0.2"

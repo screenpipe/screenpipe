@@ -121,10 +121,9 @@ export function UserBrowserCard() {
             </div>
 
             <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-              Lets the agent drive your real Chrome / Arc / Edge — the same
-              tabs you have logged into Gmail, GitHub, X, your bank.
-              Cookies, passkeys, and device-bound sessions all just work
-              because it&apos;s genuinely your browser.
+              Lets agents use your real Chrome / Arc / Edge when browser
+              context is needed. Install the extension, then approve the
+              connection in Screenpipe. No API token copy/paste.
             </p>
 
             {status.kind !== "connected" ? (
@@ -145,15 +144,12 @@ export function UserBrowserCard() {
                 className="text-xs"
               >
                 <ExternalLink className="h-3 w-3 mr-1.5" />
-                Install Screenpipe Browser Bridge
+                Install or reconnect extension
               </Button>
             ) : (
               <p className="text-xs text-muted-foreground">
-                The extension is connected. The agent can call
-                <code className="mx-1 px-1 py-0.5 rounded bg-muted text-foreground">
-                  POST /connections/browsers/user-browser/eval
-                </code>
-                to run JS in your active tab.
+                The extension is connected. Screenpipe can use your open tabs
+                when you ask an agent to work in the browser.
               </p>
             )}
           </div>

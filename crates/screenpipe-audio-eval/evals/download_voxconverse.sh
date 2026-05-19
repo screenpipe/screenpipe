@@ -29,12 +29,18 @@ RTTM_URL="https://github.com/joonson/voxconverse/archive/refs/heads/master.zip"
 # Sanity check we have a known-good file at the end. abjxc is the first wav
 # alphabetically in the dev split — its presence confirms unpacking worked.
 SANITY_FILE="$AUDIO_DIR/abjxc.wav"
+CURL_RETRY_FLAGS=(
+    --retry 8
+    --retry-delay 20
+    --retry-max-time 1800
+    --connect-timeout 30
+)
 
 mkdir -p "$FIXTURES" "$AUDIO_DIR" "$RTTM_DIR"
 
 if [ ! -f "$SANITY_FILE" ]; then
     echo "==> downloading audio (1.9 GB) from VGG..."
-    curl -L --fail --progress-bar -o "$FIXTURES/audio.zip" "$AUDIO_URL"
+    curl -L --fail "${CURL_RETRY_FLAGS[@]}" --progress-bar -o "$FIXTURES/audio.zip" "$AUDIO_URL"
 
     echo "==> unpacking audio..."
     # The audio zip extracts a top-level `audio/` directory; flatten it into
@@ -47,7 +53,7 @@ fi
 
 if [ ! -f "$RTTM_DIR/abjxc.rttm" ]; then
     echo "==> downloading RTTM ground truth from joonson/voxconverse..."
-    curl -L --fail --progress-bar -o "$FIXTURES/rttm.zip" "$RTTM_URL"
+    curl -L --fail "${CURL_RETRY_FLAGS[@]}" --progress-bar -o "$FIXTURES/rttm.zip" "$RTTM_URL"
 
     echo "==> unpacking RTTM..."
     unzip -q -o "$FIXTURES/rttm.zip" -d "$FIXTURES/_rttm_tmp"

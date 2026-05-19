@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::store::SecretStore;
 
@@ -260,6 +260,8 @@ fn fix_permissions_recursive(dir: &Path) -> usize {
 #[cfg(unix)]
 fn set_permissions_600(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
+    use tracing::warn;
+
     match std::fs::metadata(path) {
         Ok(meta) => {
             let current_mode = meta.permissions().mode() & 0o777;

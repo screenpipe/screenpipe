@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::core::device::AudioDevice;
 
 pub mod deepgram;
+pub mod diarization;
 pub mod engine;
 pub mod openai_compatible;
 pub mod stt;
@@ -36,6 +37,7 @@ pub mod text_utils;
 
 mod transcription_result;
 
+pub use diarization::{TranscriptionDiarizationSegment, TranscriptionOutput};
 pub use transcription_result::get_or_create_speaker_from_embedding;
 pub use transcription_result::process_transcription_result;
 pub use transcription_result::TranscriptionResult;

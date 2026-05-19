@@ -31,6 +31,22 @@ async function openSettings(): Promise<void> {
   await generalSection.waitForExist({ timeout: 8_000 });
 }
 
+const SETTINGS_SECTIONS = [
+  { id: 'display', keywords: ['display', 'theme', 'window', 'sidebar', 'appearance'] },
+  { id: 'general', keywords: ['general', 'startup', 'language', 'auto'] },
+  { id: 'ai', keywords: ['ai', 'model', 'preset', 'openai', 'ollama'] },
+  { id: 'recording', keywords: ['recording', 'fps', 'capture', 'monitor'] },
+  { id: 'shortcuts', keywords: ['shortcut', 'keyboard', 'hotkey', 'overlay'] },
+  { id: 'notifications', keywords: ['notification', 'toast', 'sound'] },
+  { id: 'usage', keywords: ['usage', 'activity', 'analytics'] },
+  { id: 'privacy', keywords: ['privacy', 'api', 'encryption', 'keychain'] },
+  { id: 'storage', keywords: ['storage', 'disk', 'retention', 'cache'] },
+  { id: 'speakers', keywords: ['speaker', 'voice'] },
+  { id: 'team', keywords: ['team', 'share', 'member', 'invite'] },
+  { id: 'account', keywords: ['account', 'sign', 'login', 'cloud'] },
+  { id: 'referral', keywords: ['free month', 'referral', 'invite', 'share'] },
+] as const;
+
 describe('Settings sections', () => {
   before(async () => {
     await waitForAppReady();
@@ -93,11 +109,27 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  for (const { id, keywords } of SETTINGS_SECTIONS) {
+    it(`loads Settings > ${id} via the sidebar nav`, async function () {
+      const nav = await $(`[data-testid="settings-nav-${id}"]`);
+      if (!(await nav.isExisting())) {
+        this.skip();
+      }
+      await nav.click();
+      await browser.pause(500);
+
+      const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
+      expect(body).not.toContain('unhandled runtime error');
+      expect(body).not.toContain('application error');
+      expect(keywords.some((keyword) => body.includes(keyword))).toBe(true);
+    });
+  }
+
   // ─── Recent regressions / new features (covered as smoke tests) ───────────
   //
   // Each test below pins a freshly-shipped feature against accidental drop.
   // Pattern: click into the subsection, assert the section's KEY content
-  // strings render. Looser than testid checks (Storage / Meetings / Privacy
+  // strings render. Looser than testid checks (Storage / Privacy
   // panels don't have section-level testids yet) but resilient to copy
   // tweaks because we OR several keywords. If a copy refresh removes ALL
   // listed keywords from the page, that's also a real regression worth
@@ -140,33 +172,6 @@ describe('Settings sections', () => {
     expect(generalBody.includes('clear cache')).toBe(false);
 
     const filepath = await saveScreenshot('settings-storage');
-    expect(existsSync(filepath)).toBe(true);
-  });
-
-  it('Meetings section renders detection / note settings (covers f983570e4, 287427705, b6730535d, 7be09346f)', async () => {
-    const navMeetings = await $('[data-testid="settings-nav-meetings"]');
-    await navMeetings.waitForExist({ timeout: 8_000 });
-    await navMeetings.click();
-    await browser.pause(800);
-
-    const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
-    // Recent commits put a lot of churn into meetings:
-    //   f983570e4 — promote meeting summarize button
-    //   287427705 — markdown-first note editor
-    //   b6730535d — copy meeting + transcript to clipboard
-    //   7be09346f — delete UX (modal confirm)
-    // We don't try to drive any of these; we just verify the settings panel
-    // at least mounts with vocabulary specific to this section so a future
-    // refactor that accidentally swaps in the wrong settings page (or
-    // crashes on mount) is caught.
-    const hasMeetingsContent = body.includes('meeting') ||
-      body.includes('summary') ||
-      body.includes('transcript') ||
-      body.includes('detection');
-    expect(hasMeetingsContent).toBe(true);
-    expect(body).not.toContain('unhandled runtime error');
-
-    const filepath = await saveScreenshot('settings-meetings');
     expect(existsSync(filepath)).toBe(true);
   });
 

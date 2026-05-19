@@ -142,16 +142,15 @@ pub async fn disk_usage(
             } else if let Ok(cached) = serde_json::from_str::<CachedDiskUsage>(&content) {
                 let now = chrono::Local::now().timestamp();
                 let one_hour = 60 * 60; // 1 hour cache (reduced from 2 days)
-                // Invalidate cache if it was computed for a different data dir.
-                // `screenpipe_dir` defaults to "" on older cache entries — those
-                // predate the user switching dirs, so always invalidate them.
-                // Normalize the cached key too: old entries were written with
-                // raw `to_string_lossy()`, may differ from canonical form for
-                // the same directory.
-                let cached_key_normalized =
-                    canonical_dir_key(Path::new(&cached.screenpipe_dir));
-                let dir_matches = !cached.screenpipe_dir.is_empty()
-                    && cached_key_normalized == current_dir_key;
+                                        // Invalidate cache if it was computed for a different data dir.
+                                        // `screenpipe_dir` defaults to "" on older cache entries — those
+                                        // predate the user switching dirs, so always invalidate them.
+                                        // Normalize the cached key too: old entries were written with
+                                        // raw `to_string_lossy()`, may differ from canonical form for
+                                        // the same directory.
+                let cached_key_normalized = canonical_dir_key(Path::new(&cached.screenpipe_dir));
+                let dir_matches =
+                    !cached.screenpipe_dir.is_empty() && cached_key_normalized == current_dir_key;
                 if dir_matches && now - cached.timestamp < one_hour {
                     info!(
                         "Using cached disk usage data (age: {}s)",

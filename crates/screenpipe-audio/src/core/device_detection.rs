@@ -98,10 +98,16 @@ impl InputDeviceKind {
         let wired = [
             "built-in",
             "internal",
+            "integrated microphone",
+            "microphone array",
             "macbook",
             "imac",
             "hdmi",
             "displayport",
+            "realtek",
+            "intel",
+            "smart sound",
+            "high definition audio",
             "usb",
         ];
         if wired.iter().any(|p| lower.contains(p)) {
@@ -207,6 +213,20 @@ mod tests {
         );
         assert_eq!(
             InputDeviceKind::detect("Built-in Microphone"),
+            InputDeviceKind::Wired
+        );
+    }
+
+    #[test]
+    fn detects_windows_builtin_mics_as_wired() {
+        assert_eq!(
+            InputDeviceKind::detect(
+                "Microphone Array (Intel® Smart Sound Technology for Digital Microphones)"
+            ),
+            InputDeviceKind::Wired
+        );
+        assert_eq!(
+            InputDeviceKind::detect("Microphone (Realtek(R) Audio)"),
             InputDeviceKind::Wired
         );
     }

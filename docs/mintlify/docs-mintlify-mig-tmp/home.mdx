@@ -1,7 +1,7 @@
 ---
 title: "screenpipe: open source 24/7 screen and audio memory for AI"
 sidebarTitle: "home"
-description: "screenpipe captures your screen 24/7, extracts text with OCR, transcribes audio locally, and feeds it to AI assistants. Open source and privacy-focused."
+description: "screenpipe captures your screen 24/7, reads app text through accessibility APIs, transcribes audio locally, and feeds it to AI assistants."
 icon: "house"
 ---
 
@@ -13,12 +13,12 @@ screenpipe records your screen and audio 24/7, runs locally, and makes everythin
 
 ## what screenpipe does
 
-- **captures everything** — screen text (OCR + accessibility), audio transcription, app names, browser URLs, user input
+- **captures everything** — screen text via accessibility APIs with OCR fallback, audio transcription, app names, browser URLs, user input
 - **runs locally** — all data stays on your machine in `~/.screenpipe/`
 - **AI-powered search** — find anything you've seen or heard via natural language or API
 - **pipes** — scheduled AI agents that summarize your day, track time, sync to Obsidian, and more ([browse pipes](/pipe-store)) — click **Pipes** in the sidebar to install
 - **MCP server** — give Claude, Cursor, ChatGPT, and other AI tools memory of your screen ([setup](/mcp-server))
-- **connect your apps** — 45+ integrations: Slack, Notion, Gmail, Obsidian, Toggl, HubSpot, Salesforce, and more ([connections](/connections)) — configure in **settings → connections**
+- **connect your apps** — dozens of integrations: Slack, Notion, Gmail, Obsidian, Toggl, HubSpot, Salesforce, Zoom, PostHog, Sentry, and more ([connections](/connections)) — configure in **settings → connections**
 
 ## get started in 5 minutes
 
@@ -35,6 +35,12 @@ screenpipe records your screen and audio 24/7, runs locally, and makes everythin
   <Card title="connect your AI" icon="server" href="/mcp-server">
     add screenpipe to Claude, Cursor, ChatGPT, or any MCP-compatible tool
   </Card>
+  <Card title="API recipes" icon="terminal" href="/api-recipes">
+    copy-paste search, meetings, speakers, frames, and retention workflows
+  </Card>
+  <Card title="privacy data flow" icon="shield" href="/privacy-data-flow">
+    see what stays local and when data can leave your machine
+  </Card>
 </CardGroup>
 
 ## popular use cases
@@ -43,8 +49,8 @@ screenpipe records your screen and audio 24/7, runs locally, and makes everythin
 |---|---|
 | **find something I saw on screen** | search in the app, ask your AI, or `curl localhost:3030/search?q=...` |
 | **get a summary of my day** | run the [Day Recap pipe](/pipe-store) |
-| **auto-track my time** | install [Toggl Time Tracker](/pipe-store) (17 installs) or run Time Breakdown |
-| **transcribe meetings** | automatic — [search audio](/meeting-transcription) or install [Meeting Intelligence](/pipe-store) |
+| **auto-track my time** | install [Toggl Time Tracker](/pipe-store) or run Time Breakdown |
+| **transcribe meetings** | automatic — use [meeting intelligence](/meeting-intelligence), search audio, or install a meeting pipe |
 | **give Claude memory of my screen** | [connect via MCP](/mcp-server) — one click in settings |
 | **sync activity to Obsidian** | [connect Obsidian](/obsidian) and enable the sync pipe |
 | **close my loops** | ask your AI "what was I working on before lunch?" — [learn more](/use-cases) |

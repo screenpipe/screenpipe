@@ -160,7 +160,7 @@ fn bench_individual_operations(c: &mut Criterion) {
     // Benchmark: Resize operation
     group.bench_function("resize_1080p_to_360p", |b| {
         b.iter(|| {
-            image.resize_exact(640, 360, image::imageops::FilterType::Nearest);
+            let _ = image.resize_exact(640, 360, image::imageops::FilterType::Nearest);
         });
     });
 

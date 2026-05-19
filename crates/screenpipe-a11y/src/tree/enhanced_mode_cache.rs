@@ -251,7 +251,7 @@ mod tests {
             let c = cache.clone();
             handles.push(thread::spawn(move || {
                 for i in 0..50 {
-                    let pid = (thread_id * 100 + i) as i32;
+                    let pid = thread_id * 100 + i;
                     let _ = c.should_enable(pid);
                 }
             }));
@@ -284,7 +284,7 @@ mod tests {
         // (Note: panicking outside the guard does not actually poison the
         // mutex. This test simply verifies callers can still query.)
         let _ = cache.should_enable(2);
-        assert!(cache.len() >= 1);
+        assert!(!cache.is_empty());
     }
 
     #[test]

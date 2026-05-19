@@ -165,18 +165,13 @@ pub fn get_auth_token() -> Option<String> {
         return Some(key);
     }
 
-    let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
-    if store_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&store_path) {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
-                return parsed
-                    .pointer("/state/settings/user/token")
-                    .or_else(|| parsed.pointer("/settings/user/token"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string());
-            }
-        }
+    if let Ok(parsed) = super::store_file::read_store() {
+        return parsed
+            .pointer("/state/settings/user/token")
+            .or_else(|| parsed.pointer("/settings/user/token"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
     }
 
     None

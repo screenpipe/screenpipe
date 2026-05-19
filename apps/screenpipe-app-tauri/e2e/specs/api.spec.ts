@@ -24,6 +24,7 @@
  */
 
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
+import { invokeOrThrow } from "../helpers/tauri.js";
 
 interface LocalApiConfig {
   key: string | null;
@@ -32,24 +33,7 @@ interface LocalApiConfig {
 }
 
 async function getLocalApiConfig(): Promise<LocalApiConfig> {
-  const result = (await browser.executeAsync(
-    (done: (v: LocalApiConfig | null) => void) => {
-      const g = globalThis as unknown as {
-        __TAURI__?: { core?: { invoke: (cmd: string, args?: object) => Promise<unknown> } };
-        __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: object) => Promise<unknown> };
-      };
-      const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
-      if (!inv) {
-        done(null);
-        return;
-      }
-      void inv("get_local_api_config")
-        .then((v) => done(v as LocalApiConfig))
-        .catch(() => done(null));
-    },
-  )) as LocalApiConfig | null;
-  if (!result) throw new Error("get_local_api_config IPC returned null");
-  return result;
+  return invokeOrThrow<LocalApiConfig>("get_local_api_config");
 }
 
 interface FetchResult {
@@ -72,8 +56,12 @@ async function fetchJson(
   url: string,
   headers: Record<string, string> = {},
 ): Promise<FetchResult> {
+  const timeoutMs = t(5_000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const r = await fetch(url, { headers });
+    const r = await fetch(url, { headers, signal: controller.signal });
     let body: unknown = null;
     const text = await r.text();
     try {
@@ -87,8 +75,15 @@ async function fetchJson(
       ok: false,
       status: 0,
       body: null,
-      error: e instanceof Error ? e.message : String(e),
+      error:
+        e instanceof Error && e.name === "AbortError"
+          ? `request timed out after ${timeoutMs}ms`
+          : e instanceof Error
+            ? e.message
+            : String(e),
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

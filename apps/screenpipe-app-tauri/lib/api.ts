@@ -27,6 +27,77 @@ let _apiKey: string | null = null;
 let _authEnabled = false;
 let _initialized = false;
 let _initPromise: Promise<void> | null = null;
+let _fetchPatched = false;
+
+type LocalApiConfig = {
+  key: string | null;
+  port: number;
+  auth_enabled: boolean;
+};
+
+function applyApiConfig(config: LocalApiConfig): void {
+  _port = config.port;
+  _apiKey = config.key;
+  _authEnabled = config.auth_enabled;
+
+  if (_authEnabled && _apiKey && typeof document !== "undefined") {
+    document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
+  } else if (!_authEnabled && typeof document !== "undefined") {
+    document.cookie = "screenpipe_auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  }
+}
+
+function installLocalFetchInterceptor(): void {
+  if (_fetchPatched || typeof window === "undefined") return;
+  _fetchPatched = true;
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+
+    if (
+      _authEnabled &&
+      _apiKey &&
+      (url.includes(`localhost:${_port}`) || url.includes(`127.0.0.1:${_port}`))
+    ) {
+      const headers = new Headers(init?.headers);
+      if (!headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${_apiKey}`);
+      }
+      return originalFetch(input, { ...init, headers });
+    }
+
+    return originalFetch(input, init);
+  };
+}
+
+async function readLocalApiConfig(maxRetries: number): Promise<LocalApiConfig | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const config = await invoke<LocalApiConfig>("get_local_api_config");
+      applyApiConfig(config);
+      if (config.key || !config.auth_enabled) {
+        return config;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch {
+    // Not in Tauri context (tests, SSR) — defaults are fine.
+  }
+  return null;
+}
+
+export async function refreshApiConfig(): Promise<void> {
+  await readLocalApiConfig(10);
+  installLocalFetchInterceptor();
+  _initialized = true;
+}
 
 /**
  * Load API config from the Tauri backend via IPC command.
@@ -38,67 +109,11 @@ function ensureInitialized(): Promise<void> {
   if (_initPromise) return _initPromise;
 
   _initPromise = (async () => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-
-      // Retry up to 30 times (15 seconds total) if server hasn't started yet.
-      // The server generates the API key on startup, but the webview may load
-      // before it's ready — get_local_api_config returns key:null in that case.
-      // Previously 10 retries / 5s, but on heavy DBs the server can take longer,
-      // and if get_local_api_config was sync (main thread) it would deadlock with
-      // tray/window setup — now it's async but we keep a generous timeout.
-      const MAX_RETRIES = 30;
-      const RETRY_DELAY_MS = 500;
-
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        const config = await invoke<{
-          key: string | null;
-          port: number;
-          auth_enabled: boolean;
-        }>("get_local_api_config");
-
-        _port = config.port;
-        _apiKey = config.key;
-        _authEnabled = config.auth_enabled;
-
-        // Server not ready yet: either auth_enabled=false (server state not
-        // available) or key is null. Retry until we get a real config.
-        if (!_apiKey) {
-          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-          continue;
-        }
-
-        break;
-      }
-
-      // Set auth cookie so <img src>, WebSocket, and other browser-initiated
-      // requests that can't carry custom headers are authenticated.
-      if (_authEnabled && _apiKey) {
-        document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
-      }
-
-      // Patch global fetch to inject auth header for all local API requests.
-      // Many components use direct fetch() instead of localFetch(), so they
-      // miss the auth header entirely and get 403. This catches them all.
-      if (_authEnabled && _apiKey && typeof window !== "undefined") {
-        const originalFetch = window.fetch.bind(window);
-        const apiKey = _apiKey;
-        const apiPort = _port;
-        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.includes(`localhost:${apiPort}`) || url.includes(`127.0.0.1:${apiPort}`)) {
-            const headers = new Headers(init?.headers);
-            if (!headers.has("Authorization")) {
-              headers.set("Authorization", `Bearer ${apiKey}`);
-            }
-            return originalFetch(input, { ...init, headers });
-          }
-          return originalFetch(input, init);
-        };
-      }
-    } catch {
-      // Not in Tauri context (tests, SSR) — defaults are fine
-    }
+    // Retry up to 30 times (15 seconds total) if server hasn't started yet.
+    // The server generates the API key on startup, but the webview may load
+    // before it's ready — get_local_api_config returns key:null in that case.
+    await readLocalApiConfig(30);
+    installLocalFetchInterceptor();
     _initialized = true;
   })();
 
@@ -121,46 +136,7 @@ export async function ensureApiReady(): Promise<void> {
   if (_apiKey || typeof window === "undefined") {
     return;
   }
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const config = await invoke<{
-      key: string | null;
-      port: number;
-      auth_enabled: boolean;
-    }>("get_local_api_config");
-    _port = config.port;
-    _apiKey = config.key;
-    _authEnabled = config.auth_enabled;
-    if (_authEnabled && _apiKey) {
-      document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
-    }
-    if (_authEnabled && _apiKey && typeof window !== "undefined") {
-      const originalFetch = window.fetch.bind(window);
-      const apiKey = _apiKey;
-      const apiPort = _port;
-      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.href
-              : input.url;
-        if (
-          url.includes(`localhost:${apiPort}`) ||
-          url.includes(`127.0.0.1:${apiPort}`)
-        ) {
-          const headers = new Headers(init?.headers);
-          if (!headers.has("Authorization")) {
-            headers.set("Authorization", `Bearer ${apiKey}`);
-          }
-          return originalFetch(input, { ...init, headers });
-        }
-        return originalFetch(input, init);
-      };
-    }
-  } catch {
-    /* same as ensureInitialized — non-Tauri / tests */
-  }
+  await refreshApiConfig();
 }
 
 /** Strip `token=` query param from URLs for safe console logging. */
@@ -255,12 +231,26 @@ export async function localFetch(
     ? path
     : `${getApiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
 
-  if (_authEnabled && _apiKey) {
-    const headers = new Headers(init?.headers);
-    if (!headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${_apiKey}`);
+  const fetchWithCurrentAuth = () => {
+    if (_authEnabled && _apiKey) {
+      const headers = new Headers(init?.headers);
+      if (!headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${_apiKey}`);
+      }
+      return fetch(url, { ...init, headers });
     }
-    return fetch(url, { ...init, headers });
+    return fetch(url, init);
+  };
+
+  const response = await fetchWithCurrentAuth();
+  if ((response.status === 401 || response.status === 403) && isLocalApiUrl(url)) {
+    await refreshApiConfig();
+    return fetchWithCurrentAuth();
   }
-  return fetch(url, init);
+
+  return response;
+}
+
+function isLocalApiUrl(url: string): boolean {
+  return url.includes(`localhost:${_port}`) || url.includes(`127.0.0.1:${_port}`);
 }

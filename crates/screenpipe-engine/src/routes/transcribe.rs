@@ -180,12 +180,12 @@ pub async fn transcribe_handler(
                 );
             }
         };
-        let deepgram_api_key = audio_manager.deepgram_api_key().await;
+        let deepgram_config = audio_manager.deepgram_config().await;
         let openai_compatible_config = audio_manager.openai_compatible_config().await;
         let languages = audio_manager.languages().await;
         match TranscriptionEngine::new(
             engine,
-            deepgram_api_key,
+            deepgram_config,
             openai_compatible_config,
             languages,
             vec![],

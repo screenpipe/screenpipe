@@ -54,6 +54,7 @@ import type {
   AgentSessionEvictedPayload,
 } from "@/lib/events/types";
 import {
+  CHAT_HISTORY_INITIAL_LIMIT,
   listConversations,
   loadConversationFile,
   saveConversationFile,
@@ -308,12 +309,11 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
  *  keeps this in sync afterwards via incremental events. */
 async function hydrate() {
   try {
-    const metas = await listConversations();
+    const metas = await listConversations({
+      limit: CHAT_HISTORY_INITIAL_LIMIT,
+      includeHidden: false,
+    });
     const records: SessionRecord[] = metas
-      // Hidden conversations are filtered at this boundary so the rest of
-      // the store doesn't need to know about them. A future "show hidden"
-      // UI would need to bypass this filter and read the unfiltered list.
-      .filter((m) => !m.hidden)
       .map((m) => ({
         id: m.id,
         title: m.title || "untitled",
@@ -332,6 +332,7 @@ async function hydrate() {
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
     // Storage may not be ready yet on first launch — non-fatal.
+    useChatStore.getState().actions.markDiskHydrated();
   }
 }
 

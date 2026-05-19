@@ -164,7 +164,7 @@ permissions:
     - Api(GET /search)
     - App(Slack, Chrome)
     - Window(*meeting*)
-    - Content(ocr, audio)
+    - Content(accessibility, audio)
   deny:
     - App(1Password, Signal)
     - Window(*incognito*, *bank*)
@@ -178,7 +178,7 @@ permissions:
 |-----------|--------|-------------|
 | `App(name)` | `App(Slack)` or `App(Slack, Chrome)` | filter by app name (case-insensitive substring match) |
 | `Window(glob)` | `Window(*meeting*)` | filter by window title (glob pattern) |
-| `Content(type)` | `Content(ocr, audio)` | filter content types: `ocr`, `audio`, `input`, `accessibility` |
+| `Content(type)` | `Content(accessibility, audio)` | filter content types: `accessibility`, `ocr`, `audio`, `input` |
 | `time` | `"09:00-17:00"` | daily time window — supports midnight wrap (`"22:00-06:00"`) |
 | `days` | `"Mon,Tue,Wed,Thu,Fri"` | allowed days of the week |
 
@@ -227,7 +227,7 @@ permissions:
   allow:
     - Api(GET /search)
     - App(Chrome, Arc, Firefox)
-    - Content(ocr)
+    - Content(accessibility)
 ---
 
 Generate a daily browsing report...

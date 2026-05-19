@@ -42,9 +42,8 @@ pub trait OwnedWebviewHandle: Send + Sync {
 
     /// Fire-and-forget navigation. Default impl falls back to `eval` so
     /// existing transports keep working unchanged; the Tauri impl
-    /// overrides it with `WebviewWindow::navigate(...)` so we don't pay
-    /// the eval round-trip (which polls `document.title` and races the
-    /// page's own title setters — see incident notes in the parent crate).
+    /// overrides it with the native webview `navigate(...)` call so we
+    /// don't pay the eval round-trip.
     async fn navigate(&self, url: &str) -> Result<(), String> {
         let escaped = serde_json::to_string(url).map_err(|e| format!("encode url: {e}"))?;
         self.eval(
@@ -90,8 +89,9 @@ impl OwnedBrowser {
             "owned-default",
             "Owned Browser",
             "An isolated app-managed webview with its own persistent cookie \
-             jar. Empty by default — does NOT have the user's logged-in \
-             sessions. Use this for: scraping, signups under screenpipe's \
+             jar. Starts logged out; when a site has matching browser cookies, \
+             ScreenPipe asks the user before copying that browser session into \
+             this webview. Use this for: scraping, signups under screenpipe's \
              own accounts, scheduled background tasks, navigating to a public \
              URL the user asked you to open. \
              Navigating auto-opens the embedded sidebar in the user's chat — \
@@ -161,6 +161,10 @@ mod tests {
         last_code: Mutex<Option<String>>,
     }
 
+    struct NativeNavigateHandle {
+        last_url: Mutex<Option<String>>,
+    }
+
     #[async_trait]
     impl OwnedWebviewHandle for StubHandle {
         async fn eval(
@@ -175,6 +179,27 @@ mod tests {
                 result: Some(serde_json::json!("ok")),
                 error: None,
             })
+        }
+    }
+
+    #[async_trait]
+    impl OwnedWebviewHandle for NativeNavigateHandle {
+        async fn eval(
+            &self,
+            _code: &str,
+            _url: Option<&str>,
+            _timeout: Duration,
+        ) -> Result<EvalResult, String> {
+            Ok(EvalResult {
+                ok: true,
+                result: None,
+                error: None,
+            })
+        }
+
+        async fn navigate(&self, url: &str) -> Result<(), String> {
+            *self.last_url.lock().await = Some(url.to_string());
+            Ok(())
         }
     }
 
@@ -231,6 +256,22 @@ mod tests {
         assert_eq!(
             handle.last_code.lock().await.clone(),
             Some(r#"location.href = "https://example.com""#.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn attached_owned_navigate_uses_native_handle_override() {
+        let owned = OwnedBrowser::default_instance();
+        let handle = Arc::new(NativeNavigateHandle {
+            last_url: Mutex::new(None),
+        });
+        owned.attach(handle.clone()).await;
+
+        owned.navigate("https://example.com/native").await.unwrap();
+
+        assert_eq!(
+            handle.last_url.lock().await.clone(),
+            Some("https://example.com/native".into())
         );
     }
 }

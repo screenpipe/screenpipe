@@ -5,17 +5,16 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
   Loader2,
+  Plus,
   RefreshCw,
   Users,
   LogOut,
 } from "lucide-react";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { commands } from "@/lib/utils/tauri";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
@@ -32,100 +31,114 @@ interface CalendarEventItem {
   isAllDay: boolean;
 }
 
+interface CalendarAccount {
+  instance: string | null;
+  displayName: string | null;
+}
+
 export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void } = {}) {
-  const [connected, setConnected] = useState(false);
-  const [email, setEmail] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<CalendarAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [enabled, setEnabled] = useState(false);
   const [upcomingEvents, setUpcomingEvents] = useState<CalendarEventItem[]>([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
-
-  // Load enabled state from localStorage
-  useEffect(() => {
-    try {
-      const stored = localStorage?.getItem("google-calendar-enabled");
-      if (stored !== null) setEnabled(stored === "true");
-    } catch {}
-  }, []);
-
-  const toggleEnabled = (val: boolean) => {
-    setEnabled(val);
-    try {
-      localStorage?.setItem("google-calendar-enabled", String(val));
-    } catch {}
-    posthog.capture(val ? "google_calendar_enabled" : "google_calendar_disabled");
-  };
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
   // Fetch connection status via local OAuth
   const fetchStatus = useCallback(async () => {
     try {
+      const list = await commands.oauthListInstances("google-calendar");
+      if (list.status === "ok" && list.data.length > 0) {
+        setAccounts(
+          list.data.map((i) => ({
+            instance: i.instance ?? null,
+            displayName: i.display_name ?? null,
+          }))
+        );
+        return;
+      }
+
       const status = await commands.oauthStatus("google-calendar", null);
-      if (status.status === "ok") {
-        setConnected(status.data.connected);
-        setEmail(status.data.display_name ?? null);
-        if (status.data.connected && !enabled) {
-          const stored = localStorage?.getItem("google-calendar-enabled");
-          if (stored === null) {
-            setEnabled(true);
-            try {
-              localStorage?.setItem("google-calendar-enabled", "true");
-            } catch {}
-          }
-        }
+      if (status.status === "ok" && status.data.connected) {
+        setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
+      } else {
+        setAccounts([]);
       }
     } catch (e) {
       console.error("failed to fetch google calendar status:", e);
+      setAccounts([]);
     }
-  }, [enabled]);
+  }, []);
 
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
 
+  const connected = accounts.length > 0;
+
   // Fetch upcoming events via local API
   const fetchEvents = useCallback(async () => {
     setIsLoadingEvents(true);
     try {
-      const res = await localFetch(
-        `/connections/google-calendar/events?hours_back=0&hours_ahead=8`,
-        { method: "GET" }
+      const connectedAccounts = accounts.length > 0 ? accounts : [{ instance: null, displayName: null }];
+      const eventGroups = await Promise.all(
+        connectedAccounts.map(async (account) => {
+          const params = new URLSearchParams({ hours_back: "0", hours_ahead: "8" });
+          if (account.instance) params.set("instance", account.instance);
+
+          const res = await localFetch(
+            `/connections/google-calendar/events?${params.toString()}`,
+            { method: "GET" }
+          );
+          if (!res.ok) return [];
+
+          const raw: CalendarEventItem[] = await res.json();
+          const accountLabel = account.displayName || account.instance;
+          return raw.map((e) => ({
+            ...e,
+            calendarName: connectedAccounts.length > 1 && accountLabel
+              ? accountLabel
+              : e.calendarName,
+            startDisplay: e.start
+              ? new Date(e.start).toLocaleTimeString("en-US", {
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                })
+              : "",
+            endDisplay: e.end
+              ? new Date(e.end).toLocaleTimeString("en-US", {
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                })
+              : "",
+          }));
+        })
       );
-      if (res.ok) {
-        const raw: CalendarEventItem[] = await res.json();
-        const events = raw.map((e) => ({
-          ...e,
-          startDisplay: e.start
-            ? new Date(e.start).toLocaleTimeString("en-US", {
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })
-            : "",
-          endDisplay: e.end
-            ? new Date(e.end).toLocaleTimeString("en-US", {
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })
-            : "",
-        }));
-        setUpcomingEvents(events.filter((e) => !e.isAllDay).slice(0, 5));
-      } else {
-        setUpcomingEvents([]);
-      }
+      const seen = new Set<string>();
+      const events = eventGroups
+        .flat()
+        .filter((e) => !e.isAllDay)
+        .filter((e) => {
+          const key = `${e.title}|${e.start}|${e.end}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+      setUpcomingEvents(events.slice(0, 5));
     } catch {
       setUpcomingEvents([]);
     }
     setIsLoadingEvents(false);
-  }, []);
+  }, [accounts]);
 
-  // Fetch events when connected + enabled
+  // Fetch events when connected
   useEffect(() => {
-    if (connected && enabled) {
+    if (connected) {
       fetchEvents();
     }
-  }, [connected, enabled, fetchEvents]);
+  }, [connected, fetchEvents]);
 
   // Connect flow — uses local OAuth (same as Gmail)
   const handleConnect = async () => {
@@ -135,10 +148,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("google_calendar_connected");
         await fetchStatus();
-        setEnabled(true);
-        try {
-          localStorage?.setItem("google-calendar-enabled", "true");
-        } catch {}
+        notifyConnectionsUpdated();
         onConnected?.();
       }
     } catch (e) {
@@ -148,20 +158,29 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
   };
 
   // Disconnect flow
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true);
+  const handleDisconnect = async (instance: string | null) => {
+    const key = instance ?? "__default__";
+    setDisconnecting(key);
+    const remainingAccounts = accounts.filter(account => (account.instance ?? "__default__") !== key);
     try {
-      await commands.oauthDisconnect("google-calendar", null);
-      setConnected(false);
-      setEmail(null);
-      setUpcomingEvents([]);
+      await commands.oauthDisconnect("google-calendar", instance ?? null);
+      setAccounts(remainingAccounts);
+      await fetchStatus();
       posthog.capture("google_calendar_disconnected");
-      onDisconnected?.();
+      notifyConnectionsUpdated();
+      if (remainingAccounts.length === 0) {
+        onDisconnected?.();
+      } else {
+        onConnected?.();
+      }
     } catch (e) {
       console.error("failed to disconnect google calendar:", e);
     }
-    setIsDisconnecting(false);
+    setDisconnecting(null);
   };
+
+  const primaryAccount = accounts[0];
+  const accountLabel = primaryAccount?.displayName || primaryAccount?.instance || null;
 
   const isHappeningNow = (start: string, end: string) => {
     const now = Date.now();
@@ -214,28 +233,48 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Switch checked={enabled} onCheckedChange={toggleEnabled} />
-                  <Label className="text-xs text-muted-foreground">
-                    {enabled
-                      ? "Meeting detection enabled"
-                      : "Meeting detection disabled"}
-                  </Label>
-                </div>
+                {accounts.length > 0 && (
+                  <div className="space-y-2">
+                    {accounts.map((account) => {
+                      const key = account.instance ?? "__default__";
+                      const isDisconnecting = disconnecting === key;
+                      return (
+                        <div key={key} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="text-muted-foreground truncate">
+                            {account.displayName || account.instance || "default account"}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDisconnect(account.instance)}
+                            disabled={isDisconnecting}
+                            className="text-xs text-muted-foreground hover:text-destructive h-6 px-2 shrink-0"
+                          >
+                            {isDisconnecting ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <LogOut className="h-3 w-3" />
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={handleDisconnect}
-                  disabled={isDisconnecting}
-                  className="text-xs text-muted-foreground hover:text-destructive h-7 px-2"
+                  onClick={handleConnect}
+                  disabled={isConnecting}
+                  className="text-xs h-7 px-2"
                 >
-                  {isDisconnecting ? (
+                  {isConnecting ? (
                     <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
                   ) : (
-                    <LogOut className="h-3 w-3 mr-1.5" />
+                    <Plus className="h-3 w-3 mr-1.5" />
                   )}
-                  Disconnect
+                  {isConnecting ? "Waiting for Google..." : "Add another account"}
                 </Button>
               </div>
             )}
@@ -243,7 +282,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
         </div>
 
         {/* Upcoming events preview */}
-        {connected && enabled && (
+        {connected && (
           <div className="px-4 pb-3 pt-1 border-t border-border">
             <div className="flex items-center justify-between mt-2 mb-2">
               <span className="text-xs font-medium text-muted-foreground">
@@ -316,7 +355,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                           </span>
                         )}
                       </div>
-                      <span className="shrink-0 text-muted-foreground">
+                      <span className="shrink-0 max-w-[120px] truncate text-muted-foreground" title={event.calendarName}>
                         {event.calendarName}
                       </span>
                     </div>
@@ -331,9 +370,11 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>
-              {connected && enabled
-                ? email
-                  ? `synced as ${email}`
+              {connected
+                ? accounts.length > 1
+                  ? `${accounts.length} accounts synced`
+                  : accountLabel
+                  ? `synced as ${accountLabel}`
                   : "calendar synced"
                 : "Enriches meeting detection with Google Calendar context"}
             </span>

@@ -40,6 +40,7 @@ mod bedrock;
 #[allow(deprecated)]
 mod icons;
 use crate::analytics::start_analytics;
+mod agent_event_emitter;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -54,6 +55,7 @@ mod ics_calendar;
 mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
+mod meeting_live_notes;
 mod oauth;
 mod owned_browser;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
@@ -85,6 +87,8 @@ mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
+#[cfg(target_os = "windows")]
+mod windows_webview_env;
 
 pub use server::*;
 
@@ -326,6 +330,9 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
 #[tokio::main]
 async fn main() {
     let _ = fix_path_env::fix();
+
+    #[cfg(target_os = "windows")]
+    windows_webview_env::install_user_data_dir();
 
     // Refuse to launch while a `screenpipe db recover|cleanup` operation is in
     // progress. The CLI writes ~/.screenpipe/.db_recovery.lock before doing
@@ -728,6 +735,7 @@ async fn main() {
                 recording::get_boot_phase,
                 // Commands from commands.rs
                 commands::is_enterprise_build_cmd,
+                commands::set_cloud_media_analysis_skill,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
                 enterprise_policy::set_enterprise_policy,
@@ -738,6 +746,10 @@ async fn main() {
                 commands::update_show_screenpipe_shortcut,
                 commands::show_window,
                 commands::show_window_activated,
+                commands::show_main_window,
+                commands::hide_main_window,
+                commands::e2e_emit_agent_stream,
+                commands::e2e_emit_pipe_stream,
                 commands::open_login_window,
                 commands::open_google_calendar_auth_window,
                 commands::ensure_webview_focus,
@@ -800,9 +812,13 @@ async fn main() {
                 pi::pi_check,
                 pi::pi_install,
                 pi::pi_prompt,
+                pi::pi_queue_prompt,
+                pi::pi_steer,
+                pi::pi_steer_queued,
                 pi::pi_pending,
                 pi::pi_cancel_queued,
                 pi::pi_abort,
+                pi::pi_abort_active,
                 pi::pi_new_session,
                 pi::pi_set_model,
                 pi::pi_update_config,
@@ -894,6 +910,7 @@ async fn main() {
         is_starting: Arc::new(AtomicBool::new(false)),
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
+        interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -953,7 +970,9 @@ async fn main() {
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
             // Focus the existing window
-            show_main_window(&app_for_closure, false);
+            if !crate::enterprise_policy::is_app_ui_hidden() {
+                show_main_window(app_for_closure.clone());
+            }
 
             // Forward deep-link URL from args
             if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
@@ -994,6 +1013,7 @@ async fn main() {
             commands::get_local_api_config,
             commands::regenerate_api_auth_key,
             commands::set_api_auth_key,
+            commands::set_cloud_media_analysis_skill,
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
             commands::save_enterprise_license_key,
@@ -1013,6 +1033,7 @@ async fn main() {
             owned_browser::owned_browser_set_bounds,
             owned_browser::owned_browser_navigate,
             owned_browser::owned_browser_hide,
+            owned_browser::owned_browser_resolve_session_access,
             permissions::reset_and_request_permission,
             permissions::get_missing_permissions,
             permissions::check_arc_installed,
@@ -1030,6 +1051,10 @@ async fn main() {
             commands::open_pipe_window,
             commands::show_window,
             commands::show_window_activated,
+            commands::show_main_window,
+            commands::hide_main_window,
+            commands::e2e_emit_agent_stream,
+            commands::e2e_emit_pipe_stream,
             commands::open_login_window,
             commands::ensure_webview_focus,
             commands::close_window,
@@ -1063,6 +1088,7 @@ async fn main() {
             commands::copy_deeplink_to_clipboard,
             commands::copy_text_to_clipboard,
             commands::open_note_path,
+            commands::open_windows_shell_target,
             // In-app file viewer
             viewer::open_viewer_window,
             viewer::read_viewer_file,
@@ -1079,6 +1105,7 @@ async fn main() {
             resume_global_shortcuts,
             get_env,
             get_e2e_seed_flags,
+            commands::e2e_main_overlay_visible,
             vault_status,
             vault_unlock,
             // Sync commands
@@ -1100,9 +1127,13 @@ async fn main() {
             pi::pi_check,
             pi::pi_install,
             pi::pi_prompt,
+            pi::pi_queue_prompt,
+            pi::pi_steer,
+            pi::pi_steer_queued,
             pi::pi_pending,
             pi::pi_cancel_queued,
             pi::pi_abort,
+            pi::pi_abort_active,
             pi::pi_new_session,
             pi::pi_set_model,
             pi::pi_update_config,
@@ -1183,6 +1214,7 @@ async fn main() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder, PredefinedMenuItem, MenuItemBuilder};
+                let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
 
                 let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
                     .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
@@ -1193,11 +1225,14 @@ async fn main() {
                             .build(app)?)
                         .separator();
                 }
+                if !app_ui_hidden {
+                    app_submenu_builder = app_submenu_builder
+                        .item(&MenuItemBuilder::with_id("settings", "Settings...")
+                            .accelerator("CmdOrCtrl+,")
+                            .build(app)?)
+                        .separator();
+                }
                 let app_submenu = app_submenu_builder
-                    .item(&MenuItemBuilder::with_id("settings", "Settings...")
-                        .accelerator("CmdOrCtrl+,")
-                        .build(app)?)
-                    .separator()
                     .item(&PredefinedMenuItem::quit(app, Some("Quit screenpipe"))?)
                     .build()?;
 
@@ -1295,6 +1330,9 @@ async fn main() {
                 registry.init();
             }
 
+            #[cfg(target_os = "windows")]
+            windows_webview_env::log_diagnostics();
+
             // Windows-specific setup
             if cfg!(windows) {
                 let exe_dir = env::current_exe()
@@ -1346,10 +1384,24 @@ async fn main() {
             // app without granting Screen Recording / Microphone TCC. The
             // server (DB + HTTP) still boots; only SCK + audio capture skip.
             // See get_e2e_seed_flags above for parsing.
-            if get_e2e_seed_flags().iter().any(|f| f == "no-recording") {
+            let e2e_flags = get_e2e_seed_flags();
+            if e2e_flags.iter().any(|f| f == "no-recording") {
                 store.recording.disable_audio = true;
                 store.recording.disable_vision = true;
                 info!("E2E seed: recording disabled (vision + audio)");
+            }
+            if e2e_flags.iter().any(|f| f == "cloud-audio-fallback") {
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_transcription_engine = "screenpipe-cloud".to_string();
+                store.user = store::User::default();
+                store
+                    .extra
+                    .insert("_parakeetDefaultMigrationDone".to_string(), json!(true));
+                store
+                    .extra
+                    .insert("_proCloudMigrationDone".to_string(), json!(true));
+                info!("E2E seed: screenpipe cloud audio fallback");
             }
 
             app.manage(store.clone());
@@ -1501,8 +1553,13 @@ async fn main() {
                 });
             }
 
-            // Show onboarding window if not completed
-            if !onboarding_store.is_completed {
+            let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
+
+            // Show onboarding/home unless this device is deployed as a managed
+            // background agent. Permission recovery is handled separately below.
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping startup app windows");
+            } else if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
             } else {
                 let _ = ShowRewindWindow::Home { page: None }.show(&app.handle());
@@ -1517,7 +1574,7 @@ async fn main() {
             // macOS-only: on Windows/Linux the non-macOS chat builder doesn't
             // set .visible(false), causing a visible chat window on startup.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed && !app_ui_hidden {
                 let app_handle_chat = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Wait for main window to finish setup
@@ -1542,7 +1599,7 @@ async fn main() {
 
             // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
             // Don't show reminder during first-time onboarding to reduce overwhelm
-            if store.show_shortcut_overlay && onboarding_store.is_completed {
+            if store.show_shortcut_overlay && onboarding_store.is_completed && !app_ui_hidden {
                 let shortcut = store.show_screenpipe_shortcut.clone();
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1566,7 +1623,7 @@ async fn main() {
             // Uses retry loop because CGPreflightScreenCaptureAccess can return false
             // transiently on startup before TCC fully initializes.
             #[cfg(target_os = "macos")]
-            if onboarding_store.is_completed {
+            if onboarding_store.is_completed || app_ui_hidden {
                 let mut screen_ok = false;
                 let mut mic_ok = false;
                 for attempt in 0..3 {
@@ -1625,19 +1682,11 @@ async fn main() {
                 // move, so we need a distinct handle that survives into
                 // the server thread.
                 let app_for_owned = app_handle.clone();
+                let pipe_agent_events =
+                    crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
                     std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-                        let inner = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                            parsed
-                        } else {
-                            serde_json::json!({ "type": "raw_line", "text": line })
-                        };
-                        let unified = serde_json::json!({
-                            "source": "pipe",
-                            "sessionId": format!("pipe:{}:{}", pipe_name, exec_id),
-                            "event": inner,
-                        });
-                        let _ = app_for_pipe.emit("agent_event", &unified);
+                        pipe_agent_events.emit_line(pipe_name, exec_id, line);
                     }),
                 );
 
@@ -1720,6 +1769,8 @@ async fn main() {
                                 warn!("Microphone permission not granted: {:?}. Audio recording will not work.", permissions_check.microphone);
                             }
 
+                            crate::recording::notify_audio_engine_fallback(&store_clone);
+
                             info!("Starting server core + capture on dedicated runtime...");
 
                             // Owned-browser: create the connect-side instance now so the
@@ -1756,7 +1807,7 @@ async fn main() {
                             };
 
                             // Phase 2: Start capture session
-                            let capture = match capture_session::CaptureSession::start(&server, &config).await {
+                            let capture = match capture_session::CaptureSession::start(&server, &config, true).await {
                                 Ok(c) => c,
                                 Err(e) => {
                                     error!("Failed to start capture: {}", e);
@@ -1890,6 +1941,7 @@ async fn main() {
             });
 
             crate::monitor_events::start(app_handle.clone());
+            crate::meeting_live_notes::start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);
@@ -1902,12 +1954,16 @@ async fn main() {
             // instance), apply_shortcuts early-returns and skips the rest. Fix this to:
             // 1. Collect per-shortcut failures instead of aborting on the first one
             // 2. Emit a user-visible notification listing the conflicting shortcuts
-            let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
-                    warn!("Failed to initialize global shortcuts: {}", e);
-                }
-            });
+            if app_ui_hidden {
+                info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+            } else {
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = initialize_global_shortcuts(&app_handle_clone).await {
+                        warn!("Failed to initialize global shortcuts: {}", e);
+                    }
+                });
+            }
 
             // Auto-start suggestions scheduler (always on)
             let suggestions_state = app_handle.state::<suggestions::SuggestionsState>();
@@ -2010,8 +2066,10 @@ async fn main() {
     // Setup dock right-click menu (fallback for when tray is behind the notch)
     #[cfg(target_os = "macos")]
     {
-        let app_handle_dock = app.app_handle().clone();
-        dock_menu::setup_dock_menu(app_handle_dock);
+        if !crate::enterprise_policy::is_app_ui_hidden() {
+            let app_handle_dock = app.app_handle().clone();
+            dock_menu::setup_dock_menu(app_handle_dock);
+        }
     }
 
     app.run(|app_handle, event| {
@@ -2127,6 +2185,9 @@ async fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     // Defer off the event stack so run handler stays panic-free.
                     // Open the settings/app window (not the timeline overlay).
+                    if crate::enterprise_policy::is_app_ui_hidden() {
+                        return;
+                    }
                     let app = app_handle.app_handle().clone();
                     let _ = app_handle.app_handle().run_on_main_thread(move || {
                         let _ = ShowRewindWindow::Home { page: None }.show(&app);

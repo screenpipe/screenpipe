@@ -256,6 +256,32 @@ async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
 /**
+ * Toggle the "Cloud audio + video + image analysis" capability
+ * in the screenpipe-api skill that Pi installs on every run.
+ * 
+ * Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
+ * `~/.screenpipe/cloud_media_analysis.disabled` at install time and
+ * conditionally appends the Gemma 4 E4B confidential-enclave section
+ * to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
+ * marker) = enabled. This command just creates or removes the marker.
+ * 
+ * Why a marker file instead of editing the rendered skill: Pi rewrites
+ * the rendered skill from a compiled-in template on every run, so any
+ * post-install edits get overwritten on the next pipe execution. The
+ * only stable seam is at install time.
+ * 
+ * Idempotent. Effect takes hold on the next Pi run (next pipe
+ * execution or new pi-chat session).
+ */
+async setCloudMediaAnalysisSkill(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_cloud_media_analysis_skill", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read the enterprise license key from `enterprise.json`.
  * Checks in order:
  * 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
@@ -350,6 +376,41 @@ async showWindow(window: ShowRewindWindow) : Promise<Result<null, string>> {
 async showWindowActivated(window: ShowRewindWindow) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("show_window_activated", { window }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async showMainWindow() : Promise<void> {
+    await TAURI_INVOKE("show_main_window");
+},
+async hideMainWindow() : Promise<void> {
+    await TAURI_INVOKE("hide_main_window");
+},
+/**
+ * E2E helper: emit a deterministic chat stream from the Rust side.
+ *
+ * This keeps chat performance tests close to production's Pi stdout path:
+ * one backend command starts the stream, then the app emits `agent_event`
+ * envelopes into the WebView. Tests avoid the extra WebView→Rust→WebView
+ * bridge hop that would come from calling `plugin:event|emit` for every token.
+ */
+async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_agent_stream", { sessionId, deltaCount }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * E2E helper for the scheduled-pipe path: feed synthetic pipe stdout
+ * through the same Rust-side callback adapter production uses, then let the
+ * frontend's default pipe handlers record it as a completed pipe run.
+ */
+async e2eEmitPipeStream(pipeName: string, executionId: bigint, deltaCount: number) : Promise<Result<E2eAgentStreamResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_pipe_stream", { pipeName, executionId, deltaCount }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -852,9 +913,48 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Queue a follow-up prompt for the current session. Unlike `pi_prompt`, this
+ * returns as soon as Rust owns the queued item; the prompt is written only
+ * after the active turn finishes.
+ */
+async piQueuePrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_queue_prompt", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Steer the active Pi reply using Pi's native steering command.
+ * Unlike `pi_prompt`, this is intentionally not added to the follow-up queue:
+ * Pi interrupts the current stream and resumes with the steering instruction.
+ */
+async piSteer(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_steer", { sessionId, message, images }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Promote a queued follow-up into Pi's native steer path. The prompt is
+ * removed from the Rust queue first, so it cannot later run as a normal
+ * follow-up.
+ */
+async piSteerQueued(sessionId: string | null, promptId: string) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_steer_queued", { sessionId, promptId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -893,6 +993,17 @@ async piCancelQueued(sessionId: string | null, promptId: string) : Promise<Resul
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_abort", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Abort only the active Pi operation. Pending queued follow-ups remain queued.
+ */
+async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1335,7 +1446,7 @@ startDisplay: string;
 /**
  * Pre-formatted local time, e.g. "5:00 PM" — for display.
  */
-endDisplay: string; attendees: string[]; location: string | null; calendarName: string; isAllDay: boolean; 
+endDisplay: string; attendees: string[]; location: string | null; meetingUrl: string | null; calendarName: string; isAllDay: boolean; 
 /**
  * Source identifier: "native" for OS calendar, "ics" for ICS feeds.
  * Used by meeting detector to merge events from multiple publishers.
@@ -1344,6 +1455,7 @@ source?: string }
 export type CalendarStatus = { available: boolean; authorized: boolean; authorizationStatus: string; calendarCount: number }
 export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
+export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
@@ -1461,6 +1573,17 @@ audioTranscriptionEngine: string;
  */
 transcriptionMode: string; 
 /**
+ * Stream live notes only while a meeting is active. This is separate
+ * from 24/7 background transcription: the recorder still writes durable
+ * chunks, while this powers the low-latency meeting note UI.
+ */
+meetingLiveTranscriptionEnabled: boolean; 
+/**
+ * Provider for meeting-only live notes. Defaults to the selected audio
+ * transcription engine so local/custom engines work without Cloud.
+ */
+meetingLiveTranscriptionProvider: string; 
+/**
  * Audio device names/IDs to capture from.
  */
 audioDevices: string[]; 
@@ -1484,6 +1607,11 @@ useSystemDefaultAudio: boolean;
  */
 experimentalCoreaudioSystemAudio?: boolean; 
 /**
+ * Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
+ * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
+ */
+windowsInputAecEnabled?: boolean;
+/**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
  */
@@ -1493,11 +1621,11 @@ audioChunkDuration: number;
  * Empty string or "default" means not configured.
  * Kept as String (not Option) to match existing store.bin schema.
  */
-deepgramApiKey: string;
+deepgramApiKey: string; 
 /**
  * Filter music-dominant audio before transcription using spectral analysis.
  */
-filterMusic: boolean;
+filterMusic: boolean; 
 /**
  * Maximum batch duration in seconds for batch transcription.
  * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
@@ -1531,6 +1659,22 @@ videoQuality: string;
  * native resolution). Default: 1920.
  */
 maxSnapshotWidth?: number; 
+/**
+ * Skip the background JPEG->MP4 snapshot compaction worker.
+ * Use when the MP4 timeline UI is not used, e.g. task-mining tools
+ * that consume accessibility_text / ui_events only.
+ * Side effect: JPEGs are not compacted, so disk usage depends on retention.
+ */
+disableSnapshotCompaction?: boolean; 
+/**
+ * Skip the v2 meeting detector watcher (5s-interval process / AX scan).
+ * Use when meeting detection is not consumed (task-mining, headless analysis,
+ * agents that read accessibility_text and ui_events only) — avoids the
+ * constant process enumeration + AX tree walk cost.
+ * Side effect: meeting-related DB rows are not generated; the audio pipeline's
+ * in_meeting override flag stays false.
+ */
+disableMeetingDetector?: boolean; 
 /**
  * Window titles to exclude from capture.
  */
@@ -1566,11 +1710,11 @@ disableClipboardCapture?: boolean;
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).
  */
-recordWhileLocked?: boolean;
+recordWhileLocked?: boolean; 
 /**
  * Languages for transcription (ISO 639-1 codes).
  */
-languages: string[];
+languages: string[]; 
 /**
  * Redact personally identifiable information from transcriptions.
  */
@@ -1677,12 +1821,12 @@ analyticsEnabled: boolean;
 /**
  * Persistent analytics ID (UUID, stable across sessions).
  */
-analyticsId: string;
+analyticsId: string; 
 /**
  * Enable AI workflow event detection (cloud feature, requires subscription).
  * When enabled, classifies desktop activity and triggers event-based pipes.
  */
-enableWorkflowEvents?: boolean;
+enableWorkflowEvents?: boolean; 
 /**
  * Detected hardware tier ("high", "mid", "low").
  * Set once on first launch; `None` for existing installs (treated as High).
@@ -1768,13 +1912,13 @@ showRestartNotifications?: boolean;
 /**
  * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
  */
-translucentSidebar?: boolean;
+translucentSidebar?: boolean; 
 /**
  * When true (default), hide model "thinking" reasoning blocks in the chat
  * transcript. The model still emits them server-side; we just don't
  * render the collapsible block in the UI.
  */
-hideThinkingBlocks?: boolean;
+hideThinkingBlocks?: boolean; 
 /**
  * UI theme: "light", "dark", or "system".
  */

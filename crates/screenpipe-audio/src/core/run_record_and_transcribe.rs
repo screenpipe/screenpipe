@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{device::DeviceType, update_device_capture_time},
+    meeting_streaming::{MeetingAudioFrame, MeetingAudioTap},
     metrics::AudioPipelineMetrics,
     AudioInput,
 };
@@ -77,10 +78,60 @@ const INPUT_SILENT_BUFFER_TIMEOUT_SECS: u64 = 30;
 /// CoreAudio zero-fill produces exact 0.0; any real input source — even
 /// a muted-by-hand AirPods mic — sits well above this floor.
 const SILENT_BUFFER_PEAK_THRESHOLD: f32 = 1e-6;
+const RECORDER_OUTPUT_CHANNELS: u16 = 1;
 
 #[inline]
 fn is_silent_buffer(chunk: &[f32]) -> bool {
     !chunk.is_empty() && chunk.iter().all(|s| s.abs() < SILENT_BUFFER_PEAK_THRESHOLD)
+}
+
+#[cfg(target_os = "windows")]
+fn zero_fill_reconnect_enabled_for_platform() -> bool {
+    // WASAPI input devices, especially built-in Intel/Realtek microphone
+    // arrays, can emit exact-zero buffers during ordinary quiet periods.
+    // Treating that as fatal causes reconnect churn and creates avoidable
+    // capture gaps. A real dead Windows stream is still caught by the
+    // receive-timeout path when callbacks stop arriving.
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+fn zero_fill_reconnect_enabled_for_platform() -> bool {
+    true
+}
+
+fn should_reconnect_after_silent_input(
+    device_type: &DeviceType,
+    stream_elapsed: Duration,
+    last_non_zero_elapsed: Duration,
+) -> bool {
+    if *device_type != DeviceType::Input {
+        return false;
+    }
+
+    if stream_elapsed.as_secs() < STREAM_STARTUP_GRACE_SECS {
+        return false;
+    }
+
+    if last_non_zero_elapsed.as_secs() < INPUT_SILENT_BUFFER_TIMEOUT_SECS {
+        return false;
+    }
+
+    zero_fill_reconnect_enabled_for_platform()
+}
+
+fn meeting_frame_from_recorder_output(
+    samples: Vec<f32>,
+    audio_stream: &AudioStream,
+    captured_at_unix_ms: u64,
+) -> MeetingAudioFrame {
+    MeetingAudioFrame::new(
+        Arc::new(samples),
+        &audio_stream.device,
+        audio_stream.device_config.sample_rate().0,
+        RECORDER_OUTPUT_CHANNELS,
+        captured_at_unix_ms,
+    )
 }
 
 /// Recording always uses 30s segments. Both batch and realtime modes record identically.
@@ -93,6 +144,7 @@ pub async fn run_record_and_transcribe(
     whisper_sender: Arc<crossbeam::channel::Sender<AudioInput>>,
     is_running: Arc<AtomicBool>,
     metrics: Arc<AudioPipelineMetrics>,
+    live_audio_tap: Option<MeetingAudioTap>,
 ) -> Result<()> {
     let mut receiver = audio_stream.subscribe().await;
     let device_name = audio_stream.device.to_string();
@@ -200,7 +252,18 @@ pub async fn run_record_and_transcribe(
                     // Route through the source buffer so Bluetooth packet-drop gaps
                     // are converted to silence instead of crackle.
                     source_buffer.push(chunk);
-                    collected_audio.extend(source_buffer.drain_all());
+                    let drained = source_buffer.drain_all();
+                    if let Some(tap) = live_audio_tap.as_ref() {
+                        if tap.is_active() && !drained.is_empty() {
+                            let frame = meeting_frame_from_recorder_output(
+                                drained.clone(),
+                                &audio_stream,
+                                now_epoch_millis(),
+                            );
+                            tap.send(frame);
+                        }
+                    }
+                    collected_audio.extend(drained);
                 }
                 None => continue,
             }
@@ -208,7 +271,7 @@ pub async fn run_record_and_transcribe(
 
         segment_count += 1;
         // Log per-device stats every 10 segments (~5 min at 30 s/segment).
-        if segment_count % 10 == 0 {
+        if segment_count.is_multiple_of(10) {
             source_buffer.log_stats();
         }
 
@@ -297,10 +360,11 @@ async fn recv_audio_chunk(
             // and went silent. Input devices only; output devices
             // legitimately go silent when nothing is playing.
             if let Some(last_seen) = *last_non_zero_at {
-                if audio_stream.device.device_type == DeviceType::Input
-                    && stream_start.elapsed().as_secs() >= STREAM_STARTUP_GRACE_SECS
-                    && last_seen.elapsed().as_secs() >= INPUT_SILENT_BUFFER_TIMEOUT_SECS
-                {
+                if should_reconnect_after_silent_input(
+                    &audio_stream.device.device_type,
+                    stream_start.elapsed(),
+                    last_seen.elapsed(),
+                ) {
                     warn!(
                         "no usable audio from {} for {}s — only zero-fill buffers \
                          (likely OS device hijack by another app), triggering reconnect",
@@ -389,6 +453,13 @@ fn now_epoch_secs() -> u64 {
         .as_secs()
 }
 
+fn now_epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis() as u64
+}
+
 /// Send the collected audio to the Whisper channel and keep the overlap tail.
 /// Clears `collected_audio` down to the overlap on success.
 async fn flush_audio(
@@ -420,7 +491,7 @@ async fn flush_audio(
             data: Arc::new(send_data),
             device: audio_stream.device.clone(),
             sample_rate: audio_stream.device_config.sample_rate().0,
-            channels: audio_stream.device_config.channels(),
+            channels: RECORDER_OUTPUT_CHANNELS,
             capture_timestamp,
         },
         Duration::from_secs(30),
@@ -444,4 +515,244 @@ async fn flush_audio(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::device::AudioDevice;
+
+    #[test]
+    fn live_tap_marks_recorder_mono_output_as_mono() {
+        let device = Arc::new(AudioDevice::new(
+            "Windows Mic Array".to_string(),
+            DeviceType::Input,
+        ));
+        let (audio_stream, _tx) = AudioStream::from_sender_for_test(device, 48_000, 4);
+        let samples = vec![0.1, -0.2, 0.3, -0.4];
+
+        let frame = meeting_frame_from_recorder_output(samples.clone(), &audio_stream, 1234);
+
+        assert_eq!(frame.channels, RECORDER_OUTPUT_CHANNELS);
+        assert_eq!(frame.channels, 1);
+        assert_eq!(frame.sample_rate, 48_000);
+        assert_eq!(frame.samples.as_ref(), &samples);
+    }
+
+    #[test]
+    fn output_silent_buffers_do_not_trigger_input_reconnect_watchdog() {
+        assert!(!should_reconnect_after_silent_input(
+            &DeviceType::Output,
+            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
+            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
+        ));
+    }
+
+    #[test]
+    fn startup_grace_blocks_silent_input_reconnect_watchdog() {
+        assert!(!should_reconnect_after_silent_input(
+            &DeviceType::Input,
+            Duration::from_secs(STREAM_STARTUP_GRACE_SECS - 1),
+            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sustained_zero_fill_is_treated_as_silence_not_disconnect() {
+        assert!(!should_reconnect_after_silent_input(
+            &DeviceType::Input,
+            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
+            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn non_windows_sustained_zero_fill_still_triggers_reconnect() {
+        assert!(should_reconnect_after_silent_input(
+            &DeviceType::Input,
+            Duration::from_secs(STREAM_STARTUP_GRACE_SECS + 1),
+            Duration::from_secs(INPUT_SILENT_BUFFER_TIMEOUT_SECS + 1)
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windows_live_meeting_audio_tap_e2e_uses_background_recorder_shape() {
+        let sample_rate = 16_000_u32;
+        let chunk_samples = 320_usize;
+        let device = Arc::new(AudioDevice::new(
+            "Windows Mic Array (Simulated)".to_string(),
+            DeviceType::Input,
+        ));
+        let (audio_stream, tx) = AudioStream::from_sender_for_test(device, sample_rate, 4);
+        let audio_stream = Arc::new(audio_stream);
+        let (meeting_tx, _) = broadcast::channel(512);
+        let meeting_tap = MeetingAudioTap::new(meeting_tx, Arc::new(AtomicBool::new(false)));
+        meeting_tap.set_active(true);
+        meeting_tap.set_background_suppressed(true);
+        let mut live_rx = meeting_tap.subscribe();
+
+        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded::<AudioInput>(4);
+        let is_running = Arc::new(AtomicBool::new(true));
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+
+        let pipeline = tokio::spawn({
+            let audio_stream = audio_stream.clone();
+            let whisper_tx = Arc::new(whisper_tx);
+            let is_running = is_running.clone();
+            let metrics = metrics.clone();
+            let meeting_tap = meeting_tap.clone();
+            async move {
+                run_record_and_transcribe(
+                    audio_stream,
+                    Duration::from_secs(1),
+                    whisper_tx,
+                    is_running,
+                    metrics,
+                    Some(meeting_tap),
+                )
+                .await
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        for chunk_index in 0..170 {
+            let chunk = (0..chunk_samples)
+                .map(|sample_index| {
+                    let n = chunk_index * chunk_samples + sample_index;
+                    ((n as f32 / sample_rate as f32) * 440.0 * std::f32::consts::TAU).sin() * 0.2
+                })
+                .collect::<Vec<f32>>();
+            tx.send(chunk).expect("send simulated recorder chunk");
+        }
+
+        let live_frame = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match live_rx.recv().await {
+                    Ok(frame) => break frame,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(error) => panic!("live frame: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("live frame timeout");
+        assert_eq!(live_frame.channels, 1);
+        assert_eq!(live_frame.sample_rate, sample_rate);
+        assert!(!live_frame.samples.is_empty());
+        assert!(meeting_tap.background_suppressed());
+
+        let whisper_rx_for_assert = whisper_rx.clone();
+        let audio_input = tokio::task::spawn_blocking(move || {
+            whisper_rx_for_assert.recv_timeout(Duration::from_secs(2))
+        })
+        .await
+        .expect("background receiver task")
+        .expect("background audio segment");
+        assert_eq!(audio_input.channels, 1);
+        assert_eq!(audio_input.sample_rate, sample_rate);
+        assert!(!audio_input.data.is_empty());
+
+        is_running.store(false, Ordering::Relaxed);
+        tx.send(vec![0.1; chunk_samples]).ok();
+        let pipeline_result = tokio::time::timeout(Duration::from_secs(5), pipeline)
+            .await
+            .expect("pipeline shutdown timeout")
+            .expect("pipeline task");
+        pipeline_result.expect("pipeline result");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windows_recorder_e2e_keeps_running_after_zero_fill_input() {
+        let sample_rate = 16_000_u32;
+        let chunk_samples = 320_usize;
+        let device = Arc::new(AudioDevice::new(
+            "Microphone Array (Intel Smart Sound Technology for Digital Microphones)".to_string(),
+            DeviceType::Input,
+        ));
+        let (audio_stream, tx) = AudioStream::from_sender_for_test(device, sample_rate, 2);
+        let audio_stream = Arc::new(audio_stream);
+        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded::<AudioInput>(8);
+        let is_running = Arc::new(AtomicBool::new(true));
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+
+        let pipeline = tokio::spawn({
+            let audio_stream = audio_stream.clone();
+            let whisper_tx = Arc::new(whisper_tx);
+            let is_running = is_running.clone();
+            let metrics = metrics.clone();
+            async move {
+                run_record_and_transcribe(
+                    audio_stream,
+                    Duration::from_secs(1),
+                    whisper_tx,
+                    is_running,
+                    metrics,
+                    None,
+                )
+                .await
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        for chunk_index in 0..170 {
+            let chunk = (0..chunk_samples)
+                .map(|sample_index| {
+                    let n = chunk_index * chunk_samples + sample_index;
+                    ((n as f32 / sample_rate as f32) * 440.0 * std::f32::consts::TAU).sin() * 0.2
+                })
+                .collect::<Vec<f32>>();
+            tx.send(chunk).expect("send simulated speech chunk");
+        }
+
+        let speech_segment = tokio::task::spawn_blocking({
+            let whisper_rx = whisper_rx.clone();
+            move || whisper_rx.recv_timeout(Duration::from_secs(2))
+        })
+        .await
+        .expect("speech receiver task")
+        .expect("speech segment");
+        assert_eq!(speech_segment.channels, 1);
+        assert_eq!(speech_segment.sample_rate, sample_rate);
+        assert!(!speech_segment.data.is_empty());
+
+        for _ in 0..400 {
+            tx.send(vec![0.0; chunk_samples])
+                .expect("send simulated zero-fill chunk");
+        }
+
+        let mut saw_zero_fill_in_segment = false;
+        for _ in 0..5 {
+            let segment = tokio::task::spawn_blocking({
+                let whisper_rx = whisper_rx.clone();
+                move || whisper_rx.recv_timeout(Duration::from_secs(2))
+            })
+            .await
+            .expect("zero-fill receiver task")
+            .expect("zero-fill segment");
+            assert_eq!(segment.channels, 1);
+            assert_eq!(segment.sample_rate, sample_rate);
+            saw_zero_fill_in_segment |= segment
+                .data
+                .iter()
+                .any(|sample| sample.abs() < SILENT_BUFFER_PEAK_THRESHOLD);
+            if saw_zero_fill_in_segment {
+                break;
+            }
+        }
+        assert!(saw_zero_fill_in_segment);
+        assert!(!audio_stream.is_disconnected());
+        assert_eq!(metrics.stream_timeouts.load(Ordering::Relaxed), 0);
+
+        is_running.store(false, Ordering::Relaxed);
+        tx.send(vec![0.1; chunk_samples]).ok();
+        let pipeline_result = tokio::time::timeout(Duration::from_secs(5), pipeline)
+            .await
+            .expect("pipeline shutdown timeout")
+            .expect("pipeline task");
+        pipeline_result.expect("pipeline result");
+    }
 }

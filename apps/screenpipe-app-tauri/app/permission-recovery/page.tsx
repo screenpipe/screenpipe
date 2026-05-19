@@ -16,16 +16,20 @@ function PermissionRow({
   description,
   status,
   onFix,
+  testId,
 }: {
   icon: React.ReactNode;
   label: string;
   description: string;
   status: "granted" | "denied" | "checking";
   onFix: () => void;
+  testId: string;
 }) {
   const isGranted = status === "granted";
   return (
     <button
+      data-testid={testId}
+      data-permission-status={status}
       onClick={isGranted ? undefined : onFix}
       disabled={isGranted || status === "checking"}
       className="w-full flex items-center gap-3 px-4 py-3 border border-border/50 transition-all group disabled:cursor-default hover:enabled:bg-foreground hover:enabled:text-background"
@@ -167,12 +171,12 @@ export default function PermissionRecoveryPage() {
 
       <div className="flex-1 flex flex-col items-center justify-center px-8 pb-6">
         {allOk ? (
-          <div className="text-center space-y-2">
+          <div className="text-center space-y-2" data-testid="permission-recovery-all-fixed">
             <Check className="w-5 h-5 mx-auto text-muted-foreground" />
             <p className="font-mono text-sm">all fixed — resuming</p>
           </div>
         ) : (
-          <div className="w-full max-w-sm space-y-4">
+          <div className="w-full max-w-sm space-y-4" data-testid="permission-recovery-page">
             <div className="text-center">
               <h2 className="font-mono text-sm">recording paused</h2>
               <p className="font-mono text-xs text-muted-foreground mt-1">
@@ -187,6 +191,7 @@ export default function PermissionRecoveryPage() {
                 description="capture display"
                 status={screenStatus}
                 onFix={() => handleFix("screenRecording")}
+                testId="permission-row-screen"
               />
               <PermissionRow
                 icon={<Mic className="w-4 h-4" strokeWidth={1.5} />}
@@ -194,6 +199,7 @@ export default function PermissionRecoveryPage() {
                 description="transcribe audio"
                 status={micStatus}
                 onFix={() => handleFix("microphone")}
+                testId="permission-row-microphone"
               />
               {isMacOS && (
                 <PermissionRow
@@ -202,6 +208,7 @@ export default function PermissionRecoveryPage() {
                   description="read text from apps"
                   status={accessibilityStatus}
                   onFix={() => handleFix("accessibility")}
+                  testId="permission-row-accessibility"
                 />
               )}
               {isMacOS && keychainStatus === "denied" && (
@@ -211,6 +218,7 @@ export default function PermissionRecoveryPage() {
                   description="encrypt api keys & credentials"
                   status={keychainStatus}
                   onFix={handleFixKeychain}
+                  testId="permission-row-keychain"
                 />
               )}
             </div>

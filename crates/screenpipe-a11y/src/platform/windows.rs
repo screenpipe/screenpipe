@@ -509,15 +509,11 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 let window_title = s.current_window.lock().clone();
 
                 // Check exclusions
-                if let Some(ref app) = app_name {
-                    if !s.config.should_capture_app(app) {
-                        return;
-                    }
-                }
-                if let Some(ref window) = window_title {
-                    if !s.config.should_capture_window(window) {
-                        return;
-                    }
+                if !s.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
                 }
 
                 // Check for clipboard operations (Ctrl+C, Ctrl+X, Ctrl+V)
@@ -634,15 +630,26 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             let timestamp = Utc::now();
                             let t = s.start.elapsed().as_millis() as u64;
                             // Use try_lock to avoid blocking — skip if contended
-                            let app_name = s.current_app.try_lock().map(|g| g.clone());
-                            let window_title = s.current_window.try_lock().map(|g| g.clone());
+                            let app_name =
+                                s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None);
+                            let window_title = s
+                                .current_window
+                                .try_lock()
+                                .map(|g| g.clone())
+                                .unwrap_or(None);
+                            if !s.config.should_capture_target(
+                                app_name.as_deref().unwrap_or_default(),
+                                window_title.as_deref(),
+                            ) {
+                                return;
+                            }
                             let event = UiEvent {
                                 id: None,
                                 timestamp,
                                 relative_ms: t,
                                 data: EventData::Move { x, y },
-                                app_name: app_name.unwrap_or(None),
-                                window_title: window_title.unwrap_or(None),
+                                app_name,
+                                window_title,
                                 browser_url: None,
                                 element: None,
                                 frame_id: None,
@@ -661,10 +668,11 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                 let window_title = s.current_window.lock().clone();
 
                 // Check exclusions
-                if let Some(ref app) = app_name {
-                    if !s.config.should_capture_app(app) {
-                        return;
-                    }
+                if !s.config.should_capture_target(
+                    app_name.as_deref().unwrap_or_default(),
+                    window_title.as_deref(),
+                ) {
+                    return;
                 }
 
                 match msg {
@@ -1115,22 +1123,21 @@ fn process_foreground_change(state: &mut AppObserverState) {
         // Get process name
         let app_name = get_process_name(pid).unwrap_or_else(|| "Unknown".to_string());
 
-        // Check exclusions
-        if !state.config.should_capture_app(&app_name) {
-            state.last_hwnd = hwnd_val;
-            return;
-        }
-
-        if let Some(ref t) = title {
-            if !state.config.should_capture_window(t) {
-                state.last_hwnd = hwnd_val;
-                return;
-            }
-        }
-
-        // Update shared state for event listener thread
+        // Update shared state before exclusions so input hooks do not keep
+        // attributing keystrokes/clicks to the previously focused app.
         *state.current_app.lock() = Some(app_name.clone());
         *state.current_window.lock() = title.clone();
+
+        // Check exclusions
+        if !state
+            .config
+            .should_capture_target(&app_name, title.as_deref())
+        {
+            *state.focused_element.lock() = None;
+            state.last_hwnd = hwnd_val;
+            state.last_title = title;
+            return;
+        }
 
         // Get focused element context from UIA thread
         let element = if state.config.capture_context {

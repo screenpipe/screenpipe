@@ -110,6 +110,9 @@ export function CliCommandDialog({ settings }: CliCommandDialogProps) {
     if (settings.disableAudio) {
       args.push("--disable-audio");
     }
+    if (settings.windowsInputAecEnabled) {
+      args.push("--windows-input-aec-enabled");
+    }
     if (settings.disableClipboardCapture) {
       args.push("--disable-clipboard-capture");
     }

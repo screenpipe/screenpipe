@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import mermaid from "mermaid";
 
 // Screenpipe brand theme: grayscale, sharp corners, minimal
 const SCREENPIPE_THEME = {
@@ -74,6 +73,8 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
       if (!containerRef.current || !chart.trim()) return;
 
       try {
+        const { default: mermaid } = await import("mermaid");
+
         // Detect dark mode
         const isDark = document.documentElement.classList.contains("dark");
         const theme = isDark ? SCREENPIPE_THEME_DARK : SCREENPIPE_THEME;

@@ -197,14 +197,12 @@ pub async fn oauth_connect(
         if let Some(id_token) = token_data["id_token"].as_str() {
             if extract_tid_from_jwt(id_token).as_deref() == Some(MSA_PERSONAL_TENANT_ID) {
                 // No token gets written — we bail out before the write below.
-                return Err(
-                    "Microsoft Teams requires a work or school account. \
+                return Err("Microsoft Teams requires a work or school account. \
                      You're signed in with a personal Microsoft account, \
                      which doesn't have access to Teams. Sign in with an \
                      Azure AD (organizational) account that has a Teams \
                      license and try again."
-                        .to_string(),
-                );
+                    .to_string());
             }
         }
     }
@@ -279,6 +277,32 @@ pub async fn oauth_connect(
                     ));
                 }
             }
+        }
+    }
+
+    // Slack's OAuth response nests the user-selected incoming webhook and team
+    // metadata. Copy stable, non-secret identifiers to top-level fields so the
+    // generic OAuth UI can display a useful account name and the local
+    // connection config can expose channel/workspace context without exposing
+    // the webhook URL.
+    if integration_id == "slack" {
+        if let Some(team_name) = token_data["team"]["name"].as_str().map(String::from) {
+            token_data["workspace_name"] = serde_json::Value::String(team_name);
+        }
+        if let Some(team_id) = token_data["team"]["id"].as_str().map(String::from) {
+            token_data["team_id"] = serde_json::Value::String(team_id);
+        }
+        if let Some(channel) = token_data["incoming_webhook"]["channel"]
+            .as_str()
+            .map(String::from)
+        {
+            token_data["slack_channel"] = serde_json::Value::String(channel);
+        }
+        if let Some(channel_id) = token_data["incoming_webhook"]["channel_id"]
+            .as_str()
+            .map(String::from)
+        {
+            token_data["slack_channel_id"] = serde_json::Value::String(channel_id);
         }
     }
 
@@ -413,11 +437,11 @@ pub async fn oauth_status(
     instance: Option<String>,
 ) -> Result<OAuthStatus, String> {
     let store = open_secret_store().await;
-    let token =
-        oauth::read_oauth_token_instance(store.as_ref(), &integration_id, instance.as_deref())
+    let connected =
+        oauth::is_oauth_instance_connected(store.as_ref(), &integration_id, instance.as_deref())
             .await;
 
-    let display_name = if token.is_some() {
+    let display_name = if connected {
         oauth::load_oauth_json(store.as_ref(), &integration_id, instance.as_deref())
             .await
             .and_then(|v| {
@@ -432,7 +456,7 @@ pub async fn oauth_status(
     };
 
     Ok(OAuthStatus {
-        connected: token.is_some(),
+        connected,
         display_name,
     })
 }
@@ -452,7 +476,12 @@ pub async fn oauth_disconnect(
         // Sweep all instances so the fallback path finds nothing.
         let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
         for inst in instances {
-            let _ = oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, inst.as_deref()).await;
+            let _ = oauth::delete_oauth_token_instance(
+                store.as_ref(),
+                &integration_id,
+                inst.as_deref(),
+            )
+            .await;
         }
         // Also delete the None-key in case it exists alongside named ones.
         let _ = oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, None).await;
@@ -475,7 +504,7 @@ pub async fn oauth_list_instances(
     integration_id: String,
 ) -> Result<Vec<OAuthInstanceInfo>, String> {
     let store = open_secret_store().await;
-    let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
+    let instances = oauth::list_connected_oauth_instances(store.as_ref(), &integration_id).await;
     let mut result = Vec::new();
 
     for inst in instances {
@@ -650,7 +679,10 @@ async fn fetch_supabase_project_credentials(
         .ok_or_else(|| "project missing `ref`".to_string())?;
     let project_name = first["name"].as_str().unwrap_or(project_ref);
 
-    let keys_url = format!("https://api.supabase.com/v1/projects/{}/api-keys", project_ref);
+    let keys_url = format!(
+        "https://api.supabase.com/v1/projects/{}/api-keys",
+        project_ref
+    );
     let api_keys: serde_json::Value = client
         .get(&keys_url)
         .bearer_auth(access_token)
@@ -668,7 +700,8 @@ async fn fetch_supabase_project_credentials(
         .and_then(|arr| {
             arr.iter().find_map(|k| {
                 let name = k["name"].as_str().unwrap_or_default().to_lowercase();
-                let is_service_role = name.contains("service_role") || name.contains("service role");
+                let is_service_role =
+                    name.contains("service_role") || name.contains("service role");
                 if is_service_role {
                     k["api_key"].as_str().map(str::to_string)
                 } else {

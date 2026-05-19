@@ -72,9 +72,23 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
       const msg = agentEndMessages[i];
       const role = msg.role;
       const content = msg.content;
+      const text = extractText(content);
+
+      if (isToolReturnMessage(msg, text)) {
+        const resultText = toolReturnResultText(text);
+        if (resultText && lastToolBlocks.length > 0) {
+          const lastTool = lastToolBlocks[lastToolBlocks.length - 1];
+          if (lastTool?.toolCall && !lastTool.toolCall.result) {
+            lastTool.toolCall.result =
+              resultText.length > 2000
+                ? resultText.slice(0, 2000) + "\n... (truncated)"
+                : resultText;
+          }
+        }
+        continue;
+      }
 
       if (role === "user") {
-        const text = extractText(content);
         if (!text.trim()) continue;
         const isPipePrompt = text.includes("Time range:") && text.includes("Execute the pipe now.");
         const chatMsg: any = {
@@ -99,7 +113,6 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
       }
 
       if (role === "assistant") {
-        const text = extractText(content);
         const toolBlocks = Array.isArray(content) ? extractToolCalls(content, i) : [];
         lastToolBlocks = toolBlocks;
         const contentBlocks: any[] = [];
@@ -284,6 +297,19 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
   }
 
   return messages;
+}
+
+function isToolReturnMessage(message: any, text: string): boolean {
+  const role = message?.role;
+  if (role === "tool" || role === "toolResult") return true;
+  if (role !== "user" && role !== "assistant") return false;
+  return /^#{0,6}\s*Return of (?:functions\.)?[A-Za-z0-9_-]+:\d+\b/.test(text.trim());
+}
+
+function toolReturnResultText(text: string): string {
+  return text
+    .replace(/^#{0,6}\s*Return of (?:functions\.)?[A-Za-z0-9_-]+:\d+\s*/i, "")
+    .trim();
 }
 
 /**

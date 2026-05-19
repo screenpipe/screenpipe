@@ -5,15 +5,18 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw } from "lucide-react";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { FALLBACK_TEMPLATES, type CustomTemplate } from "@/lib/summary-templates";
 import { type Suggestion } from "@/lib/hooks/use-auto-suggestions";
+import { IntegrationIcon } from "@/components/settings/connections-section";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
   onSendMessage: (message: string, displayLabel?: string) => void;
+  onOpenConnection?: (connectionId: string) => void;
+  connectionSetupSuggestions?: ConnectionSetupSuggestion[];
   autoSuggestions: Suggestion[];
   suggestionsRefreshing?: boolean;
   onRefreshSuggestions?: () => void;
@@ -25,10 +28,15 @@ interface SummaryCardsProps {
   pipesLoading?: boolean;
 }
 
-// ─── Grid scan refresh animation ──────────────────────────────────────────────
-// Brand-aligned: 3x2 card skeleton with micro-grid scan inside each card.
-// A diagonal scan line sweeps across all 6 cards simultaneously — cells flip
-// on/off as it passes, like screenpipe scanning your screen for new context.
+export interface ConnectionSetupSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+}
+
+// ─── Suggestion refresh animation ─────────────────────────────────────────────
+// Two quiet rows matching the persistent suggestion layout.
 
 function SuggestionSkeleton() {
   const GRID_COLS = 8;
@@ -46,34 +54,28 @@ function SuggestionSkeleton() {
   }, []);
 
   return (
-    <div className="grid grid-cols-3 gap-1.5">
-      {[0, 1, 2, 3, 4, 5].map((cardIdx) => {
-        const cardRow = Math.floor(cardIdx / 3);
-        const cardCol = cardIdx % 3;
-        // Offset each card's scan phase so the line travels across all 6
-        const cardOffset = cardRow * 4 + cardCol * 3;
+    <div className="overflow-hidden rounded-md border border-border/35 bg-muted/[0.08] shadow-sm divide-y divide-border/25">
+      {[0, 1].map((rowIdx) => {
+        const rowOffset = rowIdx * 4;
 
         return (
           <div
-            key={cardIdx}
-            className="border border-border/20 p-2"
-            style={{ minHeight: 52 }}
+            key={rowIdx}
+            className="flex min-h-[34px] items-center gap-1.5 px-1.5 py-1.5"
           >
-            {/* Micro grid — scan line sweeps diagonally */}
             <div
-              className="grid gap-px mb-2"
+              className="grid shrink-0 gap-px"
               style={{
-                gridTemplateColumns: `repeat(${GRID_COLS}, 4px)`,
-                gridTemplateRows: `repeat(${GRID_ROWS}, 4px)`,
+                gridTemplateColumns: `repeat(${GRID_COLS}, 3px)`,
+                gridTemplateRows: `repeat(${GRID_ROWS}, 3px)`,
               }}
             >
               {Array.from({ length: CARD_CELLS }, (_, i) => {
                 const r = Math.floor(i / GRID_COLS);
                 const c = i % GRID_COLS;
-                const diag = r + c + cardOffset;
+                const diag = r + c + rowOffset;
                 const scanPos = tick % (GRID_ROWS + GRID_COLS + 10);
                 const dist = Math.abs(diag - scanPos);
-                // On the scan line = bright, trailing = dimmer, rest = faint flicker
                 const on = dist === 0 || (dist < 3 && ((tick + i) % 3 === 0));
                 return (
                   <div
@@ -81,20 +83,21 @@ function SuggestionSkeleton() {
                     className={`transition-colors duration-75 ${
                       on ? "bg-foreground" : dist < 5 ? "bg-foreground/10" : "bg-foreground/[0.03]"
                     }`}
-                    style={{ width: 4, height: 4 }}
+                    style={{ width: 3, height: 3 }}
                   />
                 );
               })}
             </div>
-            {/* Text placeholder bars that pulse with the scan */}
-            <div
-              className="h-[7px] bg-foreground/[0.08] transition-all duration-100"
-              style={{ width: `${55 + Math.sin(tick * 0.15 + cardIdx) * 25}%` }}
-            />
-            <div
-              className="h-[5px] bg-foreground/[0.04] mt-1 transition-all duration-100"
-              style={{ width: `${35 + Math.sin(tick * 0.15 + cardIdx + 2) * 20}%` }}
-            />
+            <div className="min-w-0 flex-1 space-y-1">
+              <div
+                className="h-[7px] bg-foreground/[0.08] transition-all duration-100"
+                style={{ width: `${55 + Math.sin(tick * 0.15 + rowIdx) * 25}%` }}
+              />
+              <div
+                className="h-[5px] bg-foreground/[0.04] transition-all duration-100"
+                style={{ width: `${35 + Math.sin(tick * 0.15 + rowIdx + 2) * 20}%` }}
+              />
+            </div>
           </div>
         );
       })}
@@ -102,10 +105,27 @@ function SuggestionSkeleton() {
   );
 }
 
+function normalizeConnectionIconKey(name: string) {
+  return name.trim().toLowerCase().replace(/\.app$|\.exe$/i, "");
+}
+
+function ConnectionSuggestionIcon({ name }: { name: string }) {
+  const key = normalizeConnectionIconKey(name);
+  return (
+    <IntegrationIcon
+      icon={key}
+      className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center [&_img]:!h-3.5 [&_img]:!w-3.5 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+      fallbackClassName="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground/70"
+    />
+  );
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function SummaryCards({
   onSendMessage,
+  onOpenConnection,
+  connectionSetupSuggestions = [],
   autoSuggestions,
   suggestionsRefreshing = false,
   onRefreshSuggestions,
@@ -130,6 +150,11 @@ export function SummaryCards({
   const handleCustomTemplateClick = (template: CustomTemplate) => {
     onSendMessage(template.prompt, `\u{1F4CC} ${template.title}`);
   };
+
+  const visibleConnectionSetupSuggestions = [
+    ...connectionSetupSuggestions,
+    { id: "connections", title: "Connect Apps", description: "Browse all connections", icon: "connections" },
+  ];
 
   return (
     <div className="relative flex flex-col items-center py-4 px-4">
@@ -196,6 +221,28 @@ export function SummaryCards({
             </div>
           </button>
         )}
+        {onOpenConnection && visibleConnectionSetupSuggestions.map((connection) => (
+          <div
+            key={connection.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenConnection(connection.id)}
+            onKeyDown={(e) => e.key === "Enter" && onOpenConnection(connection.id)}
+            className="group relative text-left p-2 border border-border/40 bg-muted/10 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
+          >
+            <div className="mb-0.5 flex h-4 w-4 items-center justify-center">
+              {connection.icon === "connections"
+                ? <Plug className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden />
+                : <ConnectionSuggestionIcon name={connection.icon} />}
+            </div>
+            <div className="text-[11px] font-medium group-hover:text-background mb-0.5 leading-tight pr-4">
+              {connection.title}
+            </div>
+            <div className="text-[10px] text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
+              {connection.description}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Expanded: more templates */}
@@ -265,23 +312,7 @@ export function SummaryCards({
 
       {/* ─── Dynamic AI suggestions ─────────────────────────────────────────── */}
       <div className="w-full max-w-lg">
-        <div className="flex items-center gap-1.5 mb-1.5 px-1">
-          <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium font-mono">
-            based on your activity
-          </div>
-          {onRefreshSuggestions && (
-            <button
-              onClick={onRefreshSuggestions}
-              disabled={suggestionsRefreshing}
-              className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
-              title="refresh suggestions"
-            >
-              <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-            </button>
-          )}
-        </div>
-
-        {/* Grid scan skeleton while refreshing / suggestion cards */}
+        {/* Persistent suggestions */}
         <AnimatePresence mode="wait">
         {suggestionsRefreshing ? (
           <motion.div
@@ -295,15 +326,14 @@ export function SummaryCards({
           </motion.div>
         ) : (
           <motion.div
-            key="cards"
+            key="suggestions"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="grid grid-cols-3 gap-1.5"
+            className="overflow-hidden rounded-md border border-border/35 bg-muted/[0.08] shadow-sm divide-y divide-border/25"
           >
-              {autoSuggestions.slice(0, 6).map((s, i) => {
-                const isHero = (s.priority ?? 2) === 1 && i === 0;
+              {autoSuggestions.slice(0, 2).map((s, i) => {
                 return (
                   <motion.button
                     key={s.text}
@@ -312,27 +342,33 @@ export function SummaryCards({
                     transition={{ duration: 0.15, delay: i * 0.05 }}
                     type="button"
                     onClick={() => onSendMessage(s.text)}
-                    className={`group text-left p-2 font-mono bg-muted/20 hover:bg-foreground hover:text-background border hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer ${
-                      isHero
-                        ? "border-border/40 bg-muted/30"
-                        : "border-border/20"
-                    }`}
+                    className="group flex min-h-[34px] w-full items-center gap-1.5 px-1.5 py-1.5 text-left font-mono text-muted-foreground transition-colors duration-150 hover:bg-muted/25 hover:text-foreground"
                     title={s.text}
                   >
-                    <div className={`text-[11px] leading-tight ${isHero ? "font-medium" : ""} line-clamp-2`}>
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                      {s.connectionIcon && <ConnectionSuggestionIcon name={s.connectionIcon} />}
+                    </span>
+                    <span className="min-w-0 flex-1 text-xs leading-tight line-clamp-2">
                       {s.text}
-                    </div>
-                    {s.preview && (
-                      <div className="text-[10px] text-muted-foreground/50 group-hover:text-background/50 leading-tight mt-0.5 truncate">
-                        {s.preview}
-                      </div>
-                    )}
+                    </span>
                   </motion.button>
                 );
               })}
           </motion.div>
         )}
         </AnimatePresence>
+        {onRefreshSuggestions && (
+          <div className="mt-1.5 flex justify-center">
+            <button
+              onClick={onRefreshSuggestions}
+              disabled={suggestionsRefreshing}
+              className="rounded-full p-1 text-muted-foreground/35 transition-colors duration-150 hover:bg-muted/30 hover:text-foreground disabled:opacity-30 cursor-pointer"
+              title="refresh suggestions"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Custom Summary Builder modal */}

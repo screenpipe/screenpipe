@@ -27,15 +27,15 @@
           },
           {
             "group": "pipes",
-            "pages": ["pipe-store", "pipes", "pipe-permissions"]
+            "pages": ["pipe-store", "pipes", "pipe-debugging", "pipe-permissions"]
           },
           {
             "group": "connect",
-            "pages": ["mcp-server", "mcp-apps", "connections", "cloud-archive", "privacy-filter", "teams"]
+            "pages": ["mcp-server", "mcp-apps", "connections", "connection-reference", "cloud-archive", "privacy-data-flow", "privacy-filter", "teams"]
           },
           {
             "group": "use cases",
-            "pages": ["search-screen-history", "meeting-transcription", "ai-memory", "for-developers"]
+            "pages": ["search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "for-developers"]
           },
           {
             "group": "integrations",
@@ -43,7 +43,7 @@
           },
           {
             "group": "reference",
-            "pages": ["cli-reference"]
+            "pages": ["api-recipes", "cli-reference"]
           },
           {
             "group": "deployment",
@@ -56,7 +56,7 @@
           },
           {
             "group": "resources",
-            "pages": ["troubleshooting", "faq", "contributing", "changelog"]
+            "pages": ["troubleshooting", "faq", "contributing", "docs-maintenance", "changelog"]
           }
         ]
       },

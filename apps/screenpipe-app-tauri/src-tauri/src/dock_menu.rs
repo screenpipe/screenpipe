@@ -34,7 +34,7 @@ pub fn setup_dock_menu(app_handle: AppHandle) {
                 if let Some(app) = DOCK_APP_HANDLE.get() {
                     let app_for_closure = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        show_main_window(&app_for_closure, false);
+                        show_main_window(app_for_closure.clone());
                     });
                 }
             }));
