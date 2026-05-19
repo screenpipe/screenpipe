@@ -2861,6 +2861,7 @@ export function StandaloneChat({
   const [pastedImages, setPastedImages] = useState<string[]>([]); // Base64 data URLs
   const [imageViewer, setImageViewer] = useState<{ images: string[]; index: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const steerShortcutInFlightRef = useRef(false);
   const isEmbedded = !!className; // embedded in settings vs overlay panel
 
   // Pi agent state
@@ -3930,8 +3931,12 @@ export function StandaloneChat({
 
     if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
       e.preventDefault();
-      if (input.trim() || pastedImages.length > 0) {
-        steerMessage(input.trim());
+      e.stopPropagation();
+      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerMessage(input.trim())).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
       return;
     }
@@ -3969,13 +3974,16 @@ export function StandaloneChat({
     const handleComposerSteerShortcut = (event: KeyboardEvent) => {
       if (showMentionDropdown) return;
       if (isComposing || event.isComposing || event.keyCode === 229) return;
-      if (document.activeElement !== inputRef.current && event.target !== inputRef.current) return;
       if (!isComposerSteerShortcut(event, isMac)) return;
+      if (document.activeElement === inputRef.current || event.target === inputRef.current) return;
 
       event.preventDefault();
       event.stopPropagation();
-      if (input.trim() || pastedImages.length > 0) {
-        void steerMessage(input.trim());
+      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
+        steerShortcutInFlightRef.current = true;
+        void Promise.resolve(steerMessage(input.trim())).finally(() => {
+          steerShortcutInFlightRef.current = false;
+        });
       }
     };
 
