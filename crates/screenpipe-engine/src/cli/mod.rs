@@ -475,7 +475,7 @@ pub struct RecordArgs {
     /// (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
     /// Horizon) is focused — these blank their windows while any app is
     /// recording the screen.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = true)]
     pub pause_on_drm_content: bool,
 
     /// Disable clipboard capture entirely. The UI recorder will not record
@@ -1483,11 +1483,11 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_on_drm_content_default_false() {
+    fn test_pause_on_drm_content_default_true() {
         let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
         match cli.command {
             Command::Record(args) => {
-                assert!(!args.pause_on_drm_content, "default should be false");
+                assert!(args.pause_on_drm_content, "default should be true");
             }
             _ => panic!("expected Record command"),
         }
@@ -1520,14 +1520,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_on_drm_content_absent_flows_false() {
+    fn test_pause_on_drm_content_absent_flows_true() {
         let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
         match cli.command {
             Command::Record(args) => {
                 let settings = args.to_recording_settings();
                 assert!(
-                    !settings.pause_on_drm_content,
-                    "absent flag should be false in settings"
+                    settings.pause_on_drm_content,
+                    "absent flag should default to true in settings"
                 );
             }
             _ => panic!("expected Record command"),
