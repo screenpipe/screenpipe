@@ -372,11 +372,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let _guard = self.eval_lock.lock().await;
 
         let target_url = if let Some(target) = url {
-            Some(
-                target
-                    .parse::<url::Url>()
-                    .map_err(|e: url::ParseError| format!("invalid url: {e}"))?,
-            )
+            Some(normalize_url(&target)?)
         } else {
             None
         };
@@ -538,9 +534,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
     /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
     /// reveals/positions the webview itself.
     async fn navigate(&self, url: &str) -> Result<(), String> {
-        let parsed: url::Url = url
-            .parse()
-            .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+        let parsed: url::Url = normalize_url(url)?;
 
         // Push the user's real-browser cookies for this host into
         // WKHTTPCookieStore before issuing the navigate, so the request
@@ -778,15 +772,32 @@ pub async fn owned_browser_set_bounds(
     Ok(())
 }
 
+/// Normalise a user-supplied URL string into a full `url::Url`.
+///
+/// Accepts bare hosts (`youtube.com`), `//`-prefixed (`//youtube.com`),
+/// and fully-qualified URLs (`https://youtube.com`).  Anything that looks
+/// like it is missing a scheme gets `https://` prepended before parsing so
+/// the resulting URL always has a host.
+fn normalize_url(raw: &str) -> Result<url::Url, String> {
+    let candidate = if raw.contains("://") {
+        raw.to_owned()
+    } else if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        format!("https://{raw}")
+    };
+    candidate
+        .parse::<url::Url>()
+        .map_err(|e| format!("invalid url: {e}"))
+}
+
 /// Navigate the embedded webview to `url`. Used by the agent (via
 /// `POST /connections/browsers/owned-default/eval`) and by the sidebar
 /// when restoring per-chat state.
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
     let state = browser_state();
-    let parsed: url::Url = url
-        .parse()
-        .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+    let parsed: url::Url = normalize_url(&url)?;
 
     prepare_navigation(&app, &state, &parsed).await;
     inject_cookies_for_url(&app, &parsed).await;
