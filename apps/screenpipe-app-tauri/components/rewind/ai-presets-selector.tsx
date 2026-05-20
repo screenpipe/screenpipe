@@ -210,7 +210,8 @@ export function AIProviderConfig({
         });
         if (resp.ok) {
           const data = await resp.json();
-          const models = (data.data || []).map((m: any) => ({
+          const models = (data.data || [])
+            .map((m: any) => ({
             id: m.id,
             name: m.name || m.id,
             free: m.free,
@@ -218,7 +219,8 @@ export function AIProviderConfig({
             recommended_for: m.recommended_for,
             warning: m.warning,
             health: m.health,
-          }));
+            }))
+            .filter((m: { id: string }, idx: number, arr: { id: string }[]) => arr.findIndex((x) => x.id === m.id) === idx);
           setPiModels(models);
         }
       } catch {
@@ -404,8 +406,9 @@ export function AIProviderConfig({
             });
             if (resp.ok) {
               const data = await resp.json();
-              if (data.data?.length > 0) {
-                setOpenAIModels(data.data);
+              const uniqueModels = (data.data as { id: string }[]).filter((m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx);
+              if (uniqueModels.length > 0) {
+                setOpenAIModels(uniqueModels);
                 setIsLoadingModels(false);
                 return;
               }
