@@ -125,6 +125,10 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$HOME/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$DOWNLOAD",
           "requireLiteralLeadingDot": false
         },
