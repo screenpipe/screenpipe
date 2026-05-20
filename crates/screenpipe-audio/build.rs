@@ -122,16 +122,11 @@ fn install_onnxruntime() {
         || env_var_truthy("SCREENPIPE_SKIP_ONNX_DOWNLOAD")
         || env_var_truthy("ORT_SKIP_DOWNLOAD");
 
-    // If the library already exists, emit the link flags (x86_64 only).
+    // `ort` is configured with `load-dynamic` on Windows (both x86_64 and aarch64),
+    // so we never need `onnxruntime.lib` at link time — the DLL is opened via
+    // LoadLibrary at runtime. We still want the runtime DLL on disk, so fall
+    // through to the download path if it's missing.
     if lib_path.exists() {
-        if arch == "aarch64" {
-            return;
-        }
-        println!(
-            "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
-            pkg_name
-        );
-        println!("cargo:rustc-link-lib=dylib=onnxruntime");
         return;
     }
 
@@ -184,16 +179,12 @@ fn install_onnxruntime() {
         fs::rename(pkg_name, &target_dir).expect("failed to rename");
     }
 
-    // Emit link so we link against our extracted ONNX Runtime (x86_64 only), and only if present.
-    if arch != "aarch64" && lib_path.exists() {
+    // No `rustc-link-*` directives: with `load-dynamic`, link.exe never needs
+    // `onnxruntime.lib`. The DLL we just unpacked is what gets loaded at runtime
+    // (staged next to the binary by the workflow / app bundler).
+    if !lib_path.exists() {
         println!(
-            "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
-            pkg_name
-        );
-        println!("cargo:rustc-link-lib=dylib=onnxruntime");
-    } else {
-        println!(
-            "cargo:warning=ONNX Runtime download/install completed but {} is still missing; skipping link flags.",
+            "cargo:warning=ONNX Runtime download/install completed but {} is still missing.",
             lib_path.display()
         );
     }
