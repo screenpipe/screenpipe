@@ -17,7 +17,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::server::AppState;
-use crate::ui_recorder::{tree_walker_snapshot, TreeWalkerSnapshot};
+use crate::ui_recorder::{
+    tree_walker_snapshot, ui_recorder_status_snapshot, TreeWalkerSnapshot, UiRecorderStatus,
+};
 
 /// Cached health response to avoid recomputing on every poll.
 /// Multiple WebSocket clients + HTTP polls can call /health dozens of
@@ -85,6 +87,10 @@ pub struct HealthCheckResponse {
     pub audio_pipeline: Option<AudioPipelineHealthInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility: Option<TreeWalkerSnapshot>,
+    /// UI/input/clipboard recorder status. Surfaces "configured but not running"
+    /// distinctly from "off" so users can tell why ui_events stopped writing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_recorder: Option<UiRecorderStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_stats: Option<PoolHealthInfo>,
     /// True when vision capture loop is alive but DB writes have stopped (pool exhaustion).
@@ -727,6 +733,17 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 None
             }
         },
+        ui_recorder: {
+            let snap = ui_recorder_status_snapshot();
+            // Only attach when start_ui_recording has touched the atomics —
+            // otherwise the field is meaningless noise for users who never
+            // enabled UI capture.
+            if snap.configured || snap.events_inserted > 0 {
+                Some(snap)
+            } else {
+                None
+            }
+        },
         audio_pipeline: if !state.audio_disabled {
             let is_paused = state
                 .audio_manager
@@ -945,6 +962,7 @@ mod tests {
             pipeline: None,
             audio_pipeline: None,
             accessibility: None,
+            ui_recorder: None,
             pool_stats: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,
