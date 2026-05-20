@@ -72,25 +72,11 @@ async fn fetch_models_from_gateway(
                 .unwrap_or("standard");
             let reasoning = intelligence == "highest" || intelligence == "high";
 
-            // Determine input modalities from best_for/tags
-            let best_for = m.get("best_for").and_then(|v| v.as_array());
-            let has_vision = best_for
-                .map(|arr| {
-                    arr.iter()
-                        .any(|v| v.as_str().is_some_and(|s| s.contains("vision")))
-                })
-                .unwrap_or(false);
-            let input = if has_vision {
-                json!(["text", "image"])
-            } else {
-                json!(["text"])
-            };
-
             json!({
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                "input": input,
+                "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": 32000,
