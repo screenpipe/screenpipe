@@ -454,3 +454,12 @@ pub async fn chatgpt_oauth_logout() -> Result<bool, String> {
     info!("ChatGPT OAuth logged out");
     Ok(true)
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn chatgpt_oauth_check_token() -> Result<bool, String> {
+    match get_valid_token().await {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}

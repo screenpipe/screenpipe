@@ -836,6 +836,7 @@ async fn main() {
                 chatgpt_oauth::chatgpt_oauth_get_token,
                 chatgpt_oauth::chatgpt_oauth_logout,
                 chatgpt_oauth::chatgpt_oauth_models,
+                chatgpt_oauth::chatgpt_oauth_check_token,
                 // Generic OAuth commands (works for any OAuth integration)
                 oauth::oauth_connect,
                 oauth::oauth_cancel,
@@ -1156,6 +1157,7 @@ async fn main() {
             chatgpt_oauth::chatgpt_oauth_get_token,
             chatgpt_oauth::chatgpt_oauth_logout,
             chatgpt_oauth::chatgpt_oauth_models,
+            chatgpt_oauth::chatgpt_oauth_check_token,
             // Generic OAuth commands (works for any OAuth integration)
             oauth::oauth_connect,
             oauth::oauth_cancel,
