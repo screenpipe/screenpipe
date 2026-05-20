@@ -381,7 +381,10 @@ pub async fn reconcile_untranscribed(
                 .collect();
 
             for chunk in &recent_chunks {
-                if let Err(e) = db.record_chunk_outcome(chunk.id, ChunkOutcome::Silent).await {
+                if let Err(e) = db
+                    .record_chunk_outcome(chunk.id, ChunkOutcome::Silent)
+                    .await
+                {
                     warn!(
                         "reconciliation: failed to mark silent chunk {} as silent: {}",
                         chunk.id, e
