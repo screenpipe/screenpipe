@@ -504,7 +504,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!panelOpen) return;
+    if (!panelOpen) {
+      invoke("owned_browser_hide").catch(() => {});
+      return;
+    }
     const el = placeholderRef.current;
     if (!el) return;
     schedulePushBounds();
