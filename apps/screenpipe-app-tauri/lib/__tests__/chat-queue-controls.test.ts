@@ -47,9 +47,8 @@ describe("chat queue controls", () => {
   });
 
   it("supports focused queued-item steering and cancellation shortcuts", () => {
-    expect(isQueuedItemSteerShortcut({ key: "s" }, true)).toBe(true);
-    expect(isQueuedItemSteerShortcut({ key: "S" }, false)).toBe(true);
-    expect(isQueuedItemSteerShortcut({ key: "s", metaKey: true }, true)).toBe(false);
+    expect(isQueuedItemSteerShortcut({ key: "s" }, true)).toBe(false);
+    expect(isQueuedItemSteerShortcut({ key: "S" }, false)).toBe(false);
     expect(isQueuedItemSteerShortcut({ key: "Enter", metaKey: true }, true)).toBe(true);
     expect(isQueuedItemSteerShortcut({ key: "Enter", ctrlKey: true }, true)).toBe(false);
     expect(isQueuedItemSteerShortcut({ key: "Enter", ctrlKey: true }, false)).toBe(true);

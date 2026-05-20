@@ -57,14 +57,7 @@ export function isComposerSteerShortcut(event: KeyLike, isMac: boolean): boolean
 }
 
 export function isQueuedItemSteerShortcut(event: KeyLike, isMac: boolean): boolean {
-  if (isComposerSteerShortcut(event, isMac)) return true;
-  return (
-    event.key.toLowerCase() === "s" &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
+  return isComposerSteerShortcut(event, isMac);
 }
 
 export function isQueuedItemCancelShortcut(event: KeyLike): boolean {
