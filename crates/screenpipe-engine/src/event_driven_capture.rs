@@ -248,7 +248,10 @@ pub async fn event_driven_capture_loop(
 
     let mut state = EventDrivenCapture::new(config);
     let mut power_profile_rx = power_profile_rx;
-    let poll_interval = Duration::from_millis(50);
+    // Polling the ActivityFeed too aggressively burns CPU when idle. External UI
+    // triggers arrive via `broadcast::Receiver::recv()` (awaitable), so we only
+    // need a modest tick to detect typing-pause / idle timers.
+    let poll_interval = Duration::from_millis(250);
     let mut trigger_channel_closed = false;
 
     // Adaptive accessibility throttle: tracks per-app walk cost and backs off
@@ -536,30 +539,36 @@ pub async fn event_driven_capture_loop(
         let mut trigger = if let Some(warm) = warm_trigger_override.take() {
             Some(warm)
         } else if trigger_channel_closed {
-            state.poll_activity(&activity_feed)
+            let trigger = state.poll_activity(&activity_feed);
+            if trigger.is_none() {
+                tokio::time::sleep(poll_interval).await;
+            }
+            trigger
         } else {
-            match trigger_rx.try_recv() {
-                Ok(trigger) => Some(trigger),
-                Err(broadcast::error::TryRecvError::Empty) => {
-                    // Poll activity feed for state transitions
-                    state.poll_activity(&activity_feed)
-                }
-                Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                    debug!(
-                        "trigger channel lagged by {} messages on monitor {}",
-                        n, monitor_id
-                    );
-                    // Drain missed triggers, just capture now
-                    Some(CaptureTrigger::Manual)
-                }
-                Err(broadcast::error::TryRecvError::Closed) => {
-                    // Don't break — fall through to activity feed polling and visual
-                    // change detection so capture keeps working even without UI triggers.
-                    warn!(
-                        "trigger channel closed for monitor {}, continuing with polling-only mode",
-                        monitor_id
-                    );
-                    trigger_channel_closed = true;
+            match tokio::time::timeout(poll_interval, trigger_rx.recv()).await {
+                Ok(recv) => match recv {
+                    Ok(trigger) => Some(trigger),
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        debug!(
+                            "trigger channel lagged by {} messages on monitor {}",
+                            n, monitor_id
+                        );
+                        // Drain missed triggers, just capture now
+                        Some(CaptureTrigger::Manual)
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Don't break — fall through to activity feed polling and visual
+                        // change detection so capture keeps working even without UI triggers.
+                        warn!(
+                            "trigger channel closed for monitor {}, continuing with polling-only mode",
+                            monitor_id
+                        );
+                        trigger_channel_closed = true;
+                        state.poll_activity(&activity_feed)
+                    }
+                },
+                Err(_elapsed) => {
+                    // Poll activity feed for state transitions (typing pause / idle fallback)
                     state.poll_activity(&activity_feed)
                 }
             }
@@ -826,7 +835,9 @@ pub async fn event_driven_capture_loop(
             }
         }
 
-        tokio::time::sleep(poll_interval).await;
+        // No unconditional sleep here: the recv()/sleep select above is the
+        // loop's primary backpressure. Other early-continue branches already
+        // include bounded sleeps.
     }
 
     info!(
@@ -1533,6 +1544,14 @@ mod tests {
 
         assert_eq!(rx1.try_recv().unwrap(), CaptureTrigger::Click);
         assert_eq!(rx2.try_recv().unwrap(), CaptureTrigger::Click);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_receiver_recv_async() {
+        let (tx, mut rx) = trigger_channel();
+        tx.send(CaptureTrigger::Click).unwrap();
+        let got = rx.recv().await.unwrap();
+        assert_eq!(got, CaptureTrigger::Click);
     }
 
     #[test]

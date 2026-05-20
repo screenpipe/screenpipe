@@ -587,15 +587,23 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Replace the current conditional check with:
-    let ffmpeg_path = find_ffmpeg_path();
-    if ffmpeg_path.is_none() {
-        // Try one more time, which might trigger the installation
+    // Only require ffmpeg when audio recording is enabled. Vision-only recording
+    // should not attempt network installs (important for offline / locked-down
+    // Windows environments).
+    if !config.disable_audio {
         let ffmpeg_path = find_ffmpeg_path();
         if ffmpeg_path.is_none() {
-            eprintln!("ffmpeg not found and installation failed. please install ffmpeg manually.");
-            std::process::exit(1);
+            // Try one more time, which might trigger the installation
+            let ffmpeg_path = find_ffmpeg_path();
+            if ffmpeg_path.is_none() {
+                eprintln!(
+                    "ffmpeg not found and installation failed. please install ffmpeg manually."
+                );
+                std::process::exit(1);
+            }
         }
+    } else {
+        debug!("audio disabled; skipping ffmpeg preflight");
     }
 
     // Pre-flight permission check (macOS: trigger native prompts + poll until granted)
