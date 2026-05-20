@@ -73,7 +73,9 @@ pub use events::{
     AccessibilityNode, ElementBounds, ElementContext, EventData, EventType, Modifiers, UiEvent,
     WindowTreeSnapshot,
 };
-pub use platform::{PermissionStatus, RecordingHandle, UiRecorder};
+pub use platform::{
+    check_input_monitoring, request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
+};
 
 /// Prelude for convenient imports
 pub mod prelude {

@@ -280,7 +280,7 @@ wiremock = "0.6"
 # wiring lands in a follow-up. Cargo compiles it for the workspace either way.
 # thiserror: gated behind `enterprise-build` via `dep:thiserror`; cargo-machete
 # can't follow `#[path = ...]` imports into ee/desktop-rust/enterprise_sync.rs.
-ignored = ["tauri-utils", "screenpipe-a11y", "screenpipe-redact", "thiserror"]
+ignored = ["tauri-utils", "screenpipe-redact", "thiserror"]
 
 [profile.release]
 codegen-units = 1

@@ -48,6 +48,22 @@ async checkAccessibilityPermissionCmd() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_accessibility_permission_cmd");
 },
 /**
+ * Check Input Monitoring permission (macOS only). Polling-safe — does not
+ * trigger the system prompt. Hand-written stub; specta regenerates on rebuild.
+ */
+async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_input_monitoring_permission_cmd");
+},
+/**
+ * Request Input Monitoring permission (macOS only). Triggers the native
+ * consent prompt on first call and also opens System Settings → Privacy &
+ * Security → Input Monitoring as a fallback. Returns the post-request
+ * status. Hand-written stub; specta regenerates on rebuild.
+ */
+async requestInputMonitoringPermission() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("request_input_monitoring_permission");
+},
+/**
  * Check if Arc browser is installed (macOS only)
  */
 async checkArcInstalled() : Promise<boolean> {

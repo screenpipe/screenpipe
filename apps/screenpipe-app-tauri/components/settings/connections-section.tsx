@@ -40,6 +40,7 @@ import { HermesCard } from "./hermes-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
+import { InputMonitoringCard } from "./input-monitoring-card";
 import posthog from "posthog-js";
 
 // ---------------------------------------------------------------------------
@@ -2208,6 +2209,12 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   return (
     <div className="space-y-5">
       <p className="text-muted-foreground text-sm mb-4">Give AI access to your memory, and connect to the apps you use every day</p>
+
+      {/* macOS-only permission card. Self-gates: renders nothing off-platform.
+          Surfaces here (top of Connections) because Input Monitoring is the
+          most common silent killer of UI/clipboard capture and users don't
+          know to look in System Settings without a prompt. */}
+      <InputMonitoringCard />
 
       {/* Search & filters */}
       <div className="space-y-2">

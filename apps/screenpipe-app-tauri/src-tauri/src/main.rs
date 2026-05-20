@@ -1031,6 +1031,8 @@ async fn main() {
             permissions::check_microphone_permission,
             permissions::check_screen_recording_permission,
             permissions::check_accessibility_permission_cmd,
+            permissions::check_input_monitoring_permission_cmd,
+            permissions::request_input_monitoring_permission,
             owned_browser::owned_browser_set_bounds,
             owned_browser::owned_browser_navigate,
             owned_browser::owned_browser_hide,
