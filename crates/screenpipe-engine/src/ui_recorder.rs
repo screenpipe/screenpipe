@@ -586,7 +586,10 @@ mod tests {
         record_ui_event_flush(3);
         let after = ui_recorder_status_snapshot();
         assert_eq!(after.events_inserted, before + 3);
-        assert!(after.last_event_at.is_some(), "successful flush stamps a timestamp");
+        assert!(
+            after.last_event_at.is_some(),
+            "successful flush stamps a timestamp"
+        );
 
         // disabled path: configured=false, running=false, no clipboard.
         set_ui_recorder_state(false, false, false);
