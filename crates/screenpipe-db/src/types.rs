@@ -209,6 +209,75 @@ pub struct ReplacementAudioTranscription {
     pub end_time: f64,
 }
 
+/// Outcome of processing an audio chunk through the transcription pipeline.
+///
+/// The whole point of this enum is to separate "did we consider this chunk?"
+/// from "did the chunk produce indexable text?". Before this existed, the
+/// reconciliation sweep inferred processing state from the presence of an
+/// `audio_transcriptions` row — which conflated silent/duplicate/transcribed
+/// and caused infinite re-pick loops when STT returned empty.
+///
+/// `record_chunk_outcome` translates one of these variants into an atomic
+/// status update on `audio_chunks` (plus optional row writes / FK cascades)
+/// inside a single TX.
+#[derive(Debug, Clone)]
+pub enum ChunkOutcome {
+    /// STT produced text. The segments are written and chunk is marked done.
+    /// Multiple segments with identical trimmed text collide on the UNIQUE
+    /// `idx_audio_transcription_chunk_text` index — the writer uses
+    /// INSERT OR IGNORE so duplicates are dropped silently (their
+    /// per-speaker timing/identity stays in `diarization_segments`).
+    Transcribed {
+        segments: Vec<ReplacementAudioTranscription>,
+        engine: String,
+        device: String,
+        is_input_device: bool,
+        /// Capture timestamp of the chunk — used for the row's `timestamp`
+        /// column so search/timeline ordering matches the audio, not the
+        /// (possibly much later) reconciliation moment.
+        timestamp: DateTime<Utc>,
+    },
+
+    /// STT returned no text (silent audio, VAD rejected everything, or
+    /// post-dedup empty result). Chunk is marked `silent` so the
+    /// reconciliation sweep doesn't keep re-picking it.
+    Silent,
+
+    /// The transcription was a cross-device duplicate of another recent
+    /// device's transcript and was intentionally not recorded (the
+    /// `has_similar_recent_transcription` check fired). We still mark the
+    /// chunk as processed — semantically "we don't need to retry" — to
+    /// avoid the same loop the Silent variant prevents.
+    Duplicate,
+
+    /// Transient failure (engine crashed, model timeout, etc.). Bumps the
+    /// attempts counter; once attempts reach the cap, the chunk transitions
+    /// to `failed` and stops being picked.
+    Failed { reason: String },
+
+    /// Permanent failure (corrupt audio, decode error). Chunk is marked
+    /// `failed` immediately without attempts retries; downstream cleanup
+    /// can delete the file.
+    FailedPermanent { reason: String },
+}
+
+/// Maximum number of times reconciliation will retry a `Failed` outcome
+/// before giving up and marking the chunk `failed`. Tuned to absorb a
+/// transient engine restart without giving up on real audio.
+pub const MAX_TRANSCRIPTION_ATTEMPTS: i64 = 5;
+
+/// Processing-state counts across a recent window of audio chunks. Powers
+/// the new health diagnostic — direct measurement of a pipeline stall
+/// (pending older than threshold) instead of guessing from pool idleness.
+#[derive(Debug, Clone)]
+pub struct AudioChunkProcessingSnapshot {
+    pub pending: i64,
+    pub transcribed: i64,
+    pub silent: i64,
+    pub failed: i64,
+    pub oldest_pending: Option<DateTime<Utc>>,
+}
+
 /// A persistent memory: fact, preference, decision, or insight.
 #[derive(OaSchema, Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct MemoryRecord {

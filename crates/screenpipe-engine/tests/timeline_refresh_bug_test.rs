@@ -656,7 +656,6 @@ mod tests {
     async fn test_empty_frame_data_should_be_skipped() {
         // Simulate the fixed behavior
         struct MockFrame {
-            timestamp: String,
             frame_data: Vec<(&'static str, &'static str)>,
         }
 
@@ -667,7 +666,6 @@ mod tests {
 
         // Frame with data - should be sent
         let frame_with_data = MockFrame {
-            timestamp: "2026-01-25T14:15:00Z".to_string(),
             frame_data: vec![("Chrome", "Google")],
         };
         assert!(
@@ -676,10 +674,7 @@ mod tests {
         );
 
         // Frame with empty data (all screenpipe filtered) - should NOT be sent
-        let frame_empty = MockFrame {
-            timestamp: "2026-01-25T14:15:03Z".to_string(),
-            frame_data: vec![],
-        };
+        let frame_empty = MockFrame { frame_data: vec![] };
         assert!(
             !should_send_frame(&frame_empty),
             "Frames with empty frame_data should NOT be sent (this is the fix for 'Unknown')"
@@ -773,14 +768,12 @@ mod tests {
     async fn test_frame_availability_response() {
         #[derive(Debug)]
         struct FrameResponse {
-            frame_id: i64,
             available: bool,
             error_type: Option<String>,
-            error_message: Option<String>,
             suggestion: Option<String>,
         }
 
-        fn create_error_response(frame_id: i64, error: &str) -> FrameResponse {
+        fn create_error_response(error: &str) -> FrameResponse {
             let (error_type, suggestion) = if error.contains("not found") {
                 (
                     "not_found",
@@ -796,22 +789,20 @@ mod tests {
             };
 
             FrameResponse {
-                frame_id,
                 available: false,
                 error_type: Some(error_type.to_string()),
-                error_message: Some(error.to_string()),
                 suggestion: Some(suggestion.to_string()),
             }
         }
 
         // Test not_found response
-        let response = create_error_response(12345, "Video file not found");
+        let response = create_error_response("Video file not found");
         assert!(!response.available);
         assert_eq!(response.error_type, Some("not_found".to_string()));
         assert!(response.suggestion.unwrap().contains("deleted"));
 
         // Test server_error response
-        let response = create_error_response(12346, "ffmpeg process failed");
+        let response = create_error_response("ffmpeg process failed");
         assert!(!response.available);
         assert_eq!(response.error_type, Some("server_error".to_string()));
         assert!(response.suggestion.unwrap().contains("corrupted"));
@@ -826,7 +817,6 @@ mod tests {
         #[derive(Debug, Clone)]
         struct TimelineFrame {
             id: i64,
-            timestamp: String,
             video_path: String,
         }
 
@@ -844,17 +834,14 @@ mod tests {
         let frames = vec![
             TimelineFrame {
                 id: 1,
-                timestamp: "2026-01-25T10:00:00Z".to_string(),
                 video_path: "/data/video1.mp4".to_string(),
             },
             TimelineFrame {
                 id: 2,
-                timestamp: "2026-01-25T10:01:00Z".to_string(),
                 video_path: "/data/video2.mp4".to_string(), // This one is missing
             },
             TimelineFrame {
                 id: 3,
-                timestamp: "2026-01-25T10:02:00Z".to_string(),
                 video_path: "/data/video3.mp4".to_string(),
             },
         ];

@@ -404,10 +404,11 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn settings_with(lan: bool, api_auth: bool) -> screenpipe_config::RecordingSettings {
-        let mut s = screenpipe_config::RecordingSettings::default();
-        s.listen_on_lan = lan;
-        s.api_auth = api_auth;
-        s
+        screenpipe_config::RecordingSettings {
+            listen_on_lan: lan,
+            api_auth,
+            ..Default::default()
+        }
     }
 
     fn build(s: &screenpipe_config::RecordingSettings) -> RecordingConfig {

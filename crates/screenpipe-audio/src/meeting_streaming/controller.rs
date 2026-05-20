@@ -47,6 +47,12 @@ struct ActiveMeetingStream {
     audio_frames_seen: u64,
     audio_samples_seen: u64,
     last_audio_activity_at: Instant,
+    // Latched true the first time a frame's RMS clears the voice-activity
+    // threshold. Used to suppress the "transcript not flowing" notification
+    // when the room is just silent (e.g. user alone waiting for others to
+    // join) — no transcript is expected from silence, so warning the user is
+    // a false positive.
+    voiced_audio_seen: bool,
     live_transcript_seen: bool,
     last_live_transcript_at: Option<Instant>,
     notified_audio_stall: bool,
@@ -207,6 +213,7 @@ pub fn start_meeting_streaming_loop(
                                 session.audio_samples_seen += frame.samples.len() as u64;
                                 if frame_has_audio_activity(&frame) {
                                     session.last_audio_activity_at = Instant::now();
+                                    session.voiced_audio_seen = true;
                                 }
                                 if session.live_transcription_enabled {
                                     route_frame_to_provider(
@@ -298,6 +305,7 @@ async fn start_streaming_session(
         audio_frames_seen: 0,
         audio_samples_seen: 0,
         last_audio_activity_at: Instant::now(),
+        voiced_audio_seen: false,
         live_transcript_seen: false,
         last_live_transcript_at: None,
         notified_audio_stall: false,
@@ -618,6 +626,7 @@ fn check_and_emit_stall_notifications(session: &mut ActiveMeetingStream, now: In
         );
     } else if !session.notified_transcript_stall
         && session.audio_frames_seen > 0
+        && session.voiced_audio_seen
         && !session.live_transcript_seen
     {
         session.notified_transcript_stall = true;
@@ -787,6 +796,7 @@ mod tests {
             audio_frames_seen: 0,
             audio_samples_seen: 0,
             last_audio_activity_at: now,
+            voiced_audio_seen: false,
             live_transcript_seen: false,
             last_live_transcript_at: None,
             notified_audio_stall: false,
@@ -825,6 +835,7 @@ mod tests {
         // is the field itself, not a flag we manage from outside).
         let mut session = test_session(now, true);
         session.audio_frames_seen = 42;
+        session.voiced_audio_seen = true;
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD);
         assert!(!session.notified_audio_stall);
         assert!(session.notified_transcript_stall);
@@ -832,6 +843,16 @@ mod tests {
         // Re-running after firing is a no-op (latched).
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 5);
         assert!(session.notified_transcript_stall);
+
+        // Frames flowing but only silence (no voiced audio) — do NOT fire
+        // transcript stall. User is alone in the room waiting for others;
+        // there is nothing to transcribe, so warning them is a false positive.
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 200;
+        // voiced_audio_seen stays false
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 3);
+        assert!(!session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
 
         // Pure background sessions (no live transcription) never fire — their
         // audio tap is intentionally inactive so audio_frames_seen=0 is

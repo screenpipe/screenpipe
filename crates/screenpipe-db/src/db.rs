@@ -30,13 +30,14 @@ use zerocopy::AsBytes;
 use futures::future::try_join_all;
 
 use crate::{
-    text_similarity::is_similar_transcription, AudioChunksResponse, AudioDevice, AudioEntry,
-    AudioResult, AudioResultRaw, ContentType, DeviceType, Element, ElementRow, ElementSource,
-    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
-    MeetingTranscriptSegment, MemoryRecord, MemorySyncRow, NewDiarizationSegment, OCREntry,
-    OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, ReplacementAudioTranscription,
-    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagContentType, TextBounds, TextPosition,
-    TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
+    text_similarity::is_similar_transcription, AudioChunkProcessingSnapshot, AudioChunksResponse,
+    AudioDevice, AudioEntry, AudioResult, AudioResultRaw, ChunkOutcome, ContentType, DeviceType,
+    Element, ElementRow, ElementSource, FrameData, FrameRow, FrameRowLight, FrameWindowData,
+    InsertUiEvent, MeetingRecord, MeetingTranscriptSegment, MemoryRecord, MemorySyncRow,
+    NewDiarizationSegment, OCREntry, OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order,
+    ReplacementAudioTranscription, SearchMatch, SearchMatchGroup, SearchResult, Speaker,
+    TagContentType, TextBounds, TextPosition, TimeSeriesChunk, UiContent, UiEventRecord,
+    UiEventRow, VideoMetadata, MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
 /// Time window (in seconds) to check for similar transcriptions across devices.
@@ -1063,20 +1064,25 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<UntranscribedChunk>, sqlx::Error> {
+        // We pick `status = 'pending'` directly off the partial index
+        // (`idx_audio_chunks_pending_timestamp`) and gate on the attempts
+        // cap so chunks that have failed `MAX_TRANSCRIPTION_ATTEMPTS` times
+        // can't drag the worker forever.
         let rows = sqlx::query_as::<_, UntranscribedChunk>(
-            "SELECT ac.id, ac.file_path, ac.timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE at.id IS NULL
-               AND ac.timestamp >= ?1
-               AND ac.timestamp <= ?2
-               AND ac.file_path NOT LIKE 'cloud://%'
-             ORDER BY ac.timestamp ASC
+            "SELECT id, file_path, timestamp
+             FROM audio_chunks
+             WHERE transcription_status = 'pending'
+               AND transcription_attempts < ?4
+               AND timestamp >= ?1
+               AND timestamp <= ?2
+               AND file_path NOT LIKE 'cloud://%'
+             ORDER BY timestamp ASC
              LIMIT ?3",
         )
         .bind(since)
         .bind(older_than)
         .bind(limit)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -1091,19 +1097,20 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
     ) -> Result<Option<UntranscribedChunk>, sqlx::Error> {
         let row = sqlx::query_as::<_, UntranscribedChunk>(
-            "SELECT ac.id, ac.file_path, ac.timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE ac.id = ?1
-               AND at.id IS NULL
-               AND ac.timestamp >= ?2
-               AND ac.timestamp <= ?3
-               AND ac.file_path NOT LIKE 'cloud://%'
+            "SELECT id, file_path, timestamp
+             FROM audio_chunks
+             WHERE id = ?1
+               AND transcription_status = 'pending'
+               AND transcription_attempts < ?4
+               AND timestamp >= ?2
+               AND timestamp <= ?3
+               AND file_path NOT LIKE 'cloud://%'
              LIMIT 1",
         )
         .bind(chunk_id)
         .bind(since)
         .bind(older_than)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -1117,19 +1124,51 @@ impl DatabaseManager {
         older_than: DateTime<Utc>,
     ) -> Result<(i64, Option<DateTime<Utc>>), sqlx::Error> {
         let summary = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
-            "SELECT COUNT(*) as count, MIN(ac.timestamp) as oldest_timestamp
-             FROM audio_chunks ac
-             LEFT JOIN audio_transcriptions at ON ac.id = at.audio_chunk_id
-             WHERE at.id IS NULL
-               AND ac.timestamp >= ?1
-               AND ac.timestamp <= ?2
-               AND ac.file_path NOT LIKE 'cloud://%'",
+            "SELECT COUNT(*) as count, MIN(timestamp) as oldest_timestamp
+             FROM audio_chunks
+             WHERE transcription_status = 'pending'
+               AND transcription_attempts < ?3
+               AND timestamp >= ?1
+               AND timestamp <= ?2
+               AND file_path NOT LIKE 'cloud://%'",
         )
         .bind(since)
         .bind(older_than)
+        .bind(MAX_TRANSCRIPTION_ATTEMPTS)
         .fetch_one(&self.pool)
         .await?;
         Ok(summary)
+    }
+
+    /// Compact processing-state snapshot of recent audio chunks. Used by the
+    /// health diagnostic to detect a genuine stall (real "pending older than
+    /// X" chunks) vs the previous heuristic (idle pool + stale metric, which
+    /// fired false positives whenever the live path's dedup short-circuited).
+    pub async fn audio_chunk_processing_snapshot(
+        &self,
+        within_secs: i64,
+    ) -> Result<AudioChunkProcessingSnapshot, sqlx::Error> {
+        let row = sqlx::query_as::<_, (i64, i64, i64, i64, Option<DateTime<Utc>>)>(
+            "SELECT \
+                SUM(CASE WHEN transcription_status = 'pending' THEN 1 ELSE 0 END) AS pending, \
+                SUM(CASE WHEN transcription_status = 'transcribed' THEN 1 ELSE 0 END) AS transcribed, \
+                SUM(CASE WHEN transcription_status = 'silent' THEN 1 ELSE 0 END) AS silent, \
+                SUM(CASE WHEN transcription_status = 'failed' THEN 1 ELSE 0 END) AS failed, \
+                MIN(CASE WHEN transcription_status = 'pending' THEN timestamp END) AS oldest_pending \
+             FROM audio_chunks \
+             WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1) \
+               AND file_path NOT LIKE 'cloud://%'",
+        )
+        .bind(format!("-{} seconds", within_secs))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(AudioChunkProcessingSnapshot {
+            pending: row.0,
+            transcribed: row.1,
+            silent: row.2,
+            failed: row.3,
+            oldest_pending: row.4,
+        })
     }
 
     /// Returns true if there are audio transcriptions from output devices
@@ -1247,13 +1286,23 @@ impl DatabaseManager {
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
-        // Skip empty transcriptions (no DB access needed)
+        // Empty STT result for an existing chunk → mark Silent so the
+        // reconciliation sweep doesn't keep re-picking it. Old code returned
+        // Ok(0) here, which left the chunk pending forever.
         let trimmed = transcription.trim();
         if trimmed.is_empty() {
+            if audio_chunk_id > 0 {
+                self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                    .await?;
+            }
             return Ok(0);
         }
 
-        // Pre-read phase: dedup check on read pool (no write lock)
+        // Pre-read phase: dedup check on read pool (no write lock).
+        // When a cross-device duplicate fires we still need to flip the
+        // chunk's status — otherwise this chunk loops in the reconciliation
+        // sweep even though we DID process it (the other device kept the
+        // text).
         if self
             .has_similar_recent_transcription(trimmed, DEDUP_TIME_WINDOW_SECS)
             .await?
@@ -1262,6 +1311,10 @@ impl DatabaseManager {
                 "Skipping duplicate transcription (cross-device): {:?}",
                 trimmed.chars().take(50).collect::<String>()
             );
+            if audio_chunk_id > 0 {
+                self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Duplicate)
+                    .await?;
+            }
             return Ok(0);
         }
 
@@ -1436,7 +1489,11 @@ impl DatabaseManager {
     ) -> Result<(), sqlx::Error> {
         let trimmed = transcription.trim();
         if trimmed.is_empty() {
-            return Ok(());
+            // Funnel through Silent — never let an empty input become a no-op
+            // status-wise. That no-op was the original zombie-chunk loop.
+            return self
+                .record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                .await;
         }
         let end_time = duration_secs.unwrap_or(0.0);
         let segments = vec![ReplacementAudioTranscription {
@@ -1466,50 +1523,212 @@ impl DatabaseManager {
         is_input_device: bool,
         timestamp: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        if segments.is_empty() {
-            return Ok(());
+        // Empty inputs are a legitimate "STT returned nothing" signal — translate
+        // them into a Silent outcome so the chunk stops being re-picked, instead
+        // of returning a no-op success the way the old helper did. That no-op
+        // was the root of the zombie-chunk loop.
+        if segments.is_empty() || segments.iter().all(|s| s.transcription.trim().is_empty()) {
+            return self
+                .record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent)
+                .await;
         }
 
-        let mut tx = self.begin_immediate_with_retry().await?;
+        self.record_chunk_outcome(
+            audio_chunk_id,
+            ChunkOutcome::Transcribed {
+                segments: segments.to_vec(),
+                engine: engine.to_string(),
+                device: device.to_string(),
+                is_input_device,
+                timestamp,
+            },
+        )
+        .await
+    }
 
-        sqlx::query("DELETE FROM audio_transcriptions WHERE audio_chunk_id = ?1")
-            .bind(audio_chunk_id)
-            .execute(&mut **tx.conn())
-            .await?;
+    /// Atomically record the outcome of processing an audio chunk.
+    ///
+    /// Every transcription writer funnels through this function (live path on
+    /// dedup-skip, reconciliation silent/text/failed paths, retranscribe).
+    /// One TX writes the transcription rows AND flips `audio_chunks.status`
+    /// so the reconciliation sweep can't re-pick a chunk between the row
+    /// insert and the status update.
+    ///
+    /// Edge cases handled inline:
+    /// - Empty / whitespace-only Transcribed segments → falls through to Silent.
+    /// - Duplicate text within Transcribed (diarization splits + same word) →
+    ///   first segment lands, rest collide on the UNIQUE index and are dropped
+    ///   by INSERT OR IGNORE. Per-speaker timing/identity is preserved in
+    ///   `diarization_segments` so nothing is lost analytics-wise.
+    /// - Chunk deleted between query and outcome → the UPDATE is a no-op, the
+    ///   INSERT fails the FK check and the whole TX rolls back. Reconciliation
+    ///   will not retry because the chunk row no longer exists.
+    /// - Failed with attempts >= cap → escalates to FailedPermanent.
+    pub async fn record_chunk_outcome(
+        &self,
+        audio_chunk_id: i64,
+        outcome: ChunkOutcome,
+    ) -> Result<(), sqlx::Error> {
+        let now = Utc::now();
 
-        for (offset_index, segment) in segments.iter().enumerate() {
-            let trimmed = segment.transcription.trim();
-            if trimmed.is_empty() {
-                continue;
+        match outcome {
+            ChunkOutcome::Transcribed {
+                segments,
+                engine,
+                device,
+                is_input_device,
+                timestamp,
+            } => {
+                let filtered: Vec<&ReplacementAudioTranscription> = segments
+                    .iter()
+                    .filter(|s| !s.transcription.trim().is_empty())
+                    .collect();
+                if filtered.is_empty() {
+                    return Box::pin(
+                        self.record_chunk_outcome(audio_chunk_id, ChunkOutcome::Silent),
+                    )
+                    .await;
+                }
+
+                let mut tx = self.begin_immediate_with_retry().await?;
+
+                sqlx::query("DELETE FROM audio_transcriptions WHERE audio_chunk_id = ?1")
+                    .bind(audio_chunk_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+
+                for (offset_index, segment) in filtered.iter().enumerate() {
+                    let trimmed = segment.transcription.trim();
+                    let text_length = trimmed.len() as i64;
+
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO audio_transcriptions \
+                         (audio_chunk_id, transcription, text_length, offset_index, timestamp, \
+                          transcription_engine, device, is_input_device, start_time, end_time, speaker_id) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    )
+                    .bind(audio_chunk_id)
+                    .bind(trimmed)
+                    .bind(text_length)
+                    .bind(offset_index as i64)
+                    .bind(timestamp)
+                    .bind(&engine)
+                    .bind(&device)
+                    .bind(is_input_device)
+                    .bind(segment.start_time)
+                    .bind(segment.end_time)
+                    .bind(segment.speaker_id)
+                    .execute(&mut **tx.conn())
+                    .await?;
+                }
+
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'transcribed', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?2",
+                )
+                .bind(now)
+                .bind(audio_chunk_id)
+                .execute(&mut **tx.conn())
+                .await?;
+
+                tx.commit().await?;
+                Ok(())
             }
-            let text_length = trimmed.len() as i64;
 
-            // INSERT OR IGNORE: diarization can produce multiple segments with the same
-            // trimmed text on the same chunk (e.g. "yeah" from speakers A and B). The
-            // UNIQUE index idx_audio_transcription_chunk_text would otherwise fail the
-            // whole TX with SQLite 2067, the reconciliation retries forever, and the
-            // pool saturates. Per-speaker timing/identity is preserved in
-            // diarization_segments — losing a duplicate text row here is harmless.
-            sqlx::query(
-                "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, text_length, offset_index, timestamp, transcription_engine, device, is_input_device, start_time, end_time, speaker_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )
-            .bind(audio_chunk_id)
-            .bind(trimmed)
-            .bind(text_length)
-            .bind(offset_index as i64)
-            .bind(timestamp)
-            .bind(engine)
-            .bind(device)
-            .bind(is_input_device)
-            .bind(segment.start_time)
-            .bind(segment.end_time)
-            .bind(segment.speaker_id)
-            .execute(&mut **tx.conn())
-            .await?;
+            ChunkOutcome::Silent | ChunkOutcome::Duplicate => {
+                // Both terminal states from the pipeline's perspective: the
+                // chunk has been considered and we don't want to retry. We use
+                // `transcribed` for Duplicate (we DID transcribe — on the
+                // other device) and `silent` for Silent. The reconciliation
+                // sweep skips both.
+                let status = match outcome {
+                    ChunkOutcome::Silent => "silent",
+                    ChunkOutcome::Duplicate => "transcribed",
+                    _ => unreachable!(),
+                };
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = ?1, \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?2, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?3",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
+
+            ChunkOutcome::Failed { reason } => {
+                // Transient failure: bump attempts. If we'd hit the cap, flip
+                // to `failed` so the sweep stops re-trying. We do this in one
+                // UPDATE statement so a concurrent attempt can't double-flip.
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = ?2, \
+                         transcription_status = CASE \
+                             WHEN transcription_attempts + 1 >= ?3 THEN 'failed' \
+                             ELSE transcription_status \
+                         END \
+                     WHERE id = ?4",
+                )
+                .bind(now)
+                .bind(&reason)
+                .bind(MAX_TRANSCRIPTION_ATTEMPTS)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
+
+            ChunkOutcome::FailedPermanent { reason } => {
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'failed', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = ?2 \
+                     WHERE id = ?3",
+                )
+                .bind(now)
+                .bind(&reason)
+                .bind(audio_chunk_id)
+                .execute(&self.pool)
+                .await?;
+                Ok(())
+            }
         }
+    }
 
-        tx.commit().await?;
+    /// Mark a chunk as pending for re-transcription. Used by the retranscribe
+    /// endpoint to opt a meeting back into reconciliation with a different
+    /// engine. Existing rows are kept so the UI doesn't flash empty —
+    /// `record_chunk_outcome(Transcribed)` will DELETE them in the same TX as
+    /// the new INSERTs land.
+    pub async fn reset_chunk_for_retranscription(
+        &self,
+        audio_chunk_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE audio_chunks \
+             SET transcription_status = 'pending', \
+                 transcription_attempts = 0, \
+                 last_transcription_attempt_at = NULL, \
+                 transcription_failure_reason = NULL \
+             WHERE id = ?1",
+        )
+        .bind(audio_chunk_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

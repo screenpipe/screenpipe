@@ -257,7 +257,7 @@ fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<Stri
     }
 }
 
-const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.60.0";
+const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.73.1";
 const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
 
 /// Pool of Pi sessions — each session_id gets its own PiManager/process.
@@ -477,37 +477,61 @@ fn pi_local_install_dir() -> Option<PathBuf> {
 /// Writing these before `bun add` ensures correct versions are used.
 fn seed_pi_package_json(install_dir: &std::path::Path) {
     let pkg_path = install_dir.join("package.json");
-    // Only seed if package.json doesn't exist yet — don't overwrite user/bun changes
+    // Force-pin the current expected versions even when package.json already
+    // exists. Earlier this only *added* missing fields, which left stale
+    // version ranges in place after a pi-coding-agent bump. The 0.60.0 → 0.73.1
+    // jump silently leaves users on the old `^0.33.1` anthropic-sdk range that
+    // bun cannot reconcile with the new pi-ai's `^0.91.1` requirement →
+    // pi process dies 2s after spawn, supervisor gives up after 18 retries,
+    // main app exits with code 255. macOS Enterprise v2.4.244 hit this on
+    // every upgrade from 243.
+    let expected_sdk = json!("^0.91.1");
+    let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
+    let expected_overrides = json!({
+        "hosted-git-info": {
+            "lru-cache": "^10.0.0"
+        }
+    });
+
     if pkg_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
             let mut changed = false;
             if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
                 if let Some(obj) = pkg.as_object_mut() {
-                    // Ensure overrides are present
-                    if !contents.contains("overrides") {
-                        obj.insert(
-                            "overrides".to_string(),
-                            json!({
-                                "hosted-git-info": {
-                                    "lru-cache": "^10.0.0"
-                                }
-                            }),
-                        );
+                    if obj.get("overrides") != Some(&expected_overrides) {
+                        obj.insert("overrides".to_string(), expected_overrides.clone());
                         changed = true;
                     }
-                    // Ensure @anthropic-ai/sdk is a direct dependency (Windows bun fix)
-                    if !contents.contains("@anthropic-ai/sdk") {
-                        let deps = obj.entry("dependencies").or_insert_with(|| json!({}));
-                        if let Some(deps_obj) = deps.as_object_mut() {
-                            deps_obj.insert("@anthropic-ai/sdk".to_string(), json!("^0.73.0"));
+                    let deps = obj.entry("dependencies").or_insert_with(|| json!({}));
+                    if let Some(deps_obj) = deps.as_object_mut() {
+                        if deps_obj.get("@anthropic-ai/sdk") != Some(&expected_sdk) {
+                            deps_obj
+                                .insert("@anthropic-ai/sdk".to_string(), expected_sdk.clone());
+                            changed = true;
                         }
-                        changed = true;
+                        if deps_obj.get("@mariozechner/pi-coding-agent")
+                            != Some(&expected_pi_version)
+                        {
+                            deps_obj.insert(
+                                "@mariozechner/pi-coding-agent".to_string(),
+                                expected_pi_version.clone(),
+                            );
+                            changed = true;
+                        }
                     }
                 }
                 if changed {
                     if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
                         let _ = std::fs::write(&pkg_path, new_contents);
-                        info!("Patched pi-agent package.json (overrides + anthropic sdk)");
+                        // bun.lock pins the old transitive tree — must be
+                        // dropped so the next `bun install` re-resolves
+                        // against the corrected ranges.
+                        let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+                        let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+                        info!(
+                            "Patched pi-agent package.json (forced pins → pi {}, anthropic sdk {})",
+                            expected_pi_version, expected_sdk
+                        );
                     }
                 }
             }
@@ -516,7 +540,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     }
     let pkg_json = json!({
         "dependencies": {
-            "@anthropic-ai/sdk": "^0.73.0"
+            "@anthropic-ai/sdk": "^0.91.1"
         },
         "overrides": {
             "hosted-git-info": {
@@ -552,7 +576,7 @@ fn is_local_pi_version_current(install_dir: &std::path::Path) -> bool {
         Some(v) => v,
         None => return false,
     };
-    // PI_PACKAGE is "@mariozechner/pi-coding-agent@0.60.0" — extract version after last '@'
+    // PI_PACKAGE is "@mariozechner/pi-coding-agent@<ver>" — extract version after last '@'
     let expected = PI_PACKAGE.rsplit('@').next().unwrap_or("");
     if installed != expected {
         info!(
@@ -2391,8 +2415,11 @@ pub fn ensure_pi_installed_background() {
                     );
                 }
                 seed_pi_package_json(&install_dir);
-                if needs_lru_fix || needs_anthropic_sdk {
-                    // Delete bun.lock so bun resolves deps with new overrides/deps
+                // Drop bun.lock whenever ANY patch fires — a stale lockfile
+                // pins the resolved tree to the prior version graph, so a
+                // version bump without lockfile invalidation leaves bun
+                // reinstalling the same broken set.
+                if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {
                     let _ = std::fs::remove_file(install_dir.join("bun.lock"));
                     let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
                 }

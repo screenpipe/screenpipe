@@ -753,18 +753,42 @@ private class ReminderTrackingView: NSView {
 
 // MARK: - Draggable hosting view
 // NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
-// This subclass implements window drag for any mouseDown that SwiftUI doesn't
-// handle (i.e. not on buttons). performWindowDrag is the native Cocoa API for
-// this — no manual delta tracking needed.
+// This subclass peeks at queued mouse events to decide click vs drag BEFORE
+// SwiftUI sees the press. A click replays both events to SwiftUI normally so
+// buttons fire; a drag hands off to performDrag so SwiftUI never sees mouseUp
+// — otherwise grabbing the app-icon to reposition the pill would also fire
+// the icon's button action (e.g. opening the timeline overlay).
 
 @available(macOS 13.0, *)
 private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     override func mouseDown(with event: NSEvent) {
-        // Let SwiftUI handle first (buttons etc.)
+        guard let window = window else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let startPoint = event.locationInWindow
+        let dragThreshold: CGFloat = 4.0
+
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            switch next.type {
+            case .leftMouseUp:
+                super.mouseDown(with: event)
+                super.mouseUp(with: next)
+                return
+            case .leftMouseDragged:
+                let dx = next.locationInWindow.x - startPoint.x
+                let dy = next.locationInWindow.y - startPoint.y
+                if hypot(dx, dy) > dragThreshold {
+                    window.performDrag(with: event)
+                    return
+                }
+            default:
+                break
+            }
+        }
+
         super.mouseDown(with: event)
-        // Then start a window drag — if a button already handled the click
-        // this is a no-op because the run loop already processed the event.
-        window?.performDrag(with: event)
     }
 }
 

@@ -433,6 +433,7 @@ pub struct RecordArgs {
     ///   1. mouse/keyboard hook locks switch to try_lock (contended → app_name/window=None)
     ///   2. a11y extraction threads self-deprioritize via SetThreadPriority
     ///   3. UIA tree captures are skipped within N ms after the most recent input
+    ///
     /// Fine-tune via --extraction-thread-priority and --pause-extraction-on-input-ms.
     #[arg(long, default_value_t = false)]
     pub prioritize_input_latency: bool,
@@ -1612,10 +1613,12 @@ mod tests {
             Cli::try_parse_from(["screenpipe", "record", "--port", "4040", "--disable-audio"])
                 .unwrap();
         let sources = record_sources(["screenpipe", "record", "--port", "4040", "--disable-audio"]);
-        let mut settings = screenpipe_config::RecordingSettings::default();
-        settings.port = 3030;
-        settings.disable_audio = false;
-        settings.use_pii_removal = false;
+        let mut settings = screenpipe_config::RecordingSettings {
+            port: 3030,
+            disable_audio: false,
+            use_pii_removal: false,
+            ..Default::default()
+        };
 
         match cli.command {
             Command::Record(args) => {

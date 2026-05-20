@@ -9,7 +9,7 @@
 use anyhow::Result;
 use screenpipe_a11y::{ExtractionThreadPriority, UiCaptureConfig, UiRecorder};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -170,6 +170,68 @@ pub fn tree_walker_snapshot() -> TreeWalkerSnapshot {
         .unwrap_or_default()
 }
 
+/// Point-in-time status of the UI recorder. Exposed on `/health` so users
+/// can tell whether input/clipboard capture is actually running — distinct
+/// failure modes (config off, permissions denied, recorder errored) all
+/// look the same from the DB ("ui_events stopped writing") but are very
+/// different to recover from.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, oasgen::OaSchema)]
+pub struct UiRecorderStatus {
+    /// Did the runtime config request UI recording?
+    pub configured: bool,
+    /// Did the recorder's event loop actually start? False when configured
+    /// is true but permissions were denied or `UiRecorder::start()` failed.
+    pub running: bool,
+    /// Is clipboard content capture configured? Subset of `configured`.
+    pub clipboard_capture: bool,
+    /// Lifetime count of events the recorder has flushed to the DB.
+    pub events_inserted: u64,
+    /// Wall-clock time of the most recent successful event-batch flush.
+    pub last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// Atomic-backed status so the flush_batch hot path doesn't need a mutex.
+// `last_event_at_unix` of 0 means "never written yet".
+static UI_RECORDER_CONFIGURED: AtomicBool = AtomicBool::new(false);
+static UI_RECORDER_RUNNING: AtomicBool = AtomicBool::new(false);
+static UI_RECORDER_CLIPBOARD: AtomicBool = AtomicBool::new(false);
+static UI_RECORDER_EVENTS_INSERTED: AtomicU64 = AtomicU64::new(0);
+static UI_RECORDER_LAST_EVENT_UNIX: AtomicU64 = AtomicU64::new(0);
+
+fn set_ui_recorder_state(configured: bool, running: bool, clipboard: bool) {
+    UI_RECORDER_CONFIGURED.store(configured, Ordering::Relaxed);
+    UI_RECORDER_RUNNING.store(running, Ordering::Relaxed);
+    UI_RECORDER_CLIPBOARD.store(clipboard, Ordering::Relaxed);
+}
+
+fn record_ui_event_flush(n: u64) {
+    if n == 0 {
+        return;
+    }
+    UI_RECORDER_EVENTS_INSERTED.fetch_add(n, Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    UI_RECORDER_LAST_EVENT_UNIX.store(now, Ordering::Relaxed);
+}
+
+/// Read the latest UI recorder status snapshot.
+pub fn ui_recorder_status_snapshot() -> UiRecorderStatus {
+    let last = UI_RECORDER_LAST_EVENT_UNIX.load(Ordering::Relaxed);
+    UiRecorderStatus {
+        configured: UI_RECORDER_CONFIGURED.load(Ordering::Relaxed),
+        running: UI_RECORDER_RUNNING.load(Ordering::Relaxed),
+        clipboard_capture: UI_RECORDER_CLIPBOARD.load(Ordering::Relaxed),
+        events_inserted: UI_RECORDER_EVENTS_INSERTED.load(Ordering::Relaxed),
+        last_event_at: if last > 0 {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(last as i64, 0)
+        } else {
+            None
+        },
+    }
+}
+
 /// Handle for managing the UI recorder
 pub struct UiRecorderHandle {
     stop_flag: Arc<AtomicBool>,
@@ -226,6 +288,7 @@ pub async fn start_ui_recording(
 ) -> Result<UiRecorderHandle> {
     if !config.enabled {
         info!("UI event capture is disabled");
+        set_ui_recorder_state(false, false, false);
         return Ok(UiRecorderHandle {
             stop_flag: Arc::new(AtomicBool::new(true)),
             task_handle: None,
@@ -247,6 +310,9 @@ pub async fn start_ui_recording(
         let perms = recorder.request_permissions();
         if !perms.all_granted() {
             error!("UI capture permissions denied. UI event recording will be disabled.");
+            // configured=true, running=false makes the failure mode legible:
+            // "user asked for it, but it isn't actually running."
+            set_ui_recorder_state(true, false, config.capture_clipboard_content);
             return Ok(UiRecorderHandle {
                 stop_flag: Arc::new(AtomicBool::new(true)),
                 task_handle: None,
@@ -268,9 +334,12 @@ pub async fn start_ui_recording(
         Ok(h) => h,
         Err(e) => {
             error!("Failed to start UI recorder: {}", e);
+            set_ui_recorder_state(true, false, config.capture_clipboard_content);
             return Err(e);
         }
     };
+
+    set_ui_recorder_state(true, true, config.capture_clipboard_content);
 
     // Spawn the event processing task
     let task_handle = tokio::spawn(async move {
@@ -413,6 +482,7 @@ pub async fn start_ui_recording(
         }
 
         handle.stop();
+        UI_RECORDER_RUNNING.store(false, Ordering::Relaxed);
         info!("UI recording session ended: {}", session_id);
     });
 
@@ -439,6 +509,7 @@ async fn flush_batch(
     match db.insert_ui_events_batch(batch).await {
         Ok(inserted) => {
             debug!("Flushed {} UI events to database", inserted);
+            record_ui_event_flush(inserted as u64);
             *consecutive_failures = 0;
         }
         Err(e) => {
@@ -491,6 +562,42 @@ mod tests {
         assert!(!flag_clone.load(Ordering::Relaxed));
         handle.stop();
         assert!(flag_clone.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn ui_recorder_status_reflects_state_and_flush() {
+        // Note: globals are process-wide, but no other test in this binary
+        // touches these atomics, so this single test is race-free.
+        set_ui_recorder_state(true, true, true);
+        let snap = ui_recorder_status_snapshot();
+        assert!(snap.configured);
+        assert!(snap.running);
+        assert!(snap.clipboard_capture);
+
+        let before = snap.events_inserted;
+        record_ui_event_flush(0); // no-op
+        assert_eq!(ui_recorder_status_snapshot().events_inserted, before);
+        assert!(
+            ui_recorder_status_snapshot().last_event_at.is_none()
+                || ui_recorder_status_snapshot().last_event_at == snap.last_event_at,
+            "zero-batch flush must not bump last_event_at"
+        );
+
+        record_ui_event_flush(3);
+        let after = ui_recorder_status_snapshot();
+        assert_eq!(after.events_inserted, before + 3);
+        assert!(
+            after.last_event_at.is_some(),
+            "successful flush stamps a timestamp"
+        );
+
+        // disabled path: configured=false, running=false, no clipboard.
+        set_ui_recorder_state(false, false, false);
+        let off = ui_recorder_status_snapshot();
+        assert!(!off.configured && !off.running && !off.clipboard_capture);
+        // Counter and timestamp persist across state transitions — they're
+        // lifetime metrics, not per-session.
+        assert_eq!(off.events_inserted, after.events_inserted);
     }
 
     #[tokio::test]

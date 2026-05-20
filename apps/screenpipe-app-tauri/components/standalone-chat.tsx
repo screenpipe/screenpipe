@@ -58,6 +58,7 @@ import {
   normalizeAppTag,
   formatShortcutDisplay,
 } from "@/lib/chat-utils";
+import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards, type ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
@@ -635,7 +636,7 @@ Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks 
 - "meeting / call / conversation / what did I/they say" → search with content_type: "audio", no q param (for past meetings/calls captured by screenpipe)
 - "how long / time spent / which apps / most used" → activity-summary (not raw frame counts or SQL)
 - "what was on screen / what was I reading" → search with content_type: "all" or "accessibility"
-- "what was I doing" → activity-summary first; the windows field usually has enough without further searches
+- "what was I doing / recent activity / summarize my day" → activity-summary first. Check its data_status before claiming "no data". /search only for verbatim quotes or frame_ids.
 
 # Local server auth
 
@@ -1855,6 +1856,10 @@ function AppStatsBlock({ content }: { content: string }) {
 
 // Markdown renderer for text blocks
 function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
+  // Assistant messages occasionally contain raw tool-call XML the model emitted
+  // as text — rewrite it to a fenced code block so rehypeRaw doesn't collapse
+  // the unknown tags and bleed the args into the prose. See sanitize-tool-call-xml.ts.
+  const renderText = isUser ? text : sanitizeToolCallXml(text);
   return (
     <MemoizedReactMarkdown
       className={cn(
@@ -2023,7 +2028,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
         },
       }}
     >
-      {text}
+      {renderText}
     </MemoizedReactMarkdown>
   );
 }

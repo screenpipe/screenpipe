@@ -1,8 +1,6 @@
 use chrono::{Duration, Utc};
 use futures::{SinkExt, StreamExt};
-use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -18,47 +16,6 @@ struct StreamFramesRequest {
 #[derive(Debug, Deserialize)]
 struct StreamTimeSeriesResponse {
     timestamp: String,
-    devices: Vec<DeviceResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeviceResponse {
-    device_id: String,
-    frame_id: Option<i64>,
-}
-
-/// Helper to create a test database with frames
-async fn create_test_db_with_frames(num_frames: i64) -> Arc<DatabaseManager> {
-    let db = Arc::new(
-        DatabaseManager::new("sqlite::memory:", Default::default())
-            .await
-            .expect("Failed to create test database"),
-    );
-
-    // Create a video chunk first (requires device_name now)
-    let _video_chunk_id = db
-        .insert_video_chunk("test_video.mp4", "test_device")
-        .await
-        .expect("Failed to insert video chunk");
-
-    let now = Utc::now();
-
-    for i in 0..num_frames {
-        let timestamp = now - Duration::seconds(num_frames - i);
-        db.insert_frame(
-            "test_device",
-            Some(timestamp),
-            None, // browser_url
-            Some("test_app"),
-            Some("test_window"),
-            false,   // focused (not Option)
-            Some(i), // offset_index
-        )
-        .await
-        .expect("Failed to insert frame");
-    }
-
-    db
 }
 
 #[cfg(test)]

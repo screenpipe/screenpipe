@@ -1136,7 +1136,7 @@ fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
     let trimmed = raw?
         .trim()
         .trim_matches(|c| matches!(c, '<' | '>' | '"' | '\''))
-        .trim_end_matches(|c| matches!(c, ')' | ']' | ',' | '.' | ';'))
+        .trim_end_matches([')', ']', ',', '.', ';'])
         .to_string();
     if trimmed.is_empty() {
         return None;

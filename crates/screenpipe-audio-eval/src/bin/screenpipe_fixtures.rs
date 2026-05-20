@@ -312,7 +312,7 @@ impl FixtureBuilder {
 
     fn append_silence(&mut self, seconds: f64) {
         let samples = (seconds.max(0.0) * SAMPLE_RATE as f64).round() as usize;
-        self.samples.extend(std::iter::repeat(1e-5).take(samples));
+        self.samples.extend(std::iter::repeat_n(1e-5, samples));
     }
 
     fn add_echo(&mut self, delay_seconds: f64, gain: f32) {

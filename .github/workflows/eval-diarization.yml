@@ -11,9 +11,11 @@
 #    re-appearing across gaps). The composed templates are what test
 #    "screenpipe-shaped" data — the real workload that broke #3107.
 #
-# 2. Transcription quality eval. Runs whisper-tiny on a sample of LibriSpeech
+# 2. Transcription quality eval. Runs a small matrix (whisper-tiny,
+#    whisper-large-v3-turbo-quantized, parakeet) on a sample of LibriSpeech
 #    test-clean and reports WER + CER vs verbatim ground-truth transcripts.
-#    Catches model/regression-style hits that diarization metrics miss.
+#    Per-model utterance caps keep total wall under the eval budget — the
+#    cheap tiny gets 50, the heavier turbo gets 20.
 #
 # Threshold-tuning PRs WILL show non-zero deltas in the diarization rows.
 # Lower-is-better:
@@ -248,11 +250,11 @@ jobs:
             cat "/tmp/eval-results/${stem}.json"
           done
 
-      # Score whisper-tiny against LibriSpeech test-clean. 50 utterances
-      # is enough for a stable mean on most CI runs (~6 min wall) without
-      # blowing the timeout. The model itself is ~75 MB; download is
-      # cached by SileroVad's HF helper alongside other screenpipe
-      # models.
+      # Score a small transcription matrix against LibriSpeech test-clean.
+      # whisper-tiny gets 50 utterances (~2 min CPU wall); the heavier
+      # whisper-large-v3-turbo-quantized gets 20 to keep wall bounded;
+      # parakeet (screenpipe's actual local default) gets 50. Model weights
+      # are cached by HF — first run downloads, subsequent are warm.
       - name: Run pipeline replay matrix
         run: |
           /usr/bin/time -v ./target/release/screenpipe-eval-pipeline-replay \
@@ -270,20 +272,33 @@ jobs:
             }
           jq '.summary' /tmp/eval-results/pipeline-replay.json
 
+      # The binary exits non-zero if any single model failed, but we want
+      # the partial report (the rows that did succeed) to still make it
+      # into the sticky PR comment. So: capture the exit code, always
+      # echo the JSON if it was emitted, and defer the job-failing exit
+      # until after the report-posting step.
       - name: Run transcription eval
+        id: transcription
         run: |
+          set +e
           /usr/bin/time -v ./target/release/screenpipe-eval-transcription \
             --librispeech-dir crates/screenpipe-audio-eval/evals/fixtures/librispeech/LibriSpeech/test-clean \
-            --max-utterances 50 \
-            --whisper-model tiny \
+            --models 'tiny=50,whisper-large-v3-turbo-quantized=20,parakeet=50' \
             > /tmp/eval-results/transcription.json \
-            2>/tmp/eval-results/transcription.stderr || {
-              echo "::error::transcription eval failed"
-              cat /tmp/eval-results/transcription.stderr
-              exit 1
-            }
-          # Echo the headline numbers so they show up in the run log.
-          jq '{model, mean_wer, mean_cer, utterance_count, throughput_samples_per_sec}' /tmp/eval-results/transcription.json
+            2>/tmp/eval-results/transcription.stderr
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::transcription eval exited $rc — partial rows (if any) will still post"
+            cat /tmp/eval-results/transcription.stderr
+          fi
+          # If the binary crashed before writing valid JSON, synthesize a
+          # minimal stub so the markdown renderer doesn't blow up.
+          if ! jq -e . /tmp/eval-results/transcription.json >/dev/null 2>&1; then
+            echo '{"models":[{"model":"all","error":"binary crashed before writing JSON; see step log"}]}' > /tmp/eval-results/transcription.json
+          fi
+          # Echo headline numbers (or error reasons) so they show up in the run log.
+          jq '.models[] | {model, mean_wer, mean_cer, utterance_count, throughput_samples_per_sec, error}' /tmp/eval-results/transcription.json
 
       # Compose a sticky PR comment with one row per fixture. We post via
       # `gh pr comment` rather than a third-party action to keep the deps
@@ -382,21 +397,40 @@ jobs:
             if [ -f /tmp/eval-results/transcription.json ]; then
               echo "## Transcription quality"
               echo
-              echo "Source: LibriSpeech test-clean (CC-BY-4.0) · whisper-tiny · normalized lowercased word-level Levenshtein"
+              echo "Source: LibriSpeech test-clean (CC-BY-4.0) · per-model utterance cap · normalized lowercased word-level Levenshtein"
               echo
               echo "| model | utterances | WER | CER | throughput (samples/s) |"
               echo "|---|---:|---:|---:|---:|"
               jq -r '
-                def fmt3: . * 1000 | round / 1000 | tostring;
-                "| " + (.model // "tiny") +
-                " | " + (.utterance_count | tostring) +
-                " | " + (.mean_wer | fmt3) +
-                " | " + (.mean_cer | fmt3) +
-                " | " + (.throughput_samples_per_sec | round | tostring) +
-                " |"
+                def fmt3:
+                  if . == null then "n/a"
+                  else (. * 1000 | round / 1000 | tostring) end;
+                def fmt_int:
+                  if . == null then "n/a" else tostring end;
+                .models[] |
+                if .error then
+                  "| " + (.model // "?") + " | n/a | n/a | n/a | n/a |"
+                else
+                  "| " + (.model // "?") +
+                  " | " + (.utterance_count | fmt_int) +
+                  " | " + (.mean_wer | fmt3) +
+                  " | " + (.mean_cer | fmt3) +
+                  " | " + (if .throughput_samples_per_sec == null then "n/a" else (.throughput_samples_per_sec | round | tostring) end) +
+                  " |"
+                end
               ' /tmp/eval-results/transcription.json
+              # Surface error reasons under the table so failures are visible
+              # without digging into the artifact JSON.
+              errors=$(jq -r '[.models[] | select(.error)] | length' /tmp/eval-results/transcription.json)
+              if [ "$errors" != "0" ]; then
+                echo
+                echo "Failed models:"
+                echo
+                jq -r '.models[] | select(.error) | "- `" + (.model // "?") + "`: " + .error' \
+                  /tmp/eval-results/transcription.json
+              fi
               echo
-              echo "<sub>WER + CER on read-aloud speech. whisper-tiny is the smallest model and gives a useful regression watch even though larger models score better. See README for normalization rules.</sub>"
+              echo "<sub>WER + CER on read-aloud speech. Per-model utterance caps keep wall time bounded — tiny/parakeet at 50, the heavier large-v3-turbo-quantized at 20. See README for normalization rules.</sub>"
             fi
           } > /tmp/eval-report.md
           cat /tmp/eval-report.md
@@ -424,3 +458,11 @@ jobs:
             gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${id}" || true
           done
           gh pr comment "$PR_NUMBER" --body-file /tmp/eval-report.md
+
+      # Fail the job *after* the report has uploaded + posted, so a failing
+      # parakeet/turbo doesn't suppress the rows that did succeed.
+      - name: Fail job on transcription error
+        if: always() && steps.transcription.outputs.exit_code != '0'
+        run: |
+          echo "::error::transcription eval exited ${{ steps.transcription.outputs.exit_code }} — see comment table for which model(s) failed"
+          exit 1

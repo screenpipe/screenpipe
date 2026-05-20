@@ -775,11 +775,25 @@ pub async fn owned_browser_set_bounds(
 /// Normalise a user-supplied URL string into a full `url::Url`.
 ///
 /// Accepts bare hosts (`youtube.com`), `//`-prefixed (`//youtube.com`),
-/// and fully-qualified URLs (`https://youtube.com`).  Anything that looks
-/// like it is missing a scheme gets `https://` prepended before parsing so
-/// the resulting URL always has a host.
+/// fully-qualified URLs (`https://youtube.com`), and hostless schemes
+/// (`about:blank`, `data:...`, `file:...`).  Anything that looks like it
+/// is missing a scheme gets `https://` prepended before parsing.
 fn normalize_url(raw: &str) -> Result<url::Url, String> {
-    let candidate = if raw.contains("://") {
+    // Hostless schemes that don't use `://`. Keep this conservative so that
+    // `localhost:8080` (host:port, not a scheme) still gets `https://` prepended.
+    const HOSTLESS_SCHEMES: &[&str] = &[
+        "about:",
+        "data:",
+        "file:",
+        "blob:",
+        "javascript:",
+        "mailto:",
+        "view-source:",
+        "chrome:",
+    ];
+    let has_scheme =
+        raw.contains("://") || HOSTLESS_SCHEMES.iter().any(|s| raw.starts_with(s));
+    let candidate = if has_scheme {
         raw.to_owned()
     } else if raw.starts_with("//") {
         format!("https:{raw}")
@@ -789,6 +803,53 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
     candidate
         .parse::<url::Url>()
         .map_err(|e| format!("invalid url: {e}"))
+}
+
+#[cfg(test)]
+mod normalize_url_tests {
+    use super::normalize_url;
+
+    #[test]
+    fn keeps_fully_qualified() {
+        let u = normalize_url("https://youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_bare_host() {
+        let u = normalize_url("youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_protocol_relative() {
+        let u = normalize_url("//youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_host_port() {
+        let u = normalize_url("localhost:8080").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("localhost"));
+        assert_eq!(u.port(), Some(8080));
+    }
+
+    #[test]
+    fn preserves_about_blank() {
+        let u = normalize_url("about:blank").unwrap();
+        assert_eq!(u.scheme(), "about");
+        assert_eq!(u.path(), "blank");
+    }
+
+    #[test]
+    fn preserves_data_url() {
+        let u = normalize_url("data:text/plain,hello").unwrap();
+        assert_eq!(u.scheme(), "data");
+    }
 }
 
 /// Navigate the embedded webview to `url`. Used by the agent (via

@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use screenpipe_db::{
-    DatabaseManager, NewDiarizationSegment, ReplacementAudioTranscription, UntranscribedChunk,
+    ChunkOutcome, DatabaseManager, NewDiarizationSegment, ReplacementAudioTranscription,
+    UntranscribedChunk,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
@@ -332,16 +333,41 @@ pub async fn reconcile_untranscribed(
             Ok(output) => output,
             Err(e) => {
                 error!("reconciliation: transcription failed for batch: {}", e);
+                // Bump attempts on every chunk in the batch. Once a chunk has
+                // failed MAX_TRANSCRIPTION_ATTEMPTS times in a row the outcome
+                // helper flips it to status='failed' and it stops being picked.
+                // Without this, a wedged engine would retry the same chunks
+                // forever (one of the symptoms of the 2026-05-20 stall).
+                let reason = format!("stt batch failure: {}", e);
+                for chunk in &valid_chunks {
+                    if let Err(record_err) = db
+                        .record_chunk_outcome(
+                            chunk.id,
+                            ChunkOutcome::Failed {
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            "reconciliation: failed to record batch failure for chunk {}: {}",
+                            chunk.id, record_err
+                        );
+                    }
+                }
                 continue;
             }
         };
         let full_text = transcription_output.transcription.clone();
 
-        // Silent audio: insert an empty transcription row so these chunks are not
-        // picked up again on the next sweep. Previously we skipped recent silent
-        // chunks (< 2h old) without marking them — causing them to be re-sent to
-        // Deepgram every 120s in an infinite loop (the "zombie chunk" bug).
-        // Old silent chunks (> 2h) are deleted entirely.
+        // Silent audio. Two outcomes here, both important:
+        //   - Recent silent chunks (<2h): flip status='silent' via the
+        //     canonical outcome path. This is the loop-breaker — the old code
+        //     called replace_audio_transcription("") which silently no-op'd
+        //     on empty input, so the same chunks got picked again every 120s
+        //     forever (the zombie-chunk bug surfaced 2026-05-20).
+        //   - Old silent chunks (>2h): delete file + row entirely. ON DELETE
+        //     CASCADE wipes diarization rows. Keeping them just bloats the DB.
         if full_text.trim().is_empty() {
             let min_age = chrono::Duration::hours(2);
             let cutoff = chrono::Utc::now() - min_age;
@@ -354,23 +380,10 @@ pub async fn reconcile_untranscribed(
                 .filter(|c| c.timestamp >= cutoff)
                 .collect();
 
-            // Mark recent silent chunks as transcribed (empty) so they don't loop
             for chunk in &recent_chunks {
-                if let Err(e) = db
-                    .replace_audio_transcription(
-                        chunk.id,
-                        "",
-                        &engine_config.to_string(),
-                        &device_name,
-                        is_input,
-                        chunk.timestamp,
-                        Some(30.0),
-                        None,
-                    )
-                    .await
-                {
+                if let Err(e) = db.record_chunk_outcome(chunk.id, ChunkOutcome::Silent).await {
                     warn!(
-                        "reconciliation: failed to mark silent chunk {} as transcribed: {}",
+                        "reconciliation: failed to mark silent chunk {} as silent: {}",
                         chunk.id, e
                     );
                     consecutive_db_errors += 1;
@@ -380,7 +393,6 @@ pub async fn reconcile_untranscribed(
                 }
             }
 
-            // Delete old silent chunks entirely
             if !old_chunks.is_empty() {
                 debug!(
                     "reconciliation: batch for {} produced empty transcription, deleting {} silent chunks (>2h old)",

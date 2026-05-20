@@ -741,11 +741,13 @@ const AISection = ({
             modelCount = ollamaModels.length;
             setModels(ollamaModels);
           } else {
-            const apiModels = (data.data || []).map((m: any) => ({
+            const apiModels = (data.data || [])
+              .map((m: any) => ({
               id: m.id,
               name: m.id,
               provider: settingsPreset?.provider || "custom",
-            }));
+              }))
+              .filter((m: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === m.id) === idx);
             modelCount = apiModels.length;
             setModels(apiModels);
           }
@@ -1027,7 +1029,8 @@ const AISection = ({
                     id: m.id,
                     name: m.id,
                     provider: "openai-chatgpt",
-                  }));
+                  }))
+                  .filter((m: { id: string }, idx: number, arr: { id: string }[]) => arr.findIndex((x) => x.id === m.id) === idx);
                 console.log("[chatgpt] fetched", chatgptModels.length, "models from API");
                 if (chatgptModels.length > 0) {
                   setModels(chatgptModels);
@@ -1064,7 +1067,8 @@ const AISection = ({
             });
             if (piResp.ok) {
               const piData = await piResp.json();
-              const piModels: AIModel[] = (piData.data || []).map((m: any) => ({
+              const piModels: AIModel[] = (piData.data || [])
+                .map((m: any) => ({
                 id: m.id,
                 name: m.name || m.id,
                 provider: "screenpipe",
@@ -1079,7 +1083,8 @@ const AISection = ({
                 recommended_for: m.recommended_for,
                 warning: m.warning,
                 query_weight: m.query_weight,
-              }));
+                }))
+                .filter((m: AIModel, idx: number, arr: AIModel[]) => arr.findIndex((x) => x.id === m.id) === idx);
               if (piModels.length > 0) {
                 setModels(piModels);
                 break;

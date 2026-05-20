@@ -17,7 +17,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::server::AppState;
-use crate::ui_recorder::{tree_walker_snapshot, TreeWalkerSnapshot};
+use crate::ui_recorder::{
+    tree_walker_snapshot, ui_recorder_status_snapshot, TreeWalkerSnapshot, UiRecorderStatus,
+};
 
 /// Cached health response to avoid recomputing on every poll.
 /// Multiple WebSocket clients + HTTP polls can call /health dozens of
@@ -85,6 +87,10 @@ pub struct HealthCheckResponse {
     pub audio_pipeline: Option<AudioPipelineHealthInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accessibility: Option<TreeWalkerSnapshot>,
+    /// UI/input/clipboard recorder status. Surfaces "configured but not running"
+    /// distinctly from "off" so users can tell why ui_events stopped writing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_recorder: Option<UiRecorderStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_stats: Option<PoolHealthInfo>,
     /// True when vision capture loop is alive but DB writes have stopped (pool exhaustion).
@@ -182,6 +188,14 @@ pub struct AudioPipelineHealthInfo {
     pub meeting_app: Option<String>,
 }
 
+/// Hard ceiling on /health response time. The endpoint is on the path of
+/// the desktop tray, the meeting bar, the device watcher, and user-written
+/// launchd watchdogs — none of which expect it to stall. If
+/// `health_check_inner` blows past this budget, we'd rather serve a slightly
+/// stale cached snapshot than hang the caller (or, worse, get the whole CLI
+/// killed by a watchdog).
+const HEALTH_RESPONSE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[oasgen]
 pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<HealthCheckResponse> {
     let now_ts = std::time::SystemTime::now()
@@ -201,7 +215,25 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
         }
     }
 
-    let response = health_check_inner(&state).await;
+    let response = match tokio::time::timeout(HEALTH_RESPONSE_BUDGET, health_check_inner(&state))
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            // Inner computation exceeded the budget. Serve the last cached
+            // snapshot (even if past TTL) so callers see continuity. If no
+            // snapshot exists yet, return a minimal "degraded" response —
+            // never block forever.
+            warn!(
+                "health_check: inner computation exceeded {:?} budget — serving last cached snapshot",
+                HEALTH_RESPONSE_BUDGET
+            );
+            let cached = HEALTH_CACHE.read().await.1.clone();
+            // Don't refresh the cache timestamp here — the next caller
+            // should re-attempt rather than amortize the stale entry.
+            return JsonResponse(cached.unwrap_or_else(degraded_response));
+        }
+    };
 
     // Cache the result
     {
@@ -210,6 +242,35 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> JsonResponse<He
     }
 
     JsonResponse(response)
+}
+
+/// Minimal response served when `/health` times out before any cached
+/// snapshot is available (cold start + slow inner). Status 503 so callers
+/// can tell this apart from a normal response.
+fn degraded_response() -> HealthCheckResponse {
+    HealthCheckResponse {
+        status: "degraded".to_string(),
+        status_code: 503,
+        last_frame_timestamp: None,
+        last_audio_timestamp: None,
+        frame_status: "unknown".to_string(),
+        audio_status: "unknown".to_string(),
+        message: "health check timed out before producing a snapshot".to_string(),
+        verbose_instructions: None,
+        device_status_details: None,
+        monitors: None,
+        pipeline: None,
+        audio_pipeline: None,
+        accessibility: None,
+        ui_recorder: None,
+        pool_stats: None,
+        vision_db_write_stalled: false,
+        audio_db_write_stalled: false,
+        drm_content_paused: false,
+        schedule_paused: false,
+        hostname: None,
+        version: None,
+    }
 }
 
 async fn get_audio_reconciliation_backlog(
@@ -414,25 +475,42 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         && global_audio_active
         && audio_snap.uptime_secs > 120.0
     {
-        // Only flag a stall when the transcription consumer is actively processing
-        // (heartbeat recent) but DB writes have stopped. This prevents false positives
-        // during silence when VAD filters everything and nothing is written to DB.
-        let transcription_fresh = audio_snap.last_transcription_attempt_ts > 0
-            && now_ts.saturating_sub(audio_snap.last_transcription_attempt_ts) < threshold_secs;
-        let db_stale = audio_snap.last_db_write_ts == 0
-            || now_ts.saturating_sub(audio_snap.last_db_write_ts) > threshold_secs;
-        let stalled = transcription_fresh && db_stale;
+        // Direct measurement: count chunks stuck in 'pending' status. This
+        // replaces the previous pool-idle + stale-metric heuristic, which
+        // fired false positives whenever the live path's dedup short-circuit
+        // ate batches of common short words and went silent on the write
+        // pool. The pool idleness was a side effect of *expected* dedup
+        // behavior, not a real stall.
+        //
+        // A real stall now means: the reconciliation worker has pending
+        // chunks older than the freshness window — i.e. they should have
+        // been processed by now and haven't.
+        let backlog = audio_reconciliation_backlog.unwrap_or((0, None));
+        let pending_count = backlog.0;
+        let oldest_pending_age_secs = backlog
+            .1
+            .map(|ts| (now.timestamp() - ts.timestamp()).max(0) as u64)
+            .unwrap_or(0);
+        // A few pending chunks at any moment is normal (the 10-min freshness
+        // delay means there's always 10 min of in-flight audio). We flag a
+        // stall only when there's a real backlog (>20 chunks) AND the oldest
+        // pending chunk has been waiting noticeably longer than the
+        // freshness delay (>2x the delay = should have been picked up by
+        // the last sweep).
+        let stalled = pending_count > 20
+            && oldest_pending_age_secs
+                > (AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64).saturating_mul(2);
         if stalled {
-            // throttle to once per 60s to avoid log spam (health runs every ~1s)
+            // Throttle to once per 60s to avoid log spam (health runs every ~1s).
             static LAST_AUDIO_STALL_LOG: AtomicU64 = AtomicU64::new(0);
             let prev = LAST_AUDIO_STALL_LOG.load(Ordering::Relaxed);
             if now_ts.saturating_sub(prev) >= 60 {
                 LAST_AUDIO_STALL_LOG.store(now_ts, Ordering::Relaxed);
                 let (rs, ri, ws, wi) = state.db.pool_stats();
                 warn!(
-                    "health_check: audio transcription writes stalled — transcription active but last DB write {}s ago ({}) | pool: read={}/{} idle, write={}/{} idle",
-                    if audio_snap.last_db_write_ts > 0 { now_ts.saturating_sub(audio_snap.last_db_write_ts) } else { 0 },
-                    suspected_stall_cause(ri, wi),
+                    "health_check: audio transcription backlog stalled — {} chunk(s) pending, oldest {}s old | pool: read={}/{} idle, write={}/{} idle",
+                    pending_count,
+                    oldest_pending_age_secs,
                     ri, rs, wi, ws,
                 );
             }
@@ -727,6 +805,17 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 None
             }
         },
+        ui_recorder: {
+            let snap = ui_recorder_status_snapshot();
+            // Only attach when start_ui_recording has touched the atomics —
+            // otherwise the field is meaningless noise for users who never
+            // enabled UI capture.
+            if snap.configured || snap.events_inserted > 0 {
+                Some(snap)
+            } else {
+                None
+            }
+        },
         audio_pipeline: if !state.audio_disabled {
             let is_paused = state
                 .audio_manager
@@ -734,18 +823,34 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 .load(Ordering::Relaxed);
 
             // Query meeting detector state — timeout the RwLock read so it
-            // can't stall the health check if writes are contended.
-            let (meeting_detected, meeting_app) =
-                if let Some(detector) = state.audio_manager.meeting_detector().await {
+            // can't stall the health check if writes are contended. The
+            // comment used to say "timeout this" but no timeout was wired
+            // in — unresponsive /health is exactly what users hit in the
+            // field (jeffutter on macOS, May 2026), enough that they
+            // wrote launchd watchdogs to kill the CLI when /health stops
+            // answering. Any future await added here must stay bounded.
+            let (meeting_detected, meeting_app) = match tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                state.audio_manager.meeting_detector(),
+            )
+            .await
+            {
+                Ok(Some(detector)) => {
                     let in_meeting = detector.is_in_meeting();
                     // v2 detection reports meeting state via AtomicBool flag;
                     // the specific app name is tracked in the v2 detection loop,
                     // not exposed through MeetingDetector.
                     let app: Option<String> = None;
                     (Some(in_meeting), app)
-                } else {
+                }
+                Ok(None) => (None, None),
+                Err(_) => {
+                    warn!(
+                        "health_check: audio_manager.meeting_detector() RwLock contended >500ms, skipping meeting fields"
+                    );
                     (None, None)
-                };
+                }
+            };
 
             let device_names: Vec<String> = audio_devices.iter().map(|d| d.to_string()).collect();
             let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
@@ -945,6 +1050,7 @@ mod tests {
             pipeline: None,
             audio_pipeline: None,
             accessibility: None,
+            ui_recorder: None,
             pool_stats: None,
             vision_db_write_stalled: false,
             audio_db_write_stalled: false,

@@ -650,6 +650,25 @@ async fn execute_single_write(
             .execute(&mut **conn)
             .await?;
 
+            // Flip the chunk's processing status in the same TX so the
+            // reconciliation sweep can't re-pick this chunk between the
+            // INSERT landing and a separate UPDATE. INSERT OR IGNORE
+            // collisions (UNIQUE on chunk_id+text) still count as
+            // "transcribed" — the row already exists, we've considered
+            // this chunk.
+            sqlx::query(
+                "UPDATE audio_chunks \
+                 SET transcription_status = 'transcribed', \
+                     transcription_attempts = transcription_attempts + 1, \
+                     last_transcription_attempt_at = ?1, \
+                     transcription_failure_reason = NULL \
+                 WHERE id = ?2",
+            )
+            .bind(ts)
+            .bind(audio_chunk_id)
+            .execute(&mut **conn)
+            .await?;
+
             if result.rows_affected() == 0 {
                 Ok(WriteResult::Id(0))
             } else {
@@ -673,34 +692,65 @@ async fn execute_single_write(
         } => {
             let ts = timestamp.unwrap_or_else(Utc::now);
 
-            // If transcription is duplicate, just ensure chunk exists
+            // Cross-device duplicate detected by the read-side dedup check.
+            // The chunk row still needs to exist (so the audio file is
+            // findable on disk for playback / future reconciliation), but no
+            // transcription row is recorded. We mark status='transcribed'
+            // because we *did* process this chunk — its content is captured
+            // on the other device's row. Without this flip the reconciliation
+            // sweep would re-pick the chunk forever (the original zombie loop).
             if *is_duplicate {
-                if *existing_chunk_id != 0 {
-                    return Ok(WriteResult::Id(*existing_chunk_id));
-                }
-                let id =
+                let audio_chunk_id = if *existing_chunk_id != 0 {
+                    *existing_chunk_id
+                } else {
                     sqlx::query("INSERT INTO audio_chunks (file_path, timestamp) VALUES (?1, ?2)")
                         .bind(file_path.as_str())
                         .bind(ts)
                         .execute(&mut **conn)
                         .await?
-                        .last_insert_rowid();
-                return Ok(WriteResult::Id(id));
+                        .last_insert_rowid()
+                };
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'transcribed', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?2",
+                )
+                .bind(ts)
+                .bind(audio_chunk_id)
+                .execute(&mut **conn)
+                .await?;
+                return Ok(WriteResult::Id(audio_chunk_id));
             }
 
-            // If transcription is empty, just ensure chunk exists
+            // Empty STT result — same story as Duplicate but marked 'silent'
+            // so ops can distinguish silent capture from dedup-suppressed.
             if transcription.trim().is_empty() {
-                if *existing_chunk_id != 0 {
-                    return Ok(WriteResult::Id(*existing_chunk_id));
-                }
-                let id =
+                let audio_chunk_id = if *existing_chunk_id != 0 {
+                    *existing_chunk_id
+                } else {
                     sqlx::query("INSERT INTO audio_chunks (file_path, timestamp) VALUES (?1, ?2)")
                         .bind(file_path.as_str())
                         .bind(ts)
                         .execute(&mut **conn)
                         .await?
-                        .last_insert_rowid();
-                return Ok(WriteResult::Id(id));
+                        .last_insert_rowid()
+                };
+                sqlx::query(
+                    "UPDATE audio_chunks \
+                     SET transcription_status = 'silent', \
+                         transcription_attempts = transcription_attempts + 1, \
+                         last_transcription_attempt_at = ?1, \
+                         transcription_failure_reason = NULL \
+                     WHERE id = ?2",
+                )
+                .bind(ts)
+                .bind(audio_chunk_id)
+                .execute(&mut **conn)
+                .await?;
+                return Ok(WriteResult::Id(audio_chunk_id));
             }
 
             // Insert chunk if needed
@@ -715,7 +765,7 @@ async fn execute_single_write(
                     .last_insert_rowid()
             };
 
-            // Insert transcription
+            // Insert transcription + flip status atomically.
             let text_length = transcription.len() as i64;
             sqlx::query(
                 "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -731,6 +781,19 @@ async fn execute_single_write(
             .bind(start_time)
             .bind(end_time)
             .bind(text_length)
+            .execute(&mut **conn)
+            .await?;
+
+            sqlx::query(
+                "UPDATE audio_chunks \
+                 SET transcription_status = 'transcribed', \
+                     transcription_attempts = transcription_attempts + 1, \
+                     last_transcription_attempt_at = ?1, \
+                     transcription_failure_reason = NULL \
+                 WHERE id = ?2",
+            )
+            .bind(ts)
+            .bind(audio_chunk_id)
             .execute(&mut **conn)
             .await?;
 
@@ -1436,7 +1499,11 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS audio_chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                transcription_status TEXT NOT NULL DEFAULT 'pending',
+                transcription_attempts INTEGER NOT NULL DEFAULT 0,
+                last_transcription_attempt_at TIMESTAMP,
+                transcription_failure_reason TEXT
             )",
         )
         .execute(&pool)

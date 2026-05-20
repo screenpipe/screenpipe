@@ -311,6 +311,100 @@ async function copySystemBinary(binaryName, destination) {
 	console.log(`using system ${binaryName}: ${source} -> ${destination}`);
 }
 
+// Regression guard for 9a68ae9de — static layer. Covers every macOS sidecar,
+// not just ffmpeg/ffprobe (bun + ui_monitor have the same dyld-fragility risk).
+// Two checks per binary:
+//   1. arch-mismatch: filename suffix must match the actual Mach-O arch. A
+//      mislabeled binary (e.g. x86_64 bytes shipped as `*-aarch64-apple-darwin`)
+//      crashes on the user's Mac before any code runs.
+//   2. dyld-path: every `otool -L` entry must point to `/usr/lib/`,
+//      `/System/Library/`, or `@executable_path`/`@rpath`/`@loader_path`.
+//      Anything else (brew's Cellar, MacPorts, /Users/...) is fragile and
+//      will SIGABRT in production. This is the v2.4.243 crash class.
+async function verifyMacosSidecarsSelfContained() {
+	const SAFE_PREFIXES = [
+		'/usr/lib/',
+		'/System/Library/',
+		'@executable_path',
+		'@rpath',
+		'@loader_path',
+	];
+	const sidecars = (await fs.readdir('.'))
+		.filter((n) => /-(aarch64|x86_64)-apple-darwin$/.test(n))
+		.sort();
+	if (sidecars.length === 0) return;
+	console.log('verifying macOS sidecars are self-contained...');
+	for (const bin of sidecars) {
+		const expectedArch = bin.endsWith('-aarch64-apple-darwin') ? 'arm64' : 'x86_64';
+		const fileOut = (await $`file ${bin}`.text()).trim();
+		// `file` on a fat binary lists every slice; on a thin binary, just one.
+		// Either way the expected arch token must appear.
+		if (!new RegExp(`\\b${expectedArch}\\b`).test(fileOut)) {
+			throw new Error(
+				`sidecar ${bin} has wrong arch:\n` +
+				`  ${fileOut}\n` +
+				`filename promises ${expectedArch} — Tauri ships it under the matching target.`
+			);
+		}
+		const out = await $`otool -L ${bin}`.text();
+		for (const raw of out.split('\n')) {
+			const line = raw.trim();
+			if (!line) continue;
+			// Skip the "binary:" header and "(architecture x86_64):" sub-headers for fat binaries.
+			if (line.endsWith(':')) continue;
+			const dylib = line.split(/\s+/)[0];
+			if (SAFE_PREFIXES.some((p) => dylib.startsWith(p))) continue;
+			throw new Error(
+				`sidecar ${bin} links against non-portable dylib:\n` +
+				`  ${dylib}\n` +
+				`only ${SAFE_PREFIXES.join(', ')} survive transport to a user's Mac.\n` +
+				`see commit 9a68ae9de for context.`
+			);
+		}
+		console.log(`  ok: ${bin} (${expectedArch})`);
+	}
+}
+
+// Regression guard for 9a68ae9de — runtime layer.
+// Spawns the host-arch sidecar under `sandbox-exec` with brew/MacPorts paths
+// denied, then runs `-version`. dyld loads every non-weak LC_LOAD_DYLIB at
+// startup, so `-version` is enough to trip the SIGABRT v2.4.243 hit on user
+// Macs. This catches what `otool -L` can't: `dlopen`-loaded plugins and any
+// other init-time crash. Absolute dylib paths in LC_LOAD_DYLIB ignore DYLD
+// env vars, so `sandbox-exec` is the only way to actually simulate a Mac
+// without the brew rev shipped on the CI runner.
+//
+// Only checks the host-arch sidecar — the other arch gets exercised on its
+// own CI matrix entry. The static check above already covers both archs.
+async function verifyMacosSidecarsRun() {
+	const hostArch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
+	const sidecars = [
+		`ffmpeg-${hostArch}-apple-darwin`,
+		`ffprobe-${hostArch}-apple-darwin`,
+	];
+	const profile =
+		'(version 1)' +
+		'(allow default)' +
+		'(deny file-read* (subpath "/opt/homebrew"))' +
+		'(deny file-read* (subpath "/usr/local/Cellar"))' +
+		'(deny file-read* (subpath "/opt/local"))';
+	console.log(`running ${hostArch} sidecars in a brew-less sandbox...`);
+	for (const bin of sidecars) {
+		if (!(await fs.exists(bin))) continue;
+		try {
+			await $`sandbox-exec -p ${profile} ./${bin} -version`.quiet();
+			console.log(`  ok: ${bin}`);
+		} catch (err) {
+			const stderr = err.stderr?.toString?.() ?? '';
+			throw new Error(
+				`sidecar ${bin} fails to launch without /opt/homebrew, /usr/local/Cellar, /opt/local:\n` +
+				`${stderr || err.message}\n` +
+				`this is the v2.4.243 crash class — see commit 9a68ae9de.`
+			);
+		}
+	}
+}
+
 async function findOnPath(binaryName) {
 	const pathValue = process.env.PATH || '';
 	for (const dir of pathValue.split(path.delimiter)) {
@@ -564,54 +658,54 @@ if (platform == 'windows') {
 
 /* ########## macOS ########## */
 if (platform == 'macos') {
-	const inCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-	const releaseTarget = process.env.SCREENPIPE_RELEASE_TARGET;
+	// Always use the self-contained osxexperts.net binaries. The
+	// `copySystemBinary` path that briefly lived here (b73cf7f93) ships
+	// brew's dynamically-linked ffmpeg as-is, with hardcoded
+	// `/opt/homebrew/Cellar/ffmpeg/<rev>/lib/lib*.dylib` references.
+	// CI's brew rev (`8.1_1`) is almost never the rev a user has at
+	// runtime (`8.1`, `8.1_2`, …), so dyld fails with
+	//   Library not loaded: …/Cellar/ffmpeg/8.1_1/lib/libavdevice.62.dylib
+	// and ffmpeg SIGABRTs on every invocation. osxexperts.net binaries
+	// are statically linked and have zero external deps — safe to copy
+	// into any .app.
+	if (!(await fs.exists(`ffmpeg-aarch64-apple-darwin`))) {
+		await $`wget --no-config ${config.macos.ffmpegUrlArm} -O ffmpeg-aarch64.zip`;
+		await $`unzip -o ffmpeg-aarch64.zip -d ffmpeg-aarch64`;
+		await $`cp ffmpeg-aarch64/ffmpeg ffmpeg-aarch64-apple-darwin`;
+		await $`rm ffmpeg-aarch64.zip`;
+		await $`rm -rf ffmpeg-aarch64`;
+	}
 
-	if (inCI && releaseTarget) {
-		if (!(await fs.exists(`ffmpeg-${releaseTarget}`))) {
-			await copySystemBinary('ffmpeg', `ffmpeg-${releaseTarget}`);
-		}
-		if (!(await fs.exists(`ffprobe-${releaseTarget}`))) {
-			await copySystemBinary('ffprobe', `ffprobe-${releaseTarget}`);
-		}
-	} else {
-		// Setup ffmpeg and ffprobe for both arm64 and x86_64
-		// ref: https://github.com/nathanbabcock/ffmpeg-sidecar/blob/b0ab2e1233451f219e302bf78cbbb6a5a8e85aa4/src/download.rs#L31
-		if (!(await fs.exists(`ffmpeg-aarch64-apple-darwin`))) {
-			await $`wget --no-config ${config.macos.ffmpegUrlArm} -O ffmpeg-aarch64.zip`;
-			await $`unzip -o ffmpeg-aarch64.zip -d ffmpeg-aarch64`;
-			await $`cp ffmpeg-aarch64/ffmpeg ffmpeg-aarch64-apple-darwin`;
-			await $`rm ffmpeg-aarch64.zip`;
-			await $`rm -rf ffmpeg-aarch64`;
-		}
+	if (!(await fs.exists(`ffprobe-aarch64-apple-darwin`))) {
+		await $`wget --no-config ${config.macos.ffprobeUrlArm} -O ffprobe-aarch64.zip`;
+		await $`unzip -o ffprobe-aarch64.zip -d ffprobe-aarch64`;
+		await $`cp ffprobe-aarch64/ffprobe ffprobe-aarch64-apple-darwin`;
+		await $`rm ffprobe-aarch64.zip`;
+		await $`rm -rf ffprobe-aarch64`;
+	}
 
-		if (!(await fs.exists(`ffprobe-aarch64-apple-darwin`))) {
-			await $`wget --no-config ${config.macos.ffprobeUrlArm} -O ffprobe-aarch64.zip`;
-			await $`unzip -o ffprobe-aarch64.zip -d ffprobe-aarch64`;
-			await $`cp ffprobe-aarch64/ffprobe ffprobe-aarch64-apple-darwin`;
-			await $`rm ffprobe-aarch64.zip`;
-			await $`rm -rf ffprobe-aarch64`;
-		}
+	if (!(await fs.exists(`ffmpeg-x86_64-apple-darwin`))) {
+		await $`wget --no-config ${config.macos.ffmpegUrlx86_64} -O ffmpeg-x86_64.zip`;
+		await $`unzip -o ffmpeg-x86_64.zip -d ffmpeg-x86_64`;
+		await $`cp ffmpeg-x86_64/ffmpeg ffmpeg-x86_64-apple-darwin`;
+		await $`rm ffmpeg-x86_64.zip`;
+		await $`rm -rf ffmpeg-x86_64`;
+	}
 
-		if (!(await fs.exists(`ffmpeg-x86_64-apple-darwin`))) {
-			await $`wget --no-config ${config.macos.ffmpegUrlx86_64} -O ffmpeg-x86_64.zip`;
-			await $`unzip -o ffmpeg-x86_64.zip -d ffmpeg-x86_64`;
-			await $`cp ffmpeg-x86_64/ffmpeg ffmpeg-x86_64-apple-darwin`;
-			await $`rm ffmpeg-x86_64.zip`;
-			await $`rm -rf ffmpeg-x86_64`;
-		}
-
-		if (!(await fs.exists(`ffprobe-x86_64-apple-darwin`))) {
-			await $`wget --no-config ${config.macos.ffprobeUrlx86_64} -O ffprobe-x86_64.zip`;
-			await $`unzip -o ffprobe-x86_64.zip -d ffprobe-x86_64`;
-			await $`cp ffprobe-x86_64/ffprobe ffprobe-x86_64-apple-darwin`;
-			await $`rm ffprobe-x86_64.zip`;
-			await $`rm -rf ffprobe-x86_64`;
-		}
+	if (!(await fs.exists(`ffprobe-x86_64-apple-darwin`))) {
+		await $`wget --no-config ${config.macos.ffprobeUrlx86_64} -O ffprobe-x86_64.zip`;
+		await $`unzip -o ffprobe-x86_64.zip -d ffprobe-x86_64`;
+		await $`cp ffprobe-x86_64/ffprobe ffprobe-x86_64-apple-darwin`;
+		await $`rm ffprobe-x86_64.zip`;
+		await $`rm -rf ffprobe-x86_64`;
 	}
 
   console.log('FFMPEG and FFPROBE checks completed');
 	console.log('Moved and renamed ffmpeg binary for externalBin');
+
+	// Runs unconditionally — cache hits get verified too.
+	await verifyMacosSidecarsSelfContained();
+	await verifyMacosSidecarsRun();
 
 	// Strip extended attributes from all binaries to prevent codesign failures
 	console.log('Stripping extended attributes from binaries...');

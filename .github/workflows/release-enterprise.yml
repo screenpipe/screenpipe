@@ -521,6 +521,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+
           TARGET="aarch64-apple-darwin"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
           VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
@@ -543,30 +545,38 @@ jobs:
 
           # Find installer signing identity (Developer ID Installer)
           INSTALLER_IDENTITY=$(security find-identity -v -p basic "$HOME/Library/Keychains/build.keychain-db" 2>/dev/null | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
-
-          # Create component pkg from .app — installs to /Applications
-          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          if [ -n "$INSTALLER_IDENTITY" ]; then
-            echo "Signing .pkg with: $INSTALLER_IDENTITY"
-            pkgbuild \
-              --component "$APP_PATH" \
-              --install-location /Applications \
-              --identifier "screenpi.pe.enterprise" \
-              --version "$VERSION" \
-              --sign "$INSTALLER_IDENTITY" \
-              "$PKG_OUTPUT"
-          else
-            echo "WARNING: No 'Developer ID Installer' cert found, building unsigned .pkg"
-            echo "Apple notarization will fail without it. Add the installer cert to APPLE_CERTIFICATE."
-            pkgbuild \
-              --component "$APP_PATH" \
-              --install-location /Applications \
-              --identifier "screenpi.pe.enterprise" \
-              --version "$VERSION" \
-              "$PKG_OUTPUT"
+          if [ -z "$INSTALLER_IDENTITY" ]; then
+            echo "ERROR: No 'Developer ID Installer' certificate found in the build keychain."
+            echo "macOS .pkg artifacts must be signed with Developer ID Installer before notarization."
+            echo "Add the Developer ID Installer certificate to APPLE_CERTIFICATE; refusing to upload an untrusted .pkg."
+            security find-identity -v -p basic "$HOME/Library/Keychains/build.keychain-db" 2>&1 || true
+            exit 1
           fi
 
+          # Create an unsigned component package first so the package receipt
+          # keeps a stable identifier, then sign the final product archive with
+          # Developer ID Installer.
+          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
+          COMPONENT_PKG="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64-component.pkg"
+
+          echo "Building component .pkg..."
+          pkgbuild \
+            --component "$APP_PATH" \
+            --install-location /Applications \
+            --identifier "screenpi.pe.enterprise" \
+            --version "$VERSION" \
+            "$COMPONENT_PKG"
+
+          echo "Signing product .pkg with: $INSTALLER_IDENTITY"
+          productbuild \
+            --package "$COMPONENT_PKG" \
+            --sign "$INSTALLER_IDENTITY" \
+            --timestamp \
+            "$PKG_OUTPUT"
+          rm -f "$COMPONENT_PKG"
+
           echo "Distribution pkg created: $(basename "$PKG_OUTPUT")"
+          pkgutil --check-signature "$PKG_OUTPUT"
 
           # Notarize the .pkg
           echo "Notarizing .pkg..."
@@ -574,12 +584,12 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 15m 2>&1) || true
+            --wait --timeout 15m 2>&1)
           echo "$SUBMIT_OUT"
 
           # Extract submission ID and check result
-          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}')
-          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
+          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}' || true)
+          if ! echo "$SUBMIT_OUT" | grep -q "status: Accepted"; then
             echo "Notarization FAILED — fetching log for details..."
             if [ -n "$SUBMISSION_ID" ]; then
               xcrun notarytool log "$SUBMISSION_ID" \
@@ -587,13 +597,14 @@ jobs:
                 --password "$APPLE_PASSWORD" \
                 --team-id "$APPLE_TEAM_ID" 2>&1 || true
             fi
-            echo "WARNING: .pkg notarization failed but continuing — DMG is still available"
-            exit 0
+            echo "ERROR: Refusing to upload an unnotarized .pkg."
+            exit 1
           fi
 
           echo "Stapling .pkg..."
           xcrun stapler staple "$PKG_OUTPUT"
           xcrun stapler validate "$PKG_OUTPUT"
+          spctl --assess --type install --verbose "$PKG_OUTPUT"
           echo ".pkg notarized and stapled: $(basename "$PKG_OUTPUT")"
 
       - name: Upload to R2

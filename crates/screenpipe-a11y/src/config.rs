@@ -116,6 +116,7 @@ pub struct UiCaptureConfig {
     ///   1. `mouse_hook_proc` / `keyboard_hook_proc` blocking locks → `try_lock` (fall back to None on contention)
     ///   2. UIA worker / app observer threads run at lower OS priority (see `extraction_thread_priority`)
     ///   3. UIA worker skips tree captures during a short window after any input (see `pause_extraction_on_input_ms`)
+    ///
     /// Intended for environments where users perceive mouse/keyboard lag and prefer
     /// responsiveness over event completeness.
     pub prioritize_input_latency: bool,
@@ -136,19 +137,14 @@ pub struct UiCaptureConfig {
 /// OS thread priority for a11y extraction threads.
 /// Maps to Windows `SetThreadPriority` constants; on non-Windows platforms this
 /// is recorded but currently has no effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionThreadPriority {
     Normal,
+    #[default]
     BelowNormal,
     Lowest,
     Idle,
-}
-
-impl Default for ExtractionThreadPriority {
-    fn default() -> Self {
-        Self::BelowNormal
-    }
 }
 
 impl std::str::FromStr for ExtractionThreadPriority {

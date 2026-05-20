@@ -630,8 +630,9 @@ async fn cleanup(data_dir: &Path, apply: bool, force: bool) -> Result<()> {
         };
         let is_file = metadata.is_file();
         let is_dir = metadata.is_dir();
-        let matched = (is_file && FILE_EXACT.contains(&name.as_str()))
-            || (is_file && FILE_PREFIXES.iter().any(|p| name.starts_with(p)))
+        let matched = (is_file
+            && (FILE_EXACT.contains(&name.as_str())
+                || FILE_PREFIXES.iter().any(|p| name.starts_with(p))))
             || (is_dir && DIR_PREFIXES.iter().any(|p| name.starts_with(p)));
         if !matched {
             continue;

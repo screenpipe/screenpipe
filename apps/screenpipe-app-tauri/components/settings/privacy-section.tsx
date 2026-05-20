@@ -1759,12 +1759,14 @@ function AdminTeamTokenCard() {
         <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
           <Input
             type="text"
-            readOnly={!revealToken && pendingToken === null}
+            // First-time users have no `liveToken` yet — they must always be able
+            // to type a fresh token in. Only lock the input when we're displaying
+            // an EXISTING token in masked form; clicking the eye unlocks edit mode.
+            readOnly={Boolean(liveToken) && !revealToken && pendingToken === null}
             placeholder="sk_ent_…"
             data-testid="privacy-admin-token-input"
             value={displayValue}
             onChange={(e) => {
-              if (!revealToken && pendingToken === null) return;
               setPendingToken(e.target.value);
             }}
             onKeyDown={(e) => {
@@ -1784,7 +1786,9 @@ function AdminTeamTokenCard() {
               setRevealToken((v) => !v);
               if (pendingToken === null && liveToken) setPendingToken(liveToken);
             }}
-            disabled={!liveToken && pendingToken === null}
+            // Eye only makes sense when there's a saved token to unmask. Fresh
+            // users typing a new token don't need it.
+            disabled={!liveToken}
             data-testid="privacy-admin-token-reveal"
           >
             {revealToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}

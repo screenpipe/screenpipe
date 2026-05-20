@@ -97,12 +97,6 @@ fn get_text(conn: &Connection, dest: &str, path: &str) -> Option<String> {
     .filter(|s| !s.trim().is_empty())
 }
 
-fn get_interfaces(conn: &Connection, dest: &str, path: &str) -> Vec<String> {
-    get_prop(conn, dest, path, ATSPI_ACCESSIBLE, "GetInterfaces")
-        .and_then(|v| v.try_into().ok())
-        .unwrap_or_default()
-}
-
 fn dump_tree(conn: &Connection, dest: &str, path: &str, depth: usize, max_depth: usize) {
     if depth > max_depth {
         return;

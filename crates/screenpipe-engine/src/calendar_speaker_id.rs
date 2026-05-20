@@ -1305,7 +1305,7 @@ mod tests {
         let embedding: Vec<f32> = vec![0.1; 512];
 
         // Speaker A: already named "Louis"
-        let id_a = seed_speaker(&db, &embedding, Some("Louis")).await;
+        seed_speaker(&db, &embedding, Some("Louis")).await;
 
         // Speaker B: unnamed (will be named "louis@screenpi.pe" by calendar)
         let id_b = seed_speaker(&db, &embedding, None).await;
