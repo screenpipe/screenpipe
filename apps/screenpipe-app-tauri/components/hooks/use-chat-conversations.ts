@@ -50,6 +50,7 @@ export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  intent?: "steer";
   displayContent?: string;
   images?: string[];
   timestamp: number;
@@ -392,6 +393,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           id: m.id,
           role: m.role,
           content,
+          ...(m.intent ? { intent: m.intent } : {}),
           timestamp: m.timestamp,
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),

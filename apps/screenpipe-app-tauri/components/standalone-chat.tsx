@@ -742,6 +742,7 @@ interface Message {
   content: string; // full text for copy/history
   displayContent?: string; // short label shown in chat (e.g. template name)
   intent?: "steer";
+  turnIntentId?: string;
   images?: string[]; // base64 data URLs of attached images
   timestamp: number;
   contentBlocks?: ContentBlock[];
@@ -758,12 +759,39 @@ type QueuedDisplayPayload = {
   images: string[];
   displayContent?: string;
   optimisticUserId?: string;
+  turnIntentId?: string;
 };
 
 type OptimisticSteerPayload = {
   id: string;
   content: string;
+  turnIntentId?: string;
 };
+
+type TurnIntentRecord = {
+  id: string;
+  sessionId: string;
+  kind: "normal" | "queued" | "steer";
+  content: string;
+  preview: string;
+  displayedUserId?: string;
+  queueId?: string;
+  createdAt: number;
+  consumedAssistantId?: string;
+};
+
+type PendingSteerBatchItem = {
+  turnIntentId: string;
+  sessionId: string;
+  content: string;
+  originalUserMessage: string;
+  images: string[];
+  displayContent?: string;
+  optimisticUserId: string;
+  createdAt: number;
+};
+
+const TURN_INTENT_LEDGER_TTL_MS = 10 * 60 * 1000;
 
 // Tool icons by name
 const TOOL_ICONS: Record<string, string> = {
@@ -2375,10 +2403,14 @@ function MessageContent({
 }
 
 function getMessageIntentLabel(message: Message): string | null {
-  if (message.role === "assistant" && message.steeredResponse) {
+  if (message.role === "assistant" && (message.intent === "steer" || message.steeredResponse)) {
     return "Steered conversation";
   }
   return null;
+}
+
+function isSteeredAssistantMessage(message: Message): boolean {
+  return message.role === "assistant" && (message.intent === "steer" || message.steeredResponse === true);
 }
 
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
@@ -2874,6 +2906,9 @@ export function StandaloneChat({
   const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
   const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
   const optimisticSteerRef = useRef<OptimisticSteerPayload | null>(null);
+  const turnIntentLedgerRef = useRef<TurnIntentRecord[]>([]);
+  const pendingSteerBatchRef = useRef<PendingSteerBatchItem[]>([]);
+  const pendingSteerFlushInFlightRef = useRef(false);
   const streamRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
@@ -2888,6 +2923,72 @@ export function StandaloneChat({
   const piStoppedIntentionallyRef = useRef(false);
   const piIntentionallyStoppedPidsRef = useRef<Set<number>>(new Set());
   const piActiveStopRequestedRef = useRef(false);
+
+  const normalizeTurnIntentText = (value: string) => value.replace(/\s+/g, " ").trim();
+
+  const turnIntentTextValuesMatch = (leftValue: string, rightValue: string) => {
+    const left = normalizeTurnIntentText(leftValue);
+    const right = normalizeTurnIntentText(rightValue);
+    if (!left || !right) return false;
+    return left === right;
+  };
+
+  const turnIntentMatchesText = (record: TurnIntentRecord, text: string) => {
+    return turnIntentTextValuesMatch(record.content, text) || turnIntentTextValuesMatch(record.preview, text);
+  };
+
+  const pruneTurnIntentLedger = () => {
+    const cutoff = Date.now() - TURN_INTENT_LEDGER_TTL_MS;
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) => record.createdAt >= cutoff);
+  };
+
+  const registerTurnIntent = (record: TurnIntentRecord) => {
+    pruneTurnIntentLedger();
+    turnIntentLedgerRef.current = [
+      ...turnIntentLedgerRef.current.filter((item) => item.id !== record.id),
+      record,
+    ];
+  };
+
+  const removeTurnIntent = (id: string) => {
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) => record.id !== id);
+  };
+
+  const findTurnIntentForUserStart = (
+    sessionId: string | null | undefined,
+    text: string,
+    display?: QueuedDisplayPayload | null,
+  ): TurnIntentRecord | null => {
+    if (!sessionId) return null;
+    pruneTurnIntentLedger();
+    const sessionTurnIntents = turnIntentLedgerRef.current.filter((record) => record.sessionId === sessionId);
+    const hasIncomingText = Boolean(normalizeTurnIntentText(text));
+    const displayPreviewMatchesIncoming = display?.preview
+      ? turnIntentTextValuesMatch(display.preview, text)
+      : false;
+    const canUseDisplayIdentity = Boolean(display && (!hasIncomingText || displayPreviewMatchesIncoming));
+    const recordMatchesIncoming = (record: TurnIntentRecord) =>
+      turnIntentMatchesText(record, text) ||
+      (displayPreviewMatchesIncoming && turnIntentMatchesText(record, display?.preview ?? ""));
+
+    const byDisplayId = canUseDisplayIdentity && display?.turnIntentId
+      ? sessionTurnIntents.find((record) => record.id === display.turnIntentId)
+      : null;
+    if (byDisplayId && recordMatchesIncoming(byDisplayId)) return byDisplayId;
+
+    const byOptimisticUser = canUseDisplayIdentity && display?.optimisticUserId
+      ? sessionTurnIntents.find((record) => record.displayedUserId === display.optimisticUserId)
+      : null;
+    if (byOptimisticUser && recordMatchesIncoming(byOptimisticUser)) return byOptimisticUser;
+
+    return sessionTurnIntents.find((record) => turnIntentMatchesText(record, text)) ?? null;
+  };
+
+  const markTurnIntentConsumed = (id: string, assistantId: string) => {
+    turnIntentLedgerRef.current = turnIntentLedgerRef.current.map((record) =>
+      record.id === id ? { ...record, consumedAssistantId: assistantId } : record
+    );
+  };
   const piPresetSwitchPromiseRef = useRef<Promise<void> | null>(null);
   const piCrashCountRef = useRef(0);
   const piLastCrashRef = useRef(0);
@@ -4703,12 +4804,26 @@ export function StandaloneChat({
             pendingOptimisticSteer &&
             pendingOptimisticSteer.content.trim() === text.trim()
           );
-          const shouldConsumePendingOptimisticSteer = Boolean(pendingOptimisticSteer);
+          const shouldConsumePendingOptimisticSteer = isPendingOptimisticSteerEcho;
+          const preMatchedTurnIntent = findTurnIntentForUserStart(piSessionIdRef.current, text, pendingNextPiUserDisplayRef.current);
 
-          if (!piMessageIdRef.current || isPendingOptimisticSteerEcho) {
+          if (!piMessageIdRef.current || isPendingOptimisticSteerEcho || preMatchedTurnIntent?.kind === "steer") {
             const sidForStartedUser = piSessionIdRef.current;
-            const pendingDisplay = pendingNextPiUserDisplayRef.current;
+            const pendingDisplay = pendingNextPiUserDisplayRef.current &&
+              (!text || turnIntentTextValuesMatch(pendingNextPiUserDisplayRef.current.preview, text))
+                ? pendingNextPiUserDisplayRef.current
+                : null;
             const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
+            const matchedTurnIntent = preMatchedTurnIntent ?? findTurnIntentForUserStart(sidForStartedUser, text, queuedDisplay);
+            if (matchedTurnIntent?.consumedAssistantId) {
+              if (pendingNextPiUserDisplayRef.current?.turnIntentId === matchedTurnIntent.id) {
+                pendingNextPiUserDisplayRef.current = null;
+              }
+              if (optimisticSteerRef.current?.turnIntentId === matchedTurnIntent.id) {
+                optimisticSteerRef.current = null;
+              }
+              return;
+            }
             const queuedImages = queuedDisplay?.images.length ? queuedDisplay.images : eventImages;
             if (pendingDisplay) {
               pendingNextPiUserDisplayRef.current = null;
@@ -4716,12 +4831,15 @@ export function StandaloneChat({
             if (!text && !queuedImages.length && !queuedDisplay?.displayContent) {
               return;
             }
-            const nextUserIntent = pendingNextPiUserIntentRef.current;
+            const nextUserIntent = matchedTurnIntent
+              ? (matchedTurnIntent.kind === "steer" ? "steer" : null)
+              : pendingNextPiUserIntentRef.current;
             pendingNextPiUserIntentRef.current = null;
             const queuedTurnUserId = Date.now().toString();
             const queuedTurnAssistantId = (Date.now() + 1).toString();
             const optimisticSteer = optimisticSteerRef.current;
             const isOptimisticSteerEcho = Boolean(
+              matchedTurnIntent?.kind === "steer" && matchedTurnIntent.displayedUserId ||
               queuedDisplay?.optimisticUserId ||
               (
                 optimisticSteer &&
@@ -4731,6 +4849,9 @@ export function StandaloneChat({
             if (isOptimisticSteerEcho || shouldConsumePendingOptimisticSteer) {
               optimisticSteerRef.current = null;
             }
+            if (matchedTurnIntent?.kind === "steer") {
+              markTurnIntentConsumed(matchedTurnIntent.id, queuedTurnAssistantId);
+            }
             const startedUser: Message | null = isOptimisticSteerEcho ? null : {
               id: queuedTurnUserId,
               role: "user",
@@ -4738,12 +4859,14 @@ export function StandaloneChat({
               ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
               ...(queuedImages.length ? { images: [...queuedImages] } : {}),
               ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
+              ...(matchedTurnIntent ? { turnIntentId: matchedTurnIntent.id } : {}),
               timestamp: Date.now(),
             };
             const assistantPlaceholder: Message = {
               id: queuedTurnAssistantId,
               role: "assistant",
               content: "Processing...",
+              ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
               ...(nextUserIntent === "steer" ? { steeredResponse: true } : {}),
               timestamp: Date.now(),
               model: activePreset?.model,
@@ -4973,6 +5096,9 @@ export function StandaloneChat({
             setIsLoading(false);
             setIsStreaming(false);
             emitSessionActivity({ status: "idle" });
+            if (pendingSteerBatchRef.current.some((item) => item.sessionId === piSessionIdRef.current)) {
+              void flushPendingSteerBatch();
+            }
           }
         } else if (data.type === "response" && data.success === false) {
           const errorStr = data.error || "Unknown error";
@@ -5662,6 +5788,7 @@ export function StandaloneChat({
         userMessage,
         piImages.length > 0 ? piImages : null,
       );
+      const queuedTurnIntentId = `queued-${result.status === "ok" ? result.data : Date.now()}`;
       if (result.status !== "ok") {
         setInput(prevInput);
         if (hadPastedImages) setPastedImages(queuedImageDataUrls);
@@ -5669,10 +5796,20 @@ export function StandaloneChat({
         return;
       }
 
+      registerTurnIntent({
+        id: queuedTurnIntentId,
+        sessionId: piSessionIdRef.current,
+        kind: "queued",
+        content: userMessage,
+        preview: queuedPreviewForText(userMessage),
+        queueId: result.data,
+        createdAt: Date.now(),
+      });
       restoreQueuedDisplay(piSessionIdRef.current, result.data, {
         preview: queuedPreviewForText(userMessage),
         images: queuedImageDataUrls,
         ...(displayLabel ? { displayContent: displayLabel } : {}),
+        turnIntentId: queuedTurnIntentId,
       });
 
       posthog.capture("chat_message_enqueued", {
@@ -5730,7 +5867,7 @@ export function StandaloneChat({
   }
 
   async function sendPiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
-    optimisticSteerRef.current = null;
+    clearPendingSteerTransportState();
 
     // Auto-start Pi if it's not running yet (new session or crash recovery)
     if (!piInfo?.running) {
@@ -6322,6 +6459,160 @@ export function StandaloneChat({
     }
   }
 
+  function buildSteerPrompt(batch: PendingSteerBatchItem[]) {
+    const latest = batch[batch.length - 1];
+    if (!latest) return "";
+
+    const originalUserMessage = latest.originalUserMessage.trim();
+    const steerMessages = batch
+      .map((item, index) => `${index + 1}. ${item.content}`)
+      .join("\n");
+
+    return [
+      "The user sent steering messages while the previous assistant response was still running.",
+      "Treat them as live steering for that turn: they may refine the original request, replace it, or redirect to a new request.",
+      "Infer the user's intent from the original request and the steering messages. If a steering message is a complete request, answer that request directly.",
+      "Apply steering messages in order. If they conflict, the final steering message has highest priority.",
+      "Do not explain the steering mechanism unless the user asks about it.",
+      "",
+      "Original user request:",
+      originalUserMessage || "(unknown previous request)",
+      "",
+      "Steering messages:",
+      steerMessages,
+      "",
+      "Final steering message:",
+      latest.content,
+      "",
+      "Now answer according to the final steered intent.",
+    ].join("\n");
+  }
+
+  function clearPendingSteerTransportState(sessionId = piSessionIdRef.current) {
+    pendingNextPiUserIntentRef.current = null;
+    pendingNextPiUserDisplayRef.current = null;
+    optimisticSteerRef.current = null;
+    if (sessionId) {
+      pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
+      turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) =>
+        record.sessionId !== sessionId ||
+        record.kind !== "steer" ||
+        Boolean(record.consumedAssistantId)
+      );
+    }
+  }
+
+  async function flushPendingSteerBatch() {
+    const sessionId = piSessionIdRef.current;
+    if (!sessionId || pendingSteerFlushInFlightRef.current) return;
+
+    const batch = pendingSteerBatchRef.current.filter((item) => item.sessionId === sessionId);
+    if (batch.length === 0) return;
+    pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
+    pendingSteerFlushInFlightRef.current = true;
+
+    const latest = batch[batch.length - 1];
+    const prompt = buildSteerPrompt(batch);
+    const preview = queuedPreviewForText(latest.content);
+    const combinedImages = imageDataUrlsToPiImages(batch.flatMap((item) => item.images));
+    const hasActiveAssistant = Boolean(piMessageIdRef.current);
+
+    const labelMarkers: Message[] = batch.slice(0, -1).map((item, index) => ({
+      id: `${item.turnIntentId}-label`,
+      role: "assistant",
+      content: "",
+      intent: "steer",
+      turnIntentId: item.turnIntentId,
+      timestamp: Date.now() + index,
+      model: activePreset?.model,
+      provider: activePreset?.provider,
+    }));
+
+    let nextRowsAfterLabels: Message[] | null = null;
+    if (labelMarkers.length > 0) {
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((message) => message.id));
+        const markersToAppend = labelMarkers.filter((marker) => !existingIds.has(marker.id));
+        if (markersToAppend.length === 0) return prev;
+        const next = [...prev, ...markersToAppend];
+        nextRowsAfterLabels = next;
+        return next;
+      });
+      if (nextRowsAfterLabels) {
+        void saveConversation(nextRowsAfterLabels, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterLabels as any);
+      }
+    }
+
+    pendingNextPiUserIntentRef.current = "steer";
+    pendingNextPiUserDisplayRef.current = {
+      preview,
+      images: [...latest.images],
+      ...(latest.displayContent ? { displayContent: latest.displayContent } : {}),
+      optimisticUserId: latest.optimisticUserId,
+      turnIntentId: latest.turnIntentId,
+    };
+    optimisticSteerRef.current = {
+      id: latest.optimisticUserId,
+      content: prompt,
+      turnIntentId: latest.turnIntentId,
+    };
+    batch.slice(0, -1).forEach((item) => removeTurnIntent(item.turnIntentId));
+    registerTurnIntent({
+      id: latest.turnIntentId,
+      sessionId,
+      kind: "steer",
+      content: prompt,
+      preview,
+      displayedUserId: latest.optimisticUserId,
+      createdAt: latest.createdAt,
+    });
+
+    lastUserMessageRef.current = latest.content;
+    setIsLoading(true);
+    setIsStreaming(true);
+
+    try {
+      const result = hasActiveAssistant
+        ? await commands.piSteer(
+            sessionId,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+          )
+        : await commands.piPrompt(
+            sessionId,
+            prompt,
+            combinedImages.length > 0 ? combinedImages : null,
+          );
+
+      if (result.status !== "ok") {
+        pendingNextPiUserIntentRef.current = null;
+        pendingNextPiUserDisplayRef.current = null;
+        optimisticSteerRef.current = null;
+        removeTurnIntent(latest.turnIntentId);
+        pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
+        setIsLoading(false);
+        setIsStreaming(false);
+        toast({ title: "failed to send steered message", description: result.error, variant: "destructive" });
+      }
+    } catch (e) {
+      pendingNextPiUserIntentRef.current = null;
+      pendingNextPiUserDisplayRef.current = null;
+      optimisticSteerRef.current = null;
+      removeTurnIntent(latest.turnIntentId);
+      pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
+      setIsLoading(false);
+      setIsStreaming(false);
+      const description = e instanceof Error ? e.message : String(e);
+      toast({ title: "failed to send steered message", description, variant: "destructive" });
+    } finally {
+      pendingSteerFlushInFlightRef.current = false;
+    }
+  }
+
   async function steerMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
     const hasImages = imageDataUrls ? imageDataUrls.length > 0 : pastedImages.length > 0;
     const trimmed = userMessage.trim();
@@ -6341,6 +6632,7 @@ export function StandaloneChat({
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
+    const fallbackOriginalUserMessage = lastUserMessageRef.current;
 
     setFollowUpSuggestions([]);
     followUpFiredRef.current = false;
@@ -6349,33 +6641,34 @@ export function StandaloneChat({
       followUpAbortRef.current = null;
     }
     lastUserMessageRef.current = trimmed;
-    pendingNextPiUserIntentRef.current = "steer";
+    const turnIntentId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const optimisticUser: Message = {
-      id: Date.now().toString(),
+      id: turnIntentId,
       role: "user",
       content: trimmed,
       ...(displayLabel ? { displayContent: displayLabel } : {}),
       ...(outgoingImages.length ? { images: [...outgoingImages] } : {}),
       intent: "steer",
+      turnIntentId,
       timestamp: Date.now(),
-    };
-    optimisticSteerRef.current = {
-      id: optimisticUser.id,
-      content: trimmed,
-    };
-    pendingNextPiUserDisplayRef.current = {
-      preview: queuedPreviewForText(trimmed),
-      images: [...outgoingImages],
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      optimisticUserId: optimisticUser.id,
     };
     markCurrentAssistantInterrupted();
     const activeAssistantId = piMessageIdRef.current;
+    let originalUserMessage = fallbackOriginalUserMessage;
     let nextRowsAfterOptimisticAppend: Message[] | null = null;
     setMessages((prev) => {
       const activeAssistantIndex = activeAssistantId
         ? prev.findIndex((message) => message.id === activeAssistantId)
         : -1;
+      if (activeAssistantIndex >= 0) {
+        for (let i = activeAssistantIndex - 1; i >= 0; i -= 1) {
+          const candidate = prev[i];
+          if (candidate?.role === "user" && candidate.intent !== "steer") {
+            originalUserMessage = candidate.content;
+            break;
+          }
+        }
+      }
       if (activeAssistantIndex < 0) {
         const next = [...prev, optimisticUser];
         nextRowsAfterOptimisticAppend = next;
@@ -6387,9 +6680,16 @@ export function StandaloneChat({
         activeAssistant?.content &&
         activeAssistant.content !== "Processing..."
       ) || Boolean(activeAssistant?.contentBlocks?.length);
-      const insertIndex = hasVisibleAssistantContent
+      let insertIndex = hasVisibleAssistantContent
         ? activeAssistantIndex + 1
         : activeAssistantIndex;
+      while (
+        insertIndex < prev.length &&
+        prev[insertIndex]?.role === "user" &&
+        prev[insertIndex]?.intent === "steer"
+      ) {
+        insertIndex += 1;
+      }
       const next = [
         ...prev.slice(0, insertIndex),
         optimisticUser,
@@ -6411,64 +6711,88 @@ export function StandaloneChat({
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
 
-    const piImages = imageDataUrlsToPiImages(outgoingImages);
     if (shouldClearPastedImages) setPastedImages([]);
 
-    const rollbackOptimisticSteer = () => {
-      pendingNextPiUserIntentRef.current = null;
-      pendingNextPiUserDisplayRef.current = null;
-      optimisticSteerRef.current = null;
-
-      let nextRowsAfterRollback: Message[] | null = null;
-      setMessages((prev) => {
-        const next = prev.filter((message) => message.id !== optimisticUser.id);
-        nextRowsAfterRollback = next;
-        return next;
-      });
-      if (sidNow && nextRowsAfterRollback) {
-        useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterRollback as any);
-      }
-      if (nextRowsAfterRollback) {
-        void saveConversation(nextRowsAfterRollback, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-      }
-      clearCurrentAssistantInterrupted();
-    };
-
-    try {
-      const result = await commands.piSteer(
-        piSessionIdRef.current,
-        trimmed,
-        piImages.length > 0 ? piImages : null,
-      );
-      if (result.status !== "ok") {
-        rollbackOptimisticSteer();
-        toast({ title: "failed to steer message", description: result.error, variant: "destructive" });
-      }
-    } catch (e) {
-      rollbackOptimisticSteer();
-      console.warn("[Pi] failed to steer message:", e);
-      toast({
-        title: "failed to steer message",
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive",
-      });
+    pendingSteerBatchRef.current = [
+      ...pendingSteerBatchRef.current,
+      {
+        turnIntentId,
+        sessionId: piSessionIdRef.current,
+        content: trimmed,
+        originalUserMessage,
+        images: [...outgoingImages],
+        ...(displayLabel ? { displayContent: displayLabel } : {}),
+        optimisticUserId: optimisticUser.id,
+        createdAt: Date.now(),
+      },
+    ];
+    if (!piMessageIdRef.current) {
+      void flushPendingSteerBatch();
     }
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
     setQueuedActionPromptId(prompt.id);
     const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
+    const existingTurnIntent = queuedDisplay?.turnIntentId
+      ? turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.id === queuedDisplay.turnIntentId)
+      : turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.queueId === prompt.id);
+    const turnIntentId = existingTurnIntent?.id ?? `queued-steer-${prompt.id}`;
+    const optimisticQueuedUser: Message = {
+      id: turnIntentId,
+      role: "user",
+      content: existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview,
+      ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+      ...(queuedDisplay?.images.length ? { images: [...queuedDisplay.images] } : {}),
+      intent: "steer",
+      turnIntentId,
+      timestamp: Date.now(),
+    };
     try {
       pendingNextPiUserIntentRef.current = "steer";
-      pendingNextPiUserDisplayRef.current = queuedDisplay;
+      pendingNextPiUserDisplayRef.current = {
+        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
+        images: queuedDisplay?.images ? [...queuedDisplay.images] : [],
+        ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
+        optimisticUserId: optimisticQueuedUser.id,
+        turnIntentId,
+      };
+      registerTurnIntent({
+        id: turnIntentId,
+        sessionId: currentQueueSessionId,
+        kind: "steer",
+        content: existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview,
+        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
+        displayedUserId: optimisticQueuedUser.id,
+        queueId: prompt.id,
+        createdAt: existingTurnIntent?.createdAt ?? Date.now(),
+      });
       markCurrentAssistantInterrupted();
+      let nextRowsAfterQueuedSteer: Message[] | null = null;
+      setMessages((prev) => {
+        if (prev.some((message) => message.turnIntentId === turnIntentId || message.id === optimisticQueuedUser.id)) {
+          return prev;
+        }
+        const next = [...prev, optimisticQueuedUser];
+        nextRowsAfterQueuedSteer = next;
+        return next;
+      });
+      if (nextRowsAfterQueuedSteer) {
+        void saveConversation(nextRowsAfterQueuedSteer, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        const sidNow = piSessionIdRef.current;
+        if (sidNow) {
+          useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterQueuedSteer as any);
+        }
+      }
       const result = await commands.piSteerQueued(piSessionIdRef.current, prompt.id);
       if (result.status !== "ok") {
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
+        removeTurnIntent(turnIntentId);
+        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
         clearCurrentAssistantInterrupted();
         toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
@@ -6477,6 +6801,8 @@ export function StandaloneChat({
       if (!result.data) {
         pendingNextPiUserIntentRef.current = null;
         pendingNextPiUserDisplayRef.current = null;
+        removeTurnIntent(turnIntentId);
+        setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
         clearCurrentAssistantInterrupted();
         toast({
@@ -6496,6 +6822,8 @@ export function StandaloneChat({
     } catch (e) {
       pendingNextPiUserIntentRef.current = null;
       pendingNextPiUserDisplayRef.current = null;
+      removeTurnIntent(turnIntentId);
+      setMessages((prev) => prev.filter((message) => message.turnIntentId !== turnIntentId));
       restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
       clearCurrentAssistantInterrupted();
       toast({
@@ -7197,17 +7525,27 @@ export function StandaloneChat({
           />
         )}
         <AnimatePresence mode="popLayout">
-          {messages
-            .filter((m) => {
+          {(() => {
+            const visibleMessages = messages.filter((m) => {
               if (m.role !== "assistant") return true;
               // hide placeholder "Processing..." messages (the grid dissolve loader handles this state)
               if (m.content === "Processing..." && !m.contentBlocks?.length) return false;
               // hide empty messages with no content blocks
-              if (!m.content && !m.contentBlocks?.length) return false;
+              if (!m.content && !m.contentBlocks?.length && !isSteeredAssistantMessage(m)) return false;
               return true;
-            })
-            .map((message) => {
+            });
+
+            return visibleMessages.map((message, messageIndex) => {
               const intentLabel = getMessageIntentLabel(message);
+              const nextAssistant = visibleMessages
+                .slice(messageIndex + 1)
+                .find((candidate) => candidate.role === "assistant");
+              const hideSupersededSteerBody = isSteeredAssistantMessage(message) && Boolean(
+                nextAssistant &&
+                isSteeredAssistantMessage(nextAssistant) &&
+                !message.content &&
+                !message.contentBlocks?.length
+              );
               return (
             <motion.div
               key={message.id}
@@ -7240,7 +7578,8 @@ export function StandaloneChat({
                   {intentLabel}
                 </div>
               ) : null}
-              <div
+              {hideSupersededSteerBody ? null : (
+                <div
                 onMouseDown={(e) => {
                   if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
                   // Stage caret position from the click coords (still on live
@@ -7321,6 +7660,9 @@ export function StandaloneChat({
                   />
                 )}
               </div>
+              )}
+              {!hideSupersededSteerBody ? (
+                <>
                 {/* Action buttons - appear on hover, outside the message box */}
                 <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 transition-all duration-200">
                   <button
@@ -7414,10 +7756,13 @@ export function StandaloneChat({
                     </Popover>
                   )}
                 </div>
-              </div>
-            </motion.div>
+                </>
+              ) : null}
+            </div>
+          </motion.div>
               );
-            })}
+            });
+          })()}
         </AnimatePresence>
         <AnimatePresence>
           {isLoading && (() => {

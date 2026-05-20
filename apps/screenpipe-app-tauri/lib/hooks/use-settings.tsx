@@ -79,6 +79,7 @@ export interface ChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
+	intent?: "steer";
 	timestamp: number;
 	contentBlocks?: any[];
 	sourceCitations?: SourceCitation[];
