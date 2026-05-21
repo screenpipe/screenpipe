@@ -248,6 +248,46 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const { pinned, recents, archived } = useVisibleChatSections();
   const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+
+  type SidebarItem =
+    | { kind: "single"; session: SessionRecord }
+    | { kind: "group"; key: string; title: string; sessions: SessionRecord[] };
+
+  const groupedRecents = useMemo((): SidebarItem[] => {
+    const baseTitle = (t: string) => t.replace(/\s*#\d+$/, "").trim();
+    const titleCounts = new Map<string, number>();
+    for (const s of recentsLimited) {
+      const key = baseTitle(s.title);
+      titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+    }
+    const seen = new Map<string, SessionRecord[]>();
+    const result: SidebarItem[] = [];
+    for (const s of recentsLimited) {
+      const key = baseTitle(s.title);
+      if ((titleCounts.get(key) ?? 1) < 2) {
+        result.push({ kind: "single", session: s });
+      } else {
+        if (!seen.has(key)) {
+          const group: SessionRecord[] = [];
+          seen.set(key, group);
+          result.push({ kind: "group", key, title: key, sessions: group });
+        }
+        seen.get(key)!.push(s);
+      }
+    }
+    return result;
+  }, [recentsLimited]);
+
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -532,22 +572,60 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                recentsLimited.map((s) => (
-                  <SidebarChatRow
-                    key={s.id}
-                    session={s}
-                    isCurrent={s.id === currentId}
-                    queuedCount={queueDepths.get(s.id) ?? 0}
-                    onSelect={handleSelect}
-                    onArchive={handleArchive}
-                    onUnarchive={handleUnarchive}
-                    onDeleteRequest={setDeletingSessionId}
-                    onTogglePin={handleTogglePin}
-                    onRenameRequest={handleRenameRequest}
-                    openConversationMenuId={openConversationMenuId}
-                    setOpenConversationMenuId={setOpenConversationMenuId}
-                  />
-                ))
+                groupedRecents.map((item) => {
+                  if (item.kind === "single") {
+                    return (
+                      <SidebarChatRow
+                        key={item.session.id}
+                        session={item.session}
+                        isCurrent={item.session.id === currentId}
+                        queuedCount={queueDepths.get(item.session.id) ?? 0}
+                        onSelect={handleSelect}
+                        onArchive={handleArchive}
+                        onUnarchive={handleUnarchive}
+                        onDeleteRequest={setDeletingSessionId}
+                        onTogglePin={handleTogglePin}
+                        onRenameRequest={handleRenameRequest}
+                        openConversationMenuId={openConversationMenuId}
+                        setOpenConversationMenuId={setOpenConversationMenuId}
+                      />
+                    );
+                  }
+                  const isOpen = expandedGroups.has(item.key);
+                  return (
+                    <div key={item.key}>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(item.key)}
+                        className="w-full flex items-center gap-2 pl-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors select-none"
+                      >
+                        {isOpen
+                          ? <ChevronDown className="h-3 w-3 shrink-0" />
+                          : <ChevronRight className="h-3 w-3 shrink-0" />
+                        }
+                        <span className="text-xs truncate flex-1 text-left font-mono">{item.title}</span>
+                        <span className="text-[10px] bg-muted rounded px-1 py-0.5 tabular-nums">{item.sessions.length}</span>
+                      </button>
+                      {isOpen && item.sessions.map((s) => (
+                        <div key={s.id} className="pl-3">
+                          <SidebarChatRow
+                            session={s}
+                            isCurrent={s.id === currentId}
+                            queuedCount={queueDepths.get(s.id) ?? 0}
+                            onSelect={handleSelect}
+                            onArchive={handleArchive}
+                            onUnarchive={handleUnarchive}
+                            onDeleteRequest={setDeletingSessionId}
+                            onTogglePin={handleTogglePin}
+                            onRenameRequest={handleRenameRequest}
+                            openConversationMenuId={openConversationMenuId}
+                            setOpenConversationMenuId={setOpenConversationMenuId}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })
               )}
             </Section>
           </div>
