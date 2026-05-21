@@ -48,7 +48,6 @@ export interface StreamTimeSeriesResponse {
 export interface DeviceFrameResponse {
 	device_id: string;
 	frame_id: string;
-	frame: string; // base64 encoded image
 	offset_index: number;
 	fps: number;
 	metadata: DeviceMetadata;
@@ -63,6 +62,67 @@ export interface DeviceMetadata {
 	ocr_text: string;
 	timestamp: string;
 	browser_url?: string;
+}
+
+interface FrameContextResponse {
+	frame_id: number;
+	text?: string | null;
+	text_source?: string;
+}
+
+const MAX_CONTEXT_FRAMES = 5;
+
+async function fetchFullFrameText(frameId: string) {
+	const response = await localFetch(`/frames/${frameId}/context`);
+	if (!response.ok) return null;
+
+	const data = (await response.json()) as FrameContextResponse;
+	return data.text?.trim() || null;
+}
+
+async function buildScreenTextSamples(frames: StreamTimeSeriesResponse[]) {
+	const sampledFrames =
+		frames.length <= MAX_CONTEXT_FRAMES
+			? frames
+			: Array.from({ length: MAX_CONTEXT_FRAMES }, (_, index) => {
+					const frameIndex = Math.round(
+						(index * (frames.length - 1)) / (MAX_CONTEXT_FRAMES - 1),
+					);
+					return frames[frameIndex];
+				});
+
+	const selectedDevices = sampledFrames
+		.flatMap((frame) => frame.devices)
+		.filter((device) => device.frame_id);
+
+	const frameIds = Array.from(
+		new Set(selectedDevices.map((device) => String(device.frame_id))),
+	).slice(0, MAX_CONTEXT_FRAMES);
+
+	if (frameIds.length === 0) return [];
+
+	const previewByFrameId = new Map<string, string>();
+	for (const device of selectedDevices) {
+		const preview = device.metadata.ocr_text?.trim();
+		if (preview && !previewByFrameId.has(String(device.frame_id))) {
+			previewByFrameId.set(String(device.frame_id), preview);
+		}
+	}
+
+	const samples = await Promise.all(
+		frameIds.map(async (frameId) => {
+			try {
+				return await fetchFullFrameText(frameId);
+			} catch (error) {
+				console.warn("Failed to fetch full frame context:", frameId, error);
+				return null;
+			}
+		}),
+	);
+
+	return samples
+		.map((sample, index) => sample || previewByFrameId.get(frameIds[index]) || "")
+		.filter((sample) => sample.trim().length > 0);
 }
 
 export interface AudioData {
@@ -749,18 +809,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			contextParts.push(`Apps: ${Array.from(apps).join(", ")}`);
 		}
 
-		// Add sample OCR text (first few frames)
-		const ocrSamples: string[] = [];
-		selectedFrames.slice(0, 3).forEach((frame) => {
-			frame.devices.forEach((device) => {
-				if (device.metadata.ocr_text && device.metadata.ocr_text.length > 0) {
-					const sample = device.metadata.ocr_text.slice(0, 200);
-					if (sample.trim()) {
-						ocrSamples.push(sample);
-					}
-				}
-			});
-		});
+		// Add full text for a few selected frames. The timeline stream keeps only
+		// OCR previews for memory safety, so hydrate full text on demand here.
+		const ocrSamples = await buildScreenTextSamples(selectedFrames);
 		if (ocrSamples.length > 0) {
 			contextParts.push(`Screen text samples:\n${ocrSamples.join("\n---\n")}`);
 		}

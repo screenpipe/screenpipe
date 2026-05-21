@@ -44,13 +44,18 @@ pub struct StreamFramesRequest {
     limit: Option<usize>,
 }
 
-const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
-const DEFAULT_STREAM_FRAME_LIMIT: usize = MAX_STREAM_FRAME_LIMIT;
+const MAX_STREAM_FRAME_LIMIT: usize = 500;
+const DEFAULT_STREAM_FRAME_LIMIT: usize = 250;
+const MAX_STREAM_OCR_TEXT_CHARS: usize = 200;
 
 fn stream_frame_limit(requested: Option<usize>) -> usize {
     requested
         .unwrap_or(DEFAULT_STREAM_FRAME_LIMIT)
         .clamp(1, MAX_STREAM_FRAME_LIMIT)
+}
+
+fn stream_ocr_preview(text: String) -> String {
+    text.chars().take(MAX_STREAM_OCR_TEXT_CHARS).collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -113,7 +118,7 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                             file_path: device_frame.metadata.file_path,
                             app_name: device_frame.metadata.app_name,
                             window_name: device_frame.metadata.window_name,
-                            ocr_text: device_frame.metadata.ocr_text,
+                            ocr_text: stream_ocr_preview(device_frame.metadata.ocr_text),
                             browser_url: device_frame.metadata.browser_url,
                         },
                         audio: device_frame
@@ -538,7 +543,7 @@ async fn handle_stream_frames_socket(
                                         file_path: hot_frame.snapshot_path.clone(),
                                         app_name: hot_frame.app_name.clone(),
                                         window_name: hot_frame.window_name.clone(),
-                                        ocr_text: hot_frame.ocr_text_preview.clone(),
+                                        ocr_text: stream_ocr_preview(hot_frame.ocr_text_preview.clone()),
                                         browser_url: hot_frame.browser_url.clone(),
                                     },
                                     audio: audio_entries
@@ -1392,6 +1397,23 @@ mod tests {
         assert_eq!(
             stream_frame_limit(Some(MAX_STREAM_FRAME_LIMIT + 1)),
             MAX_STREAM_FRAME_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_stream_ocr_preview_is_bounded() {
+        assert_eq!(stream_ocr_preview("short".to_string()), "short");
+
+        let long_text = "a".repeat(MAX_STREAM_OCR_TEXT_CHARS + 1);
+        assert_eq!(
+            stream_ocr_preview(long_text).chars().count(),
+            MAX_STREAM_OCR_TEXT_CHARS
+        );
+
+        let unicode = "😀".repeat(MAX_STREAM_OCR_TEXT_CHARS + 1);
+        assert_eq!(
+            stream_ocr_preview(unicode).chars().count(),
+            MAX_STREAM_OCR_TEXT_CHARS
         );
     }
 

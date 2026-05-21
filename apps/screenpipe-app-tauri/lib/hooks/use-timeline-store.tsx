@@ -34,7 +34,8 @@ let requestRetryCount = 0;
 const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
 const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
 const MAX_REQUEST_RETRIES = 5;
-const TIMELINE_STREAM_FRAME_LIMIT = 2500;
+const TIMELINE_STREAM_FRAME_LIMIT = 250;
+const MAX_TIMELINE_FRAMES_IN_MEMORY = 500;
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -51,6 +52,18 @@ let currentWsId = 0;
 // Cache save debounce
 let cacheSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const CACHE_SAVE_DEBOUNCE_MS = 2000; // Save cache 2s after last frame update
+
+function capTimelineFrames(frames: StreamTimeSeriesResponse[]) {
+	const cappedFrames =
+		frames.length > MAX_TIMELINE_FRAMES_IN_MEMORY
+			? frames.slice(0, MAX_TIMELINE_FRAMES_IN_MEMORY)
+			: frames;
+
+	return {
+		frames: cappedFrames,
+		timestamps: new Set(cappedFrames.map((frame) => frame.timestamp)),
+	};
+}
 
 interface TimelineState {
 	frames: StreamTimeSeriesResponse[];
@@ -111,7 +124,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	pendingNavigation: null,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
-	setFrames: (frames) => set({ frames }),
+	setFrames: (frames) => {
+		const capped = capTimelineFrames(frames);
+		set({ frames: capped.frames, frameTimestamps: capped.timestamps });
+	},
 	setIsLoading: (isLoading) => set({ isLoading }),
 	setError: (error) => set({ error }),
 	setMessage: (message) => set({ message }),
@@ -142,13 +158,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				const cachedDate = new Date(cached.date);
 				const today = new Date();
 				const isToday = cachedDate.toDateString() === today.toDateString();
-				const timestamps = new Set(cached.frames.map(f => f.timestamp));
+				const capped = capTimelineFrames(cached.frames);
 				
 				// Only use cached frames if they're from today
 				// Otherwise start fresh with today's date
 				set({
-					frames: isToday ? cached.frames : [],
-					frameTimestamps: isToday ? timestamps : new Set<string>(),
+					frames: isToday ? capped.frames : [],
+					frameTimestamps: isToday ? capped.timestamps : new Set<string>(),
 					currentDate: today, // Always use today, not cached date
 					isLoading: !isToday, // Show loading if cache is stale
 					hasCachedData: isToday,
@@ -225,19 +241,21 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				}
 				requestRetryCount = 0;
 
+				const capped = capTimelineFrames(merged.frames);
+
 				// Debounce cache save
 				if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
 				cacheSaveTimer = setTimeout(() => {
 					cacheSaveTimer = null;
-					saveFramesToCache(merged.frames, state.currentDate);
+					saveFramesToCache(capped.frames, state.currentDate);
 				}, CACHE_SAVE_DEBOUNCE_MS);
 
 				return {
-					frames: merged.frames,
-					frameTimestamps: merged.timestamps,
+					frames: capped.frames,
+					frameTimestamps: capped.timestamps,
 					pendingDateSwap: false,
 					isLoading: false,
-					loadingProgress: { loaded: merged.frames.length, isStreaming: true },
+					loadingProgress: { loaded: capped.frames.length, isStreaming: true },
 					message: null,
 					error: null,
 					newFramesCount: 0,
@@ -264,21 +282,23 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 			requestRetryCount = 0; // Reset retry count on success
 
+			const capped = capTimelineFrames(merged.frames);
+
 			// Debounce cache save - don't save on every flush
 			if (cacheSaveTimer) {
 				clearTimeout(cacheSaveTimer);
 			}
 			cacheSaveTimer = setTimeout(() => {
 				cacheSaveTimer = null;
-				saveFramesToCache(merged.frames, state.currentDate);
+				saveFramesToCache(capped.frames, state.currentDate);
 			}, CACHE_SAVE_DEBOUNCE_MS);
 
 			return {
-				frames: merged.frames,
-				frameTimestamps: merged.timestamps,
+				frames: capped.frames,
+				frameTimestamps: capped.timestamps,
 				isLoading: false,
 				loadingProgress: {
-					loaded: merged.frames.length,
+					loaded: capped.frames.length,
 					isStreaming: true
 				},
 				message: null,
