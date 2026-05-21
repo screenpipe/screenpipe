@@ -2434,6 +2434,7 @@ type ChatRenderItem =
       message: Message;
       hideWhenCollapsedBy?: string;
       hideIntentLabelWhenCollapsedBy?: string;
+      showActionsWhenExpandedBy?: string;
     }
   | {
       type: "collapsed-steer-work";
@@ -2528,6 +2529,9 @@ function buildCollapsedSteerRenderItems(
         type: "message",
         message,
         hideIntentLabelWhenCollapsedBy: isFinalAssistant && hiddenAssistants.length > 0
+          ? collapsedWorkId
+          : undefined,
+        showActionsWhenExpandedBy: message.role === "user" && message.intent === "steer" && hiddenAssistants.length > 0
           ? collapsedWorkId
           : undefined,
       });
@@ -7851,6 +7855,10 @@ export function StandaloneChat({
               const shouldSuppressIntentLabel = item.hideIntentLabelWhenCollapsedBy &&
                 !expandedSteerWorkIds.has(item.hideIntentLabelWhenCollapsedBy);
               const intentLabel = shouldSuppressIntentLabel ? null : getMessageIntentLabel(message);
+              const isSteerUserMessage = message.role === "user" && message.intent === "steer";
+              const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
+              const canShowMessageActions = !item.showActionsWhenExpandedBy ||
+                expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
                 .find((candidate) => candidate.role === "assistant");
@@ -7895,7 +7903,7 @@ export function StandaloneChat({
               {hideSupersededSteerBody ? null : (
                 <div
                 onMouseDown={(e) => {
-                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  if (!canEditMessage || editingMessageId === message.id) return;
                   // Stage caret position from the click coords (still on live
                   // DOM), but defer entering edit mode to mouseup. Letting
                   // the user drag-select text inside their own messages
@@ -7906,7 +7914,7 @@ export function StandaloneChat({
                   pendingEditDownXYRef.current = { x: e.clientX, y: e.clientY };
                 }}
                 onMouseUp={(e) => {
-                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  if (!canEditMessage || editingMessageId === message.id) return;
                   const down = pendingEditDownXYRef.current;
                   pendingEditDownXYRef.current = null;
                   // If the mouse moved more than ~3px between down and up,
@@ -7925,7 +7933,7 @@ export function StandaloneChat({
                   message.role === "user"
                     ? "bg-muted/60 text-foreground px-4 py-3"
                     : "bg-background text-foreground py-1",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
+                  canEditMessage && editingMessageId !== message.id && "cursor-text",
                   // In edit mode, keep the bubble at full available width so it
                   // doesn't shrink or look like a separate small input.
                   editingMessageId === message.id && message.role === "user" && "w-full"
@@ -8004,7 +8012,7 @@ export function StandaloneChat({
                 )}
               </div>
               )}
-              {!hideSupersededSteerBody ? (
+              {!hideSupersededSteerBody && canShowMessageActions ? (
                 <>
                 {/* Action buttons - appear on hover, outside the message box */}
                 {editingMessageId !== message.id && (
@@ -8024,7 +8032,7 @@ export function StandaloneChat({
                         <Copy className="h-3 w-3" />
                       )}
                     </button>
-                    {message.role === "user" && !isLoading && (
+                    {canEditMessage && (
                       <button
                         type="button"
                         onMouseUp={(e) => e.stopPropagation()}
