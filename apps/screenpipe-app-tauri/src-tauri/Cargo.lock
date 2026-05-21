@@ -10580,7 +10580,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.248"
+version = "2.4.249"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -10835,6 +10835,7 @@ dependencies = [
  "reqwest 0.13.3",
  "screenpipe-events",
  "screenpipe-secrets",
+ "screenpipe-vault",
  "serde",
  "serde_json",
  "serde_yaml",

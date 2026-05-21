@@ -364,7 +364,18 @@ impl ServerCore {
                         Err(e) => warn!("oauth: sweep_shadowed_default_slots failed: {}", e),
                     }
 
-                    server.secret_store = Some(Arc::new(store));
+                    let store_arc = Arc::new(store);
+
+                    // Start the background OAuth refresh scheduler. Keeps
+                    // refresh-token sliding windows alive on providers like
+                    // Zoom (15h inactivity expiry) — without this, a token
+                    // can rot overnight and the only recovery is manual
+                    // reconnect. See oauth_refresh_scheduler module docs.
+                    let refresher =
+                        screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler::new();
+                    refresher.start(store_arc.clone());
+
+                    server.secret_store = Some(store_arc);
                 }
                 Err(e) => {
                     warn!("failed to initialize secret store: {}", e);

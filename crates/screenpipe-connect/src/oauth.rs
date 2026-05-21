@@ -111,6 +111,12 @@ fn store_key(integration_id: &str, instance: Option<&str>) -> String {
     }
 }
 
+/// Prefix every OAuth secret key starts with — used by the background
+/// refresh scheduler to enumerate stored tokens via `SecretStore::list`.
+pub fn store_key_prefix() -> &'static str {
+    "oauth:"
+}
+
 // ---------------------------------------------------------------------------
 // Legacy plaintext file location  (~/.screenpipe/{id}-oauth.json)
 //
@@ -400,6 +406,12 @@ pub async fn write_oauth_token_instance(
     if let Some(expires_in) = data["expires_in"].as_u64() {
         stored["expires_at"] = Value::from(unix_now() + expires_in);
     }
+    // Stamp every write — used by the background refresh scheduler to keep
+    // sliding refresh-token windows alive on providers like Zoom (15h inactivity
+    // expiry on the refresh token itself). Without this, a token can sit unused
+    // long enough that the refresh token rots and the only recovery is manual
+    // reconnect.
+    stored["last_refreshed_at"] = Value::from(unix_now());
 
     // SecretStore path — no plaintext shadow on disk.
     if let Some(s) = store {
