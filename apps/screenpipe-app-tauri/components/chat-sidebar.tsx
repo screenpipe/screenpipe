@@ -54,6 +54,7 @@ import {
   formatPipeCountdown,
   formatPipeElapsed,
 } from "@/components/pipe-activity-indicator";
+import { LiveSignal } from "@/components/live-signal";
 import {
   useChatStore,
   useChatActions,
@@ -1513,30 +1514,6 @@ function RowRightSignal({
         {label}
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-// Quadrant frames — a square fills clockwise, then empties. Sharp Unicode
-// block chars keep the per-DESIGN.md no-curves rule. Categorically different
-// motion from the static unread `█` so the row reads "live" at a glance.
-const LIVE_FRAMES = ["▘", "▀", "▛", "█", "▜", "▐", "▝", "·"] as const;
-
-function LiveSignal({ ariaLabel = "loading" }: { ariaLabel?: string }) {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const id = setInterval(
-      () => setFrame((f) => (f + 1) % LIVE_FRAMES.length),
-      140
-    );
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <span
-      className="font-mono text-[10px] leading-none text-foreground inline-flex items-center justify-center w-2.5 h-2.5 shrink-0"
-      aria-label={ariaLabel}
-    >
-      {LIVE_FRAMES[frame]}
-    </span>
   );
 }
 
