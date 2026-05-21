@@ -255,7 +255,7 @@ impl UpdatesManager {
                 .ok()
                 .flatten()
                 .map(|s| s.auto_update)
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(true)?;

@@ -120,7 +120,7 @@ export default function GeneralSettings() {
                 </div>
                 <Switch
                   id="auto-update-toggle"
-                  checked={settings?.autoUpdate ?? true}
+                  checked={settings?.autoUpdate ?? false}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }
