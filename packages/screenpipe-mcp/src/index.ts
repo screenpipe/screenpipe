@@ -278,7 +278,8 @@ const TOOLS: Tool[] = [
         content_type: {
           type: "string",
           enum: ["all", "ocr", "audio", "input", "accessibility", "memory"],
-          description: "Filter by content type. 'accessibility' is preferred for screen text (OS-native). 'ocr' is fallback for apps without accessibility support. Default: 'all'.",
+          description:
+            "Filter by content type. NOTE on screen text: 'ocr' is a legacy label — it returns ALL screen-text rows, which are accessibility-derived for most apps (the result tag [Screen·a11y] vs [Screen·ocr] tells you which). Use 'ocr' for screen text (covers both paths), 'audio' for transcriptions, 'input' for keyboard/mouse events, 'memory' for stored facts. Default: 'all'.",
           default: "all",
         },
         limit: { type: "integer", description: "Max results (default 10, max 20). Start with 5 for exploration.", default: 10 },
@@ -797,7 +798,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - **Use max_content_length=500** to keep responses compact
 - **Don't use q for audio** — transcriptions are noisy, q filters too aggressively. Search audio by time range and speaker instead
 - **app_name is case-sensitive** — use exact names: "Google Chrome" not "chrome"
-- **content_type=accessibility is preferred** for screen text (OS-native). ocr is fallback for apps without accessibility support
+- **Screen text is mostly accessibility-derived, not OCR.** Screenpipe walks the OS accessibility tree first; OCR is only a fallback (terminals, canvas-rendered apps, games). \`content_type=ocr\` returns both paths — the result label \`[Screen·a11y]\` vs \`[Screen·ocr]\` tells you which produced the row. Don't pre-filter to a11y/ocr unless you specifically need one or the other
 
 ## Common Patterns
 
@@ -961,6 +962,18 @@ function truncateMiddle(text: string | null | undefined, max: number): string {
 // while still giving the model enough text to reason over.
 const DEFAULT_SEARCH_CONTENT_TRUNCATE = 1000;
 
+// Format the screen-text tag for a result. The server's `text_source` is
+// "accessibility" (OS-native tree, primary path) or "ocr" (fallback for
+// terminals, canvas, weak a11y). Older rows have no text_source, so we
+// fall back to a bare `[Screen]`. The result type is historically called
+// OCR in the engine but most captures are accessibility-derived — surface
+// the actual source so the model picks filters correctly.
+function screenTag(textSource: unknown): string {
+  if (textSource === "accessibility") return "[Screen·a11y]";
+  if (textSource === "ocr") return "[Screen·ocr]";
+  return "[Screen]";
+}
+
 // ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
@@ -1022,8 +1035,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           if (result.type === "OCR") {
             const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";
+            // result.type is "OCR" by historical naming, but content.text_source
+            // tells us if the text actually came from the accessibility tree
+            // (primary path) or OCR (fallback). Use it to label honestly.
+            const tag = screenTag(content.text_source);
             formattedResults.push(
-              `[OCR] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
+              `${tag} ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
                 `${content.timestamp || ""}\n` +
                 `${truncateMiddle(content.text || "", effectiveCap)}` +
                 tagsStr
@@ -1724,11 +1741,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const formatted = results.map((r) => {
           // Flat shape from search_with_text_positions: { app_name, frame_id,
-          // timestamp, text, ... }. Truncate to avoid blowing past tool-output
-          // limits when matches contain full OCR blobs.
+          // timestamp, text, text_source, ... }. Truncate to keep responses
+          // under tool-output limits. text_source is "accessibility" (primary)
+          // or "ocr" (fallback) — show it so the model knows which path hit.
           const text = (r.text as string) || (r.transcription as string) || "";
+          const tag = screenTag(r.text_source);
           return (
-            `[frame:${r.frame_id ?? "?"}] ${r.app_name ?? "?"} | ${r.timestamp ?? ""}\n` +
+            `${tag} [frame:${r.frame_id ?? "?"}] ${r.app_name ?? "?"} | ${r.timestamp ?? ""}\n` +
             truncateMiddle(text, DEFAULT_SEARCH_CONTENT_TRUNCATE)
           );
         });
