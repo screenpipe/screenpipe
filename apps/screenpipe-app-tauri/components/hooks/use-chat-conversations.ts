@@ -28,7 +28,6 @@ import {
   CHAT_HISTORY_INITIAL_LIMIT,
   type ConversationMeta,
 } from "@/lib/chat-storage";
-import type { SourceCitation } from "@/lib/source-citations";
 
 
 // --- Types (mirrored from standalone-chat.tsx) ---
@@ -57,7 +56,6 @@ export interface Message {
   images?: string[];
   timestamp: number;
   contentBlocks?: ContentBlock[];
-  sourceCitations?: SourceCitation[];
   model?: string;
   provider?: string;
   interruptedBySteer?: boolean;
@@ -403,7 +401,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           timestamp: m.timestamp,
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
-          ...(m.sourceCitations?.length ? { sourceCitations: m.sourceCitations } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
@@ -789,7 +786,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         timestamp: m.timestamp,
         ...(m.displayContent ? { displayContent: m.displayContent } : {}),
         ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
-        ...((m as any).sourceCitations?.length ? { sourceCitations: (m as any).sourceCitations } : {}),
         ...((m as any).images?.length
           ? { images: (m as any).images }
           : (m as any).image
@@ -896,7 +892,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
-          ...(m.sourceCitations?.length ? { sourceCitations: m.sourceCitations } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),

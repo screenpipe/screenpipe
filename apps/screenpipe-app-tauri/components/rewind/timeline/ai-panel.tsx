@@ -446,7 +446,7 @@ Please analyze the data in context of this question.`;
 				{ id: generateId(), role: "assistant", content: "Processing..." },
 			]);
 
-			const result = await commands.piPrompt("chat", prompt, null);
+			const result = await commands.piPrompt("chat", prompt, null, null);
 			if (result.status === "error") {
 				piStreamingRef.current = false;
 				setChatMessages((prev) => [

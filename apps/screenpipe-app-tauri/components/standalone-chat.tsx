@@ -2427,15 +2427,15 @@ type ChatRenderItem =
   | {
       type: "message";
       message: Message;
-      suppressIntentLabel?: boolean;
-      steerCollapseGroupId?: string;
-      hiddenInCollapsedGroup?: string;
+      hideWhenCollapsedBy?: string;
+      hideIntentLabelWhenCollapsedBy?: string;
     }
   | {
       type: "collapsed-steer-work";
       id: string;
       rootUser: Message;
       hiddenAssistants: Message[];
+      segmentMessages: Message[];
     };
 
 function buildCollapsedSteerRenderItems(
@@ -2503,6 +2503,7 @@ function buildCollapsedSteerRenderItems(
         id: collapsedWorkId,
         rootUser: root,
         hiddenAssistants,
+        segmentMessages: segment,
       });
       collapsedWorkInserted = true;
     };
@@ -2513,7 +2514,7 @@ function buildCollapsedSteerRenderItems(
         items.push({
           type: "message",
           message,
-          hiddenInCollapsedGroup: collapsedWorkId,
+          hideWhenCollapsedBy: collapsedWorkId,
         });
         continue;
       }
@@ -2521,8 +2522,9 @@ function buildCollapsedSteerRenderItems(
       items.push({
         type: "message",
         message,
-        suppressIntentLabel: isFinalAssistant && hiddenAssistants.length > 0,
-        steerCollapseGroupId: isFinalAssistant && hiddenAssistants.length > 0 ? collapsedWorkId : undefined,
+        hideIntentLabelWhenCollapsedBy: isFinalAssistant && hiddenAssistants.length > 0
+          ? collapsedWorkId
+          : undefined,
       });
     }
     pushCollapsedWork();
@@ -2533,8 +2535,9 @@ function buildCollapsedSteerRenderItems(
   return items;
 }
 
-function collapsedSteerWorkDuration(rootUser: Message, hiddenAssistants: Message[]): string {
-  const timestamps = [rootUser.timestamp, ...hiddenAssistants.map((message) => message.timestamp)]
+function collapsedSteerWorkDuration(item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>): string {
+  const timestamps = item.segmentMessages
+    .map((message) => message.timestamp)
     .filter((timestamp) => Number.isFinite(timestamp));
   if (timestamps.length < 2) return "Worked";
   const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
@@ -2554,7 +2557,7 @@ function CollapsedSteerWorkRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const label = collapsedSteerWorkDuration(item.rootUser, item.hiddenAssistants);
+  const label = collapsedSteerWorkDuration(item);
 
   return (
     <motion.div
@@ -2570,12 +2573,12 @@ function CollapsedSteerWorkRow({
         <button
           type="button"
           onClick={onToggle}
-          className="w-full flex items-center gap-2 py-1 text-left text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 py-0.5 text-left text-muted-foreground/70 hover:text-muted-foreground transition-colors"
         >
-          <span className="text-lg leading-none">{label}</span>
-          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          <span className="text-xs leading-none">{label}</span>
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         </button>
-        <div className="w-full border-t border-border/50" />
+        <div className="mt-0.5 w-full border-t border-border/20" />
       </div>
     </motion.div>
   );
@@ -5283,7 +5286,7 @@ export function StandaloneChat({
               // Re-send the last prompt
               const lastUserMsg = messages.findLast(m => m.role === "user");
               if (lastUserMsg?.content) {
-                commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null).catch(() => {});
+                commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null, null).catch(() => {});
               }
             }
             return;
@@ -6284,6 +6287,7 @@ export function StandaloneChat({
         piSessionIdRef.current,
         promptMessage,
         piImages.length > 0 ? piImages : null,
+        null,
       );
 
       // Race: user hit "+ NEW" before Pi finished registering the new session
@@ -6310,6 +6314,7 @@ export function StandaloneChat({
               piSessionIdRef.current,
               promptMessage,
               piImages.length > 0 ? piImages : null,
+              null,
             );
           }
         } catch (e) {
@@ -6805,6 +6810,7 @@ export function StandaloneChat({
             sessionId,
             prompt,
             combinedImages.length > 0 ? combinedImages : null,
+            preview,
           );
 
       if (result.status !== "ok") {
@@ -6969,10 +6975,13 @@ export function StandaloneChat({
       ? turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.id === queuedDisplay.turnIntentId)
       : turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.queueId === prompt.id);
     const turnIntentId = existingTurnIntent?.id ?? `queued-steer-${prompt.id}`;
+    const optimisticQueuedContent = existingTurnIntent?.kind === "steer"
+      ? existingTurnIntent.preview
+      : existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview;
     const optimisticQueuedUser: Message = {
       id: turnIntentId,
       role: "user",
-      content: existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview,
+      content: optimisticQueuedContent,
       ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
       ...(queuedDisplay?.images.length ? { images: [...queuedDisplay.images] } : {}),
       intent: "steer",
@@ -7794,13 +7803,12 @@ export function StandaloneChat({
               }
 
               const message = item.message;
-              if (item.hiddenInCollapsedGroup && !expandedSteerWorkIds.has(item.hiddenInCollapsedGroup)) {
+              if (item.hideWhenCollapsedBy && !expandedSteerWorkIds.has(item.hideWhenCollapsedBy)) {
                 return null;
               }
               const messageIndex = visibleMessages.findIndex((candidate) => candidate.id === message.id);
-              const shouldSuppressIntentLabel = item.suppressIntentLabel &&
-                item.steerCollapseGroupId &&
-                !expandedSteerWorkIds.has(item.steerCollapseGroupId);
+              const shouldSuppressIntentLabel = item.hideIntentLabelWhenCollapsedBy &&
+                !expandedSteerWorkIds.has(item.hideIntentLabelWhenCollapsedBy);
               const intentLabel = shouldSuppressIntentLabel ? null : getMessageIntentLabel(message);
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
@@ -8321,7 +8329,8 @@ export function StandaloneChat({
                 <div ref={queuedScrollRef} className="max-h-[112px] overflow-y-auto scrollbar-minimal">
                   {queuedPrompts.map((p, i) => {
                     const isBusy = queuedActionPromptId === p.id;
-                    const label = p.preview || "image follow-up";
+                    const queuedDisplay = queuedDisplayBySessionRef.current[currentQueueSessionId]?.[p.id];
+                    const label = queuedDisplay?.preview || p.preview || "image follow-up";
                     return (
                       <motion.div
                         key={p.id}

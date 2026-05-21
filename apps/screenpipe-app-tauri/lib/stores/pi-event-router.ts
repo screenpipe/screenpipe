@@ -715,7 +715,6 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
             timestamp: m.timestamp,
             ...(blocks?.length ? { contentBlocks: blocks } : {}),
-            ...(m.sourceCitations?.length ? { sourceCitations: m.sourceCitations } : {}),
             ...(m.images?.length ? { images: m.images } : {}),
             ...(m.model ? { model: m.model } : {}),
             ...(m.provider ? { provider: m.provider } : {}),
