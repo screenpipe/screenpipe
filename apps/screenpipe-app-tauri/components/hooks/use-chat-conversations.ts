@@ -28,6 +28,7 @@ import {
   CHAT_HISTORY_INITIAL_LIMIT,
   type ConversationMeta,
 } from "@/lib/chat-storage";
+import type { SourceCitation } from "@/lib/source-citations";
 
 
 // --- Types (mirrored from standalone-chat.tsx) ---
@@ -51,12 +52,16 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   intent?: "steer";
+  turnIntentId?: string;
   displayContent?: string;
   images?: string[];
   timestamp: number;
   contentBlocks?: ContentBlock[];
+  sourceCitations?: SourceCitation[];
   model?: string;
   provider?: string;
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
 }
 
 // --- Hook options ---
@@ -394,12 +399,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           role: m.role,
           content,
           ...(m.intent ? { intent: m.intent } : {}),
+          ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
+          ...(m.sourceCitations?.length ? { sourceCitations: m.sourceCitations } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
+          ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+          ...(m.steeredResponse ? { steeredResponse: true } : {}),
         };
       }),
       createdAt: existing?.createdAt ?? Date.now(),
@@ -775,9 +784,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         id: m.id,
         role: m.role,
         content: m.content,
+        ...((m as any).intent ? { intent: (m as any).intent } : {}),
+        ...((m as any).turnIntentId ? { turnIntentId: (m as any).turnIntentId } : {}),
         timestamp: m.timestamp,
         ...(m.displayContent ? { displayContent: m.displayContent } : {}),
         ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
+        ...((m as any).sourceCitations?.length ? { sourceCitations: (m as any).sourceCitations } : {}),
         ...((m as any).images?.length
           ? { images: (m as any).images }
           : (m as any).image
@@ -785,6 +797,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             : {}),
         ...((m as any).model ? { model: (m as any).model } : {}),
         ...((m as any).provider ? { provider: (m as any).provider } : {}),
+        ...((m as any).interruptedBySteer ? { interruptedBySteer: true } : {}),
+        ...((m as any).steeredResponse ? { steeredResponse: true } : {}),
       }));
       // Make sure a record exists, then seed messages and mark hydrated.
       if (!store.sessions[conv.id]) {
@@ -878,11 +892,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           id: m.id,
           role: m.role,
           content,
+          ...(m.intent ? { intent: m.intent } : {}),
+          ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
+          ...(m.sourceCitations?.length ? { sourceCitations: m.sourceCitations } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
+          ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+          ...(m.steeredResponse ? { steeredResponse: true } : {}),
         };
       }),
       createdAt: Date.now(),

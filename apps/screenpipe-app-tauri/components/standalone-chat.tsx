@@ -2413,6 +2413,174 @@ function isSteeredAssistantMessage(message: Message): boolean {
   return message.role === "assistant" && (message.intent === "steer" || message.steeredResponse === true);
 }
 
+function hasRenderableAssistantBody(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  if (message.content && message.content !== "Processing...") return true;
+  return Boolean(message.contentBlocks?.length);
+}
+
+function isNormalUserMessage(message: Message): boolean {
+  return message.role === "user" && message.intent !== "steer";
+}
+
+type ChatRenderItem =
+  | {
+      type: "message";
+      message: Message;
+      suppressIntentLabel?: boolean;
+      steerCollapseGroupId?: string;
+      hiddenInCollapsedGroup?: string;
+    }
+  | {
+      type: "collapsed-steer-work";
+      id: string;
+      rootUser: Message;
+      hiddenAssistants: Message[];
+    };
+
+function buildCollapsedSteerRenderItems(
+  messages: Message[],
+  options: { canCollapseSteerWork: boolean }
+): ChatRenderItem[] {
+  const items: ChatRenderItem[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const root = messages[i];
+    if (!root || !isNormalUserMessage(root)) {
+      items.push({ type: "message", message: root });
+      continue;
+    }
+
+    let end = i + 1;
+    while (end < messages.length && !isNormalUserMessage(messages[end])) {
+      end += 1;
+    }
+
+    const segment = messages.slice(i, end);
+    const steerUsers = segment.filter((message) => message.role === "user" && message.intent === "steer");
+    if (steerUsers.length === 0 || !options.canCollapseSteerWork) {
+      items.push(...segment.map((message) => ({ type: "message" as const, message })));
+      i = end - 1;
+      continue;
+    }
+
+    const latestSteer = steerUsers[steerUsers.length - 1];
+    const latestSteerIndex = segment.findIndex((message) => message.id === latestSteer?.id);
+    const assistants = segment.filter((message) => message.role === "assistant");
+    const finalAssistant =
+      (latestSteer?.turnIntentId
+        ? [...assistants].reverse().find((message) => message.turnIntentId === latestSteer.turnIntentId && hasRenderableAssistantBody(message))
+        : undefined) ??
+      [...segment.slice(Math.max(0, latestSteerIndex + 1))]
+        .reverse()
+        .find((message) => message.role === "assistant" && hasRenderableAssistantBody(message)) ??
+      [...assistants].reverse().find(hasRenderableAssistantBody) ??
+      assistants[assistants.length - 1];
+    const hasCompletedLatestSteerResponse = Boolean(
+      finalAssistant &&
+      finalAssistant.content !== "Processing..." &&
+      hasRenderableAssistantBody(finalAssistant)
+    );
+    if (!hasCompletedLatestSteerResponse) {
+      items.push(...segment.map((message) => ({ type: "message" as const, message })));
+      i = end - 1;
+      continue;
+    }
+    const hiddenAssistantIds = new Set(
+      assistants
+        .filter((message) => message.id !== finalAssistant?.id)
+        .map((message) => message.id)
+    );
+    const hiddenAssistants = assistants.filter((message) => hiddenAssistantIds.has(message.id));
+    const collapsedWorkId = `collapsed-steer-${root.id}`;
+
+    items.push({ type: "message", message: root });
+    let collapsedWorkInserted = false;
+    const pushCollapsedWork = () => {
+      if (collapsedWorkInserted || hiddenAssistants.length === 0) return;
+      items.push({
+        type: "collapsed-steer-work",
+        id: collapsedWorkId,
+        rootUser: root,
+        hiddenAssistants,
+      });
+      collapsedWorkInserted = true;
+    };
+
+    for (const message of segment.slice(1)) {
+      if (hiddenAssistantIds.has(message.id)) {
+        pushCollapsedWork();
+        items.push({
+          type: "message",
+          message,
+          hiddenInCollapsedGroup: collapsedWorkId,
+        });
+        continue;
+      }
+      const isFinalAssistant = message.id === finalAssistant?.id;
+      items.push({
+        type: "message",
+        message,
+        suppressIntentLabel: isFinalAssistant && hiddenAssistants.length > 0,
+        steerCollapseGroupId: isFinalAssistant && hiddenAssistants.length > 0 ? collapsedWorkId : undefined,
+      });
+    }
+    pushCollapsedWork();
+
+    i = end - 1;
+  }
+
+  return items;
+}
+
+function collapsedSteerWorkDuration(rootUser: Message, hiddenAssistants: Message[]): string {
+  const timestamps = [rootUser.timestamp, ...hiddenAssistants.map((message) => message.timestamp)]
+    .filter((timestamp) => Number.isFinite(timestamp));
+  if (timestamps.length < 2) return "Worked";
+  const durationMs = Math.max(...timestamps) - Math.min(...timestamps);
+  if (durationMs <= 0) return "Worked";
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `Worked for ${seconds}s`;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `Worked for ${minutes} min${minutes === 1 ? "" : "s"}`;
+}
+
+function CollapsedSteerWorkRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: Extract<ChatRenderItem, { type: "collapsed-steer-work" }>;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const label = collapsedSteerWorkDuration(item.rootUser, item.hiddenAssistants);
+
+  return (
+    <motion.div
+      key={item.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.2 }}
+      className="relative flex min-w-0 justify-start"
+      data-testid="chat-collapsed-steer-work"
+    >
+      <div className="group/message flex flex-col items-start w-full min-w-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="w-full flex items-center gap-2 py-1 text-left text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="text-lg leading-none">{label}</span>
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        <div className="w-full border-t border-border/50" />
+      </div>
+    </motion.div>
+  );
+}
+
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -2792,6 +2960,7 @@ export function StandaloneChat({
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   // Prompts the user has queued while a previous one is still streaming.
@@ -4816,6 +4985,7 @@ export function StandaloneChat({
             const queuedDisplay = pendingDisplay ?? consumeQueuedDisplayForStartedMessage(sidForStartedUser, text);
             const matchedTurnIntent = preMatchedTurnIntent ?? findTurnIntentForUserStart(sidForStartedUser, text, queuedDisplay);
             if (matchedTurnIntent?.consumedAssistantId) {
+              pendingNextPiUserIntentRef.current = null;
               if (pendingNextPiUserDisplayRef.current?.turnIntentId === matchedTurnIntent.id) {
                 pendingNextPiUserDisplayRef.current = null;
               }
@@ -4867,6 +5037,7 @@ export function StandaloneChat({
               role: "assistant",
               content: "Processing...",
               ...(nextUserIntent === "steer" ? { intent: "steer" as const } : {}),
+              ...(matchedTurnIntent ? { turnIntentId: matchedTurnIntent.id } : {}),
               ...(nextUserIntent === "steer" ? { steeredResponse: true } : {}),
               timestamp: Date.now(),
               model: activePreset?.model,
@@ -6571,6 +6742,54 @@ export function StandaloneChat({
       createdAt: latest.createdAt,
     });
 
+    let precreatedSteerAssistantId: string | null = null;
+    if (hasActiveAssistant) {
+      const steerAssistantId = `${latest.turnIntentId}-assistant`;
+      precreatedSteerAssistantId = steerAssistantId;
+      const steerAssistantPlaceholder: Message = {
+        id: steerAssistantId,
+        role: "assistant",
+        content: "Processing...",
+        intent: "steer",
+        turnIntentId: latest.turnIntentId,
+        steeredResponse: true,
+        timestamp: Date.now(),
+        model: activePreset?.model,
+        provider: activePreset?.provider,
+      };
+      let nextRowsAfterAssistant: Message[] | null = null;
+      setMessages((prev) => {
+        if (prev.some((message) => message.id === steerAssistantId)) return prev;
+        const steerUserIndex = prev.findIndex((message) => message.id === latest.optimisticUserId);
+        const insertIndex = steerUserIndex >= 0 ? steerUserIndex + 1 : prev.length;
+        const next = [
+          ...prev.slice(0, insertIndex),
+          steerAssistantPlaceholder,
+          ...prev.slice(insertIndex),
+        ];
+        nextRowsAfterAssistant = next;
+        return next;
+      });
+      if (nextRowsAfterAssistant) {
+        void saveConversation(nextRowsAfterAssistant, {
+          refreshHistory: false,
+          syncActiveConversation: false,
+        });
+        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterAssistant as any);
+      }
+      markTurnIntentConsumed(latest.turnIntentId, steerAssistantId);
+      piMessageIdRef.current = steerAssistantId;
+      piStreamingTextRef.current = "";
+      piContentBlocksRef.current = [];
+      useChatStore.getState().actions.setStreaming(sessionId, {
+        streamingMessageId: steerAssistantId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+    }
+
     lastUserMessageRef.current = latest.content;
     setIsLoading(true);
     setIsStreaming(true);
@@ -6593,6 +6812,12 @@ export function StandaloneChat({
         pendingNextPiUserDisplayRef.current = null;
         optimisticSteerRef.current = null;
         removeTurnIntent(latest.turnIntentId);
+        if (precreatedSteerAssistantId) {
+          setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
+          piMessageIdRef.current = null;
+          piStreamingTextRef.current = "";
+          piContentBlocksRef.current = [];
+        }
         pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
         setIsLoading(false);
         setIsStreaming(false);
@@ -6603,6 +6828,12 @@ export function StandaloneChat({
       pendingNextPiUserDisplayRef.current = null;
       optimisticSteerRef.current = null;
       removeTurnIntent(latest.turnIntentId);
+      if (precreatedSteerAssistantId) {
+        setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
+        piMessageIdRef.current = null;
+        piStreamingTextRef.current = "";
+        piContentBlocksRef.current = [];
+      }
       pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
       setIsLoading(false);
       setIsStreaming(false);
@@ -7535,8 +7766,42 @@ export function StandaloneChat({
               return true;
             });
 
-            return visibleMessages.map((message, messageIndex) => {
-              const intentLabel = getMessageIntentLabel(message);
+            const renderItems = buildCollapsedSteerRenderItems(visibleMessages, {
+              canCollapseSteerWork: !isLoading && !isStreaming && !piMessageIdRef.current,
+            });
+
+            return renderItems.map((item) => {
+              if (item.type === "collapsed-steer-work") {
+                const expanded = expandedSteerWorkIds.has(item.id);
+                return (
+                  <CollapsedSteerWorkRow
+                    key={item.id}
+                    item={item}
+                    expanded={expanded}
+                    onToggle={() => {
+                      setExpandedSteerWorkIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(item.id)) {
+                          next.delete(item.id);
+                        } else {
+                          next.add(item.id);
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                );
+              }
+
+              const message = item.message;
+              if (item.hiddenInCollapsedGroup && !expandedSteerWorkIds.has(item.hiddenInCollapsedGroup)) {
+                return null;
+              }
+              const messageIndex = visibleMessages.findIndex((candidate) => candidate.id === message.id);
+              const shouldSuppressIntentLabel = item.suppressIntentLabel &&
+                item.steerCollapseGroupId &&
+                !expandedSteerWorkIds.has(item.steerCollapseGroupId);
+              const intentLabel = shouldSuppressIntentLabel ? null : getMessageIntentLabel(message);
               const nextAssistant = visibleMessages
                 .slice(messageIndex + 1)
                 .find((candidate) => candidate.role === "assistant");
