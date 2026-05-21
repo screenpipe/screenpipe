@@ -3190,6 +3190,7 @@ export function StandaloneChat({
   const piPresetSwitchPromiseRef = useRef<Promise<void> | null>(null);
   const piCrashCountRef = useRef(0);
   const piLastCrashRef = useRef(0);
+  const piTerminationDedupRef = useRef<Record<string, number>>({});
   const piThinkingStartRef = useRef<number | null>(null);
   const piSessionSyncedRef = useRef(false);
   // Initial Pi session id. The chat panel's foreground bus registration
@@ -5436,10 +5437,17 @@ export function StandaloneChat({
       // Replaces the prior `listen("pi_terminated", ...)`. The bus
       // mirrors `agent_terminated`; legacy `pi_terminated` is a Stage 5
       // cleanup target.
-      busUnregistrations.push(onAgentTerminated((payload) => {
+      busUnregistrations.push(onAgentTerminated(async (payload) => {
         if (!mounted) return;
         if (payload.sessionId !== piSessionIdRef.current) return;
         const terminatedPid = payload.pid;
+        const termKey = `${payload.sessionId}:${typeof terminatedPid === "number" ? terminatedPid : "unknown"}`;
+        const nowMs = Date.now();
+        const lastSeen = piTerminationDedupRef.current[termKey] ?? 0;
+        if (nowMs - lastSeen < 4000) {
+          return;
+        }
+        piTerminationDedupRef.current[termKey] = nowMs;
         if (typeof terminatedPid === "number" && piIntentionallyStoppedPidsRef.current.delete(terminatedPid)) {
           return;
         }
@@ -5448,6 +5456,13 @@ export function StandaloneChat({
           return;
         }
         console.log("[Pi] Process terminated, pid:", terminatedPid);
+        try {
+          const info = await commands.piInfo(piSessionIdRef.current);
+          if (info.status === "ok" && info.data.running && info.data.pid !== terminatedPid) {
+            setPiInfo(info.data);
+            return;
+          }
+        } catch {}
 
         // If a message was in flight, append error to the message so the user
         // knows the agent stopped unexpectedly (not just "completed").
