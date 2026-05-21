@@ -326,6 +326,24 @@ struct PendingClipboard {
     window_title: Option<String>,
 }
 
+/// Consecutive `WM_MOUSEWHEEL` ticks within this window are coalesced into a
+/// single `Scroll` event (summed `delta_y`). Wheel ticks fire far more often
+/// than clicks, so one event per tick floods `ui_events` with little added
+/// signal (measured: 1121 scroll vs. 15 click events in a 2-min session).
+/// Coalescing preserves total scroll distance while cutting row count ~10x.
+const SCROLL_AGGREGATION_WINDOW_MS: u128 = 500;
+
+/// In-flight scroll aggregation state (None when not currently scrolling).
+struct ScrollAggregator {
+    last_scroll: Instant,
+    accumulated_delta: i32,
+    coords: (i32, i32),
+    app_name: Option<String>,
+    window_title: Option<String>,
+    start_timestamp: chrono::DateTime<Utc>,
+    start_relative_ms: u64,
+}
+
 struct HookState {
     tx: Sender<UiEvent>,
     start: Instant,
@@ -344,6 +362,33 @@ struct HookState {
     /// Updated unconditionally at the top of mouse_hook_proc / keyboard_hook_proc so the UIA
     /// worker can defer tree captures while the user is actively typing/clicking/scrolling.
     last_input_at_ms: Arc<AtomicU64>,
+    /// In-flight scroll aggregator (None = not currently scrolling).
+    scroll_aggregator: Option<ScrollAggregator>,
+}
+
+/// Emit the accumulated scroll as a single `Scroll` event. `delta_y` is summed
+/// as i32 while aggregating and clamped to i16 (the wire type) on emit; real
+/// tick sums stay well within range.
+fn emit_aggregated_scroll(tx: &Sender<UiEvent>, agg: ScrollAggregator) {
+    let event = UiEvent {
+        id: None,
+        timestamp: agg.start_timestamp,
+        relative_ms: agg.start_relative_ms,
+        data: EventData::Scroll {
+            x: agg.coords.0,
+            y: agg.coords.1,
+            delta_x: 0,
+            delta_y: agg
+                .accumulated_delta
+                .clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        },
+        app_name: agg.app_name,
+        window_title: agg.window_title,
+        browser_url: None,
+        element: None,
+        frame_id: None,
+    };
+    let _ = tx.try_send(event);
 }
 
 // Thread-local storage for hook state
@@ -387,6 +432,7 @@ fn run_native_hooks(
             focused_element,
             pending_clipboard: Vec::new(),
             last_input_at_ms,
+            scroll_aggregator: None,
         }));
     });
 
@@ -491,10 +537,14 @@ fn run_native_hooks(
             }
         });
 
-        // Final text buffer flush
+        // Final flush on shutdown: text buffer + any in-flight scroll aggregation,
+        // so input buffered when recording stops isn't dropped.
         HOOK_STATE.with(|state| {
             if let Some(ref mut s) = *state.borrow_mut() {
                 flush_text_buffer(s);
+                if let Some(agg) = s.scroll_aggregator.take() {
+                    emit_aggregated_scroll(&s.tx, agg);
+                }
             }
         });
     }
@@ -760,6 +810,15 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                     return;
                 }
 
+                // Flush any in-flight scroll aggregation when a non-scroll mouse
+                // event arrives (e.g. a click right after scrolling), so the
+                // buffered scroll doesn't sit until the next wheel tick or timeout.
+                if msg != WM_MOUSEWHEEL {
+                    if let Some(agg) = s.scroll_aggregator.take() {
+                        emit_aggregated_scroll(&s.tx, agg);
+                    }
+                }
+
                 match msg {
                     WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => {
                         // Record activity
@@ -824,25 +883,38 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 
                         if s.config.capture_scroll {
                             // High word of mouseData contains wheel delta
-                            let delta = (mouse_struct.mouseData >> 16) as i16;
+                            let delta = (mouse_struct.mouseData >> 16) as i16 as i32;
+                            let now = Instant::now();
 
-                            let event = UiEvent {
-                                id: None,
-                                timestamp,
-                                relative_ms: t,
-                                data: EventData::Scroll {
-                                    x,
-                                    y,
-                                    delta_x: 0,
-                                    delta_y: delta,
-                                },
-                                app_name,
-                                window_title,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = s.tx.try_send(event);
+                            // Coalesce consecutive ticks within the aggregation window
+                            // into one event; otherwise flush the previous run and
+                            // start a fresh one seeded with this tick.
+                            let within_window = matches!(
+                                &s.scroll_aggregator,
+                                Some(agg) if now.duration_since(agg.last_scroll).as_millis() < SCROLL_AGGREGATION_WINDOW_MS
+                            );
+
+                            if within_window {
+                                if let Some(agg) = s.scroll_aggregator.as_mut() {
+                                    agg.accumulated_delta =
+                                        agg.accumulated_delta.saturating_add(delta);
+                                    agg.last_scroll = now;
+                                    agg.coords = (x, y);
+                                }
+                            } else {
+                                if let Some(agg) = s.scroll_aggregator.take() {
+                                    emit_aggregated_scroll(&s.tx, agg);
+                                }
+                                s.scroll_aggregator = Some(ScrollAggregator {
+                                    last_scroll: now,
+                                    accumulated_delta: delta,
+                                    coords: (x, y),
+                                    app_name,
+                                    window_title,
+                                    start_timestamp: timestamp,
+                                    start_relative_ms: t,
+                                });
+                            }
                         }
                     }
 
@@ -1517,6 +1589,7 @@ mod tests {
             focused_element: Arc::new(parking_lot::Mutex::new(None)),
             pending_clipboard: Vec::new(),
             last_input_at_ms: Arc::new(AtomicU64::new(0)),
+            scroll_aggregator: None,
         }
     }
 
