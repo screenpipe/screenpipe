@@ -169,31 +169,7 @@ impl UiRecorder {
             input_monitoring: cg_access::listen_preflight(),
         }
     }
-}
 
-// Free-function variants of the permission helpers, callable without
-// constructing a UiRecorder. Used by the Tauri host (where the engine is
-// linked in-process) to drive the Connections-page permission UI without
-// needing a direct cidre dependency.
-
-/// Check whether the current process has macOS Input Monitoring granted.
-/// Polling-safe — does not trigger the system prompt.
-pub fn check_input_monitoring() -> bool {
-    cg_access::listen_preflight()
-}
-
-/// Trigger the macOS Input Monitoring permission flow for the current
-/// process. Returns the resulting grant status. First call shows the
-/// native prompt (and registers the process in System Settings →
-/// Privacy & Security → Input Monitoring); subsequent calls return the
-/// current status without re-prompting.
-pub fn request_input_monitoring() -> bool {
-    cg_access::listen_request()
-}
-
-// Re-open the impl so the rest of the file (start, start_with_activity_feed,
-// start_internal, etc.) stays attached to `impl UiRecorder`.
-impl UiRecorder {
     /// Request permissions (shows system dialogs)
     pub fn request_permissions(&self) -> PermissionStatus {
         PermissionStatus {
@@ -318,6 +294,29 @@ impl UiRecorder {
 }
 
 // ============================================================================
+// Free-function permission helpers
+// ============================================================================
+//
+// Callable without constructing a UiRecorder. Used by the Tauri host (where
+// the engine is linked in-process) to drive the Connections-page permission
+// UI without needing a direct cidre dependency.
+
+/// Check whether the current process has macOS Input Monitoring granted.
+/// Polling-safe — does not trigger the system prompt.
+pub fn check_input_monitoring() -> bool {
+    cg_access::listen_preflight()
+}
+
+/// Trigger the macOS Input Monitoring permission flow for the current
+/// process. Returns the resulting grant status. First call shows the
+/// native prompt (and registers the process in System Settings →
+/// Privacy & Security → Input Monitoring); subsequent calls return the
+/// current status without re-prompting.
+pub fn request_input_monitoring() -> bool {
+    cg_access::listen_request()
+}
+
+// ============================================================================
 // Clipboard worker + poller
 // ============================================================================
 //
@@ -383,6 +382,13 @@ fn spawn_clipboard_worker_thread() -> Sender<ClipboardRequest> {
 /// `get_clipboard()` and costs microseconds per tick.
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 750;
 
+/// Granularity at which the poller's sleep checks the stop flag. Capping
+/// at 100ms bounds shutdown latency — without this, the recorder takes up
+/// to a full `CLIPBOARD_POLL_INTERVAL_MS` to exit on stop because
+/// `thread::sleep` is uninterruptible. Choose the smaller of the two so
+/// short test intervals don't get rounded up.
+const CLIPBOARD_STOP_CHECK_GRANULARITY_MS: u64 = 100;
+
 /// Operation marker for poll-detected clipboard mutations — distinguishes
 /// these from event-tap-driven 'c' (copy) / 'x' (cut) / 'v' (paste). The
 /// poller can't tell which gesture caused the change, only that one did.
@@ -414,9 +420,23 @@ fn run_clipboard_poller(
     // the recorder.
     let mut last_seen: Option<String> = get_clipboard();
     while !stop.load(Ordering::Relaxed) {
-        thread::sleep(std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+        // Interruptible sleep: bounded by CLIPBOARD_STOP_CHECK_GRANULARITY_MS
+        // so a stop signal mid-interval doesn't strand the thread for the
+        // full poll interval. Worst-case shutdown latency = granularity.
+        let interval = std::time::Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS);
+        let slice = std::time::Duration::from_millis(CLIPBOARD_STOP_CHECK_GRANULARITY_MS);
+        let mut waited = std::time::Duration::ZERO;
+        while waited < interval {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let remaining = interval - waited;
+            let nap = remaining.min(slice);
+            thread::sleep(nap);
+            waited += nap;
+        }
         if stop.load(Ordering::Relaxed) {
-            break;
+            return;
         }
         let current = get_clipboard();
         if current == last_seen {

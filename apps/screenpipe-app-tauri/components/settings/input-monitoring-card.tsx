@@ -26,6 +26,13 @@ export function InputMonitoringCard() {
     "checking",
   );
   const [requesting, setRequesting] = useState(false);
+  // True from the moment the user clicks Enable in this session until
+  // they reload. macOS only applies TCC changes on next process start —
+  // even if checkInputMonitoringPermissionCmd() flips to "granted"
+  // mid-session, the *running* recorder won't pick it up. Surface the
+  // need-to-restart hint so users aren't confused when "granted" lights
+  // up but `/health` still reports input_tap_running=false.
+  const [grantedThisSession, setGrantedThisSession] = useState(false);
 
   useEffect(() => {
     // platform() throws outside Tauri context — guard with try/catch.
@@ -64,6 +71,7 @@ export function InputMonitoringCard() {
 
   const handleEnable = async () => {
     setRequesting(true);
+    setGrantedThisSession(true); // user clicked → always show restart hint
     try {
       const result = await commands.requestInputMonitoringPermission();
       setStatus(result === "granted" ? "granted" : "notgranted");
@@ -75,6 +83,13 @@ export function InputMonitoringCard() {
   };
 
   const granted = status === "granted";
+  // Show the restart banner whenever the user has interacted with the
+  // permission this session OR the perm shows granted but the underlying
+  // process started without it (most reliable signal: the user just
+  // clicked Enable). We don't know from this card alone whether the
+  // recorder is in reduced mode — that would require reading /health —
+  // so we err on the side of always reminding once they've interacted.
+  const showRestartHint = grantedThisSession;
 
   return (
     <Card className="border-border bg-card overflow-hidden">
@@ -150,6 +165,16 @@ export function InputMonitoringCard() {
             changes on next process start.
           </p>
         </div>
+
+        {showRestartHint ? (
+          <div className="px-4 py-2 bg-amber-500/5 border-t border-amber-500/30">
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              <strong>Restart screenpipe</strong> to start capturing keystrokes
+              and clicks. The running recorder was started without Input
+              Monitoring and won&apos;t pick up the change until next launch.
+            </p>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
