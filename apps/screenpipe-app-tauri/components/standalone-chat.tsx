@@ -52,6 +52,7 @@ import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { FeedbackCommandDialog, type FeedbackType } from "@/components/feedback-command-dialog";
 import {
   parseMentions,
   buildAppMentionSuggestions,
@@ -2853,6 +2854,11 @@ export function StandaloneChat({
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+  const [showSlashDropdown, setShowSlashDropdown] = useState(false);
+  const [slashFilter, setSlashFilter] = useState("");
+  const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
+  const [feedbackDialogType, setFeedbackDialogType] = useState<FeedbackType>("feedback");
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
   const [isLoadingSpeakers, setIsLoadingSpeakers] = useState(false);
   const [appFilterOpen, setAppFilterOpen] = useState(false);
@@ -3909,10 +3915,41 @@ export function StandaloneChat({
       setShowMentionDropdown(true);
       setMentionFilter(atMatch[1]);
       setSelectedMentionIndex(0);
+      setShowSlashDropdown(false);
     } else {
       setShowMentionDropdown(false);
       setMentionFilter("");
     }
+
+    const slashMatch = value.match(/^\/(\w*)$/);
+    if (slashMatch) {
+      setShowSlashDropdown(true);
+      setSlashFilter(slashMatch[1]);
+      setSelectedSlashIndex(0);
+      setShowMentionDropdown(false);
+    } else {
+      setShowSlashDropdown(false);
+      setSlashFilter("");
+    }
+  };
+
+  const SLASH_COMMANDS = [
+    { command: "/bug", description: "report a bug", type: "bug" as FeedbackType },
+    { command: "/feature", description: "request a feature", type: "feature" as FeedbackType },
+    { command: "/feedback", description: "share feedback", type: "feedback" as FeedbackType },
+  ];
+
+  const filteredSlashCommands = SLASH_COMMANDS.filter((c) =>
+    c.command.slice(1).startsWith(slashFilter.toLowerCase())
+  );
+
+  const selectSlashCommand = (cmd: (typeof SLASH_COMMANDS)[0]) => {
+    setInput("");
+    setShowSlashDropdown(false);
+    setSlashFilter("");
+    setFeedbackDialogType(cmd.type);
+    setFeedbackDialogOpen(true);
+    inputRef.current?.focus();
   };
 
   const insertMention = (tag: string) => {
@@ -3945,7 +3982,7 @@ export function StandaloneChat({
       return;
     }
 
-    if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
+    if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown && !showSlashDropdown) {
       e.preventDefault();
       if (input.trim() || pastedImages.length > 0) {
         steerMessage(input.trim());
@@ -3955,7 +3992,7 @@ export function StandaloneChat({
 
     // Enter without shift submits the form. While Pi is replying, submit maps
     // to native steering so the correction applies to the current answer.
-    if (e.key === "Enter" && !e.shiftKey && !showMentionDropdown) {
+    if (e.key === "Enter" && !e.shiftKey && !showMentionDropdown && !showSlashDropdown) {
       e.preventDefault();
       if (input.trim() || pastedImages.length > 0) {
         sendMessage(input.trim());
@@ -3963,22 +4000,41 @@ export function StandaloneChat({
       return;
     }
 
-    if (!showMentionDropdown) return;
+    if (!showMentionDropdown && !showSlashDropdown) return;
 
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelectedMentionIndex(i => Math.min(i + 1, filteredMentions.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedMentionIndex(i => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filteredMentions.length > 0) {
-      e.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
-    } else if (e.key === "Escape") {
-      setShowMentionDropdown(false);
-    } else if (e.key === "Tab" && filteredMentions.length > 0) {
-      e.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
+    if (showMentionDropdown) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedMentionIndex(i => Math.min(i + 1, filteredMentions.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedMentionIndex(i => Math.max(i - 1, 0));
+      } else if (e.key === "Enter" && filteredMentions.length > 0) {
+        e.preventDefault();
+        insertMention(filteredMentions[selectedMentionIndex].tag);
+      } else if (e.key === "Escape") {
+        setShowMentionDropdown(false);
+      } else if (e.key === "Tab" && filteredMentions.length > 0) {
+        e.preventDefault();
+        insertMention(filteredMentions[selectedMentionIndex].tag);
+      }
+      return;
+    }
+
+    if (showSlashDropdown) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedSlashIndex(i => Math.min(i + 1, filteredSlashCommands.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedSlashIndex(i => Math.max(i - 1, 0));
+      } else if ((e.key === "Enter" || e.key === "Tab") && filteredSlashCommands.length > 0) {
+        e.preventDefault();
+        selectSlashCommand(filteredSlashCommands[selectedSlashIndex]);
+      } else if (e.key === "Escape") {
+        setShowSlashDropdown(false);
+      }
+      return;
     }
   };
 
@@ -7840,6 +7896,35 @@ export function StandaloneChat({
                     )}
                   </motion.div>
                 )}
+                {showSlashDropdown && filteredSlashCommands.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.1 }}
+                    className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-lg shadow-lg overflow-hidden z-50"
+                  >
+                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
+                      commands
+                    </div>
+                    {filteredSlashCommands.map((cmd, index) => (
+                      <button
+                        key={cmd.command}
+                        type="button"
+                        onClick={() => selectSlashCommand(cmd)}
+                        className={cn(
+                          "w-full px-3 py-1.5 text-left text-sm flex items-center justify-between gap-2 transition-colors",
+                          index === selectedSlashIndex
+                            ? "bg-muted text-foreground"
+                            : "hover:bg-muted/50"
+                        )}
+                      >
+                        <span className="font-mono text-xs">{cmd.command}</span>
+                        <span className="text-[10px] text-muted-foreground truncate">{cmd.description}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
               </AnimatePresence>
             </div>
             {/* Buttons row below textarea so scrollbar is above and full width is typeable */}
@@ -8097,6 +8182,12 @@ export function StandaloneChat({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <FeedbackCommandDialog
+        open={feedbackDialogOpen}
+        defaultType={feedbackDialogType}
+        onOpenChange={setFeedbackDialogOpen}
+      />
     </div>
   );
 }
