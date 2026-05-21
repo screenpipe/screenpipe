@@ -6773,6 +6773,7 @@ export function StandaloneChat({
       model: activePreset?.model,
       provider: activePreset?.provider,
     }));
+    const labelMarkerIds = new Set(labelMarkers.map((marker) => marker.id));
 
     let nextRowsAfterLabels: Message[] | null = null;
     if (labelMarkers.length > 0) {
@@ -6889,6 +6890,9 @@ export function StandaloneChat({
         optimisticSteerRef.current = null;
         removeTurnIntent(latest.turnIntentId);
         setAssistantInterruptedState(interruptedAssistantId, false);
+        if (labelMarkerIds.size > 0) {
+          setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
+        }
         if (precreatedSteerAssistantId) {
           setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
           piMessageIdRef.current = null;
@@ -6906,6 +6910,9 @@ export function StandaloneChat({
       optimisticSteerRef.current = null;
       removeTurnIntent(latest.turnIntentId);
       setAssistantInterruptedState(interruptedAssistantId, false);
+      if (labelMarkerIds.size > 0) {
+        setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
+      }
       if (precreatedSteerAssistantId) {
         setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
         piMessageIdRef.current = null;
