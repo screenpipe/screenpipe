@@ -5486,7 +5486,6 @@ export function StandaloneChat({
           forceQueueModeRef.current = false;
           setIsLoading(false);
           setIsStreaming(false);
-          emitSessionActivity({ status: "idle" });
           finishPendingSteerInterrupt();
           return;
         }
