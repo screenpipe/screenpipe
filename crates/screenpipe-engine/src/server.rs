@@ -234,6 +234,11 @@ pub struct SCServer {
     pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
     /// Unified credential store for OAuth tokens, API keys, etc.
     pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
+    /// Background OAuth refresh scheduler. Owned here so its JoinHandle
+    /// isn't dropped (which would cancel the task) and so future
+    /// observability endpoints can call `.snapshot()` to inspect metrics.
+    pub oauth_refresher:
+        Option<Arc<screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler>>,
 }
 
 impl SCServer {
@@ -271,6 +276,7 @@ impl SCServer {
             api_auth_key: None,
             cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
             secret_store: None,
+            oauth_refresher: None,
         }
     }
 

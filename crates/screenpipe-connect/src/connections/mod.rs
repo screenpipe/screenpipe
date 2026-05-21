@@ -142,6 +142,30 @@ pub enum ProxyAuth {
     None,
 }
 
+/// How the background OAuth refresher should treat this integration.
+///
+/// Most providers issue long-lived refresh tokens (Google: ~6mo, Microsoft:
+/// 90d) — for those, leaning on natural access-token expiry is enough and
+/// [`RefreshPolicy::default`] returns `keep_alive: None`.
+///
+/// Providers that expire the *refresh* token on a sliding inactivity window
+/// need a `keep_alive` floor: the refresher will proactively call refresh
+/// whenever the last successful refresh is older than this duration, even
+/// if the access token is still valid. The value should leave headroom
+/// against the provider's published limit (e.g. Zoom's 15h ⇒ 12h floor).
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshPolicy {
+    /// Maximum gap between successful refreshes. `None` = no keep-alive
+    /// pressure beyond the access-token-expiry path.
+    pub keep_alive: Option<std::time::Duration>,
+}
+
+impl Default for RefreshPolicy {
+    fn default() -> Self {
+        Self { keep_alive: None }
+    }
+}
+
 #[async_trait]
 pub trait Integration: Send + Sync {
     /// Static metadata for this integration.
@@ -159,6 +183,12 @@ pub trait Integration: Send + Sync {
     /// Default is `None` (manual credential entry).
     fn oauth_config(&self) -> Option<&'static oauth::OAuthConfig> {
         None
+    }
+
+    /// Background refresh policy. Defaults to "rely on access-token expiry".
+    /// Override when the provider expires the refresh token on inactivity.
+    fn refresh_policy(&self) -> RefreshPolicy {
+        RefreshPolicy::default()
     }
 
     /// Return proxy config for credential-free API forwarding.
