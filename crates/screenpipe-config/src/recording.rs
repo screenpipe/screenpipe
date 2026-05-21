@@ -471,7 +471,7 @@ impl Default for RecordingSettings {
             included_windows: vec![],
             ignored_urls: vec![],
             ignore_incognito_windows: true,
-            pause_on_drm_content: true,
+            pause_on_drm_content: false,
             disable_clipboard_capture: false,
             record_while_locked: false,
             languages: vec![],

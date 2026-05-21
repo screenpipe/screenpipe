@@ -136,7 +136,7 @@ pub fn is_drm_url(url: &str) -> bool {
 
     for &domain in DRM_DOMAINS {
         // Match exact host or any subdomain (e.g. "apps.disneyplus.com" matches "disneyplus.com")
-        if host == domain || host.ends_with(&format!(".{}", domain)) {
+        if host == domain || host.strip_suffix(domain).is_some_and(|s| s.ends_with('.')) {
             return true;
         }
     }
@@ -278,7 +278,6 @@ fn get_drm_url_from_window_title(app: &cidre::ax::UiElement) -> Option<String> {
     const TITLE_ALIASES: &[(&str, &str)] = &[
         ("disney+", "disneyplus.com"),
         ("disney plus", "disneyplus.com"),
-        ("disney", "disneyplus.com"),
         ("hbo max", "play.max.com"),
     ];
 
@@ -684,6 +683,9 @@ mod tests {
             "https://www.amazon.com/gp/video/detail/B0CXGTK4HY/ref=atv_hm"
         ));
         assert!(is_drm_url("https://amazon.com/gp/video/detail/something"));
+        // subdomain matching
+        assert!(is_drm_url("https://apps.disneyplus.com/il/shows/scrubs/123/watch"));
+        assert!(is_drm_url("https://watch.hulu.com/show/abc"));
     }
 
     #[test]
@@ -694,6 +696,9 @@ mod tests {
         assert!(!is_drm_url("https://example.com/netflix.com"));
         assert!(!is_drm_url("https://amazon.com/dp/B09V3KXJPB"));
         assert!(!is_drm_url("https://amazon.com/s?k=headphones"));
+        // subdomain anchor — must not match lookalike domains
+        assert!(!is_drm_url("https://netflix.com.evil.com/phish"));
+        assert!(!is_drm_url("https://notdisneyplus.com/page"));
     }
 
     #[test]
