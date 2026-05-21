@@ -291,7 +291,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 	// Note: audio transcript is now on-demand (opened via subtitle bar click)
 
-	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation } =
+	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation, loadOlderFrames, hasOlderFrames, isLoadingOlderFrames } =
 		useTimelineStore();
 
 	const { frames, isLoading, error, message, fetchNextDayData, websocket } =
@@ -448,6 +448,15 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			}
 		});
 	}, [clearNewFramesCount]);
+
+	// Trigger backward pagination when user scrolls near the oldest loaded frame
+	useEffect(() => {
+		if (frames.length === 0 || isLoadingOlderFrames || !hasOlderFrames) return;
+		// Load more when within 50 frames of the oldest loaded
+		if (currentIndex >= frames.length - 50) {
+			loadOlderFrames();
+		}
+	}, [currentIndex, frames.length, isLoadingOlderFrames, hasOlderFrames, loadOlderFrames]);
 
 	// Listen for window focus events to refresh timeline data (debounced)
 	useEffect(() => {

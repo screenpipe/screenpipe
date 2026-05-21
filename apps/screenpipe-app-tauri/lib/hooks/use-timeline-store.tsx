@@ -36,6 +36,9 @@ const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
 const MAX_REQUEST_RETRIES = 5;
 const TIMELINE_STREAM_FRAME_LIMIT = 250;
 const MAX_TIMELINE_FRAMES_IN_MEMORY = 500;
+// During backward pagination the window temporarily expands. Trimmed back to
+// MAX_TIMELINE_FRAMES_IN_MEMORY when user returns to the live edge.
+const MAX_PAGINATION_FRAMES = 1500;
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -53,12 +56,15 @@ let currentWsId = 0;
 let cacheSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const CACHE_SAVE_DEBOUNCE_MS = 2000; // Save cache 2s after last frame update
 
-function capTimelineFrames(frames: StreamTimeSeriesResponse[]) {
-	const cappedFrames =
-		frames.length > MAX_TIMELINE_FRAMES_IN_MEMORY
-			? frames.slice(0, MAX_TIMELINE_FRAMES_IN_MEMORY)
-			: frames;
+// Backward-pagination state — separate buffer so older frames don't compete
+// with the live-frame flush path.
+let olderFrameBuffer: StreamTimeSeriesResponse[] = [];
+let olderFlushTimer: ReturnType<typeof setTimeout> | null = null;
+// Timestamps older than this belong to the current pagination request.
+let olderLoadCutoffTs: string | null = null;
 
+function capTimelineFrames(frames: StreamTimeSeriesResponse[], maxFrames = MAX_TIMELINE_FRAMES_IN_MEMORY) {
+	const cappedFrames = frames.length > maxFrames ? frames.slice(0, maxFrames) : frames;
 	return {
 		frames: cappedFrames,
 		timestamps: new Set(cappedFrames.map((frame) => frame.timestamp)),
@@ -87,6 +93,10 @@ interface TimelineState {
 	// Deep link navigation — persists across component mounts
 	pendingNavigation: { timestamp: string; frameId?: string } | null;
 
+	// Backward pagination state
+	hasOlderFrames: boolean; // true while there might be more frames before the oldest loaded
+	isLoadingOlderFrames: boolean; // true while a pagination request is in-flight
+
 	// Actions
 	setPendingNavigation: (nav: { timestamp: string; frameId?: string } | null) => void;
 	setFrames: (frames: StreamTimeSeriesResponse[]) => void;
@@ -99,6 +109,8 @@ interface TimelineState {
 	fetchNextDayData: (date: Date) => void;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: () => void;
+	flushOlderFrameBuffer: () => void;
+	loadOlderFrames: () => void;
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
@@ -122,6 +134,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	hasCachedData: false,
 	pendingDateSwap: false,
 	pendingNavigation: null,
+	hasOlderFrames: true,
+	isLoadingOlderFrames: false,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
 	setFrames: (frames) => {
@@ -181,11 +195,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	// Prepare for date navigation — keep old frames visible while new ones load.
 	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
 	clearFramesForNavigation: () => {
-		// Clear the frame buffer too
+		// Clear all frame buffers (normal + pagination)
 		frameBuffer = [];
+		olderFrameBuffer = [];
+		olderLoadCutoffTs = null;
 		if (flushTimer) {
 			clearTimeout(flushTimer);
 			flushTimer = null;
+		}
+		if (olderFlushTimer) {
+			clearTimeout(olderFlushTimer);
+			olderFlushTimer = null;
 		}
 		// Clear request timeout so stale retries don't interfere
 		if (requestTimeoutTimer) {
@@ -309,6 +329,84 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		});
 	},
 
+	flushOlderFrameBuffer: () => {
+		if (olderFrameBuffer.length === 0) {
+			olderLoadCutoffTs = null;
+			set({ isLoadingOlderFrames: false });
+			return;
+		}
+
+		const framesToFlush = olderFrameBuffer;
+		olderFrameBuffer = [];
+		olderLoadCutoffTs = null;
+
+		set((state) => {
+			const merged = mergeTimelineFrames({
+				existingFrames: state.frames,
+				existingTimestamps: state.frameTimestamps,
+				incomingFrames: framesToFlush,
+			});
+
+			if (!merged.changed) {
+				return {
+					isLoadingOlderFrames: false,
+					hasOlderFrames: framesToFlush.length >= TIMELINE_STREAM_FRAME_LIMIT,
+				};
+			}
+
+			// Expand cap while paginating backward — trim back to normal on live edge return
+			const capped = capTimelineFrames(merged.frames, MAX_PAGINATION_FRAMES);
+
+			return {
+				frames: capped.frames,
+				frameTimestamps: capped.timestamps,
+				isLoadingOlderFrames: false,
+				hasOlderFrames: framesToFlush.length >= TIMELINE_STREAM_FRAME_LIMIT,
+				loadingProgress: { loaded: capped.frames.length, isStreaming: true },
+			};
+		});
+	},
+
+	loadOlderFrames: () => {
+		const { frames, currentDate, websocket, isLoadingOlderFrames, hasOlderFrames, sentRequests } = get();
+		if (isLoadingOlderFrames || !hasOlderFrames || frames.length === 0) return;
+
+		// frames is sorted descending, so last item is oldest
+		const oldestFrame = frames[frames.length - 1];
+		const oldestTs = new Date(oldestFrame.timestamp);
+
+		const startTime = new Date(currentDate);
+		startTime.setHours(0, 0, 0, 0);
+
+		// Nothing older to load if oldest frame is at or before start of day
+		if (oldestTs <= startTime) {
+			set({ hasOlderFrames: false });
+			return;
+		}
+
+		// Request frames before the oldest loaded frame
+		const endTime = new Date(oldestTs.getTime() - 1);
+		const requestKey = `older_${startTime.toISOString()}_${endTime.toISOString()}`;
+
+		if (sentRequests.has(requestKey)) return;
+		if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+
+		set((state) => ({
+			isLoadingOlderFrames: true,
+			sentRequests: new Set(state.sentRequests).add(requestKey),
+		}));
+
+		olderLoadCutoffTs = endTime.toISOString();
+
+		websocket.send(JSON.stringify({
+			start_time: startTime.toISOString(),
+			end_time: endTime.toISOString(),
+			order: "descending",
+			limit: TIMELINE_STREAM_FRAME_LIMIT,
+			keep_live: true,
+		}));
+	},
+
 	connectWebSocket: () => {
 		void (async () => {
 			await ensureApiReady();
@@ -347,6 +445,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			});
 			
 			frameBuffer = [];
+			olderFrameBuffer = [];
+			olderLoadCutoffTs = null;
+			if (olderFlushTimer) {
+				clearTimeout(olderFlushTimer);
+				olderFlushTimer = null;
+			}
 			requestRetryCount = 0; // Reset retry counter on reconnection
 			if (progressUpdateTimer) {
 				clearTimeout(progressUpdateTimer);
@@ -465,10 +569,32 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					if (data.length > 0) {
 						requestRetryCount = 0;
 					}
-					// Add to buffer instead of immediate state update
-					frameBuffer.push(...data);
 
-					// Schedule flush if not already scheduled
+					// Route frames: if a backward-pagination request is in-flight, separate
+					// frames older than the pagination cutoff so they don't get evicted by
+					// the live-edge cap (capTimelineFrames keeps newest first).
+					if (olderLoadCutoffTs !== null) {
+						const cutoff = olderLoadCutoffTs;
+						const older = (data as StreamTimeSeriesResponse[]).filter(f => f.timestamp <= cutoff);
+						const newer = (data as StreamTimeSeriesResponse[]).filter(f => f.timestamp > cutoff);
+
+						if (older.length > 0) {
+							olderFrameBuffer.push(...older);
+							if (!olderFlushTimer) {
+								olderFlushTimer = setTimeout(() => {
+									olderFlushTimer = null;
+									get().flushOlderFrameBuffer();
+								}, FLUSH_INTERVAL_MS);
+							}
+						}
+						if (newer.length > 0) {
+							frameBuffer.push(...newer);
+						}
+					} else {
+						frameBuffer.push(...data);
+					}
+
+					// Schedule normal flush
 					if (!flushTimer) {
 						flushTimer = setTimeout(() => {
 							flushTimer = null;
@@ -477,11 +603,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					}
 
 					// Debounce progress updates to prevent timeline flickering
-					// Only update every 500ms instead of on every message
 					if (!progressUpdateTimer) {
 						progressUpdateTimer = setTimeout(() => {
 							progressUpdateTimer = null;
-							const currentTotal = get().frames.length + frameBuffer.length;
+							const currentTotal = get().frames.length + frameBuffer.length + olderFrameBuffer.length;
 							set({
 								loadingProgress: {
 									loaded: currentTotal,
@@ -760,6 +885,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const { currentDate: oldDate } = get();
 		const oldDateStr = oldDate.toDateString();
 
+		// Discard any in-flight pagination — user is returning to live edge
+		olderFrameBuffer = [];
+		olderLoadCutoffTs = null;
+		if (olderFlushTimer) {
+			clearTimeout(olderFlushTimer);
+			olderFlushTimer = null;
+		}
+
 		set((state) => {
 			const newSentRequests = new Set<string>();
 			for (const key of state.sentRequests) {
@@ -770,12 +903,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				} catch { /* keep non-matching keys */ }
 				newSentRequests.add(key);
 			}
+
+			// Trim frames back to normal cap — the expanded pagination window is
+			// no longer needed once the user returns to live.
+			const capped = capTimelineFrames(state.frames);
 			return {
+				frames: capped.frames,
+				frameTimestamps: capped.timestamps,
 				sentRequests: newSentRequests,
 				currentDate: today,
-				// Signal that position should reset to latest (index 0)
-				// by clearing pendingNavigation and setting a flag
 				pendingNavigation: null,
+				hasOlderFrames: true,
+				isLoadingOlderFrames: false,
 			};
 		});
 

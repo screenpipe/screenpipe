@@ -75,7 +75,8 @@ export function mergeTimelineFrames<T extends TimelineFrameLike>({
 	incomingFrames: T[];
 	replace?: boolean;
 }): TimelineFrameMergeResult<T> {
-	const timestamps = replace ? new Set<string>() : existingTimestamps;
+	// Create a copy — never mutate the caller's Set directly (Zustand state side-effect)
+	const timestamps = replace ? new Set<string>() : new Set(existingTimestamps);
 	const newUniqueFrames: T[] = [];
 
 	for (const frame of incomingFrames) {

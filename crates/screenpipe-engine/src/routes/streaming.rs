@@ -42,6 +42,10 @@ pub struct StreamFramesRequest {
     order: Order,
     #[serde(default)]
     limit: Option<usize>,
+    /// When true, preserve the current live subscription instead of overriding it.
+    /// Used by the client to paginate backward without killing the live update feed.
+    #[serde(default)]
+    keep_live: bool,
 }
 
 const MAX_STREAM_FRAME_LIMIT: usize = 500;
@@ -302,8 +306,11 @@ async fn handle_stream_frames_socket(
                             limit
                         );
 
-                        // Set live subscription flag
-                        *live_sub_clone.lock().await = Some(is_today);
+                        // Set live subscription flag — skip if the client asked to preserve
+                        // the existing live feed (backward pagination request).
+                        if !request.keep_live {
+                            *live_sub_clone.lock().await = Some(is_today);
+                        }
 
                         if is_today {
                             // Wait for cache to warm before responding (max 30s).
