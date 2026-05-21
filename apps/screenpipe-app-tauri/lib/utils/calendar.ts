@@ -266,11 +266,13 @@ async function fetchGoogleProvider(
 ): Promise<ProviderCalendarResult> {
   let statusKnown = false;
   let statusConnected = false;
+  let needsAttention = false;
   try {
     const status = await commands.oauthStatus("google-calendar", null);
     if (status.status === "ok") {
       statusKnown = true;
       statusConnected = status.data.connected;
+      needsAttention = status.data.needs_attention === true;
     }
   } catch {
     // Fall back to probing the events endpoint below.
@@ -278,9 +280,17 @@ async function fetchGoogleProvider(
 
   // Once OAuth status is available, disconnected means there is no recoverable
   // token. Avoid repeatedly probing an endpoint that can only fail until the
-  // user reconnects.
+  // user reconnects. Exception: needs_attention means a token row exists but
+  // the keychain key is unavailable (bundle ACL mismatch) — surface this as
+  // "connected but failing" so the meeting-notes UI shows the error state
+  // instead of pushing the user to a reconnect that won't actually help.
   if (statusKnown && !statusConnected) {
-    return { source: "google", connected: false, ok: true, events: [] };
+    return {
+      source: "google",
+      connected: needsAttention,
+      ok: !needsAttention,
+      events: [],
+    };
   }
 
   const events = await fetchGoogleCalendar(hoursBack, hoursAhead);

@@ -54,6 +54,76 @@ pub struct DirectUploadKeyRecipientConfig {
 }
 
 impl EnterpriseUploadMode {
+    /// Resolve the upload mode by asking the control plane what this
+    /// license is configured for. Replaces the old env-var bootstrap so
+    /// customers don't have to set `SCREENPIPE_ENTERPRISE_UPLOAD_MODE`
+    /// on every device — the storage binding in the dashboard is the
+    /// single source of truth.
+    ///
+    /// Fails open to `HostedIngest` on any error (network down, license
+    /// invalid, server flake). The legacy env-var override is still
+    /// honored for advanced/test scenarios when explicitly set to
+    /// anything other than the default `screenpipe_write`.
+    pub async fn resolve(license_key: &str, ingest_url: &str) -> Self {
+        // Explicit env override — for MDM rollouts and local testing.
+        // Only takes effect when set to a non-default value; the empty /
+        // default case falls through to server resolution.
+        if let Ok(raw) = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE") {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if !normalized.is_empty()
+                && normalized != "screenpipe_write"
+                && normalized != "hosted_ingest"
+                && normalized != "auto"
+            {
+                if let Some(mode) = Self::from_env(ingest_url) {
+                    tracing::info!(
+                        "enterprise sync: upload mode taken from \
+                         SCREENPIPE_ENTERPRISE_UPLOAD_MODE env override ({})",
+                        normalized
+                    );
+                    return mode;
+                }
+            }
+        }
+
+        match fetch_desired_mode_from_server(license_key, ingest_url).await {
+            Ok(ServerModeHint::DirectUpload) => {
+                // Encrypted if MDM root keys are present, readable
+                // otherwise. Same logic the env path uses; just gated by
+                // server intent instead of env var.
+                if std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64").is_ok() {
+                    if let Some(mode) = Self::build_direct_encrypted(ingest_url) {
+                        tracing::info!(
+                            "enterprise sync: server requested direct upload + MDM keys \
+                             present → direct_upload_encrypted"
+                        );
+                        return mode;
+                    }
+                    tracing::warn!(
+                        "enterprise sync: server requested direct upload + MDM keys present \
+                         but key material was invalid; falling back to direct_upload_readable"
+                    );
+                }
+                tracing::info!(
+                    "enterprise sync: server requested direct upload → direct_upload_readable"
+                );
+                Self::DirectReadable(DirectUploadConfig::without_recipients(ingest_url))
+            }
+            Ok(ServerModeHint::HostedIngest) => {
+                tracing::info!("enterprise sync: server requested hosted_ingest");
+                Self::HostedIngest
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "enterprise sync: control-plane mode lookup failed; \
+                     defaulting to hosted_ingest (will retry next batch)"
+                );
+                Self::HostedIngest
+            }
+        }
+    }
+
     pub fn from_env(ingest_url: &str) -> Option<Self> {
         let mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
             .unwrap_or_else(|_| "screenpipe_write".to_string())
@@ -65,93 +135,7 @@ impl EnterpriseUploadMode {
             "direct_upload_readable" => Some(Self::DirectReadable(
                 DirectUploadConfig::without_recipients(ingest_url),
             )),
-            "direct_upload" | "direct_upload_encrypted" => {
-                let primary_key_b64 = match required_env(
-                    "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64",
-                ) {
-                    Some(v) => v,
-                    None => {
-                        warn!(
-                            "enterprise sync: direct upload requested but primary root key env is missing"
-                        );
-                        return None;
-                    }
-                };
-                let recovery_key_b64 = match required_env(
-                    "SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64",
-                ) {
-                    Some(v) => v,
-                    None => {
-                        warn!(
-                            "enterprise sync: direct upload requested but recovery root key env is missing"
-                        );
-                        return None;
-                    }
-                };
-                let primary_root_key = match decode_root_key(&primary_key_b64) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        warn!(
-                            "enterprise sync: invalid direct upload primary root key: {}",
-                            e
-                        );
-                        return None;
-                    }
-                };
-                let recovery_root_key = match decode_root_key(&recovery_key_b64) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        warn!(
-                            "enterprise sync: invalid direct upload recovery root key: {}",
-                            e
-                        );
-                        return None;
-                    }
-                };
-                let primary_key_id = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "mdm-primary-v1".to_string());
-                let recovery_key_id =
-                    std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID")
-                        .ok()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "mdm-recovery-v1".to_string());
-                if primary_key_id == recovery_key_id {
-                    warn!(
-                        "enterprise sync: direct upload primary and recovery key ids must differ"
-                    );
-                    return None;
-                }
-                if primary_root_key == recovery_root_key {
-                    warn!(
-                        "enterprise sync: direct upload primary and recovery root keys must differ"
-                    );
-                    return None;
-                }
-                let control_plane = DirectUploadConfig::without_recipients(ingest_url);
-
-                Some(Self::DirectEncrypted(DirectUploadConfig {
-                    ticket_url: control_plane.ticket_url,
-                    complete_url: control_plane.complete_url,
-                    recipients: vec![
-                        DirectUploadKeyRecipientConfig {
-                            purpose: "primary".to_string(),
-                            key_provider: "mdm_symmetric_v1".to_string(),
-                            key_id: primary_key_id,
-                            root_key: primary_root_key,
-                        },
-                        DirectUploadKeyRecipientConfig {
-                            purpose: "recovery".to_string(),
-                            key_provider: "mdm_symmetric_v1".to_string(),
-                            key_id: recovery_key_id,
-                            root_key: recovery_root_key,
-                        },
-                    ],
-                }))
-            }
+            "direct_upload" | "direct_upload_encrypted" => Self::build_direct_encrypted(ingest_url),
             other => {
                 warn!(
                     "enterprise sync: unknown upload mode '{}'; refusing to start sync",
@@ -160,6 +144,150 @@ impl EnterpriseUploadMode {
                 None
             }
         }
+    }
+
+    /// Build a `DirectEncrypted` mode from MDM-deployed root key env vars.
+    /// Shared by the legacy `from_env` path and the new server-driven
+    /// `resolve` path so the encrypted-mode contract stays in one place.
+    fn build_direct_encrypted(ingest_url: &str) -> Option<Self> {
+        let primary_key_b64 =
+            match required_env("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64") {
+                Some(v) => v,
+                None => {
+                    warn!(
+                        "enterprise sync: direct upload requested but primary root key env is missing"
+                    );
+                    return None;
+                }
+            };
+        let recovery_key_b64 =
+            match required_env("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64") {
+                Some(v) => v,
+                None => {
+                    warn!(
+                        "enterprise sync: direct upload requested but recovery root key env is missing"
+                    );
+                    return None;
+                }
+            };
+        let primary_root_key = match decode_root_key(&primary_key_b64) {
+            Ok(k) => k,
+            Err(e) => {
+                warn!(
+                    "enterprise sync: invalid direct upload primary root key: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let recovery_root_key = match decode_root_key(&recovery_key_b64) {
+            Ok(k) => k,
+            Err(e) => {
+                warn!(
+                    "enterprise sync: invalid direct upload recovery root key: {}",
+                    e
+                );
+                return None;
+            }
+        };
+        let primary_key_id = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_KEY_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "mdm-primary-v1".to_string());
+        let recovery_key_id =
+            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "mdm-recovery-v1".to_string());
+        if primary_key_id == recovery_key_id {
+            warn!(
+                "enterprise sync: direct upload primary and recovery key ids must differ"
+            );
+            return None;
+        }
+        if primary_root_key == recovery_root_key {
+            warn!(
+                "enterprise sync: direct upload primary and recovery root keys must differ"
+            );
+            return None;
+        }
+        let control_plane = DirectUploadConfig::without_recipients(ingest_url);
+
+        Some(Self::DirectEncrypted(DirectUploadConfig {
+            ticket_url: control_plane.ticket_url,
+            complete_url: control_plane.complete_url,
+            recipients: vec![
+                DirectUploadKeyRecipientConfig {
+                    purpose: "primary".to_string(),
+                    key_provider: "mdm_symmetric_v1".to_string(),
+                    key_id: primary_key_id,
+                    root_key: primary_root_key,
+                },
+                DirectUploadKeyRecipientConfig {
+                    purpose: "recovery".to_string(),
+                    key_provider: "mdm_symmetric_v1".to_string(),
+                    key_id: recovery_key_id,
+                    root_key: recovery_root_key,
+                },
+            ],
+        }))
+    }
+}
+
+// ─── Control-plane mode hint ─────────────────────────────────────────────────
+
+/// What the server tells the desktop to do for this license. The desktop
+/// translates this into a concrete `EnterpriseUploadMode` based on locally
+/// available material (e.g. MDM-deployed root keys).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerModeHint {
+    DirectUpload,
+    HostedIngest,
+}
+
+#[derive(Deserialize)]
+struct ModeResponse {
+    desired_mode: String,
+}
+
+const MODE_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// HTTP GET `<ingest sibling>/storage-binding/mode` with the license-key
+/// header. Returns the parsed hint; any non-2xx, parse failure, or network
+/// error bubbles up so the caller can fall back to `HostedIngest`.
+async fn fetch_desired_mode_from_server(
+    license_key: &str,
+    ingest_url: &str,
+) -> Result<ServerModeHint, EnterpriseSyncError> {
+    let endpoint = sibling_enterprise_endpoint(ingest_url, "storage-binding/mode");
+    let client = reqwest::Client::builder()
+        .timeout(MODE_RESOLVE_TIMEOUT)
+        .build()
+        .map_err(|e| EnterpriseSyncError::Network(e.to_string()))?;
+    let resp = client
+        .get(&endpoint)
+        .header("x-license-key", license_key)
+        .send()
+        .await
+        .map_err(|e| EnterpriseSyncError::Network(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(EnterpriseSyncError::Network(format!(
+            "mode endpoint returned status {}",
+            resp.status()
+        )));
+    }
+    let parsed: ModeResponse = resp
+        .json()
+        .await
+        .map_err(|e| EnterpriseSyncError::Network(format!("mode response parse failed: {e}")))?;
+    match parsed.desired_mode.trim().to_ascii_lowercase().as_str() {
+        "direct_upload" => Ok(ServerModeHint::DirectUpload),
+        "hosted_ingest" | "screenpipe_write" | "" => Ok(ServerModeHint::HostedIngest),
+        other => Err(EnterpriseSyncError::Network(format!(
+            "unknown desired_mode '{other}' from control plane"
+        ))),
     }
 }
 

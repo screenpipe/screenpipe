@@ -1034,6 +1034,36 @@ jobs:
             fi
           done
 
+      - name: Verify codesign on .app (macOS)
+        # Fast-fail on malformed signatures BEFORE notarization, which costs
+        # 5-15 min via notarytool's round-trip. Without this step, a broken
+        # build-keychain dance (the `errSecInternalComponent` class — see
+        # the keychain setup above) only surfaces as a notarization failure
+        # much later in the workflow.
+        #
+        # The aarch64 re-sign path at "Inject mlx.metallib..." below already
+        # runs --verify after its own re-sign; this step also covers x86_64
+        # (which has no re-sign path) and protects against a regression in
+        # the initial Tauri-side sign too.
+        if: matrix.os_type == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          APP_DIR="${BUNDLE_DIR}/macos"
+          shopt -s nullglob
+          apps=( "${APP_DIR}"/*.app )
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "::error::no .app bundle in ${APP_DIR} — Tauri build did not produce one"
+            exit 1
+          fi
+          for APP in "${apps[@]}"; do
+            echo "=== codesign --verify ${APP##*/} ==="
+            codesign --verify --deep --strict --verbose=2 "$APP"
+          done
+          echo "all .app bundles pass codesign --verify --deep --strict"
+
       - name: Inject mlx.metallib into Contents/MacOS/ + re-sign (macOS)
         # MLX's runtime library search looks for mlx.metallib next to the
         # binary (Contents/MacOS/), not in the app's Resources dir. Tauri's

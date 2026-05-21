@@ -1244,8 +1244,7 @@ interface ChatRowProps {
  * (That's why "delete chat doesn't work" — the X click was eaten by the
  * outer button.)
  *
- * Left-side bullet stays stable; the right-side status slot carries
- * exactly one signal:
+ * Right-side status slot carries exactly one signal:
  *   loading dot → streaming/thinking/tool/queued
  *   unread dot  → new content
  *   compact age → idle/read
@@ -1308,7 +1307,6 @@ export function SidebarChatRow({
           onSelect(session.id);
         }}
       >
-        <RowBullet />
         <span
           className={cn(
             "truncate flex-1 text-xs font-normal",
@@ -1441,15 +1439,6 @@ export function SidebarChatRow({
 
 /** Stable left-side bullet. State belongs in the right slot so each row
  *  reads as one clear signal instead of two competing indicators. */
-function RowBullet() {
-  return (
-    <span
-      className="h-1.5 w-1.5 rounded-full border border-muted-foreground/40 shrink-0"
-      aria-hidden
-    />
-  );
-}
-
 function RowRightSignal({
   isLive,
   isError,
@@ -1465,52 +1454,88 @@ function RowRightSignal({
   status: string;
   age: string | null;
 }) {
-  const content = (() => {
+  const { content, label } = ((): { content: React.ReactNode; label: string | null } => {
     if (isError) {
-      return (
-        <AlertCircle
-          className="h-3 w-3 text-red-500"
-          aria-label="error"
-        />
-      );
+      return {
+        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label="error" />,
+        label: "error",
+      };
     }
     if (isLive) {
-      return <LiveSignal ariaLabel={status} />;
+      const live =
+        status === "thinking" ? "thinking" :
+        status === "tool" ? "using tool" :
+        "streaming";
+      return { content: <LiveSignal ariaLabel={live} />, label: live };
     }
     if (queuedCount > 0) {
-      return <LiveSignal ariaLabel={`${queuedCount} queued`} />;
+      const q = `${queuedCount} queued`;
+      return { content: <LiveSignal ariaLabel={q} />, label: q };
     }
     if (isUnread) {
-      return (
-        <span
-          className="h-1.5 w-1.5 rounded-full bg-foreground"
-          aria-label="unread"
-        />
-      );
+      return {
+        content: (
+          <span
+            className="font-mono text-[10px] leading-none text-foreground inline-flex items-center justify-center w-2.5 h-2.5"
+            aria-label="unread"
+          >
+            █
+          </span>
+        ),
+        label: "new",
+      };
     }
     if (age) {
-      return (
-        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
-          {age}
-        </span>
-      );
+      return {
+        content: (
+          <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+            {age}
+          </span>
+        ),
+        label: null,
+      };
     }
-    return null;
+    return { content: null, label: null };
   })();
 
   if (!content) return null;
 
-  return <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>;
+  const wrapper = (
+    <span className="min-w-5 shrink-0 inline-flex justify-end">{content}</span>
+  );
+
+  if (!label) return wrapper;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{wrapper}</TooltipTrigger>
+      <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
+// Quadrant frames — a square fills clockwise, then empties. Sharp Unicode
+// block chars keep the per-DESIGN.md no-curves rule. Categorically different
+// motion from the static unread `█` so the row reads "live" at a glance.
+const LIVE_FRAMES = ["▘", "▀", "▛", "█", "▜", "▐", "▝", "·"] as const;
+
 function LiveSignal({ ariaLabel = "loading" }: { ariaLabel?: string }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const id = setInterval(
+      () => setFrame((f) => (f + 1) % LIVE_FRAMES.length),
+      140
+    );
+    return () => clearInterval(id);
+  }, []);
   return (
     <span
-      className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+      className="font-mono text-[10px] leading-none text-foreground inline-flex items-center justify-center w-2.5 h-2.5 shrink-0"
       aria-label={ariaLabel}
     >
-      <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-      <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
+      {LIVE_FRAMES[frame]}
     </span>
   );
 }

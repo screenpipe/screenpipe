@@ -774,11 +774,6 @@ export function NoteView({
       </main>
 
       <footer className="sticky bottom-0 z-30 border-t border-border bg-background">
-        {isLive && (
-          <div className="border-b border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
-            Always get consent when transcribing others.
-          </div>
-        )}
         <div className="mx-auto max-w-3xl px-5 py-3 sm:px-0">
           {!isLive && inactivityPrompt && (
             <InactivityResumeBanner
@@ -923,6 +918,11 @@ export function NoteView({
             </div>
           </div>
         </div>
+        {isLive && (
+          <div className="px-4 pb-1 text-center text-[10px] leading-none text-muted-foreground/60">
+            Always get consent when transcribing others.
+          </div>
+        )}
       </footer>
     </div>
   );

@@ -193,6 +193,28 @@ pub struct RecordingSettings {
     #[serde(rename = "minCaptureIntervalMs", default)]
     pub min_capture_interval_ms: Option<u64>,
 
+    /// Prioritize mouse/keyboard input latency over a11y event completeness.
+    /// Opt-in master switch for the three coordinated optimizations defined on
+    /// `UiCaptureConfig.prioritize_input_latency`.
+    #[serde(rename = "prioritizeInputLatency", default)]
+    pub prioritize_input_latency: bool,
+
+    /// OS thread priority for a11y extraction threads when `prioritize_input_latency`
+    /// is true. Values: "normal" / "below_normal" / "lowest" / "idle".
+    #[serde(
+        rename = "extractionThreadPriority",
+        default = "default_extraction_thread_priority"
+    )]
+    pub extraction_thread_priority: String,
+
+    /// Skip UIA tree captures within this many ms after the most recent input.
+    /// 0 disables. Ignored when `prioritize_input_latency` is false.
+    #[serde(
+        rename = "pauseExtractionOnInputMs",
+        default = "default_pause_extraction_on_input_ms"
+    )]
+    pub pause_extraction_on_input_ms: u64,
+
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
     #[serde(rename = "ignoredWindows")]
@@ -442,6 +464,9 @@ impl Default for RecordingSettings {
             visual_check_interval_ms: None,
             visual_change_threshold: None,
             min_capture_interval_ms: None,
+            prioritize_input_latency: false,
+            extraction_thread_priority: default_extraction_thread_priority(),
+            pause_extraction_on_input_ms: default_pause_extraction_on_input_ms(),
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],
@@ -494,6 +519,14 @@ fn default_experimental_coreaudio_system_audio() -> bool {
 
 fn default_max_snapshot_width() -> u32 {
     1920
+}
+
+fn default_extraction_thread_priority() -> String {
+    "below_normal".to_string()
+}
+
+fn default_pause_extraction_on_input_ms() -> u64 {
+    150
 }
 
 fn default_pii_backend() -> String {

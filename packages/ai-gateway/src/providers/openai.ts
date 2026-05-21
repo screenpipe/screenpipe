@@ -54,6 +54,34 @@ export class OpenAIProvider implements AIProvider {
 		params.temperature = body.temperature;
 	}
 
+	// OpenAI keeps adding model families that reject `temperature` (and a few
+	// other sampling knobs). When upstream returns 400 "Unsupported value:
+	// 'temperature'" we drop the offending field and retry once instead of
+	// blowing up — much more robust than chasing the prefix allowlist as
+	// OpenAI ships new model names.
+	private isUnsupportedSamplingParamError(error: any): string | null {
+		if (error?.status !== 400) return null;
+		const msg = String(error?.message ?? error?.error?.message ?? '');
+		const match = msg.match(/Unsupported value: '(\w+)'/i);
+		return match?.[1] ?? null;
+	}
+
+	private async createWithUnsupportedParamRetry<T>(
+		params: ChatCompletionCreateParams,
+		invoke: (p: ChatCompletionCreateParams) => Promise<T>,
+	): Promise<T> {
+		try {
+			return await invoke(params);
+		} catch (error: any) {
+			const unsupported = this.isUnsupportedSamplingParamError(error);
+			if (!unsupported) throw error;
+			const next = params as ChatCompletionCreateParams & Record<string, unknown>;
+			if (next[unsupported] === undefined) throw error;
+			delete next[unsupported];
+			return await invoke(next);
+		}
+	}
+
 	private applyTokenLimit(params: ChatCompletionCreateParams, body: RequestBody): void {
 		const maxTokens = body.max_completion_tokens ?? body.max_tokens;
 		if (maxTokens === undefined) return;
@@ -81,7 +109,9 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 
-		const response = await this.client.chat.completions.create(params);
+		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
+			this.client.chat.completions.create(p),
+		);
 		return new Response(JSON.stringify(this.formatResponse(response)), {
 			headers: { 'Content-Type': 'application/json' },
 		});
@@ -99,7 +129,9 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 
-		const stream = await this.client.chat.completions.create(params);
+		const stream = await this.createWithUnsupportedParamRetry(params, (p) =>
+			this.client.chat.completions.create(p),
+		);
 
 		// Capture scope fields for the error path below — `this` inside the
 		// ReadableStream start() refers to the controller, not the provider.
@@ -183,7 +215,24 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): ChatCompletionMessage[] {
-		return messages.map(
+		// Strip orphan tool-role messages (tool_call_id with no matching
+		// assistant tool_calls earlier in the array). Happens after Pi/chat
+		// history pruning or edits and triggers OpenAI 400 "messages with role
+		// 'tool' must be a response to a preceding message with 'tool_calls'".
+		const knownToolCallIds = new Set<string>();
+		const filtered: Message[] = [];
+		for (const msg of messages) {
+			if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls)) {
+				for (const call of (msg as any).tool_calls) {
+					if (call?.id) knownToolCallIds.add(call.id);
+				}
+			}
+			if (msg.role === 'tool' && msg.tool_call_id && !knownToolCallIds.has(msg.tool_call_id)) {
+				continue;
+			}
+			filtered.push(msg);
+		}
+		return filtered.map(
 			(msg) =>
 				({
 					role: msg.role,
@@ -233,8 +282,8 @@ export class OpenAIProvider implements AIProvider {
 						  })
 						: msg.content,
 					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id,
 					name: msg.name,
-					refusal: null,
 				} as ChatCompletionMessage)
 		);
 	}

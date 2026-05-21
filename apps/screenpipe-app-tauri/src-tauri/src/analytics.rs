@@ -335,9 +335,6 @@ impl AnalyticsManager {
         json!({
             // Screen capture
             "setting_disable_vision": get_bool("disableVision").unwrap_or(false),
-            "setting_disable_ocr": get_bool("disableOcr").unwrap_or(false),
-            "setting_fps": get_f64("fps").unwrap_or(0.5),
-            "setting_adaptive_fps": get_bool("adaptiveFps").unwrap_or(false),
             "setting_ocr_engine": get_str("ocrEngine").unwrap_or("unknown"),
             "setting_use_all_monitors": get_bool("useAllMonitors").unwrap_or(true),
             "setting_monitor_count": get_arr_len("monitorIds"),

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "screenpipe",
+  "productName": "screenpipe enterprise",
   "identifier": "screenpi.pe.enterprise",
   "build": {
     "beforeDevCommand": "bun run dev",

@@ -330,7 +330,44 @@ export class VertexMaasProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): any[] {
-		return messages.map((msg) => ({
+		// Drop orphan tool messages (tool_call_id with no matching assistant
+		// tool_calls earlier in the array, or a content `tool_result` part on
+		// a user/tool message whose id was never emitted). Vertex MaaS rejects
+		// the whole batch with 400 "No tool calls but found tool output" if
+		// even one orphan slips through — typically after chat history pruning
+		// or message edits.
+		const knownToolCallIds = new Set<string>();
+		const collectIds = (msg: Message) => {
+			if (msg.role !== 'assistant') return;
+			for (const call of ((msg as any).tool_calls ?? [])) {
+				if (call?.id) knownToolCallIds.add(call.id);
+			}
+			if (Array.isArray(msg.content)) {
+				for (const part of msg.content as any[]) {
+					if (part?.type === 'tool_use' && part.id) knownToolCallIds.add(part.id);
+				}
+			}
+		};
+		const isOrphanToolMessage = (msg: Message): boolean => {
+			if (msg.role === 'tool') {
+				return !!msg.tool_call_id && !knownToolCallIds.has(msg.tool_call_id);
+			}
+			if (Array.isArray(msg.content)) {
+				const hasToolResult = (msg.content as any[]).some((p) => p?.type === 'tool_result');
+				if (!hasToolResult) return false;
+				return (msg.content as any[]).every(
+					(p) => p?.type !== 'tool_result' || (p?.tool_use_id && !knownToolCallIds.has(p.tool_use_id)),
+				);
+			}
+			return false;
+		};
+		const filtered: Message[] = [];
+		for (const msg of messages) {
+			collectIds(msg);
+			if (isOrphanToolMessage(msg)) continue;
+			filtered.push(msg);
+		}
+		return filtered.map((msg) => ({
 			role: msg.role,
 			...this.formatMessageContent(msg),
 			...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),

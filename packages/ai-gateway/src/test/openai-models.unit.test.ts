@@ -182,4 +182,82 @@ describe('OpenAI API accounting and routing', () => {
 		expect(params['temperature']).toBe(0.7);
 		expect(params['max_tokens']).toBe(32);
 	});
+
+	// Sentry SCREENPIPE-AI-PROXY-Z + -X: OpenAI 400 "Unknown parameter:
+	// 'messages[1].refusal'". The provider used to inject `refusal: null` on
+	// every outbound message — that field belongs to assistant *responses*,
+	// not request bodies, and newer endpoints reject it strictly.
+	it('does not inject refusal field on outbound messages', () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		const formatted = provider.formatMessages([
+			{ role: 'user', content: 'hi' },
+			{ role: 'assistant', content: 'hello' },
+		]);
+		for (const msg of formatted) {
+			expect('refusal' in msg).toBe(false);
+		}
+	});
+
+	// Sentry SCREENPIPE-CLI / orphan tool messages — when chat history is
+	// pruned a tool-role message can survive without its originating
+	// assistant tool_calls, which OpenAI rejects with a 400.
+	it('drops orphan tool messages whose tool_call_id never appeared', () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		const formatted = provider.formatMessages([
+			{ role: 'user', content: 'hi' },
+			{ role: 'tool', content: 'ghost result', tool_call_id: 'call_ghost' },
+			{ role: 'user', content: 'continue' },
+		]);
+		expect(formatted).toHaveLength(2);
+		expect(formatted.map((m: any) => m.role)).toEqual(['user', 'user']);
+	});
+
+	// Sentry SCREENPIPE-AI-PROXY-Y: "400 Unsupported value: 'temperature'
+	// does not support 0.7 with this model. Only the default (1) is supported."
+	// New OpenAI models keep being added to the temperature-locked list. The
+	// retry strips the offending field and re-tries once, so we don't have to
+	// chase every new model prefix.
+	it('retries without temperature when OpenAI rejects it with 400', async () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		let attempts = 0;
+		let lastParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			attempts += 1;
+			lastParams = params;
+			if (attempts === 1) {
+				const err: any = new Error("400 Unsupported value: 'temperature' does not support 0.7 with this model. Only the default (1) value is supported.");
+				err.status = 400;
+				throw err;
+			}
+			return { choices: [{ message: { content: 'ok' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'gpt-future-reasoning',
+			messages: [{ role: 'user', content: 'hi' }],
+			temperature: 0.7,
+		});
+
+		expect(attempts).toBe(2);
+		expect(lastParams).not.toBeNull();
+		expect((lastParams as Record<string, unknown>)['temperature']).toBeUndefined();
+	});
+
+	it('does not retry when the 400 is about a different param than what was set', async () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		let attempts = 0;
+		provider.client.chat.completions.create = mock(async () => {
+			attempts += 1;
+			const err: any = new Error("400 Unsupported value: 'top_p' not allowed.");
+			err.status = 400;
+			throw err;
+		});
+
+		await expect(provider.createCompletion({
+			model: 'gpt-future-reasoning',
+			messages: [{ role: 'user', content: 'hi' }],
+			temperature: 0.7,
+		})).rejects.toThrow();
+		expect(attempts).toBe(1);
+	});
 });

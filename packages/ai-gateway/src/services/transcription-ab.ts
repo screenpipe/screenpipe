@@ -151,7 +151,13 @@ export async function callDeepgram(
           'Content-Type': req.contentType,
         },
         body: req.audioBuffer,
-        signal: AbortSignal.timeout(30_000),
+        // Deepgram's own docs say prerecorded latency is not expected to be
+        // sub-20s, and a typical 8-min batch takes 20-60s of Deepgram-side
+        // processing. The previous 30s timeout aborted on every non-trivial
+        // batch, surfacing as HTTP 500 "operation aborted due to timeout"
+        // to the Rust client and saturating the retry loop. Cloudflare
+        // Workers comfortably handle 180s subrequests.
+        signal: AbortSignal.timeout(180_000),
       });
 
       if (resp.ok) {
@@ -176,7 +182,7 @@ export async function callDeepgram(
       break;
     } catch (e: any) {
       if ((e.name === 'TimeoutError' || e.name === 'AbortError') && attempt < MAX_ATTEMPTS) {
-        lastError = 'timeout after 30s';
+        lastError = 'timeout after 180s';
         await new Promise((r) => setTimeout(r, 500));
         continue;
       }

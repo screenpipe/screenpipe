@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Rocket, Moon, Sun, Monitor, FlaskConical, Shield, ExternalLink, Layers, RefreshCw, MessageSquare, Sparkles } from "lucide-react";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw, MessageSquare, Sparkles } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
@@ -249,3 +249,4 @@ export default function GeneralSettings() {
     </div>
   );
 }
+

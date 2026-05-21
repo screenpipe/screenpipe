@@ -68,6 +68,8 @@ impl CaptureSession {
         // --- Capture trigger sender (set by VisionManager, consumed by UI recorder) ---
         let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
             None;
+        // --- Frame-linker sender (set by VisionManager, consumed by UI recorder + capture loops) ---
+        let mut linker_tx: Option<screenpipe_engine::frame_linker_actor::LinkerSender> = None;
 
         // --- Vision ---
         if !config.disable_vision {
@@ -83,6 +85,7 @@ impl CaptureSession {
             );
 
             capture_trigger_tx = Some(vision_manager.trigger_sender());
+            linker_tx = Some(vision_manager.linker_sender());
 
             let shutdown_rx = shutdown_tx.subscribe();
             let audio_manager_for_drm = if !config.disable_audio {
@@ -150,6 +153,7 @@ impl CaptureSession {
                 db_clone,
                 ui_config,
                 capture_trigger_tx,
+                linker_tx,
                 config.ignored_windows.clone(),
             )
             .await

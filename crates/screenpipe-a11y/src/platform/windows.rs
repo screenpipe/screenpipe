@@ -3,24 +3,28 @@
 //! Uses low-level Windows hooks for keyboard and mouse input capture.
 
 use crate::activity_feed::{ActivityFeed, ActivityKind};
-use crate::config::UiCaptureConfig;
+use crate::config::{ExtractionThreadPriority, UiCaptureConfig};
 use crate::events::{ElementContext, EventData, UiEvent, WindowTreeSnapshot};
 use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use screenpipe_core::pii_removal::remove_pii;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use super::windows_uia::{self, ClickElementRequest};
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY,
+    THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_IDLE, THREAD_PRIORITY_LOWEST,
+    THREAD_PRIORITY_NORMAL,
+};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
@@ -34,6 +38,29 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
     WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
 };
+
+/// Lower the current thread's OS priority so user input threads (mouse/keyboard hook,
+/// foreground app) get scheduled preferentially. Called from a11y extraction threads
+/// at thread start when `prioritize_input_latency` is on, to mitigate input lag caused
+/// by a11y extraction threads monopolizing CPU.
+pub(crate) fn apply_extraction_thread_priority(priority: ExtractionThreadPriority) {
+    let level: THREAD_PRIORITY = match priority {
+        ExtractionThreadPriority::Normal => THREAD_PRIORITY_NORMAL,
+        ExtractionThreadPriority::BelowNormal => THREAD_PRIORITY_BELOW_NORMAL,
+        ExtractionThreadPriority::Lowest => THREAD_PRIORITY_LOWEST,
+        ExtractionThreadPriority::Idle => THREAD_PRIORITY_IDLE,
+    };
+    unsafe {
+        let handle = GetCurrentThread();
+        match SetThreadPriority(handle, level) {
+            Ok(()) => debug!("extraction thread priority set to {:?}", priority),
+            Err(e) => warn!(
+                "SetThreadPriority({:?}) failed: {:?} — falling back to default priority",
+                priority, e
+            ),
+        }
+    }
+}
 
 /// Permission status for UI capture
 #[derive(Debug, Clone)]
@@ -171,6 +198,11 @@ impl UiRecorder {
         let click_queue = Arc::new(Mutex::new(Vec::<ClickElementRequest>::new()));
         let focused_element = Arc::new(Mutex::new(None::<ElementContext>));
 
+        // Most recent input timestamp (ms since start), used by the UIA worker to skip
+        // tree captures during/just after user input when prioritize_input_latency is on.
+        // 0 = no input observed yet.
+        let last_input_at_ms = Arc::new(AtomicU64::new(0));
+
         // Thread 1: Native Windows hooks for input events
         let tx1 = tx.clone();
         let stop1 = stop.clone();
@@ -180,6 +212,7 @@ impl UiRecorder {
         let feed1 = activity_feed.clone();
         let click_queue1 = click_queue.clone();
         let focused_element1 = focused_element.clone();
+        let last_input_at_ms1 = last_input_at_ms.clone();
         threads.push(thread::spawn(move || {
             run_native_hooks(
                 tx1,
@@ -191,6 +224,7 @@ impl UiRecorder {
                 feed1,
                 click_queue1,
                 focused_element1,
+                last_input_at_ms1,
             );
         }));
 
@@ -219,6 +253,7 @@ impl UiRecorder {
         let config3 = self.config.clone();
         let click_queue3 = click_queue.clone();
         let focused_element3 = focused_element.clone();
+        let last_input_at_ms3 = last_input_at_ms.clone();
         threads.push(thread::spawn(move || {
             windows_uia::run_uia_thread(
                 tree_tx,
@@ -227,6 +262,8 @@ impl UiRecorder {
                 focused_element3,
                 stop3,
                 config3,
+                start_time,
+                last_input_at_ms3,
             );
         }));
 
@@ -303,6 +340,10 @@ struct HookState {
     focused_element: Arc<Mutex<Option<ElementContext>>>,
     /// Clipboard operations deferred from the LL hook to the message loop.
     pending_clipboard: Vec<PendingClipboard>,
+    /// Shared timestamp (ms since start) of the most recent input event.
+    /// Updated unconditionally at the top of mouse_hook_proc / keyboard_hook_proc so the UIA
+    /// worker can defer tree captures while the user is actively typing/clicking/scrolling.
+    last_input_at_ms: Arc<AtomicU64>,
 }
 
 // Thread-local storage for hook state
@@ -326,6 +367,7 @@ fn run_native_hooks(
     activity_feed: Option<ActivityFeed>,
     click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
     focused_element: Arc<Mutex<Option<ElementContext>>>,
+    last_input_at_ms: Arc<AtomicU64>,
 ) {
     debug!("Starting native Windows hooks");
 
@@ -344,6 +386,7 @@ fn run_native_hooks(
             click_queue,
             focused_element,
             pending_clipboard: Vec::new(),
+            last_input_at_ms,
         }));
     });
 
@@ -487,6 +530,13 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 return;
             };
             if let Some(ref mut s) = *guard {
+                // Record latest input timestamp unconditionally so the UIA worker can defer
+                // extraction while the user is typing. Cheap (one atomic store).
+                if is_key_down || is_key_up {
+                    s.last_input_at_ms
+                        .store(s.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                }
+
                 // Record activity
                 if let Some(ref feed) = s.activity_feed {
                     if is_key_down {
@@ -505,8 +555,22 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
                 let t = s.start.elapsed().as_millis() as u64;
                 let mods = get_modifier_state();
 
-                let app_name = s.current_app.lock().clone();
-                let window_title = s.current_window.lock().clone();
+                // try_lock when prioritize_input_latency is set, mirroring mouse_hook_proc:
+                // avoid stalling the OS message queue if these locks are contended.
+                let (app_name, window_title) = if s.config.prioritize_input_latency {
+                    (
+                        s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
+                        s.current_window
+                            .try_lock()
+                            .map(|g| g.clone())
+                            .unwrap_or(None),
+                    )
+                } else {
+                    (
+                        s.current_app.lock().clone(),
+                        s.current_window.lock().clone(),
+                    )
+                };
 
                 // Check exclusions
                 if !s.config.should_capture_target(
@@ -612,6 +676,12 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                 return;
             };
             if let Some(ref mut s) = *guard {
+                // Record latest input timestamp unconditionally for all mouse messages
+                // (move/click/wheel). Cheap atomic store, lets the UIA worker know the user
+                // is actively driving the UI so it can defer captures.
+                s.last_input_at_ms
+                    .store(s.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+
                 // Fast path for WM_MOUSEMOVE — no mutex locks to avoid blocking
                 // the system-wide mouse input pipeline (critical for RDP cursor rendering)
                 if msg == WM_MOUSEMOVE {
@@ -660,12 +730,27 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                     return;
                 }
 
-                // Slow path for clicks/scroll — these are infrequent, mutex locks OK
+                // Slow path for clicks/scroll — these are infrequent, mutex locks OK.
+                // When prioritize_input_latency is set, switch the blocking locks to try_lock.
+                // Falls back to None if contended so the hook returns fast and Windows can
+                // dispatch the next mouse event without delay.
                 let timestamp = Utc::now();
                 let t = s.start.elapsed().as_millis() as u64;
 
-                let app_name = s.current_app.lock().clone();
-                let window_title = s.current_window.lock().clone();
+                let (app_name, window_title) = if s.config.prioritize_input_latency {
+                    (
+                        s.current_app.try_lock().map(|g| g.clone()).unwrap_or(None),
+                        s.current_window
+                            .try_lock()
+                            .map(|g| g.clone())
+                            .unwrap_or(None),
+                    )
+                } else {
+                    (
+                        s.current_app.lock().clone(),
+                        s.current_window.lock().clone(),
+                    )
+                };
 
                 // Check exclusions
                 if !s.config.should_capture_target(
@@ -693,9 +778,17 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                             _ => 0,
                         };
 
-                        // Attach focused element context (approximate, fast)
+                        // Attach focused element context (approximate, fast).
+                        // try_lock when prioritize_input_latency is set.
                         let element = if s.config.capture_context {
-                            s.focused_element.lock().clone()
+                            if s.config.prioritize_input_latency {
+                                s.focused_element
+                                    .try_lock()
+                                    .map(|g| g.clone())
+                                    .unwrap_or(None)
+                            } else {
+                                s.focused_element.lock().clone()
+                            }
                         } else {
                             None
                         };
@@ -709,9 +802,17 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 
                         // Queue ElementFromPoint request for precise element context
                         if s.config.capture_context {
-                            s.click_queue
-                                .lock()
-                                .push(ClickElementRequest { x, y, timestamp });
+                            // try_lock when prioritize_input_latency is set. If contended,
+                            // skip queueing — better than stalling the hook.
+                            if s.config.prioritize_input_latency {
+                                if let Some(mut q) = s.click_queue.try_lock() {
+                                    q.push(ClickElementRequest { x, y, timestamp });
+                                }
+                            } else {
+                                s.click_queue
+                                    .lock()
+                                    .push(ClickElementRequest { x, y, timestamp });
+                            }
                         }
                     }
 
@@ -1210,6 +1311,12 @@ fn run_app_observer(
     current_window: Arc<Mutex<Option<String>>>,
     focused_element: Arc<Mutex<Option<ElementContext>>>,
 ) {
+    // Lower OS thread priority so user input threads can preempt. The app observer
+    // does some UIAutomation work on focus changes — let it yield to input.
+    if config.prioritize_input_latency {
+        apply_extraction_thread_priority(config.extraction_thread_priority);
+    }
+
     // Initialize thread-local state
     APP_OBSERVER_STATE.with(|state| {
         *state.borrow_mut() = Some(Box::new(AppObserverState {
@@ -1409,6 +1516,7 @@ mod tests {
             click_queue: Arc::new(parking_lot::Mutex::new(Vec::new())),
             focused_element: Arc::new(parking_lot::Mutex::new(None)),
             pending_clipboard: Vec::new(),
+            last_input_at_ms: Arc::new(AtomicU64::new(0)),
         }
     }
 

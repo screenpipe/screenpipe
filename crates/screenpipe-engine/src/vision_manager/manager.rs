@@ -16,8 +16,9 @@ use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-use crate::event_driven_capture::{CaptureTrigger, TriggerSender};
+use crate::event_driven_capture::{CaptureTriggerMsg, TriggerSender};
 use crate::focus_aware_controller::FocusAwareController;
+use crate::frame_linker_actor::{linker_channel, spawn_frame_linker, LinkerSender};
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
@@ -72,6 +73,14 @@ pub struct VisionManager {
     /// Broadcast sender for capture triggers — shared with UI recorder.
     /// Each monitor subscribes via `trigger_tx.subscribe()`.
     trigger_tx: TriggerSender,
+    /// Sender for the frame-linker actor — shared with UI recorder and
+    /// each event-driven capture loop. The recorder forwards
+    /// `EventPersisted` after batch flush; the capture loop forwards
+    /// `FrameCaptured` after each successful capture; the actor pairs
+    /// them and applies `UPDATE ui_events SET frame_id` writes.
+    linker_tx: LinkerSender,
+    /// Stop flag for the linker actor task.
+    linker_stop: Arc<AtomicBool>,
     /// Hot frame cache — capture pushes frames here for zero-DB timeline reads.
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     /// Power profile receiver — each monitor gets a clone.
@@ -92,7 +101,18 @@ impl VisionManager {
         vision_handle: Handle,
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
-        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTrigger>(64);
+        let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTriggerMsg>(64);
+
+        // Frame-linker actor: pairs UI events with the frames they
+        // caused us to capture. Single shared instance across all
+        // monitors and the UI recorder. Lives as long as the
+        // VisionManager.
+        let (linker_tx, linker_rx) = linker_channel();
+        let linker_stop = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = vision_handle.enter();
+            spawn_frame_linker(db.clone(), linker_rx, linker_stop.clone());
+        }
 
         // Focus-aware capture is always on. `new_tracker()` always succeeds —
         // returns a null tracker on platforms without a native impl. Controller
@@ -112,6 +132,8 @@ impl VisionManager {
             status: Arc::new(RwLock::new(VisionManagerStatus::Stopped)),
             recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
+            linker_tx,
+            linker_stop,
             hot_frame_cache: None,
             power_profile_rx: None,
             focus_controller,
@@ -134,6 +156,14 @@ impl VisionManager {
     /// Pass this to `start_ui_recording()` so UI events trigger captures.
     pub fn trigger_sender(&self) -> TriggerSender {
         self.trigger_tx.clone()
+    }
+
+    /// Get a clone of the frame-linker sender. Pass this to
+    /// `start_ui_recording()` and the event-driven capture loops so
+    /// they can report `EventPersisted` and `FrameCaptured` for
+    /// pairing.
+    pub fn linker_sender(&self) -> LinkerSender {
+        self.linker_tx.clone()
     }
 
     /// Get current status
@@ -384,6 +414,7 @@ impl VisionManager {
         let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
         let focus_controller = self.focus_controller.clone();
+        let linker_tx = Some(self.linker_tx.clone());
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",
@@ -411,6 +442,7 @@ impl VisionManager {
                 languages,
                 power_profile_rx,
                 focus_controller,
+                linker_tx,
             )
             .await
             {
@@ -495,6 +527,11 @@ impl VisionManager {
     /// Shutdown the VisionManager
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down VisionManager");
+        // Signal the frame-linker actor to stop. Drops of the cloned
+        // senders held by recorder/capture loops will also close the
+        // channel; either path exits the actor cleanly.
+        self.linker_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.stop().await
     }
 }

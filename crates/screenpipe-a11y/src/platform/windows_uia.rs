@@ -14,7 +14,7 @@ use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, trace, warn};
@@ -39,6 +39,26 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
     MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT,
 };
+
+/// Returns true if the user has produced a mouse/keyboard event within
+/// `pause_extraction_on_input_ms`. The UIA worker uses this to skip tree captures during
+/// active input — the resulting tree would be stale within milliseconds anyway, and the
+/// extraction work would compete with input threads for CPU, contributing to perceived lag.
+fn input_too_recent(
+    config: &UiCaptureConfig,
+    start_time: Instant,
+    last_input_at_ms: &AtomicU64,
+) -> bool {
+    if !config.prioritize_input_latency || config.pause_extraction_on_input_ms == 0 {
+        return false;
+    }
+    let last_input = last_input_at_ms.load(Ordering::Relaxed);
+    if last_input == 0 {
+        return false;
+    }
+    let now_ms = start_time.elapsed().as_millis() as u64;
+    now_ms.saturating_sub(last_input) < config.pause_extraction_on_input_ms
+}
 
 /// Shared state for pending focus changes (set by COM handler, read by UIA thread)
 struct PendingFocus {
@@ -520,8 +540,17 @@ pub fn run_uia_thread(
     focused_element: Arc<Mutex<Option<ElementContext>>>,
     stop: Arc<AtomicBool>,
     config: UiCaptureConfig,
+    start_time: Instant,
+    last_input_at_ms: Arc<AtomicU64>,
 ) {
     debug!("UIA worker thread starting");
+
+    // Lower OS thread priority so user input threads can preempt. The UIA worker is
+    // the heaviest a11y consumer — letting it yield to input is the highest-value
+    // piece of the prioritize_input_latency bundle.
+    if config.prioritize_input_latency {
+        super::windows::apply_extraction_thread_priority(config.extraction_thread_priority);
+    }
 
     // Initialize COM (STA for event handler delivery)
     unsafe {
@@ -614,7 +643,7 @@ pub fn run_uia_thread(
     let debounce_dur = Duration::from_millis(config.tree_debounce_ms);
     let interval_dur = Duration::from_millis(config.tree_capture_interval_ms);
 
-    // Capture initial focused window
+    // Capture initial focused window (no input has happened yet, so input_too_recent is a no-op)
     let initial_hwnd = unsafe { GetForegroundWindow() };
     if !initial_hwnd.is_invalid() {
         capture_and_send(
@@ -629,6 +658,14 @@ pub fn run_uia_thread(
         );
     }
 
+    // Compute the cooldown for shortening MsgWaitForMultipleObjects timeout when input is recent.
+    // We want to wake up shortly after the input window expires to retry the deferred capture.
+    let input_pause_dur_ms = if config.prioritize_input_latency {
+        config.pause_extraction_on_input_ms
+    } else {
+        0
+    };
+
     // Main loop: pump messages + process events
     let mut msg = MSG::default();
     while !stop.load(Ordering::Relaxed) {
@@ -640,8 +677,14 @@ pub fn run_uia_thread(
             }
         }
 
+        // Defer tree captures while the user is actively typing/clicking. The captured
+        // tree would be stale within ms anyway, and the work would steal CPU from input
+        // threads. We keep `pending_focus` and don't bump `last_capture_time` so the
+        // capture is retried on the next loop once input pauses.
+        let skip_capture = input_too_recent(&config, start_time, &last_input_at_ms);
+
         // Check for pending focus change (debounced)
-        if config.capture_tree {
+        if config.capture_tree && !skip_capture {
             let should_capture = {
                 let pending = pending_focus.lock();
                 if let Some(ref pf) = *pending {
@@ -702,13 +745,18 @@ pub fn run_uia_thread(
         // Block until a Windows message arrives or a computed timeout elapses.
         // This replaces the old 50ms sleep-poll: the thread stays asleep until
         // something actually needs to happen (COM event, debounce, or re-capture).
-        let wait_ms = compute_next_timeout(
+        let mut wait_ms = compute_next_timeout(
             &pending_focus,
             debounce_dur,
             &last_capture_time,
             interval_dur,
             &config,
         );
+        // If we just skipped a capture due to recent input, cap the wait so we wake up
+        // shortly after the input cooldown expires and can retry the capture.
+        if skip_capture && input_pause_dur_ms > 0 {
+            wait_ms = wait_ms.min(input_pause_dur_ms);
+        }
         unsafe {
             MsgWaitForMultipleObjects(None, false, wait_ms as u32, QS_ALLINPUT);
         }
@@ -1529,6 +1577,8 @@ mod tests {
         let config2 = config.clone();
         let click_queue2 = click_queue.clone();
         let focused_element2 = focused_element.clone();
+        let start_time = Instant::now();
+        let last_input_at_ms = Arc::new(AtomicU64::new(0));
 
         let thread = std::thread::spawn(move || {
             run_uia_thread(
@@ -1538,6 +1588,8 @@ mod tests {
                 focused_element2,
                 stop2,
                 config2,
+                start_time,
+                last_input_at_ms,
             );
         });
 
@@ -1636,6 +1688,7 @@ mod tests {
 
         let cpu_before = get_process_cpu_time();
         let wall_start = std::time::Instant::now();
+        let last_input_at_ms = Arc::new(AtomicU64::new(0));
 
         let thread = std::thread::spawn(move || {
             run_uia_thread(
@@ -1645,6 +1698,8 @@ mod tests {
                 focused_element2,
                 stop2,
                 config2,
+                wall_start,
+                last_input_at_ms,
             );
         });
 

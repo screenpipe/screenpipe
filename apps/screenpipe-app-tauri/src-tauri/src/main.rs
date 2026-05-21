@@ -55,6 +55,7 @@ mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod meeting_live_notes;
+mod meeting_stall_notifications;
 mod oauth;
 mod owned_browser;
 // Cross-platform shape: macOS reads Arc/Chrome/Brave/Edge cookies and
@@ -737,6 +738,9 @@ async fn main() {
                 commands::set_cloud_media_analysis_skill,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
+                commands::save_enterprise_team_config,
+                commands::get_enterprise_team_api_token,
+                commands::get_cloud_token,
                 enterprise_policy::set_enterprise_policy,
                 commands::get_disk_usage,
                 commands::list_cache_files,
@@ -1011,6 +1015,9 @@ async fn main() {
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
             commands::save_enterprise_license_key,
+            commands::save_enterprise_team_config,
+            commands::get_enterprise_team_api_token,
+            commands::get_cloud_token,
             spawn_screenpipe,
             stop_screenpipe,
             recording::start_capture,
@@ -1024,6 +1031,8 @@ async fn main() {
             permissions::check_microphone_permission,
             permissions::check_screen_recording_permission,
             permissions::check_accessibility_permission_cmd,
+            permissions::check_input_monitoring_permission_cmd,
+            permissions::request_input_monitoring_permission,
             owned_browser::owned_browser_set_bounds,
             owned_browser::owned_browser_navigate,
             owned_browser::owned_browser_hide,
@@ -1752,6 +1761,17 @@ async fn main() {
                             // boot the server + HTTP API + DB without TCC.
                             if !disable_vision && !permissions_check.screen_recording.permitted() {
                                 warn!("Screen recording permission not granted: {:?}. Server will not start.", permissions_check.screen_recording);
+                                // Flip the recording state to a terminal Error
+                                // value so the tray stops showing "Starting…"
+                                // forever. Without this the user sees a
+                                // perpetual spinner with no signal that
+                                // anything is wrong; clearing only `is_starting`
+                                // leaves RECORDING_INFO at its default Starting
+                                // value and the health poll has no
+                                // ever_connected signal to recover from.
+                                crate::health::set_recording_status(
+                                    crate::health::RecordingStatus::Error,
+                                );
                                 is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                                 return;
                             }
@@ -1933,6 +1953,7 @@ async fn main() {
 
             crate::monitor_events::start(app_handle.clone());
             crate::meeting_live_notes::start(app_handle.clone());
+            crate::meeting_stall_notifications::start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             crate::window::reset_to_regular_and_refresh_tray(&app_handle);

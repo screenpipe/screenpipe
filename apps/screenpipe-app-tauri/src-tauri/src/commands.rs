@@ -662,6 +662,108 @@ pub fn save_enterprise_license_key(license_key: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Read the enterprise admin API token (`team_api_token`) from
+/// `~/.screenpipe/enterprise.json`. Returns None when the file is
+/// missing, malformed, or the field is empty.
+///
+/// Used by the Settings → Enterprise → Admin API token card to render
+/// "configured" state without round-tripping the plaintext value through
+/// the React state. The token itself is treated as a secret: the
+/// frontend only learns "yes there's a value" via this getter, never
+/// gets the value back.
+#[tauri::command]
+#[specta::specta]
+pub fn get_enterprise_team_api_token() -> Option<String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed
+        .get("team_api_token")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Read the user's screenpipe cloud session JWT from `~/.screenpipe/
+/// auth.json`. Returns None when the file is missing, malformed, or the
+/// token field is empty.
+///
+/// The settings store (`store.bin → user.token`) is the canonical
+/// runtime cache for this token but is only populated after a fresh
+/// in-app sign-in. `auth.json` is the durable on-disk copy written by
+/// the pi-agent configuration flow — it survives store resets and dev-
+/// mode launches where the in-memory user object hasn't been hydrated
+/// yet. Used by the enterprise-policy hook to send the Bearer header
+/// even when the in-app user object is still null.
+#[tauri::command]
+#[specta::specta]
+pub fn get_cloud_token() -> Option<String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed
+        .get("token")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Persist the user's enterprise admin status + team API token so the
+/// pi-agent's `screenpipe-team` skill knows whether to install itself.
+///
+/// Called by the frontend right after a policy fetch confirms admin
+/// role. Storing this alongside the license key in `enterprise.json`
+/// keeps everything pi-agent needs in one file the skill can read
+/// without a Tauri round-trip.
+///
+/// All fields are optional so callers can update one at a time —
+/// e.g. revoke admin without wiping the cached team token, or refresh
+/// just the token after a rotation. To FORCE a field to null, pass
+/// an empty string for strings or `false` for `is_admin`/`license_active`.
+#[tauri::command]
+#[specta::specta]
+pub fn save_enterprise_team_config(
+    is_admin: Option<bool>,
+    license_active: Option<bool>,
+    team_api_token: Option<String>,
+) -> Result<(), String> {
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create dir: {}", e))?;
+
+    let path = dir.join("enterprise.json");
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if let Some(v) = is_admin {
+        json["is_admin"] = serde_json::Value::Bool(v);
+    }
+    if let Some(v) = license_active {
+        json["license_active"] = serde_json::Value::Bool(v);
+    }
+    let token_set = team_api_token.is_some();
+    if let Some(t) = team_api_token {
+        json["team_api_token"] = if t.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(t)
+        };
+    }
+
+    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap())
+        .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
+
+    info!(
+        "enterprise: team config saved to {} (is_admin set: {}, license_active set: {}, token set: {})",
+        path.display(),
+        is_admin.is_some(),
+        license_active.is_some(),
+        token_set
+    );
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn write_browser_log(level: String, message: String) {

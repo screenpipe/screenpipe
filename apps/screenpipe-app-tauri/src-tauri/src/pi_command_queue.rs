@@ -64,10 +64,6 @@ pub struct PiCommand {
 /// How the queue waits after writing a command to stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitMode {
-    /// Write to stdin, reply Ok, advance immediately. Used for commands that
-    /// are allowed to interrupt or redirect the current turn (for example
-    /// native `steer`).
-    WriteOnly,
     /// Write a prompt, acknowledge the write, then wait for the agent to
     /// become idle before the next queued prompt is written. This keeps
     /// follow-ups in Rust's cancellable queue until their actual turn starts.
@@ -564,12 +560,6 @@ pub fn spawn_queue(
                     }
 
                     match cmd.wait_mode {
-                        WaitMode::WriteOnly => {
-                            if let Some(pid) = &prompt_id {
-                                state.dequeue_prompt(pid);
-                            }
-                            let _ = cmd.reply.send(Ok(()));
-                        }
                         WaitMode::Prompt => {
                             // The prompt has now left the waiting queue and
                             // entered the transcript as the active turn.
@@ -720,16 +710,6 @@ async fn wait_for_done_or_terminated(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    /// Create a pipe-based fake stdin for testing.
-    fn fake_stdin() -> (Arc<Mutex<ChildStdin>>, std::fs::File) {
-        // We can't easily create a ChildStdin directly, so we test
-        // the queue logic via the public API with a real subprocess.
-        // For unit tests, we verify the signal/wait logic instead.
-        unimplemented!("Integration tests use real Pi process")
-    }
 
     #[tokio::test]
     async fn test_queue_state_done_signal() {
@@ -778,7 +758,7 @@ mod tests {
         // Send a command in the background
         let h = tokio::spawn(async move {
             let result = handle
-                .send(json!({"type": "prompt"}), WaitMode::WriteOnly)
+                .send(json!({"type": "prompt"}), WaitMode::Prompt)
                 .await;
             assert!(result.is_ok());
             // The receiver should work
@@ -788,7 +768,7 @@ mod tests {
 
         // Receive from the channel and complete it
         if let Some(QueueMessage::Command(cmd)) = rx.recv().await {
-            assert_eq!(cmd.wait_mode, WaitMode::WriteOnly);
+            assert_eq!(cmd.wait_mode, WaitMode::Prompt);
             let _ = cmd.reply.send(Ok(()));
         }
 
@@ -810,7 +790,7 @@ mod tests {
         let h1 = {
             let h = handle.clone();
             tokio::spawn(
-                async move { h.send(json!({"type": "prompt"}), WaitMode::WriteOnly).await },
+                async move { h.send(json!({"type": "prompt"}), WaitMode::Prompt).await },
             )
         };
         let h2 = {

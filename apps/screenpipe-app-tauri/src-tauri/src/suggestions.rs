@@ -5,9 +5,18 @@
 //! Background AI suggestion scheduler — pre-generates personalized chat
 //! suggestions using Apple Intelligence during idle/charging periods.
 //! Cached suggestions are instantly available when the chat opens.
+//!
+//! This file handles user-controlled strings (window titles, OCR snippets,
+//! transcripts) — historically the source of repeated UTF-8 char-boundary
+//! panics (SCREENPIPE-APP-97 and predecessors). `deny(clippy::string_slice)`
+//! forces every byte-index slice through [`screenpipe_core::strings`] so we
+//! don't reintroduce `&s[..N]` panics for the fifth time.
+
+#![deny(clippy::string_slice)]
 
 use crate::recording::{local_api_context_from_app, LocalApiContext};
 use futures::StreamExt;
+use screenpipe_core::strings::{safe_byte_prefix, truncate_string};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::sync::Arc;
@@ -522,11 +531,7 @@ fn coding_suggestions(
                         .next()
                         .or_else(|| w.window_name.split(" - ").next())
                         .unwrap_or(&w.window_name);
-                    if title.chars().count() > 30 {
-                        format!("{}...", title.chars().take(27).collect::<String>())
-                    } else {
-                        title.to_string()
-                    }
+                    truncate_string(title, 30)
                 })
                 .collect()
         })
@@ -619,11 +624,7 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
         .iter()
         .take(3)
         .map(|w| {
-            if w.window_name.chars().count() > 35 {
-                format!("{}...", w.window_name.chars().take(32).collect::<String>())
-            } else {
-                w.window_name.clone()
-            }
+            truncate_string(&w.window_name, 35)
         })
         .collect();
 
@@ -646,11 +647,7 @@ fn browsing_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec
     }];
 
     for w in &browser_windows {
-        let title = if w.window_name.chars().count() > 35 {
-            format!("{}...", w.window_name.chars().take(32).collect::<String>())
-        } else {
-            w.window_name.clone()
-        };
+        let title = truncate_string(&w.window_name, 35);
         suggestions.push(Suggestion {
             text: format!("what was I reading on \"{}\"?", title),
             preview: Some(format!("{}min on this page", w.cnt / 60)),
@@ -693,11 +690,7 @@ fn meeting_suggestions(apps: &[AppActivity], windows: &[WindowActivity]) -> Vec<
             MEETING_APPS.iter().any(|m| *m == w.app_name.to_lowercase()) && w.window_name.len() > 3
         })
         .map(|w| {
-            if w.window_name.chars().count() > 40 {
-                format!("{}...", w.window_name.chars().take(37).collect::<String>())
-            } else {
-                w.window_name.clone()
-            }
+            truncate_string(&w.window_name, 40)
         });
 
     let preview = if meeting_mins > 0 {
@@ -771,11 +764,7 @@ fn writing_suggestions(
                         .next()
                         .or_else(|| w.window_name.split(" - ").next())
                         .unwrap_or(&w.window_name);
-                    if title.chars().count() > 30 {
-                        format!("{}...", title.chars().take(27).collect::<String>())
-                    } else {
-                        title.to_string()
-                    }
+                    truncate_string(title, 30)
                 })
                 .collect()
         })
@@ -946,11 +935,7 @@ fn video_editing_suggestions(
                 .next()
                 .or_else(|| w.window_name.split(" - ").next())
                 .unwrap_or(&w.window_name);
-            if title.chars().count() > 35 {
-                format!("{}...", title.chars().take(32).collect::<String>())
-            } else {
-                title.to_string()
-            }
+            truncate_string(title, 35)
         });
 
     vec![
@@ -1037,11 +1022,7 @@ fn idle_suggestions(
             && !skip.contains(&w.app_name.to_lowercase().as_str())
     });
     if let Some(w) = interesting_window {
-        let title = if w.window_name.chars().count() > 35 {
-            format!("{}...", w.window_name.chars().take(32).collect::<String>())
-        } else {
-            w.window_name.clone()
-        };
+        let title = truncate_string(&w.window_name, 35);
         suggestions.push(Suggestion {
             text: format!("summarize \"{}\"", title),
             preview: Some(format!("in {}", w.app_name)),
@@ -1353,12 +1334,7 @@ async fn build_activity_context(
     // 2. Window titles (~400 chars)
     parts.push("Windows:".to_string());
     for w in windows.iter().take(6) {
-        let title = if w.window_name.chars().count() > 50 {
-            let truncated: String = w.window_name.chars().take(47).collect();
-            format!("{}...", truncated)
-        } else {
-            w.window_name.clone()
-        };
+        let title = truncate_string(&w.window_name, 50);
         parts.push(format!("  {} — {}", w.app_name, title));
     }
     parts.push(String::new());
@@ -1395,8 +1371,7 @@ async fn build_activity_context(
             let mut used = 0;
             for s in &snippets {
                 let text = s.snippet.trim().replace('\n', " ");
-                let end = text.floor_char_boundary(text.len().min(150));
-                let line = format!("  [{}] {}", s.app_name, &text[..end]);
+                let line = format!("  [{}] {}", s.app_name, safe_byte_prefix(&text, 150));
                 if used + line.len() > char_budget {
                     break;
                 }
@@ -1533,7 +1508,7 @@ async fn generate_ai_suggestions(
                 .unwrap_or("");
             debug!(
                 "suggestions AI response: {}",
-                &content[..content.floor_char_boundary(content.len().min(300))]
+                safe_byte_prefix(content, 300)
             );
             parse_ai_response(content)
         }
@@ -1609,7 +1584,10 @@ fn parse_ai_response(content: &str) -> Option<AiResult> {
         if let Some(end) = content.rfind(']') {
             if start <= end && content.is_char_boundary(start) && content.is_char_boundary(end + 1)
             {
-                if let Ok(arr) = serde_json::from_str::<Vec<String>>(&content[start..=end]) {
+                // Safe: char-boundary verified on both ends two lines above.
+                #[allow(clippy::string_slice)]
+                let slice = &content[start..=end];
+                if let Ok(arr) = serde_json::from_str::<Vec<String>>(slice) {
                     if !arr.is_empty() {
                         return Some(AiResult {
                             suggestions: arr
@@ -1650,6 +1628,8 @@ fn extract_json_object(content: &str) -> Option<String> {
     let start = cleaned.find('{')?;
     let end = cleaned.rfind('}')?;
     if end >= start && cleaned.is_char_boundary(start) && cleaned.is_char_boundary(end + 1) {
+        // Safe: char-boundary verified on both ends in the guard above.
+        #[allow(clippy::string_slice)]
         Some(cleaned[start..=end].to_string())
     } else {
         None
@@ -2018,7 +1998,7 @@ mod tests {
                 println!(
                     "    [{}] {}...",
                     a.app_name,
-                    &a.snippet[..a.snippet.floor_char_boundary(a.snippet.len().min(80))]
+                    safe_byte_prefix(&a.snippet, 80)
                 );
             }
         }
@@ -2029,16 +2009,14 @@ mod tests {
                 println!(
                     "    [{}] {}...",
                     speaker,
-                    &a.transcription[..a
-                        .transcription
-                        .floor_char_boundary(a.transcription.len().min(80))]
+                    safe_byte_prefix(&a.transcription, 80)
                 );
             }
         }
         if !ocr.is_empty() {
             println!("\n  ocr samples:");
             for s in ocr.iter().take(3) {
-                println!("    \"{}\"", &s[..s.floor_char_boundary(s.len().min(80))]);
+                println!("    \"{}\"", safe_byte_prefix(s, 80));
             }
         }
 

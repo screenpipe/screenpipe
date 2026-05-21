@@ -569,7 +569,11 @@ function RemoteSyncSection({
           )}
           <Input
             placeholder="user@host"
-            value={config.user && config.host ? `${config.user}@${config.host}` : ""}
+            value={
+              config.user || config.host
+                ? `${config.user ? `${config.user}@` : ""}${config.host ?? ""}`
+                : ""
+            }
             onChange={(e) => {
               const val = e.target.value;
               const at = val.indexOf("@");

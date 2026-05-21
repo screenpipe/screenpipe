@@ -624,8 +624,27 @@ export function TranscriptPanel({
           if (e.key === "Escape") onClose();
         }}
       >
-        <header className="flex items-center justify-end px-4 py-3 border-b border-border shrink-0">
-          <div className="flex items-center gap-1">
+        <header className="flex items-center gap-2 px-4 py-1.5 border-b border-border shrink-0">
+          {showSearch && (searchOpen || Boolean(query.trim())) ? (
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setQuery("");
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder="search transcript..."
+              className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+            />
+          ) : (
+            <div className="flex-1" />
+          )}
+          <div className="flex items-center gap-1 shrink-0">
             {headerActions}
             {showSearch && (
               <Button
@@ -678,26 +697,6 @@ export function TranscriptPanel({
           <div className="flex items-start gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span className="leading-5">{recoveryMessage}</span>
-          </div>
-        )}
-
-        {showSearch && (searchOpen || Boolean(query.trim())) && (
-          <div className="px-4 py-2 border-b border-border shrink-0">
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setQuery("");
-                  setSearchOpen(false);
-                }
-              }}
-              placeholder="search transcript..."
-              className="w-full bg-transparent text-xs px-2 py-1 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-            />
           </div>
         )}
 

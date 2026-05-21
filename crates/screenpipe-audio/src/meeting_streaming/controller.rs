@@ -19,8 +19,8 @@ use crate::{core::engine::AudioTranscriptionEngine, transcription::engine::Trans
 use super::{
     deepgram_live,
     events::{
-        is_manual_live_marker, MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent,
-        MeetingStreamingError, MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
+        MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
+        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
         MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
     openai_realtime, selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
@@ -28,10 +28,14 @@ use super::{
 
 const LIVE_FINAL_PERSIST_ATTEMPTS: usize = 18;
 const LIVE_FINAL_PERSIST_RETRY_DELAY: Duration = Duration::from_secs(5);
-const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(30);
+const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(5);
 const LIVE_INACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LIVE_NO_AUDIO_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LIVE_MAX_SESSION_DURATION: Duration = Duration::from_secs(2 * 60 * 60);
+/// After this long without audio frames or transcripts, fire a "live note
+/// looks broken" notification (once per session, per condition) so the user
+/// doesn't sit through a silent meeting wondering why nothing is appearing.
+const STALL_NOTIFY_THRESHOLD: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct ActiveMeetingStream {
@@ -43,8 +47,16 @@ struct ActiveMeetingStream {
     audio_frames_seen: u64,
     audio_samples_seen: u64,
     last_audio_activity_at: Instant,
+    // Latched true the first time a frame's RMS clears the voice-activity
+    // threshold. Used to suppress the "transcript not flowing" notification
+    // when the room is just silent (e.g. user alone waiting for others to
+    // join) — no transcript is expected from silence, so warning the user is
+    // a false positive.
+    voiced_audio_seen: bool,
     live_transcript_seen: bool,
     last_live_transcript_at: Option<Instant>,
+    notified_audio_stall: bool,
+    notified_transcript_stall: bool,
     device_senders: HashMap<String, mpsc::Sender<MeetingAudioFrame>>,
     device_retry_after: HashMap<String, Instant>,
 }
@@ -93,32 +105,20 @@ pub fn start_meeting_streaming_loop(
 
         match db.get_most_recent_active_meeting().await {
             Ok(Some(meeting)) => {
-                if should_reattach_manual_live_session(
-                    &meeting.meeting_app,
-                    &meeting.detection_source,
-                ) {
-                    info!(
-                        "meeting streaming: reattaching active meeting on coordinator start (meeting_id={})",
-                        meeting.id
-                    );
-                    start_streaming_session(
-                        &config,
-                        &audio_tap,
-                        &transcription_engine,
-                        &mut active,
-                        meeting.id,
-                        Some(meeting.meeting_app),
-                        meeting.title,
-                    )
-                    .await;
-                } else {
-                    debug!(
-                        "meeting streaming: active meeting {} is background-only (source={}); not reattaching live stream",
-                        meeting.id, meeting.detection_source
-                    );
-                    audio_tap.set_active(false);
-                    audio_tap.set_background_suppressed(false);
-                }
+                info!(
+                    "meeting streaming: reattaching active meeting on coordinator start (meeting_id={}, source={})",
+                    meeting.id, meeting.detection_source
+                );
+                start_streaming_session(
+                    &config,
+                    &audio_tap,
+                    &transcription_engine,
+                    &mut active,
+                    meeting.id,
+                    Some(meeting.meeting_app),
+                    meeting.title,
+                )
+                .await;
             }
             Ok(None) => {}
             Err(err) => {
@@ -139,18 +139,6 @@ pub fn start_meeting_streaming_loop(
 
                     if active.as_ref().is_some_and(|s| s.meeting_id == meeting_id) {
                         debug!("meeting streaming: duplicate start for meeting {}", meeting_id);
-                        continue;
-                    }
-
-                    if !event.data.is_manual_live_start() {
-                        debug!(
-                            "meeting streaming: meeting {} is background-only (source={:?}, app={:?}); not starting live stream",
-                            meeting_id,
-                            event.data.detection_source,
-                            event.data.app
-                        );
-                        audio_tap.set_active(false);
-                        audio_tap.set_background_suppressed(false);
                         continue;
                     }
 
@@ -225,6 +213,7 @@ pub fn start_meeting_streaming_loop(
                                 session.audio_samples_seen += frame.samples.len() as u64;
                                 if frame_has_audio_activity(&frame) {
                                     session.last_audio_activity_at = Instant::now();
+                                    session.voiced_audio_seen = true;
                                 }
                                 if session.live_transcription_enabled {
                                     route_frame_to_provider(
@@ -246,6 +235,9 @@ pub fn start_meeting_streaming_loop(
                     }
                 }
                 _ = inactivity_tick.tick() => {
+                    if let Some(session) = active.as_mut() {
+                        check_and_emit_stall_notifications(session, Instant::now());
+                    }
                     if let Some(reason) = active
                         .as_ref()
                         .and_then(|session| auto_end_reason(session, Instant::now()))
@@ -284,10 +276,6 @@ pub fn start_meeting_streaming_loop(
     })
 }
 
-fn should_reattach_manual_live_session(meeting_app: &str, detection_source: &str) -> bool {
-    is_manual_live_marker(Some(detection_source)) || is_manual_live_marker(Some(meeting_app))
-}
-
 async fn start_streaming_session(
     config: &MeetingStreamingConfig,
     audio_tap: &MeetingAudioTap,
@@ -317,8 +305,11 @@ async fn start_streaming_session(
         audio_frames_seen: 0,
         audio_samples_seen: 0,
         last_audio_activity_at: Instant::now(),
+        voiced_audio_seen: false,
         live_transcript_seen: false,
         last_live_transcript_at: None,
+        notified_audio_stall: false,
+        notified_transcript_stall: false,
         device_senders: HashMap::new(),
         device_retry_after: HashMap::new(),
     });
@@ -602,6 +593,59 @@ fn should_request_auto_end_for_inactivity(session: &ActiveMeetingStream, now: In
         && now.duration_since(session.last_audio_activity_at) >= LIVE_NO_AUDIO_ACTIVITY_TIMEOUT
 }
 
+/// Fire at most one "audio stall" and one "transcript stall" event per
+/// session, when the live note has clearly failed to start streaming.
+///
+/// Only runs when `live_transcription_enabled == true`. In pure background
+/// mode the audio tap is inactive by design so `audio_frames_seen` is
+/// always zero — checking it would produce false positives on every
+/// non-live meeting.
+fn check_and_emit_stall_notifications(session: &mut ActiveMeetingStream, now: Instant) {
+    if !session.live_transcription_enabled {
+        return;
+    }
+    if now.duration_since(session.started_at) < STALL_NOTIFY_THRESHOLD {
+        return;
+    }
+
+    let elapsed_secs = now.duration_since(session.started_at).as_secs();
+
+    if !session.notified_audio_stall && session.audio_frames_seen == 0 {
+        session.notified_audio_stall = true;
+        warn!(
+            "meeting streaming: audio stall — no frames after {}s (meeting_id={})",
+            elapsed_secs, session.meeting_id
+        );
+        let _ = screenpipe_events::send_event(
+            "meeting_streaming_audio_stall",
+            serde_json::json!({
+                "meeting_id": session.meeting_id,
+                "provider": session.provider,
+                "elapsed_secs": elapsed_secs,
+            }),
+        );
+    } else if !session.notified_transcript_stall
+        && session.audio_frames_seen > 0
+        && session.voiced_audio_seen
+        && !session.live_transcript_seen
+    {
+        session.notified_transcript_stall = true;
+        warn!(
+            "meeting streaming: transcript stall — audio flowing but no transcript after {}s (meeting_id={}, frames={})",
+            elapsed_secs, session.meeting_id, session.audio_frames_seen
+        );
+        let _ = screenpipe_events::send_event(
+            "meeting_streaming_transcript_stall",
+            serde_json::json!({
+                "meeting_id": session.meeting_id,
+                "provider": session.provider,
+                "elapsed_secs": elapsed_secs,
+                "audio_frames_seen": session.audio_frames_seen,
+            }),
+        );
+    }
+}
+
 fn should_request_auto_end_for_max_duration(session: &ActiveMeetingStream, now: Instant) -> bool {
     session.live_transcription_enabled
         && now.duration_since(session.started_at) >= LIVE_MAX_SESSION_DURATION
@@ -752,8 +796,11 @@ mod tests {
             audio_frames_seen: 0,
             audio_samples_seen: 0,
             last_audio_activity_at: now,
+            voiced_audio_seen: false,
             live_transcript_seen: false,
             last_live_transcript_at: None,
+            notified_audio_stall: false,
+            notified_transcript_stall: false,
             device_senders: HashMap::new(),
             device_retry_after: HashMap::new(),
         }
@@ -764,34 +811,75 @@ mod tests {
         MeetingAudioTap::new(tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
     }
 
-    #[test]
-    fn auto_detected_meeting_event_is_background_only() {
-        let event = MeetingLifecycleEvent {
-            meeting_id: Some(7),
-            app: Some("zoom.us".to_string()),
-            detection_source: Some("ui_scan".to_string()),
-            ..Default::default()
-        };
+    // `check_and_emit_stall_notifications` calls `screenpipe_events::send_event`,
+    // which lazy-initializes a `tokio::spawn`ed cleanup task — that init panics
+    // outside a runtime. Run the test under tokio so the lazy state survives
+    // and the subsequent `#[tokio::test]` cases don't see a poisoned cell.
+    #[tokio::test]
+    async fn stall_notifications_fire_once_per_condition() {
+        let now = Instant::now();
 
-        assert!(!event.is_manual_live_start());
+        // Below threshold: nothing fires even though nothing has arrived.
+        let mut session = test_session(now, true);
+        check_and_emit_stall_notifications(&mut session, now + Duration::from_secs(30));
+        assert!(!session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
+
+        // Past threshold with zero frames → audio stall (and only audio stall).
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD);
+        assert!(session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
+
+        // Audio arrives but no transcript → transcript stall, audio stall does
+        // not re-fire even after we reset the flag (the once-per-session guard
+        // is the field itself, not a flag we manage from outside).
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 42;
+        session.voiced_audio_seen = true;
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD);
+        assert!(!session.notified_audio_stall);
+        assert!(session.notified_transcript_stall);
+
+        // Re-running after firing is a no-op (latched).
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 5);
+        assert!(session.notified_transcript_stall);
+
+        // Frames flowing but only silence (no voiced audio) — do NOT fire
+        // transcript stall. User is alone in the room waiting for others;
+        // there is nothing to transcribe, so warning them is a false positive.
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 200;
+        // voiced_audio_seen stays false
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 3);
+        assert!(!session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
+
+        // Pure background sessions (no live transcription) never fire — their
+        // audio tap is intentionally inactive so audio_frames_seen=0 is
+        // expected.
+        let mut session = test_session(now, false);
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 10);
+        assert!(!session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
     }
 
     #[test]
-    fn manual_meeting_event_starts_live_mode() {
-        let event = MeetingLifecycleEvent {
+    fn lifecycle_event_resolves_meeting_id_from_either_alias() {
+        // The event accepts both `meeting_id` and `id` as the canonical
+        // identifier; everything downstream of the coordinator routes through
+        // resolved_meeting_id(), so a regression here silently breaks every
+        // meeting_started subscriber.
+        let from_meeting_id = MeetingLifecycleEvent {
             meeting_id: Some(7),
-            app: Some("manual".to_string()),
-            detection_source: Some("manual".to_string()),
             ..Default::default()
         };
+        assert_eq!(from_meeting_id.resolved_meeting_id(), Some(7));
 
-        assert!(event.is_manual_live_start());
-    }
-
-    #[test]
-    fn active_auto_meeting_does_not_reattach_live_stream() {
-        assert!(!should_reattach_manual_live_session("zoom.us", "ui_scan"));
-        assert!(should_reattach_manual_live_session("manual", "manual"));
+        let from_id = MeetingLifecycleEvent {
+            id: Some(11),
+            ..Default::default()
+        };
+        assert_eq!(from_id.resolved_meeting_id(), Some(11));
     }
 
     #[tokio::test]

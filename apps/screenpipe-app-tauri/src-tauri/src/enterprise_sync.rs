@@ -381,14 +381,25 @@ mod imp {
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let cfg = match EnterpriseSyncConfig::from_env(
+        // Resolve license key from the canonical file location the
+        // in-app license prompt writes to (~/.screenpipe/enterprise.json,
+        // or the MDM Resources/ copy). Without this the env-var-only
+        // discovery in `from_env` silently no-ops on every standard
+        // install — the telemetry pipeline would never start, even with
+        // the dashboard fully configured.
+        let license_fallback = crate::commands::get_enterprise_license_key();
+
+        let cfg = match EnterpriseSyncConfig::from_env_with_fallback(
             app_data_dir,
             device_id.clone(),
             device_label.clone(),
+            license_fallback,
         ) {
             Some(c) => c,
             None => {
-                info!("enterprise sync: SCREENPIPE_ENTERPRISE_LICENSE_KEY not set, skipping");
+                info!(
+                    "enterprise sync: no license key in env or ~/.screenpipe/enterprise.json — skipping"
+                );
                 return None;
             }
         };
@@ -410,6 +421,19 @@ mod imp {
             // Small startup delay so the local screenpipe server is up before
             // we hammer it. Mirrors calendar publisher's `sleep(10)`.
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+            // Ask the control plane what upload mode this license should run
+            // in. Replaces the old "set SCREENPIPE_ENTERPRISE_UPLOAD_MODE on
+            // every customer machine" UX — the dashboard binding is now the
+            // single source of truth, so a fresh enterprise install just
+            // needs the license key and uploads start automatically.
+            let mut cfg = cfg;
+            cfg.resolve_upload_mode().await;
+            info!(
+                "enterprise sync: resolved upload mode = {:?}",
+                std::mem::discriminant(&cfg.upload_mode)
+            );
+
             ee_sync::run(cfg, local, rx).await;
         });
 

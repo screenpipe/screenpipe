@@ -93,19 +93,57 @@ impl EnterpriseSyncConfig {
     /// Build config from env vars + the OS device id. Returns `None` when
     /// required env (`SCREENPIPE_ENTERPRISE_LICENSE_KEY`) is missing — caller
     /// should silently skip sync in that case.
+    ///
+    /// `upload_mode` is initialized to `HostedIngest` as a safe default. The
+    /// caller should run [`Self::resolve_upload_mode`] once the async runtime
+    /// is up to upgrade to `DirectReadable` / `DirectEncrypted` based on the
+    /// customer's storage binding in the control plane. This replaces the
+    /// old "set `SCREENPIPE_ENTERPRISE_UPLOAD_MODE` on every device" UX —
+    /// the dashboard binding is now the single source of truth.
     pub fn from_env(
         app_data_dir: PathBuf,
         device_id: String,
         device_label: String,
     ) -> Option<Self> {
+        Self::from_env_with_fallback(app_data_dir, device_id, device_label, None)
+    }
+
+    /// Same as `from_env` but lets the caller pass a license key resolved
+    /// from somewhere else (e.g. `~/.screenpipe/enterprise.json` populated
+    /// by the desktop's in-app prompt). Env var still wins when set — that
+    /// keeps MDM rollouts working — but a missing env no longer disables
+    /// enterprise sync when the user has signed in normally through the
+    /// app. Without this fallback the entire telemetry pipeline silently
+    /// no-ops because the license key lives in the file, not the shell.
+    pub fn from_env_with_fallback(
+        app_data_dir: PathBuf,
+        device_id: String,
+        device_label: String,
+        license_key_fallback: Option<String>,
+    ) -> Option<Self> {
         let license_key = std::env::var("SCREENPIPE_ENTERPRISE_LICENSE_KEY")
             .ok()
-            .filter(|s| !s.trim().is_empty())?;
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| license_key_fallback.filter(|s| !s.trim().is_empty()))?;
         let ingest_url = std::env::var("SCREENPIPE_ENTERPRISE_INGEST_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_INGEST_URL.to_string());
-        let upload_mode = EnterpriseUploadMode::from_env(&ingest_url)?;
+        // Honor an explicit env override at boot for MDM / dev / test flows.
+        // Fail-closed semantics: if the operator explicitly set a mode and
+        // it can't be honored (invalid keys etc.), refuse to start sync — a
+        // silent fallback to plaintext could leak data. When no override is
+        // set we start in HostedIngest and let `resolve_upload_mode` ask
+        // the control plane what this license is actually configured for.
+        let explicit_mode = std::env::var("SCREENPIPE_ENTERPRISE_UPLOAD_MODE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "auto");
+        let upload_mode = if explicit_mode.is_some() {
+            EnterpriseUploadMode::from_env(&ingest_url)?
+        } else {
+            EnterpriseUploadMode::HostedIngest
+        };
         let cursor_path = app_data_dir.join(CURSOR_FILENAME);
         Some(Self {
             license_key,
@@ -115,6 +153,19 @@ impl EnterpriseSyncConfig {
             cursor_path,
             upload_mode,
         })
+    }
+
+    /// Ask the control plane which upload mode this license should run in,
+    /// and update `self.upload_mode` accordingly. Safe to call before every
+    /// sync run — if the lookup fails, the existing mode is preserved.
+    ///
+    /// This is what makes the "install enterprise build → enter license key
+    /// → uploads start" flow possible without any env-var setup on the
+    /// customer's machine.
+    pub async fn resolve_upload_mode(&mut self) {
+        let resolved =
+            EnterpriseUploadMode::resolve(&self.license_key, &self.ingest_url).await;
+        self.upload_mode = resolved;
     }
 }
 
@@ -334,6 +385,8 @@ pub enum EnterpriseSyncError {
     IngestAuthRejected,
     #[error("ingest server error: status {0}")]
     IngestServerError(u16),
+    #[error("control-plane network error: {0}")]
+    Network(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }

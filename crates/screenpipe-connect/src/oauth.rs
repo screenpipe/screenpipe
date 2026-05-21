@@ -243,8 +243,21 @@ async fn load_oauth_json_exact(
     // Try SecretStore first
     if let Some(s) = store {
         let key = store_key(integration_id, instance);
-        if let Ok(Some(val)) = s.get_json::<Value>(&key).await {
-            return Some(val);
+        match s.get_json::<Value>(&key).await {
+            Ok(Some(val)) => return Some(val),
+            Ok(None) => {}
+            Err(e) => {
+                // Most common cause: encrypted token row exists but the keychain
+                // key is unavailable (dev↔prod bundle ACL split, recent encryption
+                // toggle, revoked keychain item). Without this log the disconnect
+                // looks like a missing token and the user has to reconnect to
+                // recover, which silently rewrites under the active bundle's key.
+                tracing::warn!(
+                    "oauth: secret store read failed for {} (instance={:?}): {e:#}",
+                    integration_id,
+                    instance,
+                );
+            }
         }
     }
 
@@ -322,6 +335,23 @@ pub async fn is_oauth_instance_connected(
         .await
         .as_ref()
         .is_some_and(oauth_json_is_recoverable)
+}
+
+/// True when at least one token row exists in the store for this integration,
+/// regardless of whether the value can be decrypted. Lets callers distinguish
+/// "user disconnected / never connected" from "keychain key is currently
+/// unavailable" — the former requires a reconnect, the latter just needs the
+/// keychain to come back (or a bundle-id check).
+pub async fn oauth_instance_token_exists(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> bool {
+    let instances = list_oauth_instances(store, integration_id).await;
+    match instance {
+        Some(name) => instances.iter().any(|i| i.as_deref() == Some(name)),
+        None => !instances.is_empty(),
+    }
 }
 
 /// List only instances that are recoverable: either the access token is still

@@ -508,24 +508,6 @@
     }
   }
 
-  /* sp-pulse — slow soft halo for live-streaming chat rows in the
-     sidebar. Tailwind's default `animate-pulse` is too loud (opacity
-     fades from 1 → 0.5) and `animate-ping` flashes outward too
-     aggressively. We want a calmer breath — opacity dips less far,
-     scales out slightly, and breathes at 1.6s so it reads as
-     "background activity" rather than "alert me now". */
-  @keyframes sp-pulse {
-    0%,
-    100% {
-      transform: scale(1);
-      opacity: 0.55;
-    }
-    50% {
-      transform: scale(1.6);
-      opacity: 0;
-    }
-  }
-
   .meeting-audio-level-bar {
     transform-origin: bottom;
   }

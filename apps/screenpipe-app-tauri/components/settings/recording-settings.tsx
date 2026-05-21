@@ -2604,6 +2604,22 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 )}
               </div>
             )}
+            <div className="mt-2.5 pt-2.5 border-t border-border/50 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Append typed text to note
+                  <HelpTooltip text="When the meeting stops, screenpipe appends what you typed (and the files you edited) during the meeting to the meeting note. Turn off to keep notes clean." />
+                </h3>
+                <p className="text-xs text-muted-foreground">Auto-add your typed text + edited files at the end of the note</p>
+              </div>
+              <Switch
+                id="appendTypedTextToMeetingNote"
+                checked={settings.appendTypedTextToMeetingNote ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ appendTypedTextToMeetingNote: checked }, true)
+                }
+              />
+            </div>
           </CardContent>
         </Card>
         )}

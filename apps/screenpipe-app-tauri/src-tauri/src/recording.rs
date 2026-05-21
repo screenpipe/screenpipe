@@ -731,6 +731,11 @@ pub async fn spawn_screenpipe(
             permissions_check.screen_recording
         );
         state.is_starting.store(false, Ordering::SeqCst);
+        state.is_starting_capture.store(false, Ordering::SeqCst);
+        // Flip the tray state machine to a terminal Error so the
+        // recording status indicator stops showing "Starting…" forever
+        // when the user has clicked "click to record" with TCC denied.
+        crate::health::set_recording_status(crate::health::RecordingStatus::Error);
         return Err(
             "Screen recording permission required. Please grant permission and restart the app."
                 .to_string(),

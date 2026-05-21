@@ -68,17 +68,19 @@ pub mod tree;
 
 // Re-exports
 pub use activity_feed::{ActivityFeed, ActivityKind, CaptureParams};
-pub use config::UiCaptureConfig;
+pub use config::{ExtractionThreadPriority, UiCaptureConfig};
 pub use events::{
     AccessibilityNode, ElementBounds, ElementContext, EventData, EventType, Modifiers, UiEvent,
     WindowTreeSnapshot,
 };
-pub use platform::{PermissionStatus, RecordingHandle, UiRecorder};
+pub use platform::{
+    check_input_monitoring, request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
+};
 
 /// Prelude for convenient imports
 pub mod prelude {
     pub use crate::activity_feed::{ActivityFeed, ActivityKind, CaptureParams};
-    pub use crate::config::UiCaptureConfig;
+    pub use crate::config::{ExtractionThreadPriority, UiCaptureConfig};
     pub use crate::events::{
         AccessibilityNode, ElementContext, EventData, EventType, UiEvent, WindowTreeSnapshot,
     };

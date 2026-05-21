@@ -38,8 +38,6 @@ import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import localforage from "localforage";
 import { useChangelogDialog } from "@/lib/hooks/use-changelog-dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { ShareLogsButton } from "./share-logs-button";
 import { openSettingsWindow } from "@/lib/utils/window";
 import { commands } from "@/lib/utils/tauri";
 

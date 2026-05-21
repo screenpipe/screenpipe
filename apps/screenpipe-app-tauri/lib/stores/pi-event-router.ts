@@ -62,6 +62,7 @@ import {
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   useChatStore,
+  sessionRecordFromMeta,
   type SessionStatus,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
@@ -313,22 +314,7 @@ async function hydrate() {
       limit: CHAT_HISTORY_INITIAL_LIMIT,
       includeHidden: false,
     });
-    const records: SessionRecord[] = metas
-      .map((m) => ({
-        id: m.id,
-        title: m.title || "untitled",
-        preview: "",
-        status: "idle" as const,
-        messageCount: m.messageCount,
-        createdAt: m.createdAt,
-        updatedAt: m.updatedAt,
-        pinned: m.pinned,
-        // History reload doesn't count as new activity — start clean.
-        unread: false,
-        lastUserMessageAt: m.lastUserMessageAt,
-        kind: m.kind,
-        pipeContext: m.pipeContext,
-      }));
+    const records: SessionRecord[] = metas.map(sessionRecordFromMeta);
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
     // Storage may not be ready yet on first launch — non-fatal.

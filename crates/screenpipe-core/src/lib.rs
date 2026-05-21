@@ -7,6 +7,7 @@ pub mod memories;
 pub mod paths;
 pub mod permissions;
 pub mod pipes;
+pub mod strings;
 // Thin ffmpeg encoder helpers — moved out of screenpipe-engine so that
 // downstream consumers (including the commercial @screenpipe/sdk in
 // screenpipe/sdk) can reuse the x265 pipeline without pulling the full

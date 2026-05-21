@@ -104,7 +104,7 @@ fn has_state(states: &[u32], bit: u32) -> bool {
     let bit_in_word = bit % 32;
     states
         .get(word)
-        .map_or(false, |w| (w >> bit_in_word) & 1 == 1)
+        .is_some_and(|w| (w >> bit_in_word) & 1 == 1)
 }
 
 fn main() {

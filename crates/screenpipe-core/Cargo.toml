@@ -46,6 +46,7 @@ reqwest = { workspace = true }
 hex = { version = "0.4", optional = true }
 async-trait = "0.1"
 screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
+screenpipe-vault = { path = "../screenpipe-vault", optional = true }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"], optional = true }
 
 once_cell = "1.19.0"
@@ -63,7 +64,7 @@ default = ["security"]
 # without changing behavior (it's never enabled at compile time).
 cargo-clippy = []
 security = ["dep:regex", "dep:lazy_static"]
-secrets = ["dep:screenpipe-secrets", "dep:sqlx"]
+secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault", "dep:sqlx"]
 cloud-sync = [
     "dep:argon2",
     "dep:chacha20poly1305",

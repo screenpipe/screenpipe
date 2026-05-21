@@ -580,7 +580,10 @@ function HomeContent() {
         const res = await localFetch("/meetings/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: targetId }),
+          body: JSON.stringify({
+            id: targetId,
+            append_typed_text: settings.appendTypedTextToMeetingNote ?? true,
+          }),
         });
         if (res.ok) {
           const meeting: MeetingRecord = await res.json();
@@ -635,7 +638,7 @@ function HomeContent() {
     } finally {
       setMeetingLoading(false);
     }
-  }, [meetingState]);
+  }, [meetingState, settings.appendTypedTextToMeetingNote]);
 
   // Native overlay already toggles the meeting in Rust. Refresh local state
   // here instead of toggling again, otherwise one click can create or stop

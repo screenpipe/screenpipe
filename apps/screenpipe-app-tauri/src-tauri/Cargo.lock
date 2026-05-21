@@ -10580,9 +10580,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.237"
+version = "2.4.247"
 dependencies = [
  "aes",
+ "aes-gcm",
  "anyhow",
  "arboard",
  "async-trait",
@@ -10682,6 +10683,7 @@ dependencies = [
  "uuid",
  "webview2-com",
  "windows 0.58.0",
+ "windows-core 0.61.2",
  "windows-icons",
  "winreg 0.52.0",
  "wiremock",
@@ -10700,7 +10702,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -10758,7 +10760,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -10770,7 +10772,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10803,7 +10805,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -10851,7 +10853,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10876,7 +10878,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -10944,7 +10946,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10960,7 +10962,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10987,7 +10989,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-rfdetr-mlx"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "image 0.25.10",
  "mlx-rs",
@@ -10998,7 +11000,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -11051,7 +11053,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.335"
+version = "0.3.339"
 dependencies = [
  "argon2",
  "chacha20poly1305",

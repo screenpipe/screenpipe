@@ -192,8 +192,7 @@ pub fn set_audio_device_status(devices: Vec<AudioDeviceEntry>) {
     *guard = devices;
 }
 
-#[allow(dead_code)]
-fn set_recording_status(status: RecordingStatus) {
+pub fn set_recording_status(status: RecordingStatus) {
     RECORDING_INFO
         .write()
         .unwrap_or_else(|e| e.into_inner())

@@ -22,6 +22,7 @@
 
 import { create } from "zustand";
 import type { ConversationKind, PipeContext } from "@/lib/hooks/use-settings";
+import type { ConversationMeta } from "@/lib/chat-storage";
 
 export type SessionStatus =
   | "idle" // not currently producing output
@@ -541,6 +542,28 @@ export const useChatStore = create<ChatStore>((set) => ({
  *  `actions` is set once in the create() call and never replaced, so this
  *  selector returns the same reference forever. Safe to use in deps. */
 export const useChatActions = () => useChatStore((s) => s.actions);
+
+/** Build a fresh SessionRecord from on-disk metadata. Used by both the
+ *  boot-time hydrate path and the pipe-run recorder so the sidebar sees
+ *  identically-shaped rows whether they were loaded at startup or upserted
+ *  the moment a pipe finishes. unread is false: persisted-from-disk rows
+ *  aren't user-actionable in the inbox sense. */
+export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
+  return {
+    id: m.id,
+    title: m.title || "untitled",
+    preview: "",
+    status: "idle",
+    messageCount: m.messageCount,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+    pinned: m.pinned,
+    unread: false,
+    lastUserMessageAt: m.lastUserMessageAt,
+    kind: m.kind,
+    pipeContext: m.pipeContext,
+  };
+}
 
 /**
  * "+ new chat" semantics. If the user already has an empty chat

@@ -18,6 +18,8 @@ pub mod drm_detector;
 pub mod event_driven_capture;
 pub mod focus_aware_controller;
 pub mod focus_tracker;
+pub mod frame_linker;
+pub mod frame_linker_actor;
 pub mod hot_frame_cache;
 pub mod logging;
 pub mod meeting_detector;

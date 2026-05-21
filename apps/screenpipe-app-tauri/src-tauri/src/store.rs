@@ -633,10 +633,6 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "lockVaultShortcut", default)]
     pub lock_vault_shortcut: String,
-    /// When true, screen capture continues but OCR text extraction is skipped.
-    /// Reduces CPU usage significantly while still recording video.
-    #[serde(rename = "disableOcr", default)]
-    pub disable_ocr: bool,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
@@ -1022,7 +1018,6 @@ Rules:
             lock_vault_shortcut: "Ctrl+Shift+L".to_string(),
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
-            disable_ocr: false,
             show_shortcut_overlay: true,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),

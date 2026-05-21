@@ -17,13 +17,28 @@ pub mod linux;
 
 // Re-export platform-specific types with common names
 #[cfg(target_os = "macos")]
-pub use macos::{PermissionStatus, RecordingHandle, UiRecorder};
+pub use macos::{
+    check_input_monitoring, request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
+};
 
 #[cfg(target_os = "windows")]
 pub use windows::{PermissionStatus, RecordingHandle, UiRecorder};
 
 #[cfg(target_os = "linux")]
 pub use linux::{PermissionStatus, RecordingHandle, UiRecorder};
+
+// Cross-platform stubs for the Input Monitoring helpers. macOS is the only
+// platform with a distinct TCC category for input monitoring; on Windows
+// and Linux there's no separate gate, so callers should treat the
+// permission as always granted.
+#[cfg(not(target_os = "macos"))]
+pub fn check_input_monitoring() -> bool {
+    true
+}
+#[cfg(not(target_os = "macos"))]
+pub fn request_input_monitoring() -> bool {
+    true
+}
 
 // Stub for unsupported platforms (not macOS, Windows, or Linux)
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

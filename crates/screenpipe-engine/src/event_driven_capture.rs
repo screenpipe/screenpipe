@@ -57,6 +57,12 @@ pub enum CaptureTrigger {
     TypingPause,
     /// User stopped scrolling
     ScrollStop,
+    /// A non-printable key was pressed (Arrow / Enter / Tab / Esc, or
+    /// modifier combo like Ctrl+S) while `capture_keystrokes=true`.
+    /// Only fires when `capture_on_keystroke=true` — off by default
+    /// to avoid the capture-per-keystroke storm that would otherwise
+    /// happen during heavy keyboard use.
+    KeyPress,
     /// Clipboard content changed
     Clipboard,
     /// Screen content changed without user input (video, animation, auto-scroll)
@@ -65,6 +71,76 @@ pub enum CaptureTrigger {
     Idle,
     /// Manual/forced capture request
     Manual,
+}
+
+/// A trigger plus the `correlation_id` of the originating `ui_events` row,
+/// if any. The recorder assigns the correlation id when forwarding events
+/// that warrant a capture; the capture loop accumulates them across
+/// debounced triggers and reports the full set back through the frame
+/// linker once the resulting frame lands. Internally-generated triggers
+/// (Idle, VisualChange, Manual) leave `correlation_id` as `None`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptureTriggerMsg {
+    pub trigger: CaptureTrigger,
+    pub correlation_id: Option<crate::frame_linker::CorrelationId>,
+}
+
+impl CaptureTriggerMsg {
+    pub fn new(trigger: CaptureTrigger) -> Self {
+        Self {
+            trigger,
+            correlation_id: None,
+        }
+    }
+    pub fn with_correlation(
+        trigger: CaptureTrigger,
+        id: crate::frame_linker::CorrelationId,
+    ) -> Self {
+        Self {
+            trigger,
+            correlation_id: Some(id),
+        }
+    }
+}
+
+/// Reduce a batch of drained triggers to (kind, correlation_ids).
+///
+/// - `kind` is the most recent non-skipped trigger (most recent context
+///   wins for capture).
+/// - `correlation_ids` accumulates every non-skipped corr id, so when
+///   the capture lands every triggering event row gets linked.
+/// - Skipped kinds (Clipboard/KeyPress under their off gates) drop
+///   both their corr id and their kind from consideration. This
+///   matters for mixed-kind drains: a tail Clipboard with the gate
+///   off must NOT clear the corr ids of valid earlier triggers.
+fn reduce_drained_triggers<I>(
+    msgs: I,
+    skip_clipboard: bool,
+    skip_keypress: bool,
+) -> (
+    Option<CaptureTrigger>,
+    Vec<crate::frame_linker::CorrelationId>,
+)
+where
+    I: IntoIterator<Item = CaptureTriggerMsg>,
+{
+    let mut trigger: Option<CaptureTrigger> = None;
+    let mut correlation_ids = Vec::new();
+    for msg in msgs {
+        let should_skip = match &msg.trigger {
+            CaptureTrigger::Clipboard => skip_clipboard,
+            CaptureTrigger::KeyPress => skip_keypress,
+            _ => false,
+        };
+        if should_skip {
+            continue;
+        }
+        if let Some(corr) = msg.correlation_id {
+            correlation_ids.push(corr);
+        }
+        trigger = Some(msg.trigger);
+    }
+    (trigger, correlation_ids)
 }
 
 impl CaptureTrigger {
@@ -76,6 +152,7 @@ impl CaptureTrigger {
             CaptureTrigger::Click => "click",
             CaptureTrigger::TypingPause => "typing_pause",
             CaptureTrigger::ScrollStop => "scroll_stop",
+            CaptureTrigger::KeyPress => "key_press",
             CaptureTrigger::Clipboard => "clipboard",
             CaptureTrigger::VisualChange => "visual_change",
             CaptureTrigger::Idle => "idle",
@@ -91,15 +168,22 @@ pub struct EventDrivenCaptureConfig {
     pub min_capture_interval_ms: u64,
     /// Maximum time without a capture before taking an idle snapshot.
     pub idle_capture_interval_ms: u64,
-    /// How long after typing stops to take a typing_pause capture.
-    pub typing_pause_delay_ms: u64,
-    /// How long after scrolling stops to take a scroll_stop capture.
-    pub scroll_stop_delay_ms: u64,
     /// JPEG quality for snapshots (1-100).
     pub jpeg_quality: u8,
     /// Whether to capture on clicks.
     pub capture_on_click: bool,
-    /// Whether to capture on clipboard changes.
+    /// Whether to capture on non-printable keypresses when the a11y
+    /// layer has `capture_keystrokes=true`. Off by default — turning
+    /// this on can fire dozens of captures during a fast typing burst.
+    pub capture_on_keystroke: bool,
+    /// Whether to capture on clipboard changes. **Off by default**:
+    /// taking a full paired capture (screenshot + tree walk + OCR) on
+    /// every Ctrl+C/X/V costs 250–800ms of blocking work and tends to
+    /// saturate the thread pool, causing visible input lag on USB HID
+    /// devices. The clipboard text is already stored in `ui_events`
+    /// via the input event batch — only the frame would be missing.
+    /// When this is false, Clipboard rows leave `frame_id` as NULL.
+    /// Flip to true to opt into linkage and accept the latency.
     pub capture_on_clipboard: bool,
     /// Interval (ms) between visual-change checks (screenshot + frame diff).
     /// Set to 0 to disable visual change detection.
@@ -113,11 +197,10 @@ impl Default for EventDrivenCaptureConfig {
         Self {
             min_capture_interval_ms: 200,
             idle_capture_interval_ms: 30_000, // 30 seconds
-            typing_pause_delay_ms: 500,
-            scroll_stop_delay_ms: 300,
             jpeg_quality: 80,
             capture_on_click: true,
-            capture_on_clipboard: true,
+            capture_on_keystroke: false,
+            capture_on_clipboard: false,
             visual_check_interval_ms: 3_000, // check every 3 seconds
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
         }
@@ -127,14 +210,13 @@ impl Default for EventDrivenCaptureConfig {
 /// Event-driven capture state machine.
 ///
 /// Tracks user activity and determines when to trigger captures.
-/// Works by polling the ActivityFeed at a high frequency and detecting
-/// state transitions (typing → not typing, scrolling → not scrolling, etc.).
+/// Idle detection still polls the ActivityFeed at ~50ms intervals;
+/// typing-pause / scroll-stop bursts now flow through the UI recorder
+/// so the resulting frame can be linked back to the originating row.
 pub struct EventDrivenCapture {
     config: EventDrivenCaptureConfig,
     /// Time of last capture
     last_capture: Instant,
-    /// Previous typing state
-    was_typing: bool,
     /// Last known idle_ms from ActivityFeed
     last_idle_ms: u64,
 }
@@ -144,7 +226,6 @@ impl EventDrivenCapture {
         Self {
             config,
             last_capture: Instant::now(),
-            was_typing: false,
             last_idle_ms: 0,
         }
     }
@@ -168,24 +249,16 @@ impl EventDrivenCapture {
     ///
     /// Call this in a loop at ~50ms intervals. Returns `Some(trigger)` when
     /// a state transition is detected that warrants a capture.
+    ///
+    /// Note: `TypingPause` used to fire from here based on ActivityFeed
+    /// timing, but that path was untraceable — the resulting frame
+    /// couldn't be linked back to any `ui_events` row. TypingPause now
+    /// fires from the UI recorder when the a11y layer emits a Text
+    /// event (already burst-end-debounced at `text_timeout_ms`),
+    /// carrying that row's correlation_id so the linker can populate
+    /// `frame_id`.
     pub fn poll_activity(&mut self, feed: &ActivityFeed) -> Option<CaptureTrigger> {
         let idle_ms = feed.idle_ms();
-        let is_typing = feed.is_typing();
-        let kb_idle = feed.keyboard_idle_ms();
-
-        // Detect typing pause: was typing, now stopped for typing_pause_delay_ms
-        if self.was_typing && !is_typing && kb_idle >= self.config.typing_pause_delay_ms {
-            self.was_typing = false;
-            if self.can_capture() {
-                return Some(CaptureTrigger::TypingPause);
-            }
-        }
-
-        // Track typing state
-        if is_typing {
-            self.was_typing = true;
-        }
-
         // Detect idle capture need
         if self.needs_idle_capture() {
             return Some(CaptureTrigger::Idle);
@@ -200,8 +273,8 @@ impl EventDrivenCapture {
 ///
 /// Uses `broadcast` so multiple receivers (one per monitor) can subscribe
 /// to a single sender shared with the UI recorder.
-pub type TriggerSender = broadcast::Sender<CaptureTrigger>;
-pub type TriggerReceiver = broadcast::Receiver<CaptureTrigger>;
+pub type TriggerSender = broadcast::Sender<CaptureTriggerMsg>;
+pub type TriggerReceiver = broadcast::Receiver<CaptureTriggerMsg>;
 
 /// Create a trigger channel pair.
 pub fn trigger_channel() -> (TriggerSender, TriggerReceiver) {
@@ -236,6 +309,7 @@ pub async fn event_driven_capture_loop(
     languages: Vec<screenpipe_core::Language>,
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
     focus_controller: Arc<crate::focus_aware_controller::FocusAwareController>,
+    linker_tx: Option<crate::frame_linker_actor::LinkerSender>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -248,7 +322,10 @@ pub async fn event_driven_capture_loop(
 
     let mut state = EventDrivenCapture::new(config);
     let mut power_profile_rx = power_profile_rx;
-    let poll_interval = Duration::from_millis(50);
+    // Polling the ActivityFeed too aggressively burns CPU when idle. External UI
+    // triggers arrive via `broadcast::Receiver::recv()` (awaitable), so we only
+    // need a modest tick to detect typing-pause / idle timers.
+    let poll_interval = Duration::from_millis(250);
     let mut trigger_channel_closed = false;
 
     // Adaptive accessibility throttle: tracks per-app walk cost and backs off
@@ -533,37 +610,114 @@ pub async fn event_driven_capture_loop(
         // If the Warm path above detected a visual change, short-circuit
         // directly to VisualChange — the regular trigger sources (external
         // broadcast, activity feed) don't apply to non-focused monitors.
-        let mut trigger = if let Some(warm) = warm_trigger_override.take() {
-            Some(warm)
+        //
+        // We DRAIN all pending triggers each iteration rather than picking
+        // up one per 50ms tick. The last drained trigger's `kind` wins
+        // (most-recent context for the capture), and every drained
+        // correlation id is reported to the linker so all the UI events
+        // that fired within this debounce window get linked to the same
+        // resulting frame.
+        //
+        // Triggers whose kind would be skipped under current config
+        // (Clipboard when capture_on_clipboard=false, KeyPress when
+        // capture_on_keystroke=false) are filtered out HERE rather than
+        // downstream. Otherwise a single skipped Clipboard at the tail
+        // of a `Click, Click, Clipboard` drain would clear the two
+        // valid Click correlation ids and the click rows would lose
+        // their frame_id link.
+        let mut correlation_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
+        let mut trigger: Option<CaptureTrigger>;
+        if let Some(warm) = warm_trigger_override.take() {
+            trigger = Some(warm);
         } else if trigger_channel_closed {
-            state.poll_activity(&activity_feed)
+            trigger = state.poll_activity(&activity_feed);
+            if trigger.is_none() {
+                tokio::time::sleep(poll_interval).await;
+            }
         } else {
-            match trigger_rx.try_recv() {
-                Ok(trigger) => Some(trigger),
-                Err(broadcast::error::TryRecvError::Empty) => {
-                    // Poll activity feed for state transitions
-                    state.poll_activity(&activity_feed)
-                }
-                Err(broadcast::error::TryRecvError::Lagged(n)) => {
+            // Block on `recv()` for the FIRST trigger so an idle channel
+            // doesn't burn CPU (matches the upstream "reduce idle
+            // wakeups" change). Once a message arrives, drain the rest
+            // via `try_recv` so that bursts of triggers coalesce into
+            // one capture, with every correlation_id reaching the
+            // linker. The reducer then collapses (kind, corr_ids) and
+            // filters out skipped kinds (Clipboard/KeyPress with their
+            // respective gates off).
+            let mut drained: Vec<CaptureTriggerMsg> = Vec::new();
+            let mut lagged_force_manual = false;
+            let mut closed_now = false;
+
+            match tokio::time::timeout(poll_interval, trigger_rx.recv()).await {
+                Ok(Ok(msg)) => drained.push(msg),
+                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
                     debug!(
                         "trigger channel lagged by {} messages on monitor {}",
                         n, monitor_id
                     );
-                    // Drain missed triggers, just capture now
-                    Some(CaptureTrigger::Manual)
+                    // Missed broadcast msgs — their correlation_ids are
+                    // gone forever and those ui_events rows will stay
+                    // frame_id=NULL. Fall back to Manual below if
+                    // nothing else in this drain wins.
+                    lagged_force_manual = true;
                 }
-                Err(broadcast::error::TryRecvError::Closed) => {
-                    // Don't break — fall through to activity feed polling and visual
-                    // change detection so capture keeps working even without UI triggers.
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
                     warn!(
                         "trigger channel closed for monitor {}, continuing with polling-only mode",
                         monitor_id
                     );
-                    trigger_channel_closed = true;
-                    state.poll_activity(&activity_feed)
+                    closed_now = true;
+                }
+                Err(_elapsed) => {
+                    // No trigger this poll_interval — fall through to
+                    // poll_activity below.
                 }
             }
-        };
+
+            // Drain any remaining triggers that piled up while we were
+            // waiting on the first one.
+            if !closed_now {
+                loop {
+                    match trigger_rx.try_recv() {
+                        Ok(msg) => drained.push(msg),
+                        Err(broadcast::error::TryRecvError::Empty) => break,
+                        Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                            debug!(
+                                "trigger channel lagged by {} more messages on monitor {}",
+                                n, monitor_id
+                            );
+                            lagged_force_manual = true;
+                        }
+                        Err(broadcast::error::TryRecvError::Closed) => {
+                            warn!(
+                                "trigger channel closed for monitor {}, continuing with polling-only mode",
+                                monitor_id
+                            );
+                            closed_now = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if closed_now {
+                trigger_channel_closed = true;
+            }
+
+            let (reduced_trigger, reduced_corr_ids) = reduce_drained_triggers(
+                drained,
+                !state.config.capture_on_clipboard,
+                !state.config.capture_on_keystroke,
+            );
+            trigger = reduced_trigger;
+            correlation_ids = reduced_corr_ids;
+            if trigger.is_none() && lagged_force_manual {
+                trigger = Some(CaptureTrigger::Manual);
+            }
+            // If draining produced nothing, fall back to internal sources.
+            if trigger.is_none() {
+                trigger = state.poll_activity(&activity_feed);
+            }
+        }
 
         // Visual change detection: periodically screenshot + frame diff
         // Re-check DRM pause before touching SCK — the flag may have been set
@@ -613,21 +767,6 @@ pub async fn event_driven_capture_loop(
         }
 
         if let Some(trigger) = trigger {
-            // Clipboard events don't need a full capture cycle (screenshot +
-            // tree walk + OCR). The clipboard text is already stored by the
-            // UI recorder's input event batch. Triggering a full paired
-            // capture here causes 250-800ms of blocking work (pbpaste +
-            // spawn_blocking tree walk + OCR semaphore) which saturates the
-            // thread pool and causes input lag on USB HID devices.
-            if matches!(trigger, CaptureTrigger::Clipboard) {
-                debug!(
-                    "clipboard trigger on monitor {} — skipping capture (text stored via input events)",
-                    monitor_id
-                );
-                tokio::time::sleep(poll_interval).await;
-                continue;
-            }
-
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
             if matches!(
@@ -739,6 +878,27 @@ pub async fn event_driven_capture_loop(
                                 push_to_hot_cache(cache, result, &device_name, &trigger).await;
                             }
 
+                            // Report the capture to the frame linker so the
+                            // `ui_events` rows that triggered it get their
+                            // `frame_id` populated. Only send when we have
+                            // correlation ids attached — internal-only
+                            // triggers (Idle, VisualChange, startup Manual)
+                            // have nothing to pair.
+                            if !correlation_ids.is_empty() {
+                                if let Some(ref linker) = linker_tx {
+                                    let _ = linker.try_send(
+                                        crate::frame_linker_actor::LinkerMessage::FrameCaptured(
+                                            crate::frame_linker::FrameCaptured {
+                                                frame_id: result.frame_id,
+                                                correlation_ids: std::mem::take(
+                                                    &mut correlation_ids,
+                                                ),
+                                            },
+                                        ),
+                                    );
+                                }
+                            }
+
                             debug!(
                                 "event capture: trigger={}, frame_id={}, text_source={:?}, dur={}ms, elements_deduped={}, monitor={}",
                                 trigger.as_str(),
@@ -826,7 +986,9 @@ pub async fn event_driven_capture_loop(
             }
         }
 
-        tokio::time::sleep(poll_interval).await;
+        // No unconditional sleep here: the recv()/sleep select above is the
+        // loop's primary backpressure. Other early-continue branches already
+        // include bounded sleeps.
     }
 
     info!(
@@ -1511,14 +1673,15 @@ mod tests {
     fn test_trigger_channel() {
         let (tx, mut rx) = trigger_channel();
 
-        tx.send(CaptureTrigger::Click).unwrap();
-        tx.send(CaptureTrigger::AppSwitch {
+        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click))
+            .unwrap();
+        tx.send(CaptureTriggerMsg::new(CaptureTrigger::AppSwitch {
             app_name: "Code".to_string(),
-        })
+        }))
         .unwrap();
 
-        assert_eq!(rx.try_recv().unwrap(), CaptureTrigger::Click);
-        match rx.try_recv().unwrap() {
+        assert_eq!(rx.try_recv().unwrap().trigger, CaptureTrigger::Click);
+        match rx.try_recv().unwrap().trigger {
             CaptureTrigger::AppSwitch { app_name } => assert_eq!(app_name, "Code"),
             _ => panic!("expected AppSwitch"),
         }
@@ -1529,10 +1692,103 @@ mod tests {
         let (tx, mut rx1) = trigger_channel();
         let mut rx2 = tx.subscribe();
 
-        tx.send(CaptureTrigger::Click).unwrap();
+        tx.send(CaptureTriggerMsg::with_correlation(
+            CaptureTrigger::Click,
+            42,
+        ))
+        .unwrap();
 
-        assert_eq!(rx1.try_recv().unwrap(), CaptureTrigger::Click);
-        assert_eq!(rx2.try_recv().unwrap(), CaptureTrigger::Click);
+        let m1 = rx1.try_recv().unwrap();
+        let m2 = rx2.try_recv().unwrap();
+        assert_eq!(m1.trigger, CaptureTrigger::Click);
+        assert_eq!(m1.correlation_id, Some(42));
+        assert_eq!(m2.trigger, CaptureTrigger::Click);
+        assert_eq!(m2.correlation_id, Some(42));
+    }
+
+    #[test]
+    fn reduce_drained_picks_last_kind_and_collects_corr_ids() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 1),
+            CaptureTriggerMsg::with_correlation(
+                CaptureTrigger::AppSwitch {
+                    app_name: "Code".into(),
+                },
+                2,
+            ),
+            CaptureTriggerMsg::with_correlation(
+                CaptureTrigger::WindowFocus {
+                    window_name: "main".into(),
+                },
+                3,
+            ),
+        ];
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+        // Last kind wins.
+        assert!(matches!(trigger, Some(CaptureTrigger::WindowFocus { .. })));
+        // All three corr ids accumulate.
+        assert_eq!(corrs, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reduce_drained_skipped_clipboard_does_not_clear_earlier_corr_ids() {
+        // The exact regression: a Clipboard tail with the gate OFF used
+        // to clear valid Click corr_ids that drained alongside it.
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 10),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 11),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 12),
+        ];
+        let (trigger, corrs) =
+            reduce_drained_triggers(drained, /*skip_clipboard*/ true, false);
+        // Clipboard dropped from kind decision — most recent non-skipped wins.
+        assert_eq!(trigger, Some(CaptureTrigger::Click));
+        // Only the two valid Click corr ids survive.
+        assert_eq!(corrs, vec![10, 11]);
+    }
+
+    #[test]
+    fn reduce_drained_skipped_keypress_filters_in_mixed_drain() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 20),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Click, 21),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 22),
+        ];
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, /*skip_keypress*/ true);
+        assert_eq!(trigger, Some(CaptureTrigger::Click));
+        assert_eq!(corrs, vec![21]);
+    }
+
+    #[test]
+    fn reduce_drained_all_skipped_returns_none() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 1),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 2),
+        ];
+        let (trigger, corrs) = reduce_drained_triggers(drained, true, true);
+        assert!(trigger.is_none());
+        assert!(corrs.is_empty());
+    }
+
+    #[test]
+    fn reduce_drained_gates_off_pass_through() {
+        let drained = vec![
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::Clipboard, 1),
+            CaptureTriggerMsg::with_correlation(CaptureTrigger::KeyPress, 2),
+        ];
+        // Both gates off (capture_on_X=true) → both pass.
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+        assert_eq!(trigger, Some(CaptureTrigger::KeyPress));
+        assert_eq!(corrs, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_receiver_recv_async() {
+        let (tx, mut rx) = trigger_channel();
+        tx.send(CaptureTriggerMsg::new(CaptureTrigger::Click))
+            .unwrap();
+        let got = rx.recv().await.unwrap();
+        assert_eq!(got.trigger, CaptureTrigger::Click);
     }
 
     #[test]
@@ -1540,10 +1796,16 @@ mod tests {
         let config = EventDrivenCaptureConfig::default();
         assert_eq!(config.min_capture_interval_ms, 200);
         assert_eq!(config.idle_capture_interval_ms, 30_000);
-        assert_eq!(config.typing_pause_delay_ms, 500);
         assert_eq!(config.jpeg_quality, 80);
         assert!(config.capture_on_click);
-        assert!(config.capture_on_clipboard);
+        assert!(
+            !config.capture_on_clipboard,
+            "off by default — HID latency trade-off; opt in for frame_id linkage"
+        );
+        assert!(
+            !config.capture_on_keystroke,
+            "off by default — capture-per-keystroke would be a storm during typing"
+        );
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
     }

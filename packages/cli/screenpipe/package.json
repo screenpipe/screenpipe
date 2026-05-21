@@ -6,11 +6,8 @@
   "exports": {
     ".": "./lib/index.js"
   },
-  "bin": {
-    "screenpipe": "bin/screenpipe.js"
-  },
   "scripts": {
-    "postinstall": "sh scripts/postinstall.sh || true"
+    "postinstall": "node scripts/postinstall.js"
   },
   "optionalDependencies": {
     "@screenpipe/cli-darwin-arm64": "0.1.0",

@@ -17,6 +17,7 @@ import { commands } from "@/lib/utils/tauri";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
+import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
 
 interface CalendarEventItem {
   id: string;
@@ -230,6 +231,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                     ? "Waiting for Google..."
                     : "Connect Google Calendar"}
                 </Button>
+                <GoogleOAuthUnverifiedAppHint />
               </div>
             ) : (
               <div className="space-y-3">

@@ -182,10 +182,10 @@ export type Settings = SettingsStore & {
 	meetingLiveTranscriptionEnabled?: boolean;
 	/** Provider for manually-started live notes. Defaults to the selected transcription engine. */
 	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "openai-realtime" | "deepgram-live";
+	/** When true, the user's typed text (and edited files) captured during a meeting is auto-appended to the meeting note when the meeting stops. Default true. */
+	appendTypedTextToMeetingNote?: boolean;
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;
-	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
-	disableOcr?: boolean;
 	/** Filters pushed from team — merged with local filters for recording */
 	teamFilters?: {
 		ignoredWindows: string[];
@@ -273,6 +273,10 @@ export type Settings = SettingsStore & {
 		displayChanges?: boolean;
 		/** Live-note prompt when a meeting is detected. Default true. */
 		meetingLiveNotes?: boolean;
+		/** OS notification when a meeting starts but no audio frames arrive within 60s. Default true. */
+		audioCaptureStalled?: boolean;
+		/** In-app /notify when audio is captured but no live transcript arrives within 60s. Default true. */
+		liveTranscriptStalled?: boolean;
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
@@ -409,6 +413,34 @@ export function makeDefaultPresets(isPro: boolean): AIPreset[] {
 // ensureDefaultPreset() re-seeds with pro status once settings.user is loaded.
 const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
+const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
+
+const isLoggedInProUser = (user: User | null | undefined) =>
+	user?.cloud_subscribed === true && Boolean(user.token || user.id);
+
+const applyProCloudAudioDefaults = (settings: Settings): Settings => {
+	if (!isLoggedInProUser(settings.user)) return settings;
+	if ((settings as any)._proCloudAudioDefaultsAppliedV2) return settings;
+
+	// If the user picked a non-default, non-cloud engine, they've configured audio
+	// themselves — don't flip live-meeting on or rewrite the provider behind their back.
+	// V2 marker is intentionally left unset so a later switch back to default re-evaluates.
+	const userChoseCustomEngine =
+		settings.audioTranscriptionEngine !== DEFAULT_AUDIO_ENGINE &&
+		settings.audioTranscriptionEngine !== "screenpipe-cloud";
+	if (userChoseCustomEngine) return settings;
+
+	const oldCloudEngineMigrationAlreadyRan = (settings as any)._cloudEngineApplied === true;
+	if (!oldCloudEngineMigrationAlreadyRan) {
+		settings.audioTranscriptionEngine = "screenpipe-cloud";
+	}
+	settings.meetingLiveTranscriptionEnabled = true;
+	settings.meetingLiveTranscriptionProvider = "screenpipe-cloud";
+	(settings as any)._proCloudAudioDefaultsAppliedV2 = true;
+
+	return settings;
+};
+
 let DEFAULT_SETTINGS: Settings = {
 			aiPresets: makeDefaultPresets(false) as any,
 			deviceId: crypto.randomUUID(),
@@ -420,6 +452,7 @@ let DEFAULT_SETTINGS: Settings = {
 			audioTranscriptionEngine: "whisper-large-v3-turbo-quantized",
 			meetingLiveTranscriptionEnabled: true,
 			meetingLiveTranscriptionProvider: "selected-engine",
+			appendTypedTextToMeetingNote: true,
 			ocrEngine: "default",
 			monitorIds: ["default"],
 			audioDevices: ["default"],
@@ -474,7 +507,6 @@ let DEFAULT_SETTINGS: Settings = {
 			searchShortcut: "Control+Super+K",
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
-			disableOcr: false,
 			useAllMonitors: true,
 			showShortcutOverlay: true,
 			chatHistory: {
@@ -516,7 +548,6 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 
 		if (p === "windows") {
-			DEFAULT_SETTINGS.disableOcr = true;
 			DEFAULT_SETTINGS.overlayMode = "window";
 		}
 
@@ -599,6 +630,10 @@ function createSettingsStore() {
 		}
 		if (!settings.meetingLiveTranscriptionProvider) {
 			settings.meetingLiveTranscriptionProvider = "selected-engine";
+			needsUpdate = true;
+		}
+		if (settings.appendTypedTextToMeetingNote === undefined) {
+			settings.appendTypedTextToMeetingNote = true;
 			needsUpdate = true;
 		}
 
@@ -723,16 +758,11 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
-		// Post-migration: if user is a paid subscriber but still on a local engine
-		// (because migration ran before login), switch to cloud once.
-		// _cloudEngineApplied prevents overriding if user manually switches back later.
-		if (
-			settings.user?.cloud_subscribed &&
-			settings.audioTranscriptionEngine !== "screenpipe-cloud" &&
-			!(settings as any)._cloudEngineApplied
-		) {
-			settings.audioTranscriptionEngine = "screenpipe-cloud";
-			(settings as any)._cloudEngineApplied = true;
+		// Post-migration: when a logged-in Pro user is first confirmed, default
+		// both background and live transcription to Screenpipe Cloud. The marker
+		// prevents future user refreshes from overriding a manual engine choice.
+		if (isLoggedInProUser(settings.user) && !(settings as any)._proCloudAudioDefaultsAppliedV2) {
+			applyProCloudAudioDefaults(settings);
 			needsUpdate = true;
 		}
 
@@ -779,7 +809,15 @@ function createSettingsStore() {
 	const set = async (value: Partial<Settings>) => {
 		const store = await getStore();
 		const current = await get();
-		const newSettings = { ...current, ...value };
+		let newSettings = { ...current, ...value } as Settings;
+		if ("user" in value) {
+			// On logout / Pro→non-Pro transition, clear the V2 marker so a future
+			// Pro login re-evaluates cloud defaults (handles account switching).
+			if (!isLoggedInProUser(newSettings.user)) {
+				delete (newSettings as any)._proCloudAudioDefaultsAppliedV2;
+			}
+			newSettings = applyProCloudAudioDefaults(newSettings);
+		}
 		await store.set("settings", newSettings);
 		await saveAndEncrypt(store);
 	};

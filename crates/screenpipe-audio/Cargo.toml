@@ -112,10 +112,9 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-ort = { version = "=2.0.0-rc.10", features = [
-  "download-binaries",
-  "copy-dylibs",
-] }
+# Avoid build-time network downloads (ort-sys download-binaries) for Windows x86_64.
+# When ONNX Runtime is available at runtime, `ort` can load it dynamically.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
 samplerate = { version = "0.2.4" }
 libsamplerate-sys = "0.1.10"
 

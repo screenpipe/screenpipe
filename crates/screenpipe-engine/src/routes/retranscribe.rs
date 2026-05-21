@@ -737,9 +737,8 @@ async fn resolve_engine(
     requested: Option<&str>,
 ) -> Arc<AudioTranscriptionEngine> {
     if let Some(engine_str) = requested {
-        match engine_str.parse::<AudioTranscriptionEngine>() {
-            Ok(engine) => return Arc::new(engine),
-            Err(_) => {}
+        if let Ok(engine) = engine_str.parse::<AudioTranscriptionEngine>() {
+            return Arc::new(engine);
         }
     }
     state.audio_manager.transcription_engine().await
@@ -811,15 +810,11 @@ fn group_meeting_chunks(
         let device = chunk_device(chunk);
         let should_start_new = if let Some(current_batch) = batches.last() {
             let last_device = chunk_device(current_batch[0]);
-            if last_device != device {
-                true
-            } else if (current_batch.len() as u64) * ASSUMED_AUDIO_CHUNK_SECS >= max_duration_secs {
-                true
-            } else {
-                let last_chunk = current_batch.last().expect("non-empty batch");
-                let gap = (chunk.timestamp - last_chunk.timestamp).num_seconds().abs();
-                gap > MEETING_RETRANSCRIBE_MAX_GAP_SECS
-            }
+            let last_chunk = current_batch.last().expect("non-empty batch");
+            let gap = (chunk.timestamp - last_chunk.timestamp).num_seconds().abs();
+            last_device != device
+                || (current_batch.len() as u64) * ASSUMED_AUDIO_CHUNK_SECS >= max_duration_secs
+                || gap > MEETING_RETRANSCRIBE_MAX_GAP_SECS
         } else {
             true
         };

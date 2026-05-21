@@ -153,16 +153,33 @@ add this as a stdio MCP server in your editor's MCP settings. see also:
 
 ## HTTP transport (optional)
 
-if you need remote MCP access or prefer HTTP over stdio, the `screenpipe-mcp` package also provides an HTTP server:
+if you need remote MCP access or prefer HTTP over stdio, the `screenpipe-mcp` npm package includes an HTTP server binary. both the stdio (`screenpipe-mcp`) and HTTP (`screenpipe-mcp-http`) commands come from the same npm package.
+
+### localhost only (default)
 
 ```bash
-npx -y screenpipe-mcp-http --port 3031
+npx screenpipe-mcp-http --port 3031
 ```
 
-this is useful for tools like [Msty](https://msty.studio) that support HTTP MCP transport. both `screenpipe-mcp` (stdio) and `screenpipe-mcp-http` (HTTP) come from the same npm package `screenpipe-mcp`.
+this starts an HTTP MCP server on `http://127.0.0.1:3031`. useful for tools like [Msty](https://msty.studio) that support HTTP MCP transport.
+
+### expose to your LAN
+
+to access the server from other machines on your network, use `--listen-on-lan`. **this requires an API key for security:**
+
+```bash
+npx screenpipe-mcp-http --port 3031 --listen-on-lan --api-key your-secret-key
+```
+
+then from a remote machine, call the server with the bearer token:
+
+```bash
+curl -H "Authorization: Bearer your-secret-key" \
+  http://<your-machine-ip>:3031/mcp/search?q=example
+```
 
 <Warning>
-HTTP MCP can expose screen history to whatever can reach the server. keep it on trusted machines and networks, and do not bind it publicly unless you know exactly how it is protected.
+HTTP MCP can expose screen history. when using `--listen-on-lan`, always set an `--api-key` — screenpipe will refuse to start without it. keep the key secret and only share with trusted services.
 </Warning>
 
 ## available tools

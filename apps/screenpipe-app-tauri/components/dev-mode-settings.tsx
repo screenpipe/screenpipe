@@ -46,7 +46,7 @@ const getDebuggingCommands = (os: string | null, dataDir: string) => {
   # 3. Run: screenpipe -h
   # 4. Choose your preferred setup and start Screenpipe:
   #    (Replace [YOUR_ARGS] with your chosen arguments)
-  #    Example: screenpipe --fps 1 `;
+  #    Example: screenpipe --data-dir `;
 
   const logPath =
     os === "windows"

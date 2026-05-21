@@ -221,6 +221,75 @@ pub fn check_accessibility_permission_cmd() -> OSPermissionStatus {
     core_to_os_status(screenpipe_core::permissions::check_accessibility())
 }
 
+/// Check Input Monitoring permission (macOS only).
+///
+/// Input Monitoring is a TCC category separate from Accessibility. Without
+/// it the recorder can still capture clipboard (via NSPasteboard polling)
+/// and app/window switches, but not keystrokes or clicks. Polling-safe —
+/// uses the preflight variant that doesn't trigger the system prompt.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn check_input_monitoring_permission_cmd() -> OSPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        if screenpipe_a11y::check_input_monitoring() {
+            OSPermissionStatus::Granted
+        } else {
+            // The TCC preflight API doesn't distinguish NotDetermined from
+            // Denied — both return false. We surface as Empty so the UI
+            // shows "request" rather than "open settings"; the request
+            // flow handles both cases identically (prompt on first call,
+            // open System Settings as fallback).
+            OSPermissionStatus::Empty
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        OSPermissionStatus::NotNeeded
+    }
+}
+
+/// Request Input Monitoring permission (macOS only).
+///
+/// Calls `cg_access::listen_request()` to trigger the system permission
+/// flow. On first call this either shows the native prompt (if NotDetermined)
+/// or silently no-ops (if already Denied — macOS doesn't re-prompt). For
+/// reliability we also open System Settings → Input Monitoring so the user
+/// can grant manually if the prompt didn't appear.
+///
+/// Returns the post-request permission status so the UI can update without
+/// waiting for the next poll.
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn request_input_monitoring_permission() -> OSPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if screenpipe_a11y::check_input_monitoring() {
+            return OSPermissionStatus::Granted;
+        }
+        // Open the Input Monitoring pane first so when the OS prompt
+        // appears it's layered on top of the settings UI the user lands
+        // in if they dismiss the prompt. Matches the pattern used by
+        // request_permission for ScreenRecording above.
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+            .spawn();
+        // Triggers the native consent prompt the first time the process
+        // calls it. Subsequent calls are no-ops if denied — the user has
+        // to enable from System Settings, which we just opened.
+        if screenpipe_a11y::request_input_monitoring() {
+            OSPermissionStatus::Granted
+        } else {
+            OSPermissionStatus::Denied
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        OSPermissionStatus::NotNeeded
+    }
+}
+
 /// Reset a permission using tccutil and re-request it
 /// This removes the app from the TCC database and triggers a fresh permission request
 #[tauri::command(async)]

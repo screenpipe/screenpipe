@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Plug, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { FALLBACK_TEMPLATES, type CustomTemplate } from "@/lib/summary-templates";
@@ -346,7 +346,11 @@ export function SummaryCards({
                     title={s.text}
                   >
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      {s.connectionIcon && <ConnectionSuggestionIcon name={s.connectionIcon} />}
+                      {s.connectionIcon ? (
+                        <ConnectionSuggestionIcon name={s.connectionIcon} />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5 text-muted-foreground/70 group-hover:text-foreground/70" strokeWidth={1.5} aria-hidden />
+                      )}
                     </span>
                     <span className="min-w-0 flex-1 text-xs leading-tight line-clamp-2">
                       {s.text}

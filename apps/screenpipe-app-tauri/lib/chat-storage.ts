@@ -252,7 +252,7 @@ async function orderedConversationEntries(dir: string): Promise<ConversationEntr
   return ordered;
 }
 
-function conversationMetaFromJson(conv: any): ConversationMeta | null {
+export function conversationMetaFromJson(conv: any): ConversationMeta | null {
   if (!conv || typeof conv.id !== "string") return null;
 
   const messages = Array.isArray(conv.messages) ? conv.messages : [];

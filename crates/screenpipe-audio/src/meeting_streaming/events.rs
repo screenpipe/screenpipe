@@ -128,15 +128,6 @@ impl MeetingLifecycleEvent {
                     .filter(|s| !s.trim().is_empty())
             })
     }
-
-    pub fn is_manual_live_start(&self) -> bool {
-        is_manual_live_marker(self.detection_source.as_deref())
-            || is_manual_live_marker(self.app.as_deref())
-    }
-}
-
-pub(crate) fn is_manual_live_marker(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value.trim().eq_ignore_ascii_case("manual"))
 }
 
 #[derive(Clone, Debug, Serialize)]

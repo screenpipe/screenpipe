@@ -64,6 +64,15 @@ pub struct StartMeetingRequest {
 #[derive(OaSchema, Deserialize, Debug)]
 pub struct StopMeetingRequest {
     pub id: Option<i64>,
+    /// When false, skip auto-appending the user's typed text (and edited
+    /// files) to the meeting note. Defaults to true to preserve historical
+    /// behavior.
+    #[serde(default = "default_append_typed_text")]
+    pub append_typed_text: bool,
+}
+
+fn default_append_typed_text() -> bool {
+    true
 }
 
 #[derive(OaSchema, Deserialize, Debug)]
@@ -566,7 +575,7 @@ pub(crate) async fn stop_meeting_handler(
 
     state
         .db
-        .end_meeting_with_typed_text(id, &now, true)
+        .end_meeting_with_typed_text(id, &now, body.append_typed_text)
         .await
         .map_err(|e| {
             (

@@ -881,6 +881,50 @@ fn refresh_chatgpt_token(token_data: &mut serde_json::Value, now: u64) {
     }
 }
 
+/// Magic prefix written by the app/CLI when `store.bin` is encrypted.
+/// Matches `STORE_MAGIC` in `screenpipe-engine/src/cli/store_file.rs`.
+const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
+
+/// Read `store.bin`, decrypting via the secrets keychain key if it starts with
+/// the `SPSTORE1` magic prefix. Keeps `resolve_preset` and `pipe models list`
+/// in agreement on encrypted stores; before this helper the runner did a plain
+/// `read_to_string` and silently failed when the file was encrypted.
+fn read_store_bin(path: &Path) -> Option<serde_json::Value> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() >= STORE_MAGIC.len() && &data[..STORE_MAGIC.len()] == STORE_MAGIC {
+        #[cfg(feature = "secrets")]
+        {
+            use screenpipe_secrets::keychain::{get_key, KeyResult};
+            let key = match get_key() {
+                KeyResult::Found(k) => k,
+                _ => {
+                    warn!(
+                        "store.bin is encrypted but keychain key is unavailable; \
+                         pipe preset resolution will fail. Open the app once or \
+                         disable store encryption."
+                    );
+                    return None;
+                }
+            };
+            let plaintext =
+                screenpipe_vault::crypto::decrypt_small(&data[STORE_MAGIC.len()..], &key).ok()?;
+            return serde_json::from_slice(&plaintext).ok();
+        }
+        #[cfg(not(feature = "secrets"))]
+        {
+            warn!(
+                "store.bin is encrypted but this build lacks the `secrets` feature; \
+                 cannot read AI presets"
+            );
+            return None;
+        }
+    }
+    if data.iter().all(|b| b.is_ascii_whitespace()) {
+        return Some(serde_json::json!({}));
+    }
+    serde_json::from_slice(&data).ok()
+}
+
 /// Read `~/.screenpipe/store.bin` and find the preset by id.
 /// Falls back to the default preset if `preset_id` is `"default"`.
 /// Creates store.bin with a default preset if it doesn't exist (CLI mode).
@@ -926,8 +970,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         }
     }
 
-    let content = std::fs::read_to_string(&store_path).ok()?;
-    let store: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let store = read_store_bin(&store_path)?;
     let presets = store.get("settings")?.get("aiPresets")?.as_array()?;
 
     // Normalize legacy preset IDs to current names
@@ -1004,6 +1047,28 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         api_key,
         prompt,
     })
+}
+
+/// Enumerate the preset IDs currently in `store.bin`, for surfacing in error
+/// messages. Returns an empty vec if the store is missing or unreadable —
+/// callers should phrase the message accordingly.
+fn list_available_preset_ids(pipes_dir: &Path) -> Vec<String> {
+    let Some(parent) = pipes_dir.parent() else {
+        return Vec::new();
+    };
+    let Some(store) = read_store_bin(&parent.join("store.bin")) else {
+        return Vec::new();
+    };
+    store
+        .get("settings")
+        .and_then(|s| s.get("aiPresets"))
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -2268,12 +2333,20 @@ impl PipeManager {
                         )
                     }
                     None => {
+                        let available = list_available_preset_ids(&self.pipes_dir);
+                        let available_hint = if available.is_empty() {
+                            String::from("no presets are configured")
+                        } else {
+                            format!("available presets: {}", available.join(", "))
+                        };
                         return Err(anyhow!(
-                            "pipe '{}': preset '{}' not found in settings — \
-                             create the preset in Settings → AI or remove the \
-                             'preset: {}' line from the pipe config",
+                            "pipe '{}': preset '{}' not found in settings — {}. \
+                             Set one of those in the pipe's `preset:` field, or \
+                             create a new preset with `screenpipe pipe models create {} --provider … --model …`, \
+                             or remove the `preset:` line to use the default.",
                             name,
                             preset_id,
+                            available_hint,
                             preset_id
                         ));
                     }

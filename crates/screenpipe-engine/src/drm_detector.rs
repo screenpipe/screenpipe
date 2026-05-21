@@ -805,7 +805,8 @@ mod tests {
         let _ = Command::new("open")
             .args(["-a", "Comet", "https://netflix.com"])
             .spawn()
-            .expect("failed to open Comet — is it installed?");
+            .expect("failed to open Comet — is it installed?")
+            .wait();
 
         // Give the browser time to launch, load the page, and take focus
         thread::sleep(Duration::from_secs(5));

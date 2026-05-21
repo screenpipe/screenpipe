@@ -152,7 +152,7 @@ impl TranscriptionEngine {
                         &oc_config.endpoint
                     ),
                     oc_config.model,
-                    oc_config.api_key.as_ref().map_or(false, |k| !k.is_empty()),
+                    oc_config.api_key.as_ref().is_some_and(|k| !k.is_empty()),
                 );
                 Ok(Self::OpenAICompatible {
                     endpoint: oc_config.endpoint,

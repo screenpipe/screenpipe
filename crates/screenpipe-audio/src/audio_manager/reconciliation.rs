@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use screenpipe_db::{
-    DatabaseManager, NewDiarizationSegment, ReplacementAudioTranscription, UntranscribedChunk,
+    ChunkOutcome, DatabaseManager, NewDiarizationSegment, ReplacementAudioTranscription,
+    UntranscribedChunk,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
@@ -62,7 +63,13 @@ struct PendingTranscription {
 /// Audio is encoded as MP3 (64 kbps mono 16 kHz) before upload, so durations
 /// are bounded by the compressed size, not raw WAV.
 ///
-/// - Deepgram via Cloudflare: 100 MB upload limit ÷ 64 kbps ≈ 3.5 h → cap at 5000 s (~83 min)
+/// - Deepgram via Cloudflare: cap at 480 s (8 min). Bounded by Deepgram's own
+///   10-minute hard ceiling — requests exceeding it return 504 Gateway Timeout
+///   on Nova models (https://github.com/orgs/deepgram/discussions/585). Bigger
+///   batches also blow past our worker's AbortSignal because Deepgram's
+///   documented minimum latency isn't sub-20s. Diarization quality plateaus
+///   above ~3 min audio per Deepgram's docs, so 8 min keeps the quality win
+///   without flirting with the 10-min cliff.
 /// - OpenAI-compatible: user-configurable (unknown engine limits), default 3000 s (~50 min)
 /// - Parakeet: ONNX int8 encoder handles up to ~52s but quality degrades past 30s.
 ///   Benchmarked: full audio = 33.1% WER, 30s chunks = 33.9% WER (best chunked).
@@ -71,7 +78,7 @@ struct PendingTranscription {
 /// - Qwen3-ASR: similar to Whisper architecture → cap at 600 s (10 min)
 pub fn default_max_batch_duration_secs(engine: &AudioTranscriptionEngine) -> u64 {
     match engine {
-        AudioTranscriptionEngine::Deepgram => 5000,
+        AudioTranscriptionEngine::Deepgram => 480,
         AudioTranscriptionEngine::OpenAICompatible => 3000,
         AudioTranscriptionEngine::Parakeet => 45,
         _ => 600,
@@ -326,16 +333,41 @@ pub async fn reconcile_untranscribed(
             Ok(output) => output,
             Err(e) => {
                 error!("reconciliation: transcription failed for batch: {}", e);
+                // Bump attempts on every chunk in the batch. Once a chunk has
+                // failed MAX_TRANSCRIPTION_ATTEMPTS times in a row the outcome
+                // helper flips it to status='failed' and it stops being picked.
+                // Without this, a wedged engine would retry the same chunks
+                // forever (one of the symptoms of the 2026-05-20 stall).
+                let reason = format!("stt batch failure: {}", e);
+                for chunk in &valid_chunks {
+                    if let Err(record_err) = db
+                        .record_chunk_outcome(
+                            chunk.id,
+                            ChunkOutcome::Failed {
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            "reconciliation: failed to record batch failure for chunk {}: {}",
+                            chunk.id, record_err
+                        );
+                    }
+                }
                 continue;
             }
         };
         let full_text = transcription_output.transcription.clone();
 
-        // Silent audio: insert an empty transcription row so these chunks are not
-        // picked up again on the next sweep. Previously we skipped recent silent
-        // chunks (< 2h old) without marking them — causing them to be re-sent to
-        // Deepgram every 120s in an infinite loop (the "zombie chunk" bug).
-        // Old silent chunks (> 2h) are deleted entirely.
+        // Silent audio. Two outcomes here, both important:
+        //   - Recent silent chunks (<2h): flip status='silent' via the
+        //     canonical outcome path. This is the loop-breaker — the old code
+        //     called replace_audio_transcription("") which silently no-op'd
+        //     on empty input, so the same chunks got picked again every 120s
+        //     forever (the zombie-chunk bug surfaced 2026-05-20).
+        //   - Old silent chunks (>2h): delete file + row entirely. ON DELETE
+        //     CASCADE wipes diarization rows. Keeping them just bloats the DB.
         if full_text.trim().is_empty() {
             let min_age = chrono::Duration::hours(2);
             let cutoff = chrono::Utc::now() - min_age;
@@ -348,23 +380,13 @@ pub async fn reconcile_untranscribed(
                 .filter(|c| c.timestamp >= cutoff)
                 .collect();
 
-            // Mark recent silent chunks as transcribed (empty) so they don't loop
             for chunk in &recent_chunks {
                 if let Err(e) = db
-                    .replace_audio_transcription(
-                        chunk.id,
-                        "",
-                        &engine_config.to_string(),
-                        &device_name,
-                        is_input,
-                        chunk.timestamp,
-                        Some(30.0),
-                        None,
-                    )
+                    .record_chunk_outcome(chunk.id, ChunkOutcome::Silent)
                     .await
                 {
                     warn!(
-                        "reconciliation: failed to mark silent chunk {} as transcribed: {}",
+                        "reconciliation: failed to mark silent chunk {} as silent: {}",
                         chunk.id, e
                     );
                     consecutive_db_errors += 1;
@@ -374,7 +396,6 @@ pub async fn reconcile_untranscribed(
                 }
             }
 
-            // Delete old silent chunks entirely
             if !old_chunks.is_empty() {
                 debug!(
                     "reconciliation: batch for {} produced empty transcription, deleting {} silent chunks (>2h old)",

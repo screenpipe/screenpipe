@@ -48,6 +48,22 @@ async checkAccessibilityPermissionCmd() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_accessibility_permission_cmd");
 },
 /**
+ * Check Input Monitoring permission (macOS only). Polling-safe — does not
+ * trigger the system prompt. Hand-written stub; specta regenerates on rebuild.
+ */
+async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_input_monitoring_permission_cmd");
+},
+/**
+ * Request Input Monitoring permission (macOS only). Triggers the native
+ * consent prompt on first call and also opens System Settings → Privacy &
+ * Security → Input Monitoring as a fallback. Returns the post-request
+ * status. Hand-written stub; specta regenerates on rebuild.
+ */
+async requestInputMonitoringPermission() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("request_input_monitoring_permission");
+},
+/**
  * Check if Arc browser is installed (macOS only)
  */
 async checkArcInstalled() : Promise<boolean> {
@@ -304,6 +320,53 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 }
 },
 /**
+ * Persist the user's enterprise admin status + team API token so the
+ * pi-agent's `screenpipe-team` skill knows whether to install itself.
+ * 
+ * Called by the frontend right after a policy fetch confirms admin
+ * role. Storing this alongside the license key in `enterprise.json`
+ * keeps everything pi-agent needs in one file the skill can read
+ * without a Tauri round-trip.
+ * 
+ * All fields are optional so callers can update one at a time —
+ * e.g. revoke admin without wiping the cached team token, or refresh
+ * just the token after a rotation. To FORCE a field to null, pass
+ * an empty string for strings or `false` for `is_admin`/`license_active`.
+ */
+async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read the user's screenpipe cloud session JWT from `~/.screenpipe/
+ * auth.json`. Returns None when the file is missing, malformed, or the
+ * token field is empty.
+ * 
+ * The settings store (`store.bin → user.token`) is the canonical
+ * runtime cache for this token but is only populated after a fresh
+ * in-app sign-in. `auth.json` is the durable on-disk copy written by
+ * the pi-agent configuration flow — it survives store resets and dev-
+ * mode launches where the in-memory user object hasn't been hydrated
+ * yet. Used by the enterprise-policy hook to send the Bearer header
+ * even when the in-app user object is still null.
+ */
+async getCloudToken() : Promise<string | null> {
+    return await TAURI_INVOKE("get_cloud_token");
+},
+/**
+ * Read the enterprise admin API token from
+ * `~/.screenpipe/enterprise.json.team_api_token`. Returns null when
+ * missing/empty. Used by Settings → Admin API token to render
+ * "configured" state. Hand-written stub; specta regenerates on rebuild.
+ */
+async getEnterpriseTeamApiToken() : Promise<string | null> {
+    return await TAURI_INVOKE("get_enterprise_team_api_token");
+},
+/**
  * Called by the frontend after fetching the enterprise policy.
  */
 async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
@@ -389,7 +452,7 @@ async hideMainWindow() : Promise<void> {
 },
 /**
  * E2E helper: emit a deterministic chat stream from the Rust side.
- *
+ * 
  * This keeps chat performance tests close to production's Pi stdout path:
  * one backend command starts the stream, then the app emits `agent_event`
  * envelopes into the WebView. Tests avoid the extra WebView→Rust→WebView
@@ -1446,7 +1509,7 @@ export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
-export type OAuthStatus = { connected: boolean; display_name: string | null }
+export type OAuthStatus = { connected: boolean; display_name: string | null; needs_attention?: boolean }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
@@ -1555,13 +1618,13 @@ audioTranscriptionEngine: string;
  */
 transcriptionMode: string; 
 /**
- * Stream live notes only while a meeting is active. This is separate
- * from 24/7 background transcription: the recorder still writes durable
- * chunks, while this powers the low-latency meeting note UI.
+ * Stream live notes only for manually-started live meetings. This is
+ * separate from 24/7 background transcription: the recorder still writes
+ * durable chunks, while this powers the low-latency meeting note UI.
  */
 meetingLiveTranscriptionEnabled: boolean; 
 /**
- * Provider for meeting-only live notes. Defaults to the selected audio
+ * Provider for manually-started live notes. Defaults to the selected audio
  * transcription engine so local/custom engines work without Cloud.
  */
 meetingLiveTranscriptionProvider: string; 
@@ -1592,7 +1655,7 @@ experimentalCoreaudioSystemAudio?: boolean;
  * Experimental: request Windows WASAPI microphone Acoustic Echo Cancellation.
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
  */
-windowsInputAecEnabled?: boolean;
+windowsInputAecEnabled?: boolean; 
 /**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
@@ -1657,6 +1720,26 @@ disableSnapshotCompaction?: boolean;
  * in_meeting override flag stays false.
  */
 disableMeetingDetector?: boolean; 
+/**
+ * Override `EventDrivenCaptureConfig::idle_capture_interval_ms` (milliseconds).
+ * None = follow active PowerProfile.
+ */
+idleCaptureIntervalMs?: bigint | null; 
+/**
+ * Override `EventDrivenCaptureConfig::visual_check_interval_ms` (milliseconds).
+ * None = follow active PowerProfile.
+ */
+visualCheckIntervalMs?: bigint | null; 
+/**
+ * Override `EventDrivenCaptureConfig::visual_change_threshold` (0.0–1.0).
+ * None = follow active PowerProfile.
+ */
+visualChangeThreshold?: number | null; 
+/**
+ * Override `EventDrivenCaptureConfig::min_capture_interval_ms` (milliseconds).
+ * None = follow active PowerProfile.
+ */
+minCaptureIntervalMs?: bigint | null; 
 /**
  * Window titles to exclude from capture.
  */

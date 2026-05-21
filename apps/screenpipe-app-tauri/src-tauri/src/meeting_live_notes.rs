@@ -172,7 +172,11 @@ pub fn start(app: AppHandle) {
                 continue;
             }
 
-            let url = format!("screenpipe://meeting/{meeting_id}?live=0");
+            // Default (no ?live=0) opens the transcript panel alongside the
+            // note — this notification fires at meeting start and the user
+            // clicked "join and take notes", so they want the live view, not
+            // a static note pane.
+            let url = format!("screenpipe://meeting/{meeting_id}");
             let mut calendar_match = {
                 let events = calendar_events.read().await;
                 find_calendar_match(&events, &event.data)
