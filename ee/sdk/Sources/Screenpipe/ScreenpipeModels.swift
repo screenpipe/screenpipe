@@ -178,6 +178,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
   public var monitorId: Int?
   public var microphone: Bool?
   public var systemAudio: Bool?
+  public var ignoredWindows: [String]?
+  public var includedWindows: [String]?
+  public var ignoredUrls: [String]?
 
   public init(
     output: String? = nil,
@@ -186,7 +189,10 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     filenamePrefix: String? = nil,
     monitorId: Int? = nil,
     microphone: Bool? = nil,
-    systemAudio: Bool? = nil
+    systemAudio: Bool? = nil,
+    ignoredWindows: [String]? = nil,
+    includedWindows: [String]? = nil,
+    ignoredUrls: [String]? = nil
   ) {
     self.output = output
     self.outputDir = outputDir
@@ -195,6 +201,9 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     self.monitorId = monitorId
     self.microphone = microphone
     self.systemAudio = systemAudio
+    self.ignoredWindows = ignoredWindows
+    self.includedWindows = includedWindows
+    self.ignoredUrls = ignoredUrls
   }
 
   public init(
@@ -203,7 +212,10 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     filenamePrefix: String? = nil,
     monitorId: Int? = nil,
     microphone: Bool? = nil,
-    systemAudio: Bool? = nil
+    systemAudio: Bool? = nil,
+    ignoredWindows: [String]? = nil,
+    includedWindows: [String]? = nil,
+    ignoredUrls: [String]? = nil
   ) {
     self.init(
       output: outputURL.path,
@@ -211,7 +223,10 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
       filenamePrefix: filenamePrefix,
       monitorId: monitorId,
       microphone: microphone,
-      systemAudio: systemAudio
+      systemAudio: systemAudio,
+      ignoredWindows: ignoredWindows,
+      includedWindows: includedWindows,
+      ignoredUrls: ignoredUrls
     )
   }
 
@@ -221,7 +236,10 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
     filenamePrefix: String? = nil,
     monitorId: Int? = nil,
     microphone: Bool? = nil,
-    systemAudio: Bool? = nil
+    systemAudio: Bool? = nil,
+    ignoredWindows: [String]? = nil,
+    includedWindows: [String]? = nil,
+    ignoredUrls: [String]? = nil
   ) {
     self.init(
       outputDir: outputDirectoryURL.path,
@@ -229,7 +247,10 @@ public struct ScreenpipeStartOptions: Codable, Equatable, Sendable {
       filenamePrefix: filenamePrefix,
       monitorId: monitorId,
       microphone: microphone,
-      systemAudio: systemAudio
+      systemAudio: systemAudio,
+      ignoredWindows: ignoredWindows,
+      includedWindows: includedWindows,
+      ignoredUrls: ignoredUrls
     )
   }
 

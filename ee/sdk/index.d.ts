@@ -13,6 +13,25 @@ export interface RecorderOptions {
   microphone?: boolean
   /** Reserved for future system-audio muxing. Accepted today but not recorded. */
   systemAudio?: boolean
+  /**
+   * Substring patterns matched against the focused app name and window title
+   * (case-insensitive). While a matching window is in focus, the recorder
+   * skips writing frames — the MP4 contains a hard cut over the filtered
+   * period. Mirrors the engine's `--ignored-windows` CLI flag.
+   */
+  ignoredWindows?: Array<string>
+  /**
+   * Substring whitelist. If non-empty, frames are written ONLY while the
+   * focused app name or window title matches at least one pattern.
+   * Mirrors the engine's `--included-windows` CLI flag.
+   */
+  includedWindows?: Array<string>
+  /**
+   * URL patterns to skip (case-insensitive, domain-aware matching).
+   * When the focused window is a browser navigated to a matching URL,
+   * the recorder skips writing frames. Mirrors `--ignored-urls`.
+   */
+  ignoredUrls?: Array<string>
 }
 /** Permission status returned by `requestPermissions`. */
 export interface PermissionStatus {

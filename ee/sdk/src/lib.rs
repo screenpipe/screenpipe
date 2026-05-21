@@ -30,6 +30,19 @@ pub struct RecorderOptions {
     pub microphone: Option<bool>,
     /// Reserved for future system-audio muxing. Accepted today but not recorded.
     pub system_audio: Option<bool>,
+    /// Substring patterns matched against the focused app name and window title
+    /// (case-insensitive). While a matching window is in focus, the recorder
+    /// skips writing frames — the MP4 contains a hard cut over the filtered
+    /// period. Mirrors the engine's `--ignored-windows` CLI flag.
+    pub ignored_windows: Option<Vec<String>>,
+    /// Substring whitelist. If non-empty, frames are written ONLY while the
+    /// focused app name or window title matches at least one pattern.
+    /// Mirrors the engine's `--included-windows` CLI flag.
+    pub included_windows: Option<Vec<String>>,
+    /// URL patterns to skip (case-insensitive, domain-aware matching).
+    /// When the focused window is a browser navigated to a matching URL,
+    /// the recorder skips writing frames. Mirrors `--ignored-urls`.
+    pub ignored_urls: Option<Vec<String>>,
 }
 
 /// Permission status returned by `requestPermissions`.

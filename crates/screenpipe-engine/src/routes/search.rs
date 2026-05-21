@@ -352,6 +352,7 @@ pub(crate) async fn search(
                     browser_url: ocr.browser_url.clone(),
                     focused: ocr.focused,
                     device_name: ocr.device_name.clone(),
+                    text_source: ocr.text_source.clone(),
                 }),
                 SearchResult::Audio(audio) => {
                     let transcription = truncate(audio.transcription.clone());

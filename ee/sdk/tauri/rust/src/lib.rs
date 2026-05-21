@@ -272,6 +272,12 @@ pub struct StartOptions {
     pub monitor_id: Option<u32>,
     pub microphone: Option<bool>,
     pub system_audio: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignored_windows: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_windows: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignored_urls: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

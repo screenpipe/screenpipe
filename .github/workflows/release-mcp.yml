@@ -23,7 +23,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+
+      - name: Authenticate to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ] || [ "${#NPM_TOKEN}" -lt 10 ]; then
+            echo "::error::NPM_TOKEN secret looks invalid (length ${#NPM_TOKEN})"
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "registry=https://registry.npmjs.org/" >> ~/.npmrc
+          USER=$(npm whoami) || { echo "::error::npm whoami failed — NPM_TOKEN auth invalid"; exit 1; }
+          echo "npm authed as: $USER"
 
       - name: Install dependencies
         working-directory: packages/screenpipe-mcp
@@ -35,9 +47,13 @@ jobs:
 
       - name: Publish to npm
         working-directory: packages/screenpipe-mcp
-        run: npm publish --access public || echo "npm publish failed (version may already exist) — continuing"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if npm view "screenpipe-mcp@$VER" version >/dev/null 2>&1; then
+            echo "screenpipe-mcp@$VER already on npm — skipping publish"
+          else
+            npm publish --access public
+          fi
 
       - name: Sync manifest.json version from package.json
         working-directory: packages/screenpipe-mcp

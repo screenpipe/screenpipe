@@ -12,10 +12,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, Lock, LogIn, LogOut, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, Keyboard } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
-import { useSettings, getStore } from "@/lib/hooks/use-settings";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { CONNECTION_CATEGORY_BY_ID } from "@/lib/constants/connections";
@@ -29,7 +29,6 @@ import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
-import { CalendarCard } from "./calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { GoogleSheetsCard } from "./google-sheets-card";
@@ -40,7 +39,7 @@ import { HermesCard } from "./hermes-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
-import { InputMonitoringCard } from "./input-monitoring-card";
+import { InputMonitoringPanel } from "./input-monitoring-card";
 import posthog from "posthog-js";
 
 // ---------------------------------------------------------------------------
@@ -294,8 +293,7 @@ export function IntegrationIcon({
       </svg>
     ),
     "apple-intelligence": <img src="/images/apple-intelligence.png" alt="Apple Intelligence" className="w-5 h-5 rounded" />,
-    "apple-calendar": <img src="/images/apple.svg" alt="Apple" className="w-5 h-5 dark:invert" />,
-    "windows-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
+    "input-monitoring": <Keyboard className="h-5 w-5 text-muted-foreground" />,
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
@@ -483,6 +481,21 @@ interface ConnectionTile {
 type ConnectionSort = "default" | "alphabetical";
 
 const ALL_CONNECTION_CATEGORIES = "All";
+
+// Curated row shown above the search bar. Order is editorial — high-activation
+// AI surfaces first, then communication, then write-back knowledge tools. We
+// hide this row whenever the user is searching/filtering so the result set
+// stays the obvious answer to their query.
+const FEATURED_CONNECTION_IDS = [
+  "claude",
+  "cursor",
+  "codex",
+  "claude-code",
+  "chatgpt",
+  "slack",
+  "obsidian",
+  "notion",
+];
 
 const CONNECTION_SORT_OPTIONS: { value: ConnectionSort; label: string }[] = [
   { value: "default", label: "Default" },
@@ -1941,18 +1954,8 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
   const [codexInstalled, setCodexInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
-  const [calendarUserDisconnected, setCalendarUserDisconnected] = useState(false);
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
-
-  const refreshCalendarTile = useCallback(() => {
-    getStore()
-      .then((store) => store.get<boolean>("calendarUserDisconnected"))
-      .then((val) => setCalendarUserDisconnected(val ?? false))
-      .catch(() => {});
-  }, []);
-
-  // Re-read on panel open/close and on explicit connect/disconnect
-  useEffect(() => { refreshCalendarTile(); }, [selected, refreshCalendarTile]);
+  const [inputMonitoringGranted, setInputMonitoringGranted] = useState(false);
 
   const refreshStatus = useCallback(() => {
     getInstalledMcpVersion().then(v => {
@@ -1975,6 +1978,9 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
           statuses.length > 0 && statuses.every(b => b.status === "granted")
         );
       }).catch(() => setBrowserUrlConnected(false));
+      commands.checkInputMonitoringPermissionCmd()
+        .then(r => setInputMonitoringGranted(r === "granted"))
+        .catch(() => setInputMonitoringGranted(false));
     }
   }, []);
 
@@ -2037,7 +2043,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
       ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
-      { id: "apple-calendar", name: os === "windows" ? "Windows Calendar" : "Apple Calendar", icon: os === "windows" ? "windows-calendar" : "apple-calendar", connected: false },
+      ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
@@ -2072,9 +2078,6 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       const api = integrations.find(i => i.id === h.id);
       if (api) h.connected = api.connected;
     }
-    // If user explicitly disconnected calendar, suppress the dot regardless of OS state
-    const calTile = hardcoded.find(h => h.id === "apple-calendar");
-    if (calTile && calendarUserDisconnected) calTile.connected = false;
     // Google Calendar dot is driven by direct oauthStatus (not the cached API), so it stays
     // in sync immediately after connect/disconnect without waiting for cache expiry.
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
@@ -2083,7 +2086,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       ...tile,
       category: tile.category ?? CONNECTION_CATEGORY_BY_ID[tile.id] ?? "Other",
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, integrations, googleCalendarConnected, inputMonitoringGranted]);
 
   const categoryOptions = useMemo(() => {
     const categories = Array.from(
@@ -2091,6 +2094,18 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     ).sort((a, b) => a.localeCompare(b));
     return [ALL_CONNECTION_CATEGORIES, ...categories];
   }, [allTiles]);
+
+  const isDefaultView =
+    !search.trim() &&
+    categoryFilter === ALL_CONNECTION_CATEGORIES &&
+    sortBy === "default";
+
+  const featured = useMemo(() => {
+    if (!isDefaultView) return [];
+    return FEATURED_CONNECTION_IDS
+      .map((id) => allTiles.find((t) => t.id === id))
+      .filter((t): t is ConnectionTile => !!t);
+  }, [allTiles, isDefaultView]);
 
   const filtered = useMemo(() => {
     let tiles = allTiles;
@@ -2104,8 +2119,14 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     if (sortBy === "alphabetical") {
       return [...tiles].sort((a, b) => a.name.localeCompare(b.name));
     }
+    // In default view, the featured row already surfaces these — drop them
+    // from the grid below to avoid duplication.
+    if (isDefaultView) {
+      const featuredIds = new Set(FEATURED_CONNECTION_IDS);
+      tiles = tiles.filter((t) => !featuredIds.has(t.id));
+    }
     return tiles;
-  }, [allTiles, categoryFilter, search, sortBy]);
+  }, [allTiles, categoryFilter, search, sortBy, isDefaultView]);
 
   const selectedIntegration = integrations.find(i => i.id === selected);
 
@@ -2130,11 +2151,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
-      case "apple-calendar": return <CalendarCard onConnectionChange={() => {
-        refreshCalendarTile();
-        notifyConnectionsUpdated();
-        fetchIntegrations();
-      }} />;
+      case "input-monitoring": return <InputMonitoringPanel onStatusChange={setInputMonitoringGranted} />;
       case "google-calendar": return <GoogleCalendarCard
         onConnected={() => setGoogleCalendarConnected(true)}
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
@@ -2210,11 +2227,22 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
     <div className="space-y-5">
       <p className="text-muted-foreground text-sm mb-4">Give AI access to your memory, and connect to the apps you use every day</p>
 
-      {/* macOS-only permission card. Self-gates: renders nothing off-platform.
-          Surfaces here (top of Connections) because Input Monitoring is the
-          most common silent killer of UI/clipboard capture and users don't
-          know to look in System Settings without a prompt. */}
-      <InputMonitoringCard />
+      {/* Featured — curated high-activation connections, default view only. */}
+      {featured.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-muted-foreground">Featured</h3>
+          <div className="grid grid-cols-4 gap-2">
+            {featured.map((tile) => (
+              <Tile
+                key={tile.id}
+                tile={tile}
+                selected={selected === tile.id}
+                onClick={() => setSelected(selected === tile.id ? null : tile.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Search & filters */}
       <div className="space-y-2">

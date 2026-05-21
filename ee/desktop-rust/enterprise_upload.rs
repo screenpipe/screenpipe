@@ -11,9 +11,12 @@
 //! checksums and cursors, not the telemetry body.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use screenpipe_core::sync::crypto::{
-    compute_checksum, decrypt, encrypt, generate_key, generate_nonce, KEY_SIZE,
+use reqwest::header::HeaderMap;
+use screenpipe_core::sync::crypto::compute_checksum;
+use screenpipe_sync::pipeline::{TicketedConfig, TicketedPipeline};
+use screenpipe_sync::{
+    BodyEncryptor, ChaCha20Poly1305Encryptor, KeyRecipientConfig as SyncKeyRecipientConfig,
+    SyncError, KEY_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,9 +30,35 @@ pub const DIRECT_UPLOAD_CONTENT_TYPE: &str =
 pub const DIRECT_UPLOAD_READABLE_CONTENT_TYPE: &str = "application/vnd.screenpipe.telemetry+jsonl";
 const DIRECT_UPLOAD_MODE: &str = "direct_upload_encrypted";
 const DIRECT_UPLOAD_READABLE_MODE: &str = "direct_upload_readable";
-const DIRECT_UPLOAD_ALGORITHM: &str = "chacha20poly1305";
 const DIRECT_UPLOAD_MAX_RETRIES: u32 = 3;
 const DIRECT_UPLOAD_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
+
+impl From<SyncError> for EnterpriseSyncError {
+    fn from(value: SyncError) -> Self {
+        match value {
+            SyncError::AuthRejected => Self::IngestAuthRejected,
+            SyncError::ControlPlaneServerError(c) => Self::IngestServerError(c),
+            SyncError::StorageRejected(s) => {
+                Self::Ingest(format!("direct upload rejected by storage: {s}"))
+            }
+            SyncError::StorageTransient(s) => {
+                Self::Ingest(format!("direct upload storage error: {s}"))
+            }
+            SyncError::InvalidArgument(s) => Self::Ingest(s),
+            SyncError::Crypto(s) => Self::Ingest(format!("crypto: {s}")),
+            SyncError::Io(e) => Self::Io(e),
+            // Maps to `Ingest` (not `Network`) to preserve the pre-refactor
+            // behavior of `request_upload_ticket` and `complete_upload`,
+            // which lumped reqwest send errors and non-classified control-
+            // plane responses into the catch-all `Ingest` variant. The
+            // existing `EnterpriseSyncError::Network` variant is owned by
+            // `fetch_desired_mode_from_server` and not produced by the
+            // upload data plane.
+            SyncError::Network(s) => Self::Ingest(s),
+            SyncError::Serde(s) => Self::Ingest(format!("serde: {s}")),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum EnterpriseUploadMode {
@@ -150,23 +179,23 @@ impl EnterpriseUploadMode {
     /// Shared by the legacy `from_env` path and the new server-driven
     /// `resolve` path so the encrypted-mode contract stays in one place.
     fn build_direct_encrypted(ingest_url: &str) -> Option<Self> {
-        let primary_key_b64 =
-            match required_env("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64") {
-                Some(v) => v,
-                None => {
-                    warn!(
-                        "enterprise sync: direct upload requested but primary root key env is missing"
-                    );
-                    return None;
-                }
-            };
+        let primary_key_b64 = match required_env("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_ROOT_KEY_B64")
+        {
+            Some(v) => v,
+            None => {
+                warn!(
+                    "enterprise sync: direct upload requested but primary root key env is missing"
+                );
+                return None;
+            }
+        };
         let recovery_key_b64 =
             match required_env("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_ROOT_KEY_B64") {
                 Some(v) => v,
                 None => {
                     warn!(
-                        "enterprise sync: direct upload requested but recovery root key env is missing"
-                    );
+                    "enterprise sync: direct upload requested but recovery root key env is missing"
+                );
                     return None;
                 }
             };
@@ -195,22 +224,17 @@ impl EnterpriseUploadMode {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "mdm-primary-v1".to_string());
-        let recovery_key_id =
-            std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "mdm-recovery-v1".to_string());
+        let recovery_key_id = std::env::var("SCREENPIPE_ENTERPRISE_DIRECT_UPLOAD_RECOVERY_KEY_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "mdm-recovery-v1".to_string());
         if primary_key_id == recovery_key_id {
-            warn!(
-                "enterprise sync: direct upload primary and recovery key ids must differ"
-            );
+            warn!("enterprise sync: direct upload primary and recovery key ids must differ");
             return None;
         }
         if primary_root_key == recovery_root_key {
-            warn!(
-                "enterprise sync: direct upload primary and recovery root keys must differ"
-            );
+            warn!("enterprise sync: direct upload primary and recovery root keys must differ");
             return None;
         }
         let control_plane = DirectUploadConfig::without_recipients(ingest_url);
@@ -315,6 +339,8 @@ pub struct DirectUploadRecordCounts {
     pub audio: usize,
     pub ui: usize,
     pub snapshots: usize,
+    #[serde(default)]
+    pub memories: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -322,6 +348,8 @@ pub struct DirectUploadCursors {
     pub last_frame_ts: Option<String>,
     pub last_audio_ts: Option<String>,
     pub last_ui_ts: Option<String>,
+    #[serde(default)]
+    pub last_memory_ts: Option<String>,
 }
 
 impl DirectUploadCursors {
@@ -330,6 +358,7 @@ impl DirectUploadCursors {
             last_frame_ts: cursor.last_frame_ts.clone(),
             last_audio_ts: cursor.last_audio_ts.clone(),
             last_ui_ts: cursor.last_ui_ts.clone(),
+            last_memory_ts: cursor.last_memory_ts.clone(),
         }
     }
 }
@@ -382,14 +411,6 @@ struct DirectUploadCompleteRequest {
     plaintext_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct UploadTicketResponse {
-    ok: bool,
-    method: String,
-    upload_url: String,
-    headers: std::collections::BTreeMap<String, String>,
-}
-
 #[derive(Debug)]
 pub struct EncryptedDirectUploadBatch {
     pub manifest: DirectUploadManifest,
@@ -403,35 +424,47 @@ pub fn encrypt_direct_upload_batch(
     counts: DirectUploadRecordCounts,
     cursors: DirectUploadCursors,
 ) -> Result<EncryptedDirectUploadBatch, EnterpriseSyncError> {
-    if plaintext.is_empty() {
-        return Err(EnterpriseSyncError::Ingest(
-            "direct upload refuses empty plaintext batch".to_string(),
-        ));
-    }
+    // Build the shared-crate encryptor from the customer's MDM recipients.
+    // `ChaCha20Poly1305Encryptor::new` enforces presence of primary+recovery,
+    // unique key_ids, and distinct root keys — checks we used to scatter
+    // through this file. Catch them once in the constructor instead.
+    let recipients: Vec<SyncKeyRecipientConfig> = direct
+        .recipients
+        .iter()
+        .map(|r| {
+            SyncKeyRecipientConfig::new(
+                r.purpose.clone(),
+                r.key_provider.clone(),
+                r.key_id.clone(),
+                r.root_key,
+            )
+        })
+        .collect();
+    let encryptor = ChaCha20Poly1305Encryptor::new(recipients)?;
+    let encrypted = encryptor.encrypt(plaintext)?;
 
     let plaintext_sha256 = compute_checksum(plaintext);
-    let data_key = generate_key();
-    let data_key_bytes: &[u8; KEY_SIZE] = &*data_key;
-    let nonce = generate_nonce();
-    let ciphertext = encrypt(plaintext, data_key_bytes, &nonce)
-        .map_err(|e| EnterpriseSyncError::Ingest(format!("encrypt batch: {}", e)))?;
-    let ciphertext_sha256 = compute_checksum(&ciphertext);
+    let ciphertext_sha256 = compute_checksum(&encrypted.ciphertext);
 
-    let recipients = wrap_data_key_for_recipients(direct, data_key_bytes)?;
-    let primary_key_id = recipients
+    // Translate the generic descriptor to the screenpipe wire shape. The
+    // two are structurally identical today; keeping a thin conversion
+    // here means the wire contract is owned by THIS module — a future
+    // additive field on `screenpipe_sync::EncryptionDescriptor` doesn't
+    // accidentally leak into the ingest manifest until we choose to map
+    // it.
+    let recipients_wire: Vec<DirectUploadKeyRecipient> = encrypted
+        .descriptor
+        .recipients
         .iter()
-        .find(|r| r.purpose == "primary")
-        .map(|r| r.key_id.clone())
-        .ok_or_else(|| {
-            EnterpriseSyncError::Ingest(
-                "direct upload requires a primary key recipient".to_string(),
-            )
-        })?;
-    if !recipients.iter().any(|r| r.purpose == "recovery") {
-        return Err(EnterpriseSyncError::Ingest(
-            "direct upload requires a recovery key recipient".to_string(),
-        ));
-    }
+        .map(|r| DirectUploadKeyRecipient {
+            purpose: r.purpose.clone(),
+            key_provider: r.key_provider.clone(),
+            key_id: r.key_id.clone(),
+            key_wrap_algorithm: r.key_wrap_algorithm.clone(),
+            wrapped_data_key_b64: r.wrapped_data_key_b64.clone(),
+            wrap_nonce_b64: r.wrap_nonce_b64.clone(),
+        })
+        .collect();
 
     let batch_id = compute_batch_id(&cfg.device_id, &plaintext_sha256, &counts, &cursors);
 
@@ -443,19 +476,19 @@ pub fn encrypt_direct_upload_batch(
             device_label: cfg.device_label.clone(),
             batch_id,
             content_type: DIRECT_UPLOAD_CONTENT_TYPE.to_string(),
-            content_length: ciphertext.len(),
+            content_length: encrypted.ciphertext.len(),
             plaintext_sha256,
             ciphertext_sha256: Some(ciphertext_sha256),
             record_counts: counts,
             cursors,
             encryption: Some(DirectUploadEncryption {
-                algorithm: DIRECT_UPLOAD_ALGORITHM.to_string(),
-                primary_key_id,
-                nonce_b64: BASE64.encode(nonce),
-                recipients,
+                algorithm: encrypted.descriptor.algorithm,
+                primary_key_id: encrypted.descriptor.primary_key_id,
+                nonce_b64: encrypted.descriptor.nonce_b64,
+                recipients: recipients_wire,
             }),
         },
-        ciphertext,
+        ciphertext: encrypted.ciphertext,
     })
 }
 
@@ -468,11 +501,14 @@ pub async fn upload_direct_encrypted_batch(
     cursors: DirectUploadCursors,
 ) -> Result<DirectUploadManifest, EnterpriseSyncError> {
     let encrypted = encrypt_direct_upload_batch(cfg, direct, &plaintext, counts, cursors)?;
-
-    let ticket = request_upload_ticket(http, cfg, direct, &encrypted.manifest).await?;
-    put_direct_upload_body(http, &ticket, &encrypted.ciphertext).await?;
-    complete_upload(http, cfg, direct, &encrypted.manifest).await?;
-
+    run_ticketed_upload(
+        http,
+        cfg,
+        direct,
+        &encrypted.manifest,
+        &encrypted.ciphertext,
+    )
+    .await?;
     Ok(encrypted.manifest)
 }
 
@@ -514,98 +550,36 @@ pub async fn upload_direct_readable_batch(
     cursors: DirectUploadCursors,
 ) -> Result<DirectUploadManifest, EnterpriseSyncError> {
     let manifest = readable_direct_upload_manifest(cfg, &plaintext, counts, cursors)?;
-    let ticket = request_upload_ticket(http, cfg, direct, &manifest).await?;
-    put_direct_upload_body(http, &ticket, &plaintext).await?;
-    complete_upload(http, cfg, direct, &manifest).await?;
+    run_ticketed_upload(http, cfg, direct, &manifest, &plaintext).await?;
     Ok(manifest)
 }
 
-async fn request_upload_ticket(
+/// Glue between the screenpipe ingest wire format and
+/// `screenpipe_sync::TicketedPipeline`. The pipeline does ticket → PUT →
+/// complete with backoff; this fn just builds the JSON shapes the
+/// screenpipe control plane expects and maps errors back into the
+/// enterprise-sync error taxonomy.
+async fn run_ticketed_upload(
     http: &reqwest::Client,
     cfg: &EnterpriseSyncConfig,
     direct: &DirectUploadConfig,
     manifest: &DirectUploadManifest,
-) -> Result<UploadTicketResponse, EnterpriseSyncError> {
-    let resp = http
-        .post(&direct.ticket_url)
-        .header("X-License-Key", &cfg.license_key)
-        .json(manifest)
-        .send()
-        .await
-        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
-
-    classify_control_plane_response(resp, "upload ticket").await
-}
-
-async fn put_direct_upload_body(
-    http: &reqwest::Client,
-    ticket: &UploadTicketResponse,
     body: &[u8],
 ) -> Result<(), EnterpriseSyncError> {
-    if !ticket.ok || ticket.method.to_uppercase() != "PUT" {
-        return Err(EnterpriseSyncError::Ingest(
-            "upload ticket did not return a PUT target".to_string(),
-        ));
-    }
+    let mut control_headers = HeaderMap::new();
+    control_headers.insert(
+        "x-license-key",
+        cfg.license_key
+            .parse()
+            .map_err(|e| EnterpriseSyncError::Ingest(format!("bad license-key header: {e}")))?,
+    );
 
-    let headers = header_map(&ticket.headers)?;
-    let mut last_error: Option<EnterpriseSyncError> = None;
-    for attempt in 0..DIRECT_UPLOAD_MAX_RETRIES {
-        if attempt > 0 {
-            let backoff = DIRECT_UPLOAD_INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-            warn!(
-                "enterprise sync: direct upload retry {}/{} after {:?}",
-                attempt + 1,
-                DIRECT_UPLOAD_MAX_RETRIES,
-                backoff
-            );
-            tokio::time::sleep(backoff).await;
-        }
+    let pipeline_cfg = TicketedConfig::new(direct.ticket_url.clone(), direct.complete_url.clone())
+        .with_control_headers(control_headers)
+        .with_http(http.clone())
+        .with_put_retries(DIRECT_UPLOAD_MAX_RETRIES, DIRECT_UPLOAD_INITIAL_BACKOFF);
 
-        match http
-            .put(&ticket.upload_url)
-            .headers(headers.clone())
-            .body(body.to_vec())
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => return Ok(()),
-            Ok(resp) if resp.status().is_client_error() => {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                return Err(EnterpriseSyncError::Ingest(format!(
-                    "direct upload rejected by storage: {} {}",
-                    status,
-                    body.chars().take(200).collect::<String>()
-                )));
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                last_error = Some(EnterpriseSyncError::Ingest(format!(
-                    "direct upload storage error: {} {}",
-                    status,
-                    body.chars().take(200).collect::<String>()
-                )));
-            }
-            Err(e) => {
-                last_error = Some(EnterpriseSyncError::Ingest(e.to_string()));
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| {
-        EnterpriseSyncError::Ingest("direct upload failed after retries".to_string())
-    }))
-}
-
-async fn complete_upload(
-    http: &reqwest::Client,
-    cfg: &EnterpriseSyncConfig,
-    direct: &DirectUploadConfig,
-    manifest: &DirectUploadManifest,
-) -> Result<(), EnterpriseSyncError> {
-    let req = DirectUploadCompleteRequest {
+    let complete_req = DirectUploadCompleteRequest {
         mode: manifest.mode.clone(),
         device_id: manifest.device_id.clone(),
         batch_id: manifest.batch_id.clone(),
@@ -617,69 +591,17 @@ async fn complete_upload(
             None
         },
     };
-    let resp = http
-        .post(&direct.complete_url)
-        .header("X-License-Key", &cfg.license_key)
-        .json(&req)
-        .send()
-        .await
-        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
 
-    if resp.status().is_success() {
-        return Ok(());
-    }
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED
-        || resp.status() == reqwest::StatusCode::FORBIDDEN
-    {
-        return Err(EnterpriseSyncError::IngestAuthRejected);
-    }
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    Err(EnterpriseSyncError::Ingest(format!(
-        "upload complete failed: {} {}",
-        status,
-        body.chars().take(200).collect::<String>()
-    )))
-}
+    let ticket_json = serde_json::to_value(manifest)
+        .map_err(|e| EnterpriseSyncError::Ingest(format!("serialize manifest: {e}")))?;
+    let complete_json = serde_json::to_value(&complete_req)
+        .map_err(|e| EnterpriseSyncError::Ingest(format!("serialize complete: {e}")))?;
 
-async fn classify_control_plane_response<T: for<'de> Deserialize<'de>>(
-    resp: reqwest::Response,
-    label: &str,
-) -> Result<T, EnterpriseSyncError> {
-    let status = resp.status();
-    if status.is_success() {
-        return resp
-            .json::<T>()
-            .await
-            .map_err(|e| EnterpriseSyncError::Ingest(format!("{}: {}", label, e)));
-    }
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(EnterpriseSyncError::IngestAuthRejected);
-    }
-    if status.is_server_error() {
-        return Err(EnterpriseSyncError::IngestServerError(status.as_u16()));
-    }
-    let body = resp.text().await.unwrap_or_default();
-    Err(EnterpriseSyncError::Ingest(format!(
-        "{} failed: {} {}",
-        label,
-        status,
-        body.chars().take(200).collect::<String>()
-    )))
-}
-
-fn header_map(
-    raw: &std::collections::BTreeMap<String, String>,
-) -> Result<HeaderMap, EnterpriseSyncError> {
-    let mut out = HeaderMap::new();
-    for (key, value) in raw {
-        let name = HeaderName::from_bytes(key.as_bytes())
-            .map_err(|e| EnterpriseSyncError::Ingest(format!("bad upload header: {}", e)))?;
-        let value = HeaderValue::from_str(value)
-            .map_err(|e| EnterpriseSyncError::Ingest(format!("bad upload header value: {}", e)))?;
-        out.insert(name, value);
-    }
-    Ok(out)
+    let pipeline = TicketedPipeline::new(pipeline_cfg);
+    pipeline
+        .upload(body, &manifest.content_type, &ticket_json, &complete_json)
+        .await?;
+    Ok(())
 }
 
 fn compute_batch_id(
@@ -722,33 +644,6 @@ fn required_env(name: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn wrap_data_key_for_recipients(
-    direct: &DirectUploadConfig,
-    data_key_bytes: &[u8; KEY_SIZE],
-) -> Result<Vec<DirectUploadKeyRecipient>, EnterpriseSyncError> {
-    if direct.recipients.len() < 2 {
-        return Err(EnterpriseSyncError::Ingest(
-            "direct upload requires primary and recovery key recipients".to_string(),
-        ));
-    }
-
-    let mut recipients = Vec::with_capacity(direct.recipients.len());
-    for recipient in &direct.recipients {
-        let wrap_nonce = generate_nonce();
-        let wrapped_data_key = encrypt(data_key_bytes, &recipient.root_key, &wrap_nonce)
-            .map_err(|e| EnterpriseSyncError::Ingest(format!("wrap data key: {}", e)))?;
-        recipients.push(DirectUploadKeyRecipient {
-            purpose: recipient.purpose.clone(),
-            key_provider: recipient.key_provider.clone(),
-            key_id: recipient.key_id.clone(),
-            key_wrap_algorithm: DIRECT_UPLOAD_ALGORITHM.to_string(),
-            wrapped_data_key_b64: BASE64.encode(wrapped_data_key),
-            wrap_nonce_b64: Some(BASE64.encode(wrap_nonce)),
-        });
-    }
-    Ok(recipients)
-}
-
 fn sibling_enterprise_endpoint(ingest_url: &str, endpoint: &str) -> String {
     let trimmed = ingest_url.trim_end_matches('/');
     if let Some(base) = trimmed.strip_suffix("/ingest") {
@@ -770,6 +665,13 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Use the screenpipe-core ChaCha20-Poly1305 implementation directly
+    // here on purpose: this test proves wire compatibility — that batches
+    // emitted by our new `screenpipe-sync`-based encryptor are decryptable
+    // by an independent ChaCha20-Poly1305 caller. If the two libraries
+    // ever drift (or our encryptor mis-flows the nonce/key), this test
+    // breaks loudly before any customer sees corrupt ciphertext.
+    use screenpipe_core::sync::crypto::decrypt;
 
     fn direct_cfg() -> DirectUploadConfig {
         DirectUploadConfig {
@@ -834,12 +736,14 @@ mod tests {
             last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
             last_audio_ts: None,
             last_ui_ts: None,
+            last_memory_ts: None,
         };
         let counts = DirectUploadRecordCounts {
             frames: 1,
             audio: 0,
             ui: 0,
             snapshots: 0,
+            memories: 0,
         };
 
         let batch =
@@ -914,11 +818,13 @@ mod tests {
             audio: 0,
             ui: 0,
             snapshots: 0,
+            memories: 0,
         };
         let cursors = DirectUploadCursors {
             last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
             last_audio_ts: None,
             last_ui_ts: None,
+            last_memory_ts: None,
         };
 
         let a =
@@ -939,11 +845,13 @@ mod tests {
             audio: 0,
             ui: 0,
             snapshots: 0,
+            memories: 0,
         };
         let cursors = DirectUploadCursors {
             last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
             last_audio_ts: None,
             last_ui_ts: None,
+            last_memory_ts: None,
         };
 
         let manifest =

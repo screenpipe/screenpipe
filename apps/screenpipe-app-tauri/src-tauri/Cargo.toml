@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.4.249"
+version = "2.4.252"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -153,6 +153,12 @@ icalendar = "0.17"
 # too, so this CANNOT live under `cfg(not(target_os = "windows"))`.
 thiserror = { version = "1.0", optional = true }
 
+# Generic sync primitives (destination trait + ticketed pipeline + body
+# encryption). Used by `ee/desktop-rust/enterprise_upload.rs` for the
+# direct-upload path. Gated behind enterprise-build for the same reason
+# as thiserror — `#[path = ...]` imports aren't followed by cargo-machete.
+screenpipe-sync = { path = "../../../crates/screenpipe-sync", optional = true }
+
 # jemalloc — aggressively returns freed pages to OS, reducing RSS bloat
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
@@ -253,7 +259,7 @@ official-build = []
 # Source for the sync lives under `ee/desktop-rust/enterprise_sync.rs` (EE-licensed).
 # Consumer builds never compile this code.
 # Do NOT add official-build here — enterprise has its own policy-gated updater.
-enterprise-build = ["dep:thiserror"]
+enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
 
 # On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
 apple-intelligence = ["screenpipe-engine/apple-intelligence"]
@@ -281,7 +287,7 @@ wiremock = "0.6"
 # wiring lands in a follow-up. Cargo compiles it for the workspace either way.
 # thiserror: gated behind `enterprise-build` via `dep:thiserror`; cargo-machete
 # can't follow `#[path = ...]` imports into ee/desktop-rust/enterprise_sync.rs.
-ignored = ["tauri-utils", "screenpipe-redact", "thiserror"]
+ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync"]
 
 [profile.release]
 codegen-units = 1

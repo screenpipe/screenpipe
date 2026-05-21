@@ -303,8 +303,10 @@ export function DailySummaryCard({
         end_time: endTime.toISOString(),
       };
 
-      // Fetch audio + OCR frames in parallel
-      const [audioData, ocrData] = await Promise.all([
+      // Fetch audio + accessibility events in parallel. Accessibility (UI
+      // tree) is used instead of OCR so the breakdown still works when
+      // vision/screenshot capture is disabled.
+      const [audioData, uiData] = await Promise.all([
         localFetch(
           `/search?${new URLSearchParams({
             content_type: "audio",
@@ -317,7 +319,7 @@ export function DailySummaryCard({
           .catch(() => ({ data: [] })),
         localFetch(
           `/search?${new URLSearchParams({
-            content_type: "ocr",
+            content_type: "accessibility",
             ...timeParams,
             limit: "1000",
           })}`
@@ -326,10 +328,10 @@ export function DailySummaryCard({
           .catch(() => ({ data: [] })),
       ]);
 
-      // ── Compute time-per-app from OCR frames (deterministic, no AI) ──
+      // ── Compute time-per-app from accessibility events (deterministic, no AI) ──
       const frames: FrameTimestamp[] = [];
-      for (const item of ocrData.data || []) {
-        if (item.type === "OCR") {
+      for (const item of uiData.data || []) {
+        if (item.type === "UI") {
           const c = item.content;
           if (c?.timestamp && c?.app_name) {
             frames.push({ timestamp: c.timestamp, appName: c.app_name });

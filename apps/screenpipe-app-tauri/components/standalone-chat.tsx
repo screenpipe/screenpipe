@@ -4730,6 +4730,17 @@ export function StandaloneChat({
           })();
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
 
+          // Skip the chat panel's own injected `<conversation_history>...`
+          // sync prompt (see promptMessage construction at the piPrompt call).
+          // Pi echoes it back as a message_start (user) event; we've already
+          // stored the real user-typed message locally via sendPiMessage, so
+          // adding this would create a phantom user bubble whose first 50
+          // chars look like `<conversation_history>\nassistant: [tool: ...`
+          // and corrupt the chat title on next save.
+          if (text.startsWith("<conversation_history>")) {
+            return;
+          }
+
           if (!piMessageIdRef.current) {
             const sidForStartedUser = piSessionIdRef.current;
             const pendingDisplay = pendingNextPiUserDisplayRef.current;

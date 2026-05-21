@@ -124,12 +124,12 @@ export default function GeneralSettings() {
                   <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
-                    <p className="text-xs text-muted-foreground">Install updates automatically</p>
+                    <p className="text-xs text-muted-foreground">Restart automatically when an update is downloaded. Off: a "restart to update" banner appears instead.</p>
                   </div>
                 </div>
                 <Switch
                   id="auto-update-toggle"
-                  checked={settings?.autoUpdate ?? true}
+                  checked={settings?.autoUpdate ?? false}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }

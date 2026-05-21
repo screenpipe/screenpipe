@@ -3613,7 +3613,8 @@ impl DatabaseManager {
             COALESCE(video_chunks.device_name, frames.device_name) as device_name,
             GROUP_CONCAT(tags.name, ',') as tags,
             frames.browser_url,
-            frames.focused
+            frames.focused,
+            frames.text_source
         FROM frames
         LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
         LEFT JOIN ocr_text ON frames.id = ocr_text.frame_id
@@ -3683,6 +3684,7 @@ impl DatabaseManager {
                     .unwrap_or_default(),
                 browser_url: raw.browser_url,
                 focused: raw.focused,
+                text_source: raw.text_source,
             })
             .collect())
     }
@@ -7133,7 +7135,7 @@ impl DatabaseManager {
             // the entire result set, hiding results from other apps.
             format!(
                 r#"
-SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibility_tree_json FROM (
+SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibility_tree_json, text_source FROM (
     SELECT
         f.id,
         f.timestamp,
@@ -7143,6 +7145,7 @@ SELECT id, timestamp, url, app_name, window_name, ocr_text, text_json, accessibi
         COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
         o.text_json,
         f.accessibility_tree_json,
+        f.text_source,
         ROW_NUMBER() OVER (
             PARTITION BY COALESCE(f.app_name, o.app_name, '')
             ORDER BY f.timestamp {order_dir}, {relevance} DESC
@@ -7171,7 +7174,8 @@ SELECT
     COALESCE(f.window_name, o.window_name) as window_name,
     COALESCE(f.full_text, o.text, f.accessibility_text, '') as ocr_text,
     o.text_json,
-    f.accessibility_tree_json
+    f.accessibility_tree_json,
+    f.text_source
 FROM frames f
 LEFT JOIN ocr_text o ON f.id = o.frame_id
 WHERE {}
@@ -7239,6 +7243,7 @@ LIMIT ? OFFSET ?
                     confidence: calculate_confidence(&positions),
                     text: row.ocr_text.clone(),
                     url: row.url.clone(),
+                    text_source: row.text_source.clone(),
                 }
             })
             .collect())
@@ -7562,6 +7567,9 @@ LIMIT ? OFFSET ?
                 confidence: 0.0,
                 text: String::new(),
                 url: row.url,
+                // FrameRowLight skips text/text_source for speed; grouped
+                // results don't surface text to clients, so None is fine.
+                text_source: None,
             })
             .collect())
     }
@@ -10253,6 +10261,7 @@ mod tests {
             confidence,
             text: String::new(),
             url: url.to_string(),
+            text_source: None,
         }
     }
 

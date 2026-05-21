@@ -48,7 +48,13 @@ if (!permissions.screen) {
   throw new Error("Screen Recording permission is required");
 }
 
-const recorder = new Recorder({ output: "/tmp/session.mp4" });
+const recorder = new Recorder({
+  output: "/tmp/session.mp4",
+  // Optional privacy filters — recording pauses (hard cut in the MP4)
+  // while a matching window/URL is focused.
+  ignoredWindows: ["1password", "private"],
+  ignoredUrls: ["wellsfargo.com", "chase"],
+});
 await recorder.start();
 
 // ... user does stuff ...
@@ -64,6 +70,22 @@ await recorder.stop();
 - `options.monitorId` (number, optional): display id; defaults to the primary display.
 - `options.microphone` (boolean, optional): accepted for forward compatibility.
 - `options.systemAudio` (boolean, optional): accepted for forward compatibility.
+- `options.ignoredWindows` (string[], optional): substring patterns matched
+  case-insensitively against the focused app name and window title. While a
+  matching window is in focus, the recorder skips writing frames — the MP4
+  contains a hard cut over the filtered period. Mirrors the engine's
+  `--ignored-windows` CLI flag.
+- `options.includedWindows` (string[], optional): substring whitelist. If
+  non-empty, frames are written ONLY while the focused app name or window
+  title matches at least one pattern. Mirrors `--included-windows`.
+- `options.ignoredUrls` (string[], optional): URL patterns to skip
+  (case-insensitive, domain-aware match — `chase` matches `chase.com` and
+  `online.chase.com` but not `purchase.com`). When the focused browser is on
+  a matching URL, the recorder skips writing frames. Mirrors `--ignored-urls`.
+
+Filtering uses the macOS Accessibility API; without that permission the
+filter fails open (records everything). Without any filter list set, the
+recorder stays on the zero-overhead fast path — no a11y polling is done.
 
 ### Methods
 

@@ -345,12 +345,24 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (!historyEnabled) return;
 
     const convId = conversationId || crypto.randomUUID();
-    const firstUserMsg = msgs.find(m => m.role === "user");
-    const title = firstUserMsg?.content.slice(0, 50) || "New Chat";
 
-    // Try to load existing conversation to preserve createdAt
+    // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
+
+    // Derive a title from the first user message, but skip messages that are
+    // the chat panel's own injected `<conversation_history>...` sync prompt
+    // (Pi can echo that back as a message_start (user) event, leaking it into
+    // the messages array — see the prompt construction at the piPrompt call).
+    const firstUserMsg = msgs.find(
+      (m) => m.role === "user" && !m.content.startsWith("<conversation_history>")
+    );
+    const derivedTitle = firstUserMsg?.content.slice(0, 50) || "New Chat";
+    // Preserve any previously-persisted title (user renames, pipe-run titles
+    // like `pipe-opportunity-scout-gpt55 #8209`). Only fall through to the
+    // derived title when the file has no title yet. Mirrors the router's
+    // background-save logic in pi-event-router.ts.
+    const title = existing?.title || derivedTitle;
 
     const conversation: ChatConversation = {
       id: convId,
@@ -402,6 +414,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
+      // Preserve pipe-run identity across follow-up saves. Without this, the
+      // first user-typed follow-up to a pipe-run silently demoted it to a
+      // plain chat (kind/pipeContext dropped on disk).
+      ...(existing?.kind ? { kind: existing.kind } : {}),
+      ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {

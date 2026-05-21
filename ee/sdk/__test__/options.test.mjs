@@ -36,6 +36,29 @@ test("accepts undefined microphone + systemAudio (all optional)", () => {
   assert.ok(r);
 });
 
+test("accepts ignoredWindows / includedWindows / ignoredUrls filter lists", () => {
+  // Construction only — verifies the filter fields are accepted by the
+  // native binding. The actual pause behavior is exercised in
+  // recording.test.mjs against a focused app the host controls.
+  const r = new Recorder({
+    output: tempMp4("filters"),
+    ignoredWindows: ["1password", "private"],
+    includedWindows: [],
+    ignoredUrls: ["wellsfargo.com", "chase"],
+  });
+  assert.ok(r);
+});
+
+test("accepts empty filter arrays (zero-overhead fast path)", () => {
+  const r = new Recorder({
+    output: tempMp4("filters-empty"),
+    ignoredWindows: [],
+    includedWindows: [],
+    ignoredUrls: [],
+  });
+  assert.ok(r);
+});
+
 test("start() with a non-existent monitor id reports a useful error", async (t) => {
   if (!hasFfmpeg()) { t.skip("ffmpeg not on PATH"); return; }
   const r = new Recorder({ output: tempMp4("bad-mon"), monitorId: 999_999 });

@@ -1021,7 +1021,7 @@ Rules:
             show_shortcut_overlay: true,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
-            auto_update: true,
+            auto_update: false,
             auto_update_pipes: true,
             enhanced_ai: false,
             #[cfg(target_os = "macos")]

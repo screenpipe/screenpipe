@@ -3,9 +3,12 @@
 //! This module provides the HTTP client for communicating with the
 //! Screenpipe cloud sync API.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
+use screenpipe_sync::destination::HttpPutDirect;
+use screenpipe_sync::{BlobDestination, PutRequest, SyncError as TransportError};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -294,56 +297,32 @@ impl SyncClient {
     /// and require the upload token in the URL path. The URL format is:
     /// `{supabaseUrl}/storage/v1/object/upload/sign/{bucket}/{path}?token={token}`
     pub async fn upload_to_s3(&self, upload_url: &str, data: &[u8]) -> SyncResult<()> {
-        let mut last_err = None;
-        for attempt in 0..MAX_RETRIES {
-            if attempt > 0 {
-                let backoff = INITIAL_BACKOFF * 2u32.pow(attempt - 1);
-                warn!(
-                    "upload retry {}/{} after {:?}",
-                    attempt + 1,
-                    MAX_RETRIES,
-                    backoff
-                );
-                tokio::time::sleep(backoff).await;
-            }
+        // Delegate to the shared `HttpPutDirect` so the retry / bytes-pool /
+        // cancellation logic is the same one ee/ uses. Wire format is
+        // preserved byte-for-byte — same method (PUT), same Content-Type
+        // (`application/octet-stream`), same `x-upsert: true` header, same
+        // body — the wire-compat test below is the regression guard.
+        //
+        // Why we reuse `self.http_transfer` instead of letting HttpPutDirect
+        // construct its own client: the long-timeout transfer client is
+        // configured by `SyncClient::new` (120s) and shares a connection
+        // pool with the other upload/download paths. A fresh client per
+        // call would reset that pool every batch.
+        let dest = HttpPutDirect::with_client(upload_url.to_string(), self.http_transfer.clone())
+            .max_retries(MAX_RETRIES)
+            .initial_backoff(INITIAL_BACKOFF);
 
-            let result = self
-                .http_transfer
-                .put(upload_url)
-                .header("Content-Type", "application/octet-stream")
-                .header("x-upsert", "true")
-                .body(data.to_vec())
-                .send()
-                .await;
+        let mut headers = BTreeMap::new();
+        headers.insert("x-upsert".to_string(), "true".to_string());
 
-            match result {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        return Ok(());
-                    }
-                    let status = response.status();
-                    // Don't retry client errors (4xx)
-                    if status.is_client_error() {
-                        let body = response.text().await.unwrap_or_default();
-                        return Err(SyncError::Server(format!(
-                            "S3 upload failed with status: {} body: {}",
-                            status, body
-                        )));
-                    }
-                    let body = response.text().await.unwrap_or_default();
-                    last_err = Some(SyncError::Server(format!(
-                        "S3 upload failed with status: {} body: {}",
-                        status, body
-                    )));
-                }
-                Err(e) => {
-                    last_err = Some(SyncError::Network(e.to_string()));
-                }
-            }
-        }
-
-        Err(last_err
-            .unwrap_or_else(|| SyncError::Network("upload failed after retries".to_string())))
+        dest.put(&PutRequest {
+            body: data,
+            content_type: "application/octet-stream",
+            headers,
+        })
+        .await
+        .map(|_| ())
+        .map_err(map_transport_error)
     }
 
     /// Mark an upload as completed.
@@ -1038,6 +1017,49 @@ struct ApiError {
     code: Option<String>,
 }
 
+/// Map a `screenpipe_sync::SyncError` to this crate's `SyncError`,
+/// preserving the variant that pre-refactor callers were matching on.
+///
+/// Old `upload_to_s3` used two error categories:
+///   - 4xx from storage → `SyncError::Server`
+///   - 5xx / network / "ran out of retries" → `SyncError::Network`
+///
+/// The mapping below preserves that contract so any `match` arms in
+/// upstream callers (e.g. `SyncManager::upload`, `archive.rs`) keep
+/// working without touching them.
+fn map_transport_error(e: TransportError) -> SyncError {
+    match e {
+        // 4xx from storage → permanent for this URL. Caller treats this
+        // as a server-side rejection rather than a transient network blip.
+        TransportError::StorageRejected(msg) => {
+            SyncError::Server(format!("S3 upload failed: {msg}"))
+        }
+        // 5xx from storage / network errors after retries → transient.
+        TransportError::StorageTransient(msg) => {
+            SyncError::Network(format!("upload failed after retries: {msg}"))
+        }
+        // `HttpPutDirect` rejects empty bodies / bad headers up-front.
+        // None of the production callers (encrypted blob, pipe manifest,
+        // memory manifest, media chunk) ever pass an empty body, so this
+        // arm is a defensive cast — surface it as a server-side error
+        // rather than a transient one so the sync loop doesn't spin.
+        TransportError::InvalidArgument(msg) => SyncError::Server(format!("invalid upload: {msg}")),
+        // These categories aren't produced by the put() call path but
+        // mapping them keeps the From total — better to surface a
+        // descriptive error than silently swallow a future addition.
+        TransportError::AuthRejected => {
+            SyncError::Server("storage auth rejected (presigned URL expired?)".to_string())
+        }
+        TransportError::ControlPlaneServerError(c) => {
+            SyncError::Network(format!("storage server error: {c}"))
+        }
+        TransportError::Crypto(msg) => SyncError::Server(format!("crypto: {msg}")),
+        TransportError::Io(e) => SyncError::Network(format!("io: {e}")),
+        TransportError::Network(msg) => SyncError::Network(msg),
+        TransportError::Serde(msg) => SyncError::Server(format!("serde: {msg}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1086,5 +1108,96 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("search_tokens"));
         assert!(json.contains("dG9rZW4x"));
+    }
+
+    /// Wire-compat regression guard. The cloud sync, archive, pipe sync,
+    /// and memory sync prod paths all hit `upload_to_s3` with a
+    /// pre-signed Supabase storage URL. The server expects:
+    ///   - method PUT
+    ///   - `Content-Type: application/octet-stream`
+    ///   - `x-upsert: true` (replace, don't 409 on existing key)
+    ///   - body = raw bytes (no multipart, no encoding)
+    /// This test fails loudly if any of those drift.
+    #[tokio::test]
+    async fn upload_to_s3_wire_format_unchanged_post_migration() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/object/blob/abc"))
+            .and(header("content-type", "application/octet-stream"))
+            .and(header("x-upsert", "true"))
+            // Custom body matcher so we can compare bytes exactly. The
+            // body must be the raw bytes we handed in, no transformation.
+            .and(wiremock::matchers::body_bytes(b"hello-cloud-blob".to_vec()))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg = SyncClientConfig::new(
+            "tok".to_string(),
+            "dev-1".to_string(),
+            "host".to_string(),
+            "macos".to_string(),
+        )
+        .with_api_url(server.uri());
+        let client = SyncClient::new(cfg).unwrap();
+
+        let upload_url = format!("{}/object/blob/abc", server.uri());
+        client
+            .upload_to_s3(&upload_url, b"hello-cloud-blob")
+            .await
+            .expect("PUT should succeed");
+
+        // Belt-and-suspenders: assert no OTHER requests landed (the mock
+        // already enforces .expect(1), but be explicit so the assertion
+        // names the wire-shape concern).
+        let received: Vec<Request> = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1, "exactly one PUT expected");
+        let req = &received[0];
+        assert_eq!(req.method.to_string(), "PUT");
+        assert_eq!(req.body, b"hello-cloud-blob".to_vec());
+        // Headers should NOT contain anything beyond what upload_to_s3 set
+        // plus reqwest-default housekeeping (host, content-length, etc).
+        assert_eq!(
+            req.headers.get("content-type").map(|v| v.to_str().unwrap()),
+            Some("application/octet-stream")
+        );
+        assert_eq!(
+            req.headers.get("x-upsert").map(|v| v.to_str().unwrap()),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_to_s3_maps_4xx_to_server_error() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("denied"))
+            // 4xx must NOT retry — exactly one attempt.
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg =
+            SyncClientConfig::new("tok".into(), "dev-1".into(), "host".into(), "macos".into())
+                .with_api_url(server.uri());
+        let client = SyncClient::new(cfg).unwrap();
+        let err = client
+            .upload_to_s3(&format!("{}/x", server.uri()), b"x")
+            .await
+            .expect_err("should fail");
+        match err {
+            SyncError::Server(msg) => assert!(
+                msg.contains("S3 upload failed"),
+                "expected wrapped Server error, got: {msg}"
+            ),
+            other => panic!("expected Server, got {other:?}"),
+        }
     }
 }

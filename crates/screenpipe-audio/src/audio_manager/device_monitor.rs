@@ -194,8 +194,9 @@ pub async fn start_device_monitor(
         // started different devices from saved config.
         let mut needs_initial_sync = true;
 
-        // One-time migration flag for legacy "Display N (output)" device names
-        #[cfg(target_os = "macos")]
+        // One-time migration flag: on first loop iteration, scrub the bare
+        // "default" sentinel (all platforms) and migrate legacy "Display N
+        // (output)" names to "System Audio (output)" (macOS only).
         let mut legacy_migrated = false;
 
         loop {
@@ -227,6 +228,34 @@ pub async fn start_device_monitor(
                 }
                 let enabled_devices = audio_manager.enabled_devices().await;
 
+                // Scrub the legacy bare "default" sentinel from `enabled_devices`
+                // once per session. Older versions persisted "default" to mean
+                // "follow the system default device"; today that's represented
+                // by the `use_system_default_audio` flag, and modern
+                // `start_device` only ever inserts names with an (input)/(output)
+                // suffix. The stray entry has no behavioral effect (recording
+                // proceeds on the resolved devices) but caused the monitor below
+                // to ERROR every poll forever.
+                //
+                // Narrowed to the literal sentinel so that an unplugged real
+                // device persisted under a bare name doesn't get silently
+                // dropped from the user's enabled set.
+                if !legacy_migrated {
+                    let sentinels: Vec<String> = enabled_devices
+                        .iter()
+                        .filter(|name| name.trim().eq_ignore_ascii_case("default"))
+                        .cloned()
+                        .collect();
+                    for name in &sentinels {
+                        info!(
+                            "[DEVICE_RECOVERY] dropping legacy '{}' sentinel from enabled_devices (use_system_default_audio supersedes it)",
+                            name
+                        );
+                        audio_manager.forget_device(name).await;
+                    }
+                }
+                let enabled_devices = audio_manager.enabled_devices().await;
+
                 // Migrate legacy "Display N (output)" device names to "System Audio (output)".
                 // This handles upgrades from versions that tracked per-display output devices.
                 #[cfg(target_os = "macos")]
@@ -253,6 +282,12 @@ pub async fn start_device_monitor(
                             let _ = audio_manager.start_device(&device).await;
                         }
                     }
+                }
+                // Non-macOS platforms still need to flip the flag so the scrub
+                // above runs exactly once.
+                #[cfg(not(target_os = "macos"))]
+                {
+                    legacy_migrated = true;
                 }
 
                 // Handle "Follow System Default" mode
@@ -867,7 +902,7 @@ pub async fn start_device_monitor(
                     let device = match parse_audio_device(&device_name) {
                         Ok(device) => device,
                         Err(e) => {
-                            error!("Device name {} invalid: {}", device_name, e);
+                            debug!("Device name {} invalid: {}", device_name, e);
                             continue;
                         }
                     };
@@ -909,7 +944,7 @@ pub async fn start_device_monitor(
                     let device = match parse_audio_device(device_name) {
                         Ok(device) => device,
                         Err(e) => {
-                            error!("Device name {} invalid: {}", device_name, e);
+                            debug!("Device name {} invalid: {}", device_name, e);
                             continue;
                         }
                     };

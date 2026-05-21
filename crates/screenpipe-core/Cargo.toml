@@ -48,6 +48,11 @@ async-trait = "0.1"
 screenpipe-secrets = { path = "../screenpipe-secrets", optional = true }
 screenpipe-vault = { path = "../screenpipe-vault", optional = true }
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"], optional = true }
+# Shared sync primitives. `upload_to_s3` delegates to
+# `screenpipe_sync::HttpPutDirect` so the retry / bytes-pool / cancellation
+# code path is the same one ee/ uses. Gated to the cloud-sync feature so
+# consumer builds without sync don't pay the dep cost.
+screenpipe-sync = { path = "../screenpipe-sync", optional = true }
 
 once_cell = "1.19.0"
 
@@ -73,6 +78,7 @@ cloud-sync = [
     "dep:base64",
     "dep:zeroize",
     "dep:thiserror",
+    "dep:screenpipe-sync",
     "dep:hex",
 ]
 
@@ -93,4 +99,9 @@ core-graphics = { version = "0.24.0", features = ["highsierra"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { version = "0.16.1" }
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[dev-dependencies]
+# Used by sync::client wire-compat test (asserts the PUT request shape
+# stays byte-identical after the upload_to_s3 → HttpPutDirect migration).
+wiremock = "0.6"
 

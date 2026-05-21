@@ -66,9 +66,11 @@ export const useUpdateBanner = create<UpdateBannerState>((set) => ({
 interface UpdateBannerProps {
   className?: string;
   compact?: boolean;
+  /** "sidebar" renders a vertical card sized for the app sidebar. */
+  variant?: "default" | "sidebar";
 }
 
-export function UpdateBanner({ className, compact = false }: UpdateBannerProps) {
+export function UpdateBanner({ className, compact = false, variant = "default" }: UpdateBannerProps) {
   const { isVisible, updateInfo, isInstalling, isDownloading, downloadProgress, setIsVisible, setIsInstalling, pendingUpdate, authRequired, setAuthRequired } = useUpdateBanner();
   const { toast } = useToast();
 
@@ -214,6 +216,48 @@ export function UpdateBanner({ className, compact = false }: UpdateBannerProps) 
   }
 
   if (!isVisible || !updateInfo) return null;
+
+  if (variant === "sidebar") {
+    if (isDownloading) {
+      const pct = downloadProgress?.percent ?? 0;
+      return (
+        <div className={cn(
+          "rounded-lg border border-border bg-card/50 px-2.5 py-2 text-xs",
+          className,
+        )}>
+          <div className="flex items-center gap-2 mb-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-primary animate-pulse shrink-0" />
+            <span className="text-muted-foreground truncate">Downloading v{updateInfo.version}…</span>
+          </div>
+          <div className="h-1 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <button
+        type="button"
+        onClick={handleUpdate}
+        disabled={isInstalling}
+        className={cn(
+          "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-border bg-card/50 hover:bg-card transition-colors text-left disabled:opacity-60",
+          className,
+        )}
+      >
+        <Sparkles className="h-4 w-4 text-primary shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-foreground truncate">
+            {isInstalling ? "Restarting…" : "Restart to update"}
+          </div>
+          <div className="text-[10px] text-muted-foreground truncate">v{updateInfo.version}</div>
+        </div>
+      </button>
+    );
+  }
 
   if (compact) {
     return (

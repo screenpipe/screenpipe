@@ -348,6 +348,10 @@ pub async fn event_driven_capture_loop(
 
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
+    // Last frame_id that was successfully written to the DB. Used to link
+    // events to a frame even when content-dedup skips the capture — the
+    // screen looks the same, so reusing the last frame is semantically correct.
+    let mut last_frame_id: Option<i64> = None;
     // Track last successful DB write time — dedup is bypassed after 30s
     // to guarantee the timeline always has periodic entries
     let mut last_db_write = Instant::now();
@@ -403,6 +407,7 @@ pub async fn event_driven_capture_loop(
                 }
                 if let Some(ref result) = output.result {
                     last_content_hash = result.content_hash;
+                    last_frame_id = Some(result.frame_id);
                     last_db_write = Instant::now();
                     // Update elements cache for this device (first frame = anchor)
                     if let Some(hash) = result.content_hash {
@@ -859,6 +864,7 @@ pub async fn event_driven_capture_loop(
                         if let Some(ref result) = output.result {
                             // Full capture — update hash, metrics, cache
                             last_content_hash = result.content_hash;
+                            last_frame_id = Some(result.frame_id);
                             last_db_write = Instant::now();
 
                             // Update elements cache: only when we inserted new elements
@@ -925,6 +931,28 @@ pub async fn event_driven_capture_loop(
                                 monitor_id,
                                 trigger.as_str()
                             );
+                            // Even though the frame was deduped, the events that
+                            // triggered this capture still need a frame_id. The
+                            // screen looks identical to the last captured frame,
+                            // so link them to that frame — semantically correct
+                            // and prevents the correlation_ids from expiring unmatched.
+                            if !correlation_ids.is_empty() {
+                                if let (Some(ref linker), Some(fid)) = (&linker_tx, last_frame_id) {
+                                    let _ = linker.try_send(
+                                        crate::frame_linker_actor::LinkerMessage::FrameCaptured(
+                                            crate::frame_linker::FrameCaptured {
+                                                frame_id: fid,
+                                                correlation_ids: std::mem::take(
+                                                    &mut correlation_ids,
+                                                ),
+                                            },
+                                        ),
+                                    );
+                                } else {
+                                    // No frame ever captured yet — just drop the ids.
+                                    correlation_ids.clear();
+                                }
+                            }
                         }
                     }
                     Ok(Err(e)) => {
