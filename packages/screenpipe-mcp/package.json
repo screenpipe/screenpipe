@@ -31,7 +31,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "screenpipe": "latest",
     "ws": "^8.19.0"
   },
   "devDependencies": {

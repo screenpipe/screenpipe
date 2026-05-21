@@ -6,7 +6,6 @@
       "name": "screenpipe-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.27.1",
-        "screenpipe": "latest",
         "ws": "^8.19.0",
       },
       "devDependencies": {
@@ -132,14 +131,6 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.56.0", "", { "os": "win32", "cpu": "x64" }, "sha512-FeCnkPCTHQJFbiGG49KjV5YGW/8b9rrXAM2Mz2kiIoktq2qsJxRD5giEMEOD2lPdgs72upzefaUvS+nc8E3UzQ=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.56.0", "", { "os": "win32", "cpu": "x64" }, "sha512-H8AE9Ur/t0+1VXujj90w0HrSOuv0Nq9r1vSZF2t5km20NTfosQsGGUXDaKdQZzwuLts7IyL1fYT4hM95TI9c4g=="],
-
-    "@screenpipe/cli-darwin-arm64": ["@screenpipe/cli-darwin-arm64@0.3.302", "", { "os": "darwin", "cpu": "arm64", "bin": { "screenpipe": "bin/screenpipe" } }, "sha512-WlPu/vT20xbKCACQjoTvK2D7jOxdDpMjP1X093/f0GbjUxwXjSeHkqxgWES1jWlv6+rsVS181yF9/II3UOy5NA=="],
-
-    "@screenpipe/cli-darwin-x64": ["@screenpipe/cli-darwin-x64@0.3.302", "", { "os": "darwin", "cpu": "x64", "bin": { "screenpipe": "bin/screenpipe" } }, "sha512-KrMeC4+MHTl8la1EQmVV2LcmK2ifuOe2AXb5BWoZ748HDUwR+pPSalNIvIt2GS6GuJVnpudB1HH0fIZqox9afQ=="],
-
-    "@screenpipe/cli-linux-x64": ["@screenpipe/cli-linux-x64@0.3.302", "", { "os": "linux", "cpu": "x64", "bin": { "screenpipe": "bin/screenpipe" } }, "sha512-/aY+YaOqnroPDGPa0j9hZhv97ePMlNpReaigIMs9H7/vjLsFkgzSBZE/goFYxFCks7MjTm18SN7BcvUmJA8x6Q=="],
-
-    "@screenpipe/cli-win32-x64": ["@screenpipe/cli-win32-x64@0.3.302", "", { "os": "win32", "cpu": "x64", "bin": { "screenpipe": "bin/screenpipe.exe" } }, "sha512-gq7WF1pV6CtPk9ozPDzmC9OiuAEgi6x9YVj3iyEOO3M+IsHOZ1V7sBBX4txRObHHSF5v2FWVaGfkLEA4N3N2rQ=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
@@ -360,8 +351,6 @@
     "router": ["router@2.2.0", "", { "dependencies": { "debug": "^4.4.0", "depd": "^2.0.0", "is-promise": "^4.0.0", "parseurl": "^1.3.3", "path-to-regexp": "^8.0.0" } }, "sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ=="],
 
     "safer-buffer": ["safer-buffer@2.1.2", "", {}, "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="],
-
-    "screenpipe": ["screenpipe@0.3.302", "", { "optionalDependencies": { "@screenpipe/cli-darwin-arm64": "0.3.302", "@screenpipe/cli-darwin-x64": "0.3.302", "@screenpipe/cli-linux-x64": "0.3.302", "@screenpipe/cli-win32-x64": "0.3.302" }, "bin": { "screenpipe": "bin/screenpipe.js" } }, "sha512-S/rSOBqeQ7IqRFyDLCtEJlvQTZdbcEz/LOgQ5HBqnMf095kDzyorzmN+UsB+9ZEpZKC8gUotuqpbYD4v5tkV6A=="],
 
     "send": ["send@1.2.1", "", { "dependencies": { "debug": "^4.4.3", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "etag": "^1.8.1", "fresh": "^2.0.0", "http-errors": "^2.0.1", "mime-types": "^3.0.2", "ms": "^2.1.3", "on-finished": "^2.4.1", "range-parser": "^1.2.1", "statuses": "^2.0.2" } }, "sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ=="],
 
