@@ -348,7 +348,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const historyEnabled = settings?.chatHistory?.historyEnabled ?? true;
     if (!historyEnabled) return;
 
-    const convId = conversationId || crypto.randomUUID();
+    // Prefer live session id to avoid stale conversationId during quick switches.
+    const convId = piSessionIdRef.current || conversationId || crypto.randomUUID();
     const firstUserMsg = msgs.find(m => m.role === "user");
     const title = firstUserMsg?.content.slice(0, 50) || "New Chat";
 
@@ -505,7 +506,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
     }
 
-    if (!conversationId) {
+    if (!conversationId || conversationId !== convId) {
       setConversationId(convId);
     }
   };
