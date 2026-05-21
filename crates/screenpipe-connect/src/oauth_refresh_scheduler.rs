@@ -83,11 +83,7 @@ const FAILURE_COOLDOWN: Duration = Duration::from_secs(6 * 60 * 60);
 ///
 /// Pure function — no I/O. The scheduler calls this with `now = unix_now()`
 /// for each stored secret on each tick.
-pub fn needs_refresh_now(
-    value: &Value,
-    policy: RefreshPolicy,
-    now_secs: u64,
-) -> bool {
+pub fn needs_refresh_now(value: &Value, policy: RefreshPolicy, now_secs: u64) -> bool {
     // Can't refresh if we have no refresh token. The user will see the
     // disconnected state in the UI and reconnect.
     if value["refresh_token"].as_str().is_none() {
@@ -698,8 +694,7 @@ mod tests {
         tick(&store, &runner, &metrics, &failures, &policies).await;
         let after_cooldown = metrics.snapshot();
         assert_eq!(
-            after_cooldown.refreshes_attempted,
-            MAX_CONSECUTIVE_FAILURES as u64,
+            after_cooldown.refreshes_attempted, MAX_CONSECUTIVE_FAILURES as u64,
             "cooldown should have prevented further attempts"
         );
     }
@@ -708,10 +703,7 @@ mod tests {
     async fn tick_ignores_non_oauth_keys() {
         let store = mem_store().await;
         store.set("cred:notion", b"some-creds").await.unwrap();
-        store
-            .set("api_auth_key", b"deadbeef")
-            .await
-            .unwrap();
+        store.set("api_auth_key", b"deadbeef").await.unwrap();
 
         let runner: Arc<dyn RefreshRunner> = Arc::new(RecorderRunner::default());
         let metrics = Arc::new(MetricsInner::default());
