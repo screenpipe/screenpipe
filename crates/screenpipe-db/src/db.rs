@@ -9843,7 +9843,12 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
             }
 
             // Parse confidence, defaulting to 0.0 if invalid
-            let confidence = block.conf.parse::<f32>().unwrap_or(0.0);
+            let confidence = block
+                .conf
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0);
 
             // Skip blocks with very low confidence (likely noise)
             if confidence < 0.0 {
@@ -9851,10 +9856,26 @@ pub fn parse_all_text_positions(blocks: &[OcrTextBlock]) -> Vec<TextPosition> {
             }
 
             // Parse bounding box (already screen space, top-left origin, normalized 0–1)
-            let left = block.left.parse::<f32>().unwrap_or(0.0);
-            let top = block.top.parse::<f32>().unwrap_or(0.0);
-            let width = block.width.parse::<f32>().unwrap_or(0.0);
-            let height = block.height.parse::<f32>().unwrap_or(0.0);
+            let left = block
+                .left
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let top = block
+                .top
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let width = block
+                .width
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
+            let height = block
+                .height
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite())?;
 
             // Skip blocks with invalid dimensions
             if width <= 0.0 || height <= 0.0 {
@@ -9967,6 +9988,21 @@ mod tests {
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0].text, "Test");
         assert!((positions[0].confidence - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_all_text_positions_filters_nan_bounds() {
+        let blocks = vec![
+            create_test_block("Valid", "95.5", "0.1", "0.5", "0.08", "0.02"),
+            create_test_block("NaNLeft", "90.0", "NaN", "0.5", "0.1", "0.02"),
+            create_test_block("NaNWidth", "90.0", "0.2", "0.5", "NaN", "0.02"),
+            create_test_block("NaNHeight", "90.0", "0.3", "0.5", "0.1", "NaN"),
+        ];
+
+        let positions = parse_all_text_positions(&blocks);
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].text, "Valid");
     }
 
     #[test]
