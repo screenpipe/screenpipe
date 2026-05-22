@@ -8203,6 +8203,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-team-memory"
+version = "0.3.341"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "screenpipe-vault"
 version = "0.3.341"
 dependencies = [

@@ -42,6 +42,7 @@ pub mod destination;
 pub mod error;
 pub mod hash;
 pub mod jsonl;
+pub mod source;
 
 #[cfg(feature = "encrypt")]
 pub mod encrypt;
@@ -51,6 +52,7 @@ pub mod pipeline;
 
 pub use destination::{BlobDestination, PutOutcome, PutRequest};
 pub use error::SyncError;
+pub use source::{BlobEntry, BlobSource, GetResponse, ListRequest, ListResponse, LocalFsSource};
 
 #[cfg(feature = "encrypt")]
 pub use encrypt::{
