@@ -330,7 +330,8 @@ struct PendingClipboard {
 /// single `Scroll` event (summed `delta_y`). Wheel ticks fire far more often
 /// than clicks, so one event per tick floods `ui_events` with little added
 /// signal (measured: 1121 scroll vs. 15 click events in a 2-min session).
-/// Coalescing preserves total scroll distance while cutting row count ~10x.
+/// Coalescing preserves total scroll distance while cutting row count ~86x
+/// (measured: 1121 → 13 events in a 2-min session).
 const SCROLL_AGGREGATION_WINDOW_MS: u128 = 500;
 
 /// In-flight scroll aggregation state (None when not currently scrolling).
@@ -481,6 +482,20 @@ fn run_native_hooks(
                         if let Some(last_time) = s.last_text_time {
                             if last_time.elapsed().as_millis() as u64 >= s.config.text_timeout_ms {
                                 flush_text_buffer(s);
+                            }
+                        }
+
+                        // Idle-flush: emit any in-flight scroll aggregation once
+                        // SCROLL_AGGREGATION_WINDOW_MS has elapsed without a new wheel
+                        // tick.  The 100ms SetTimer above bounds worst-case latency to
+                        // ~600ms.
+                        let needs_idle_flush = s
+                            .scroll_aggregator
+                            .as_ref()
+                            .is_some_and(|agg| agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS);
+                        if needs_idle_flush {
+                            if let Some(agg) = s.scroll_aggregator.take() {
+                                emit_aggregated_scroll(&s.tx, agg);
                             }
                         }
 
