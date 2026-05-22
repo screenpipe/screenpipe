@@ -472,7 +472,11 @@ async fn send_jsonrpc(
         .map_err(|e| anyhow!("failed to read MCP response body: {}", e))?;
 
     if !status.is_success() {
-        return Err(anyhow!("MCP server returned {}: {}", status, truncate(&text, 400)));
+        return Err(anyhow!(
+            "MCP server returned {}: {}",
+            status,
+            truncate(&text, 400)
+        ));
     }
 
     // Content-type sniffing: we accept either an explicit SSE
@@ -558,10 +562,7 @@ pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
     );
     for cfg in enabled {
         out.push_str(&format!("\n## {} (mcp:{})\n", cfg.name, cfg.id));
-        out.push_str(&format!(
-            "  list tools: GET {}/{}/tools\n",
-            base, cfg.id
-        ));
+        out.push_str(&format!("  list tools: GET {}/{}/tools\n", base, cfg.id));
         out.push_str(&format!(
             "  call tool:  POST {}/{}/call  body: {{\"tool\":\"<name>\",\"arguments\":{{...}}}}\n",
             base, cfg.id
@@ -751,9 +752,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let tools = probe_mcp_server(&client, &server.uri(), &[])
-            .await
-            .unwrap();
+        let tools = probe_mcp_server(&client, &server.uri(), &[]).await.unwrap();
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "brave_web_search");
         assert_eq!(tools[0].description.as_deref(), Some("Search the web"));
@@ -797,9 +796,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let tools = probe_mcp_server(&client, &server.uri(), &[])
-            .await
-            .unwrap();
+        let tools = probe_mcp_server(&client, &server.uri(), &[]).await.unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["page1_a", "page1_b", "page2_a"]);
     }
@@ -829,9 +826,7 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let tools = probe_mcp_server(&client, &server.uri(), &[])
-            .await
-            .unwrap();
+        let tools = probe_mcp_server(&client, &server.uri(), &[]).await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "sse_tool");
     }
@@ -977,10 +972,7 @@ mod tests {
             let store = store.clone();
             let counter = counter.clone();
             handles.push(tokio::spawn(async move {
-                store
-                    .call_tool("brave", "search", json!({}))
-                    .await
-                    .unwrap();
+                store.call_tool("brave", "search", json!({})).await.unwrap();
                 counter.fetch_add(1, Ordering::SeqCst);
             }));
         }

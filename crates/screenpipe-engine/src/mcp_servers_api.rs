@@ -67,10 +67,7 @@ async fn list_servers(State(state): State<McpServersState>) -> Json<Value> {
 }
 
 /// GET /mcp-servers/:id — single server detail (no header values).
-async fn get_server(
-    State(state): State<McpServersState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn get_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
     let store = state.store.lock().await;
     match store.get(&id).await {
         Some(cfg) => Json(json!({ "data": cfg })).into_response(),
@@ -99,7 +96,10 @@ async fn upsert_server(
 
     let store = state.store.lock().await;
     let existing = store.get(&id).await;
-    let created_at = existing.as_ref().map(|c| c.created_at).unwrap_or_else(|| Utc::now().timestamp());
+    let created_at = existing
+        .as_ref()
+        .map(|c| c.created_at)
+        .unwrap_or_else(|| Utc::now().timestamp());
 
     let supplied = normalise_supplied(body.headers);
     // CRLF / NUL in a header value would let a malicious config
@@ -135,10 +135,7 @@ async fn upsert_server(
 }
 
 /// DELETE /mcp-servers/:id — remove a server.
-async fn delete_server(
-    State(state): State<McpServersState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn delete_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
     let store = state.store.lock().await;
     match store.delete(&id).await {
         Ok(()) => Json(json!({ "success": true })).into_response(),
@@ -217,8 +214,10 @@ fn normalise_supplied(headers: Vec<McpHeader>) -> Vec<McpHeader> {
 /// header to an existing server would wipe every other secret because
 /// the UI sends placeholder text for the unchanged ones.
 fn merge_headers(existing: &[McpHeader], supplied: &[McpHeader]) -> Vec<McpHeader> {
-    let mut existing_map: std::collections::HashMap<&str, &str> =
-        existing.iter().map(|h| (h.name.as_str(), h.value.as_str())).collect();
+    let mut existing_map: std::collections::HashMap<&str, &str> = existing
+        .iter()
+        .map(|h| (h.name.as_str(), h.value.as_str()))
+        .collect();
     supplied
         .iter()
         .filter_map(|h| {
@@ -242,13 +241,12 @@ fn merge_headers(existing: &[McpHeader], supplied: &[McpHeader]) -> Vec<McpHeade
 }
 
 /// POST /mcp-servers/:id/test — probe stored server.
-async fn test_server(
-    State(state): State<McpServersState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn test_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
     let store = state.store.lock().await;
     match store.probe_tools(&id).await {
-        Ok(tools) => Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response(),
+        Ok(tools) => {
+            Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
+        }
         Err(e) => bad_request(&e.to_string()),
     }
 }
@@ -261,17 +259,16 @@ async fn test_ad_hoc(
 ) -> Response {
     let store = state.store.lock().await;
     match store.probe_ad_hoc(&body.url, &body.headers).await {
-        Ok(tools) => Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response(),
+        Ok(tools) => {
+            Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
+        }
         Err(e) => bad_request(&e.to_string()),
     }
 }
 
 /// GET /mcp-servers/:id/tools — cached tools list (same wire format as
 /// `/test`, but suitable for the bridge extension to call cheaply).
-async fn list_tools(
-    State(state): State<McpServersState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn list_tools(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
     let store = state.store.lock().await;
     match store.probe_tools(&id).await {
         Ok(tools) => Json(json!({ "data": { "tools": tools } })).into_response(),
@@ -297,11 +294,7 @@ async fn call_tool(
 // ---------------------------------------------------------------------------
 
 fn bad_request(msg: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "error": msg })),
-    )
-        .into_response()
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
 }
 
 fn not_found(id: &str) -> Response {

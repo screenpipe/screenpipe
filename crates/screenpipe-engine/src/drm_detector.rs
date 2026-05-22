@@ -684,7 +684,9 @@ mod tests {
         ));
         assert!(is_drm_url("https://amazon.com/gp/video/detail/something"));
         // subdomain matching
-        assert!(is_drm_url("https://apps.disneyplus.com/il/shows/scrubs/123/watch"));
+        assert!(is_drm_url(
+            "https://apps.disneyplus.com/il/shows/scrubs/123/watch"
+        ));
         assert!(is_drm_url("https://watch.hulu.com/show/abc"));
     }
 
