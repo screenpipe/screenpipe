@@ -776,7 +776,7 @@ await copyBunBinary();
 
 // --dev or --build
 const action = process.argv?.[2]
-if (action?.includes('--build' || action.includes('--dev'))) {
+if (action?.includes('--build') || action?.includes('--dev')) {
 	process.chdir(path.join(cwd, '..'))
 	process.env['FFMPEG_DIR'] = exports.ffmpeg
 	if (platform === 'windows') {
