@@ -649,7 +649,11 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
-      const firstUserMsg = messages.find((m: any) => m.role === "user") as any;
+      // Skip injected <conversation_history> sync prompts — Pi echoes them back
+      // as user events and their first 50 chars would corrupt the title.
+      const firstUserMsg = messages.find(
+        (m: any) => m.role === "user" && !m.content?.startsWith("<conversation_history>")
+      ) as any;
       const derivedTitle: string =
         firstUserMsg?.content?.slice(0, 50) || "New Chat";
       // Prefer a previously-persisted title (user may have renamed it),
@@ -697,11 +701,15 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             id: m.id,
             role: m.role,
             content,
+            ...(m.intent ? { intent: m.intent } : {}),
+            ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
             timestamp: m.timestamp,
             ...(blocks?.length ? { contentBlocks: blocks } : {}),
             ...(m.images?.length ? { images: m.images } : {}),
             ...(m.model ? { model: m.model } : {}),
             ...(m.provider ? { provider: m.provider } : {}),
+            ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+            ...(m.steeredResponse ? { steeredResponse: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),

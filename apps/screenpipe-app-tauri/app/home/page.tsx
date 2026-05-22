@@ -30,7 +30,7 @@ import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
-import { UpdateBanner, useUpdateListener } from "@/components/update-banner";
+import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
@@ -88,7 +88,6 @@ const SETTINGS_SECTIONS = new Set<string>([
 ]);
 
 function HomeContent() {
-  useUpdateListener();
   const router = useRouter();
   const { isMac } = usePlatform();
   // In fullscreen, macOS hides the traffic lights — collapse the

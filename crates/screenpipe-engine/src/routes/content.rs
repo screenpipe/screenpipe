@@ -142,6 +142,9 @@ pub struct InputContent {
     /// Element context from accessibility APIs
     pub element_role: Option<String>,
     pub element_name: Option<String>,
+    /// Frame the event triggered (linked by frame_linker)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
 }
 
 // Response structs

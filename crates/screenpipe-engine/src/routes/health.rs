@@ -37,6 +37,31 @@ const AUDIO_RECONCILIATION_LOOKBACK_HOURS: i64 = 24 * 7;
 const AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS: i64 = 10 * 60;
 const AUDIO_RECONCILIATION_BACKLOG_CACHE_TTL_SECS: i64 = 30;
 
+/// Decide whether the audio transcription backlog should be flagged as a real
+/// stall. Real stall = the reconciliation worker has fallen behind. A "stall"
+/// is intentionally NOT flagged when batch mode is parking the queue while a
+/// live audio session owns the engine — that's expected, not broken.
+///
+/// Returning `false` here is what makes the difference between the user
+/// seeing a calm "ok" response and a misleading 503/degraded mid-meeting.
+fn audio_backlog_is_stalled(
+    pending_count: u64,
+    oldest_pending_age_secs: u64,
+    intentionally_deferring: bool,
+) -> bool {
+    if intentionally_deferring {
+        return false;
+    }
+    // A few pending chunks at any moment is normal (the 10-min freshness
+    // delay means there's always 10 min of in-flight audio). We flag a stall
+    // only when there's a real backlog AND the oldest chunk has been waiting
+    // noticeably longer than the freshness delay (>2x = should have been
+    // picked up by the last sweep).
+    pending_count > 20
+        && oldest_pending_age_secs
+            > (AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64).saturating_mul(2)
+}
+
 /// Describe the most likely cause of a DB-write stall from pool stats.
 /// Old message always said "pool exhaustion likely" which was wrong when the
 /// real cause was elsewhere (e.g. metrics gap on reconciliation path) and the
@@ -397,6 +422,38 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     let oldest_pending_transcription_at =
         audio_reconciliation_backlog.and_then(|(_, oldest)| oldest);
 
+    // Query meeting/audio-session state once, early, so both the stall checks
+    // below and the audio_pipeline payload further down can reuse it. The
+    // batch-mode pipeline intentionally defers background transcription while
+    // a live session is active — without this signal, the stall heuristic
+    // misreads that intentional deferral as a broken pipeline and flips the
+    // whole response to degraded/503. 500ms bound on the RwLock read so a
+    // contended writer can never stall /health.
+    let (meeting_detected, meeting_app) = if !state.audio_disabled {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            state.audio_manager.meeting_detector(),
+        )
+        .await
+        {
+            Ok(Some(detector)) => (Some(detector.is_in_meeting()), None),
+            Ok(None) => (None, None),
+            Err(_) => {
+                warn!(
+                    "health_check: audio_manager.meeting_detector() RwLock contended >500ms, skipping meeting fields"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+    // True when the audio pipeline is *intentionally* holding the batch
+    // queue (live meeting / audio session absorbing the engine). Used to
+    // suppress false-positive stall warnings — see comments at the
+    // audio_db_write_stalled and audio_degraded gates below.
+    let intentionally_deferring = meeting_detected.unwrap_or(false);
+
     // 60 seconds — tight enough to detect real stalls, loose enough to
     // tolerate adaptive FPS (0.1-0.5 fps) and brief DB contention spikes.
     let threshold_secs = 60u64;
@@ -484,22 +541,20 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         //
         // A real stall now means: the reconciliation worker has pending
         // chunks older than the freshness window — i.e. they should have
-        // been processed by now and haven't.
+        // been processed by now and haven't. The `intentionally_deferring`
+        // gate (handled by audio_backlog_is_stalled) prevents the same
+        // false-positive class during a live audio session.
         let backlog = audio_reconciliation_backlog.unwrap_or((0, None));
         let pending_count = backlog.0;
         let oldest_pending_age_secs = backlog
             .1
             .map(|ts| (now.timestamp() - ts.timestamp()).max(0) as u64)
             .unwrap_or(0);
-        // A few pending chunks at any moment is normal (the 10-min freshness
-        // delay means there's always 10 min of in-flight audio). We flag a
-        // stall only when there's a real backlog (>20 chunks) AND the oldest
-        // pending chunk has been waiting noticeably longer than the
-        // freshness delay (>2x the delay = should have been picked up by
-        // the last sweep).
-        let stalled = pending_count > 20
-            && oldest_pending_age_secs
-                > (AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64).saturating_mul(2);
+        let stalled = audio_backlog_is_stalled(
+            pending_count,
+            oldest_pending_age_secs,
+            intentionally_deferring,
+        );
         if stalled {
             // Throttle to once per 60s to avoid log spam (health runs every ~1s).
             static LAST_AUDIO_STALL_LOG: AtomicU64 = AtomicU64::new(0);
@@ -627,10 +682,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // Audio degradation: chunks_channel_full > 0 means the Whisper consumer
     // couldn't keep up and audio was dropped even after a 30s backpressure wait.
     // A reconciliation backlog means audio exists but transcript has not landed
-    // yet, which should be visible instead of reported as healthy.
+    // yet, which should be visible instead of reported as healthy — *unless*
+    // the backlog is the expected result of batch mode deferring during a
+    // live session, in which case it's not a problem to surface.
     let audio_degraded = if !state.audio_disabled && audio_snap.uptime_secs > 120.0 {
         let channel_full = audio_snap.chunks_channel_full > 0;
-        let transcription_backlog = pending_transcription_segments.is_some();
+        let transcription_backlog =
+            pending_transcription_segments.is_some() && !intentionally_deferring;
         if channel_full {
             warn!(
                 "health_check: {} audio chunk(s) dropped (transcription engine too slow)",
@@ -822,36 +880,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 .transcription_paused
                 .load(Ordering::Relaxed);
 
-            // Query meeting detector state — timeout the RwLock read so it
-            // can't stall the health check if writes are contended. The
-            // comment used to say "timeout this" but no timeout was wired
-            // in — unresponsive /health is exactly what users hit in the
-            // field (jeffutter on macOS, May 2026), enough that they
-            // wrote launchd watchdogs to kill the CLI when /health stops
-            // answering. Any future await added here must stay bounded.
-            let (meeting_detected, meeting_app) = match tokio::time::timeout(
-                std::time::Duration::from_millis(500),
-                state.audio_manager.meeting_detector(),
-            )
-            .await
-            {
-                Ok(Some(detector)) => {
-                    let in_meeting = detector.is_in_meeting();
-                    // v2 detection reports meeting state via AtomicBool flag;
-                    // the specific app name is tracked in the v2 detection loop,
-                    // not exposed through MeetingDetector.
-                    let app: Option<String> = None;
-                    (Some(in_meeting), app)
-                }
-                Ok(None) => (None, None),
-                Err(_) => {
-                    warn!(
-                        "health_check: audio_manager.meeting_detector() RwLock contended >500ms, skipping meeting fields"
-                    );
-                    (None, None)
-                }
-            };
-
+            // meeting_detected / meeting_app were queried earlier (next to
+            // the stall gates that depend on them) — reuse them here.
             let device_names: Vec<String> = audio_devices.iter().map(|d| d.to_string()).collect();
             let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
 
@@ -1101,6 +1131,27 @@ mod tests {
         let cloned = resp.clone();
         assert_eq!(cloned.status, "healthy");
         assert_eq!(cloned.status_code, 200);
+    }
+
+    #[test]
+    fn audio_backlog_stall_gate() {
+        let freshness = AUDIO_RECONCILIATION_FRESHNESS_DELAY_SECS as u64;
+        let way_past = freshness * 3;
+
+        // Real stall: big backlog, old, no live session — must flag.
+        assert!(audio_backlog_is_stalled(200, way_past, false));
+
+        // Same numbers but live session in flight — must NOT flag.
+        // (Mid-meeting false-positive: batch mode parks the queue while live
+        //  transcription owns the engine, and the old check misread that as
+        //  a broken pipeline.)
+        assert!(!audio_backlog_is_stalled(200, way_past, true));
+
+        // Small backlog within the freshness window — never a stall.
+        assert!(!audio_backlog_is_stalled(5, freshness / 2, false));
+
+        // Big count but young enough — not a stall yet.
+        assert!(!audio_backlog_is_stalled(200, freshness, false));
     }
 
     #[test]

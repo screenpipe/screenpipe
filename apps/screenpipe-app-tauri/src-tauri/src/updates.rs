@@ -112,12 +112,77 @@ fn get_target_arch() -> &'static str {
 pub fn is_source_build(_app: &tauri::AppHandle) -> bool {
     // The official-build feature is only enabled during CI releases
     // Source builds will not have this feature enabled
-    !cfg!(feature = "official-build")
+    !cfg!(feature = "official-build") && !cfg!(feature = "enterprise-build")
 }
 
 /// Enterprise build: updates are managed by IT (Intune/RoboPack), not in-app.
 pub fn is_enterprise_build(_app: &tauri::AppHandle) -> bool {
     cfg!(feature = "enterprise-build")
+}
+
+fn enterprise_app_update_policy(app: &tauri::AppHandle) -> Option<serde_json::Value> {
+    SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.extra.get("enterpriseAppUpdatePolicy").cloned())
+}
+
+fn enterprise_update_mode(app: &tauri::AppHandle) -> Option<String> {
+    enterprise_app_update_policy(app)
+        .and_then(|policy| {
+            policy
+                .get("mode")
+                .and_then(|mode| mode.as_str())
+                .map(str::to_string)
+        })
+        .map(|mode| mode.to_lowercase())
+}
+
+fn enterprise_updates_managed_locally(app: &tauri::AppHandle) -> bool {
+    let metadata = crate::enterprise_install_metadata::get_enterprise_install_metadata();
+    match enterprise_update_mode(app).as_deref() {
+        Some("screenpipe") => false,
+        Some("auto_detect") => metadata.managed,
+        Some("mdm") | Some("manual") => true,
+        // Missing/unknown policy → behave like a new org with the consumer
+        // banner flow. Existing orgs are explicitly pinned to "manual" via
+        // the website migration so they hit the arm above, not this one.
+        _ => false,
+    }
+}
+
+/// Snapshot of a pending update, exposed to the frontend via
+/// `get_pending_update`. The banner queries this on mount so it can hydrate
+/// state even when the `update-available` event fires before React mounts.
+#[derive(Clone, serde::Serialize)]
+pub struct PendingUpdateSnapshot {
+    pub version: String,
+    pub body: String,
+    /// True once the bundle is downloaded and the app is ready to restart.
+    pub downloaded: bool,
+    /// True when download failed with 401/403 — user must sign in.
+    pub auth_required: bool,
+}
+
+fn auto_update_enabled_from_settings(settings: Result<Option<SettingsStore>, String>) -> bool {
+    settings
+        .ok()
+        .flatten()
+        .map(|settings| settings.auto_update)
+        .unwrap_or(false)
+}
+
+fn load_auto_update_enabled(app: &tauri::AppHandle) -> bool {
+    let settings = SettingsStore::get(app);
+    match &settings {
+        Ok(Some(settings)) => debug!("auto-update setting: {}", settings.auto_update),
+        Ok(None) => warn!("settings missing during update check; auto-update disabled"),
+        Err(err) => warn!(
+            "failed to read settings during update check; auto-update disabled: {}",
+            err
+        ),
+    }
+    auto_update_enabled_from_settings(settings)
 }
 
 pub struct UpdatesManager {
@@ -127,6 +192,11 @@ pub struct UpdatesManager {
     /// None for enterprise builds (no in-app update UI).
     update_menu_item: Option<MenuItem<Wry>>,
     update_installed: Arc<Mutex<bool>>,
+    /// Latest pending update info, mirrored to the frontend on demand. None
+    /// until an update is detected; populated before download, then flipped
+    /// to downloaded=true once the bundle lands. Survives webview-mount
+    /// races that would otherwise lose the `update-available` event.
+    pending_update: Arc<Mutex<Option<PendingUpdateSnapshot>>>,
     /// Prevents concurrent check_for_updates calls (boot check + periodic race)
     is_checking: AtomicBool,
 }
@@ -152,6 +222,7 @@ impl UpdatesManager {
             interval: Duration::from_secs(interval_minutes * 60),
             update_available: Arc::new(Mutex::new(false)),
             update_installed: Arc::new(Mutex::new(false)),
+            pending_update: Arc::new(Mutex::new(None)),
             app: app.clone(),
             update_menu_item,
             is_checking: AtomicBool::new(false),
@@ -179,9 +250,13 @@ impl UpdatesManager {
         }
         let _guard = CheckGuard(&self.is_checking);
 
-        // Enterprise: updates managed by IT (Intune/RoboPack), no in-app check
-        if is_enterprise_build(&self.app) {
-            info!("enterprise build, updates managed by IT");
+        // Enterprise: default to IT-managed updates unless the dashboard policy
+        // explicitly allows the Screenpipe updater for this install context.
+        if is_enterprise_build(&self.app) && enterprise_updates_managed_locally(&self.app) {
+            info!(
+                "enterprise build, updates managed outside app (mode={:?})",
+                enterprise_update_mode(&self.app)
+            );
             return Result::Ok(false);
         }
 
@@ -219,7 +294,11 @@ impl UpdatesManager {
         );
         // Build updater with auth header so paid users can download from R2
         let mut builder = self.app.updater_builder();
-        if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
+        if is_enterprise_build(&self.app) {
+            if let Some(license_key) = crate::commands::get_enterprise_license_key() {
+                builder = builder.header("X-License-Key", license_key)?;
+            }
+        } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
             if let Some(ref token) = settings.user.token {
                 builder = builder.header("Authorization", format!("Bearer {}", token))?;
             }
@@ -250,12 +329,14 @@ impl UpdatesManager {
         }
         if let Ok(Some(update)) = check_result {
             *self.update_available.lock().await = true;
+            *self.pending_update.lock().await = Some(PendingUpdateSnapshot {
+                version: update.version.clone(),
+                body: update.body.clone().unwrap_or_default(),
+                downloaded: false,
+                auth_required: false,
+            });
 
-            let auto_update = SettingsStore::get(&self.app)
-                .ok()
-                .flatten()
-                .map(|s| s.auto_update)
-                .unwrap_or(false);
+            let auto_update = load_auto_update_enabled(&self.app);
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(true)?;
@@ -352,6 +433,9 @@ impl UpdatesManager {
             match download_result {
                 Ok(_) => {
                     *self.update_installed.lock().await = true;
+                    if let Some(snap) = self.pending_update.lock().await.as_mut() {
+                        snap.downloaded = true;
+                    }
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
                         item.set_text("Restart to update")?;
@@ -365,6 +449,9 @@ impl UpdatesManager {
                         || err_str.contains("Forbidden")
                     {
                         warn!("update download requires authentication: {}", err_str);
+                        if let Some(snap) = self.pending_update.lock().await.as_mut() {
+                            snap.auth_required = true;
+                        }
                         let _ = self.app.emit(
                             "update-auth-required",
                             serde_json::json!({
@@ -473,6 +560,12 @@ impl UpdatesManager {
 
     pub async fn has_update_installed(&self) -> bool {
         *self.update_installed.lock().await
+    }
+
+    /// Read the current pending update snapshot, for the frontend banner to
+    /// hydrate when its listener mounts late and misses the event.
+    pub async fn pending_update_snapshot(&self) -> Option<PendingUpdateSnapshot> {
+        self.pending_update.lock().await.clone()
     }
 
     /// Show dialog explaining auto-updates are not available for source builds
@@ -627,6 +720,18 @@ fn check_whats_new(app: &tauri::AppHandle) {
     });
 }
 
+/// Hydrate the frontend banner state on mount. The `update-available` event
+/// is broadcast once when the download completes — if the React app isn't
+/// mounted yet (boot race) or the listener lives on a route the user hasn't
+/// visited yet, that event is lost. The banner calls this command on mount
+/// to pick up state it may have missed.
+#[tauri::command]
+pub async fn get_pending_update(
+    state: tauri::State<'_, Arc<UpdatesManager>>,
+) -> Result<Option<PendingUpdateSnapshot>, ()> {
+    Ok(state.pending_update_snapshot().await)
+}
+
 pub fn start_update_check(
     app: &tauri::AppHandle,
     interval_minutes: u64,
@@ -666,4 +771,37 @@ pub fn start_update_check(
     });
 
     Ok(updates_manager)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_update_setting_respects_false() {
+        let mut settings = SettingsStore::default();
+        settings.auto_update = false;
+
+        assert!(!auto_update_enabled_from_settings(Ok(Some(settings))));
+    }
+
+    #[test]
+    fn auto_update_setting_respects_true() {
+        let mut settings = SettingsStore::default();
+        settings.auto_update = true;
+
+        assert!(auto_update_enabled_from_settings(Ok(Some(settings))));
+    }
+
+    #[test]
+    fn auto_update_setting_fails_closed_when_missing() {
+        assert!(!auto_update_enabled_from_settings(Ok(None)));
+    }
+
+    #[test]
+    fn auto_update_setting_fails_closed_when_unreadable() {
+        assert!(!auto_update_enabled_from_settings(Err(
+            "store unavailable".to_string()
+        )));
+    }
 }

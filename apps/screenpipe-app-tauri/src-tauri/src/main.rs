@@ -47,6 +47,7 @@ mod chatgpt_oauth;
 mod commands;
 mod disk_usage;
 mod embedded_server;
+mod enterprise_install_metadata;
 mod enterprise_policy;
 mod enterprise_sync;
 mod hardware;
@@ -63,9 +64,9 @@ mod owned_browser;
 // injects via WKHTTPCookieStore; other platforms compile to a stub
 // `cookies_for_host` that returns empty until Windows (DPAPI + AES-256-
 // GCM + WebView2) and Linux (libsecret + webkit2gtk) readers land.
+mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
-mod permission_events;
 mod permissions;
 mod pi;
 mod pi_command_queue;
@@ -736,6 +737,7 @@ async fn main() {
                 recording::get_boot_phase,
                 // Commands from commands.rs
                 commands::is_enterprise_build_cmd,
+                enterprise_install_metadata::get_enterprise_install_metadata,
                 commands::set_cloud_media_analysis_skill,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
@@ -877,6 +879,7 @@ async fn main() {
             .typ::<suggestions::CachedSuggestions>()
             .typ::<suggestions::Suggestion>()
             .typ::<hardware::HardwareCapability>()
+            .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
             .typ::<oauth::OAuthStatus>();
 
@@ -1009,6 +1012,8 @@ async fn main() {
         .manage(sync_scheduler)
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
+            enterprise_install_metadata::get_enterprise_install_metadata,
+            updates::get_pending_update,
             commands::get_local_api_config,
             commands::regenerate_api_auth_key,
             commands::set_api_auth_key,
@@ -1944,7 +1949,7 @@ async fn main() {
                             let port = core.port;
                             let key = core.local_api_key.clone();
                             drop(guard);
-                            crate::permission_events::start(app_handle_clone.clone(), port, key);
+                            crate::engine_events::start(app_handle_clone.clone(), port, key);
                             return;
                         }
                     }

@@ -405,6 +405,7 @@ pub(crate) async fn search(
                     modifiers: input.modifiers,
                     element_role: input.element.as_ref().and_then(|e| e.role.clone()),
                     element_name: input.element.as_ref().and_then(|e| e.name.clone()),
+                    frame_id: input.frame_id,
                 }),
                 SearchResult::Memory(m) => ContentItem::Memory(MemoryContent {
                     id: m.id,

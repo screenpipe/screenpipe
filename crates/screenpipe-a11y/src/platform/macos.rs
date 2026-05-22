@@ -166,7 +166,7 @@ impl UiRecorder {
     pub fn check_permissions(&self) -> PermissionStatus {
         PermissionStatus {
             accessibility: ax::is_process_trusted(),
-            input_monitoring: cg_access::listen_preflight(),
+            input_monitoring: check_input_monitoring(),
         }
     }
 
@@ -174,7 +174,7 @@ impl UiRecorder {
     pub fn request_permissions(&self) -> PermissionStatus {
         PermissionStatus {
             accessibility: ax::is_process_trusted_with_prompt(true),
-            input_monitoring: cg_access::listen_request(),
+            input_monitoring: request_input_monitoring(),
         }
     }
 
@@ -304,8 +304,27 @@ impl UiRecorder {
 
 /// Check whether the current process has macOS Input Monitoring granted.
 /// Polling-safe — does not trigger the system prompt.
+///
+/// `CGPreflightListenEventAccess` alone is unreliable: it returns true for
+/// "ghost" TCC records (orphaned grants from a previous build at the same
+/// signature/path that's been removed from System Settings → Input
+/// Monitoring, or responsibility-attributed grants from a parent process).
+/// When that happens the UI shows "Enabled" but the running CGEventTap can
+/// still fail to create — keystroke capture silently runs in reduced mode.
+/// We verify by actually attempting to create a tap: if it fails the
+/// preflight is lying and we report "not granted" so the user can re-grant.
 pub fn check_input_monitoring() -> bool {
-    cg_access::listen_preflight()
+    if !cg_access::listen_preflight() {
+        return false;
+    }
+    if probe_listen_event_tap() {
+        return true;
+    }
+    debug!(
+        "input monitoring: CGPreflightListenEventAccess=true but CGEventTapCreate failed — \
+         likely a stale TCC record (ghost). User should run tccutil reset ListenEvent."
+    );
+    false
 }
 
 /// Trigger the macOS Input Monitoring permission flow for the current
@@ -314,7 +333,33 @@ pub fn check_input_monitoring() -> bool {
 /// Privacy & Security → Input Monitoring); subsequent calls return the
 /// current status without re-prompting.
 pub fn request_input_monitoring() -> bool {
-    cg_access::listen_request()
+    cg_access::listen_request() && probe_listen_event_tap()
+}
+
+/// Attempt to create a no-op CGEventTap as ground-truth verification that
+/// Input Monitoring is actually granted to *this* process. `CGEventTapCreate`
+/// returns null if TCC denies the listen-event capability — unlike the
+/// preflight API it can't be fooled by ghost records. Cheap (microseconds)
+/// and side-effect-free: the tap is created in LISTEN_ONLY mode and dropped
+/// immediately without ever being added to a run loop.
+fn probe_listen_event_tap() -> bool {
+    extern "C" fn noop(
+        _proxy: *mut cg::EventTapProxy,
+        _event_type: cg::EventType,
+        event: &mut cg::Event,
+        _user_info: *mut c_void,
+    ) -> Option<&cg::Event> {
+        Some(event)
+    }
+    cg::EventTap::new::<c_void>(
+        cg::EventTapLocation::Session,
+        cg::EventTapPlacement::TailAppend,
+        cg::EventTapOpts::LISTEN_ONLY,
+        cg::EventType::KEY_DOWN.mask(),
+        noop,
+        std::ptr::null_mut(),
+    )
+    .is_some()
 }
 
 // ============================================================================

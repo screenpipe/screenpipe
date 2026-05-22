@@ -8723,6 +8723,64 @@ LIMIT ? OFFSET ?
         Ok((deleted, inserted))
     }
 
+    /// Mark `audio_chunks` within a meeting's window as `transcribed` when a
+    /// live `meeting_transcript_segments` row sits within
+    /// `coverage_window_secs` of the chunk's timestamp. This stops the
+    /// background reconciler from re-running STT on audio the live provider
+    /// already covered — without that, every live-transcribed meeting also
+    /// gets fully re-transcribed by Whisper after it ends, doubling battery,
+    /// CPU, storage, and the rows the UI reads back.
+    ///
+    /// Chunks far from any live segment (live dropped mid-meeting, etc.)
+    /// stay `pending` so reconciliation can still backfill those gaps.
+    ///
+    /// Trade-off: marked chunks won't get a background-engine row in
+    /// `audio_transcriptions`, so they don't contribute to global speaker
+    /// embedding/backfill. Users who need full-quality archival can run the
+    /// retranscribe API, which resets `transcription_status='pending'`.
+    pub async fn mark_chunks_covered_by_live(
+        &self,
+        meeting_id: i64,
+        coverage_window_secs: f64,
+    ) -> Result<u64, SqlxError> {
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        let coverage_days = coverage_window_secs / 86_400.0;
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let rows = sqlx::query(
+            r#"
+            UPDATE audio_chunks
+            SET transcription_status = 'transcribed',
+                last_transcription_attempt_at = ?1,
+                transcription_failure_reason = NULL
+            WHERE transcription_status = 'pending'
+              AND julianday(timestamp) >= julianday(
+                    (SELECT meeting_start FROM meetings WHERE id = ?2)
+                  )
+              AND julianday(timestamp) <= julianday(
+                    COALESCE(
+                        (SELECT meeting_end FROM meetings WHERE id = ?2),
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    )
+                  )
+              AND EXISTS (
+                  SELECT 1 FROM meeting_transcript_segments mts
+                  WHERE mts.meeting_id = ?2
+                    AND ABS(julianday(mts.captured_at) - julianday(audio_chunks.timestamp)) <= ?3
+              )
+            "#,
+        )
+        .bind(&now)
+        .bind(meeting_id)
+        .bind(coverage_days)
+        .execute(&mut **tx.conn())
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(rows)
+    }
+
     pub async fn list_meeting_transcript_segments(
         &self,
         meeting_id: i64,
@@ -8791,6 +8849,18 @@ LIMIT ? OFFSET ?
                   AND TRIM(at.transcription) != ''
                   AND ac.file_path NOT LIKE 'cloud://%'
                   AND (s.id IS NULL OR s.hallucination = 0)
+                  -- Drop background rows already covered by a live segment in the
+                  -- same meeting (within ±15s). Live + background both writing the
+                  -- same audio is by design (live = real-time, background = post-hoc
+                  -- archival via reconciliation), but consumers should see one copy.
+                  -- The window is half a typical chunk; gaps in live coverage stay
+                  -- visible because their background rows won't have a nearby live row.
+                  AND NOT EXISTS (
+                      SELECT 1 FROM meeting_transcript_segments mts
+                      WHERE mts.meeting_id = mw.meeting_id
+                        AND ABS(julianday(mts.captured_at) - julianday(at.timestamp))
+                            <= (15.0 / 86400.0)
+                  )
             )
             SELECT * FROM (
                 SELECT * FROM live_segments

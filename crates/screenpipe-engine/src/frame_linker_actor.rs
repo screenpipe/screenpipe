@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use screenpipe_db::DatabaseManager;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::frame_linker::{
     CorrelationId, EventPersisted, FrameCaptured, FrameLinker, FrameLinkerConfig,
@@ -110,17 +110,53 @@ pub fn spawn_frame_linker(
                             break;
                         }
                         Some(LinkerMessage::EventPersisted(e)) => {
+                            let corr_id = e.correlation_id;
+                            let row_id = e.row_id;
+                            debug!(corr_id, row_id, "frame_linker: event persisted");
                             if let Some(update) =
                                 linker.on_event_persisted(e, Instant::now())
                             {
                                 PAIRS_EMITTED.fetch_add(1, Ordering::Relaxed);
+                                info!(
+                                    corr_id,
+                                    row_id = update.row_id,
+                                    frame_id = update.frame_id,
+                                    "frame_linker: paired event→frame (frame arrived first)"
+                                );
                                 apply_update(&db, update.row_id, update.frame_id).await;
+                            } else {
+                                let (pe, pf) = linker.pending_len();
+                                debug!(
+                                    corr_id,
+                                    row_id,
+                                    pending_events = pe,
+                                    pending_frames = pf,
+                                    "frame_linker: event stashed, waiting for frame"
+                                );
                             }
                         }
                         Some(LinkerMessage::FrameCaptured(c)) => {
+                            let frame_id = c.frame_id;
+                            let n_corr = c.correlation_ids.len();
+                            debug!(frame_id, n_corr, "frame_linker: frame captured");
                             let updates = linker.on_frame_captured(c, Instant::now());
                             if !updates.is_empty() {
                                 PAIRS_EMITTED.fetch_add(updates.len() as u64, Ordering::Relaxed);
+                                info!(
+                                    frame_id,
+                                    paired = updates.len(),
+                                    still_pending = n_corr - updates.len(),
+                                    "frame_linker: paired frame→events (events arrived first)"
+                                );
+                            } else {
+                                let (pe, pf) = linker.pending_len();
+                                debug!(
+                                    frame_id,
+                                    n_corr,
+                                    pending_events = pe,
+                                    pending_frames = pf,
+                                    "frame_linker: frame stashed, waiting for event rows"
+                                );
                             }
                             for update in updates {
                                 apply_update(&db, update.row_id, update.frame_id).await;
@@ -130,12 +166,29 @@ pub fn spawn_frame_linker(
                 }
                 _ = tick.tick() => {
                     let evicted = linker.tick(Instant::now());
+                    let (pe, pf) = linker.pending_len();
+                    let total_pairs = PAIRS_EMITTED.load(Ordering::Relaxed);
+                    let total_evicted = EVICTED_TTL.load(Ordering::Relaxed) + evicted as u64;
+                    let total_failed = UPDATES_FAILED.load(Ordering::Relaxed);
                     if evicted > 0 {
                         EVICTED_TTL.fetch_add(evicted as u64, Ordering::Relaxed);
-                        let (e, f) = linker.pending_len();
+                        warn!(
+                            evicted,
+                            pending_events = pe,
+                            pending_frames = pf,
+                            total_pairs,
+                            total_evicted,
+                            total_failed,
+                            "frame_linker: stale entries expired without pairing (frame or event never arrived)"
+                        );
+                    } else {
                         debug!(
-                            "frame linker evicted {} stale entries (pending: {} events, {} frames)",
-                            evicted, e, f
+                            pending_events = pe,
+                            pending_frames = pf,
+                            total_pairs,
+                            total_evicted,
+                            total_failed,
+                            "frame_linker: tick"
                         );
                     }
                 }
@@ -145,16 +198,23 @@ pub fn spawn_frame_linker(
 }
 
 async fn apply_update(db: &Arc<DatabaseManager>, row_id: i64, frame_id: i64) {
-    if let Err(e) = db.update_ui_event_frame_id(row_id, frame_id).await {
-        UPDATES_FAILED.fetch_add(1, Ordering::Relaxed);
-        // A failed UPDATE is recoverable in principle (the row stays
-        // NULL) but very rare in practice — log and move on. We don't
-        // retry because the linker has no memory of dispatched updates;
-        // a retry would have to re-pair from scratch.
-        warn!(
-            "frame linker UPDATE failed (row_id={}, frame_id={}): {}",
-            row_id, frame_id, e
-        );
+    match db.update_ui_event_frame_id(row_id, frame_id).await {
+        Ok(_) => {
+            debug!(row_id, frame_id, "frame_linker: ui_events.frame_id updated");
+        }
+        Err(e) => {
+            UPDATES_FAILED.fetch_add(1, Ordering::Relaxed);
+            // A failed UPDATE is recoverable in principle (the row stays
+            // NULL) but very rare in practice — log and move on. We don't
+            // retry because the linker has no memory of dispatched updates;
+            // a retry would have to re-pair from scratch.
+            warn!(
+                row_id,
+                frame_id,
+                error = %e,
+                "frame_linker: UPDATE ui_events.frame_id failed"
+            );
+        }
     }
 }
 

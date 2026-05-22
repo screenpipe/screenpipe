@@ -37,15 +37,23 @@ mod imp {
 
     pub(super) struct ScreenpipeLocalClient {
         api_url_base: String,
-        api_key: Option<String>,
+        // App handle, so we can re-read the current api_auth_key from
+        // `RecordingState` on every request. The previous implementation
+        // captured the key once at startup — but `enterprise_sync::spawn`
+        // runs *before* the recording server finishes booting, so the
+        // snapshot was always `None`. Every subsequent /search call hit
+        // a 403 because no Bearer header was attached, the sync task
+        // backed off for an hour, and no telemetry ever made it to the
+        // customer's storage backend.
+        app: tauri::AppHandle,
         http: reqwest::Client,
     }
 
     impl ScreenpipeLocalClient {
-        pub fn new(api_url_base: String, api_key: Option<String>) -> Self {
+        pub fn new(api_url_base: String, app: tauri::AppHandle) -> Self {
             Self {
                 api_url_base,
-                api_key,
+                app,
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()
@@ -53,8 +61,12 @@ mod imp {
             }
         }
 
+        fn current_api_key(&self) -> Option<String> {
+            crate::recording::local_api_context_from_app(&self.app).api_key
+        }
+
         fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-            match &self.api_key {
+            match self.current_api_key() {
                 Some(key) => req.header("Authorization", format!("Bearer {key}")),
                 None => req,
             }
@@ -480,9 +492,13 @@ mod imp {
 
         let api = local_api_context_from_app(app);
         let api_url_base = api.url("");
+        // NB: don't capture `api.api_key` here — at spawn-time the
+        // recording server hasn't finished booting and the key is
+        // usually `None`. ScreenpipeLocalClient re-reads it from
+        // RecordingState on every request via the app handle.
         let local: Arc<dyn LocalApiClient> = Arc::new(ScreenpipeLocalClient::new(
             api_url_base,
-            api.api_key.clone(),
+            app.clone(),
         ));
 
         let (tx, rx) = tokio::sync::watch::channel(false);

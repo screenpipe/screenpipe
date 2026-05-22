@@ -68,14 +68,14 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 
 or run the CLI:
 
-```bash
-npx screenpipe@latest record
+```
+npx screenpipe record
 ```
 
 then 
 
 ```bash
-claude mcp add screenpipe -- npx -y screenpipe-mcp
+claude mcp add screenpipe -- npx -y screenpipe-mcp@latest
 ```
 
 then ask claude `what did i see in the last 5 mins?` or `summarize today conversations` or `create a pipe that updates linear every time i work on task X`
@@ -95,6 +95,8 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 
 <p align="center">
     <a href="https://docs.screenpi.pe">docs</a> ·
+    <a href="https://screenpi.pe/sdk">sdk</a> ·
+    <a href="https://screenpi.pe/team">team</a> ·
     <a href="https://discord.gg/screenpipe">discord</a> ·
     <a href="https://twitter.com/screenpipe">x</a> ·
     <a href="https://www.youtube.com/@screen_pipe">youtube</a> ·
@@ -110,6 +112,17 @@ Thanks to all contributors:
 <a href="https://github.com/screenpipe/screenpipe/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=screenpipe/screenpipe" />
 </a>
+
+## Translations
+
+- [日本語 (Japanese)](translated_readmes/README-ja.md)
+- [简体中文 (Simplified Chinese)](translated_readmes/README-zh_CN.md)
+- [Français (French)](translated_readmes/README-fr.md)
+- [Español (Spanish)](translated_readmes/README-es.md)
+- [Português BR (Brazilian Portuguese)](translated_readmes/README-pt_BR.md)
+- [Deutsch (German)](translated_readmes/README-de.md)
+
+Want to translate screenpipe into another language? See [`translated_readmes/`](translated_readmes/README.md).
 
 <details>
 <summary>📖 LLM reference</summary>

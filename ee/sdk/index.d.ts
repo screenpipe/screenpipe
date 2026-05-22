@@ -13,6 +13,25 @@ export interface RecorderOptions {
   microphone?: boolean
   /** Reserved for future system-audio muxing. Accepted today but not recorded. */
   systemAudio?: boolean
+  /**
+   * Substring patterns matched against the focused app name and window title
+   * (case-insensitive). While a matching window is in focus, the recorder
+   * skips writing frames — the MP4 contains a hard cut over the filtered
+   * period. Mirrors the engine's `--ignored-windows` CLI flag.
+   */
+  ignoredWindows?: Array<string>
+  /**
+   * Substring whitelist. If non-empty, frames are written ONLY while the
+   * focused app name or window title matches at least one pattern.
+   * Mirrors the engine's `--included-windows` CLI flag.
+   */
+  includedWindows?: Array<string>
+  /**
+   * URL patterns to skip (case-insensitive, domain-aware matching).
+   * When the focused window is a browser navigated to a matching URL,
+   * the recorder skips writing frames. Mirrors `--ignored-urls`.
+   */
+  ignoredUrls?: Array<string>
 }
 /** Permission status returned by `requestPermissions`. */
 export interface PermissionStatus {
@@ -32,6 +51,29 @@ export interface FocusedApp {
   browserUrl?: string
   nodeCount: number
   walkMs: number
+}
+/**
+ * Current state of the window/URL filter. Returned by
+ * `Recorder.filterStatus()`. When `paused` is true, the capture loop is
+ * dropping frames — `reason` is a short tag identifying which rule fired
+ * (`"ignored_window"`, `"included_window_mismatch"`, `"ignored_url"`,
+ * `"incognito"`, `"excluded_app"`). Both fields are `null`/`false` when
+ * no filter is configured or when a11y permission has not been granted.
+ */
+export interface FilterStatus {
+  paused: boolean
+  reason?: string
+}
+/**
+ * Patch passed to `Recorder.setFilters({...})` for live filter updates.
+ * Any field omitted (or sent as `null`) clears that list. All three fields
+ * follow the same matching semantics as the matching `RecorderOptions`
+ * fields.
+ */
+export interface FilterPatch {
+  ignoredWindows?: Array<string>
+  includedWindows?: Array<string>
+  ignoredUrls?: Array<string>
 }
 /**
  * Prompt the OS for screen recording + microphone permissions if not already
@@ -84,6 +126,20 @@ export declare class Recorder {
    * granted. Independent of `start()` — works as a pre-flight meter.
    */
   audioLevel(): Promise<number>
+  /**
+   * Current state of the window/URL filter — see `FilterStatus`. Polled
+   * by host integrations to drive UI ("⏸ paused — banking site") or to
+   * count skipped frames. Returns `{ paused: false, reason: undefined }`
+   * when no filter is configured.
+   */
+  filterStatus(): Promise<FilterStatus>
+  /**
+   * Replace the active filter lists at runtime. Each field in `patch`
+   * either provides a new list or — when omitted — clears that list. The
+   * next focus-watcher tick (≤ 1 s later) re-evaluates the current focused
+   * window against the updated rules.
+   */
+  setFilters(patch: FilterPatch): Promise<void>
   /**
    * Snapshot of the currently focused window via accessibility APIs.
    * Returns `null` when no focused window is detected or the window

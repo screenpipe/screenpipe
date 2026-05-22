@@ -47,7 +47,8 @@ use crate::{
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
-            list_memories_handler, list_memory_tags_handler, update_memory_handler,
+            list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
+            update_memory_handler,
         },
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
@@ -239,6 +240,11 @@ pub struct SCServer {
     /// observability endpoints can call `.snapshot()` to inspect metrics.
     pub oauth_refresher:
         Option<Arc<screenpipe_connect::oauth_refresh_scheduler::OAuthRefreshScheduler>>,
+    /// Background scheduler that mirrors `memories` out to Claude Code's
+    /// CLAUDE.md and Codex's AGENTS.md every few minutes. Owned for the
+    /// same reasons as `oauth_refresher` — keeps the JoinHandle alive
+    /// and exposes `.snapshot()` for health reporting later.
+    pub external_memory_sync: Option<Arc<crate::external_memory_sync::ExternalMemorySyncScheduler>>,
 }
 
 impl SCServer {
@@ -277,6 +283,7 @@ impl SCServer {
             cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
             secret_store: None,
             oauth_refresher: None,
+            external_memory_sync: None,
         }
     }
 
@@ -623,6 +630,7 @@ impl SCServer {
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
             .get("/memories/tags", list_memory_tags_handler)
+            .post("/memories/sync-external", sync_external_memories_handler)
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)

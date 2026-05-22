@@ -37,7 +37,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     // Public client ID from the Zoom Marketplace app (User-managed OAuth,
     // private distribution). Safe to ship in the binary — the secret half
     // stays on the website (OAUTH_ZOOM_CLIENT_SECRET in Vercel env).
-    client_id: "Nx8XJ_6Qai8ttYUEMHDPg",
+    client_id: "EqdPSw5wS76kO3HyRzDb7Q",
     extra_auth_params: &[],
     // Zoom requires HTTPS redirect URIs for OAuth apps; the local
     // callback won't pass app-review. Relay through the website like

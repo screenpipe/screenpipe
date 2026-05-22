@@ -16,6 +16,7 @@ pub enum OSPermission {
     Microphone,
     Accessibility,
     Automation,
+    InputMonitoring,
 }
 
 #[tauri::command(async)]
@@ -47,6 +48,10 @@ pub fn open_permission_settings(permission: OSPermission) {
                 .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
                 .spawn()
                 .expect("Failed to open Automation settings"),
+            OSPermission::InputMonitoring => Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+                .spawn()
+                .expect("Failed to open Input Monitoring settings"),
         };
     }
 }
@@ -98,6 +103,12 @@ pub async fn request_permission(permission: OSPermission) {
             OSPermission::Automation => {
                 // Open Automation settings — user must toggle manually
                 open_permission_settings(OSPermission::Automation);
+            }
+            OSPermission::InputMonitoring => {
+                // Defer to the dedicated request flow (opens Settings + calls
+                // CGRequestListenEventAccess). The ghost-record probe lives
+                // inside `screenpipe_a11y::request_input_monitoring`.
+                let _ = request_input_monitoring_permission().await;
             }
         }
     }
@@ -307,6 +318,7 @@ pub async fn reset_and_request_permission(
             OSPermission::ScreenRecording => "ScreenCapture",
             OSPermission::Microphone => "Microphone",
             OSPermission::Accessibility => "Accessibility",
+            OSPermission::InputMonitoring => "ListenEvent",
             OSPermission::Automation => {
                 // Automation doesn't use tccutil reset flow — just open settings
                 open_permission_settings(OSPermission::Automation);
@@ -978,6 +990,6 @@ pub fn request_arc_automation_permission(_app: tauri::AppHandle) -> bool {
 // NOTE: Runtime permission monitoring is now handled by
 // `screenpipe-engine::permission_monitor` which emits `permission_lost` /
 // `permission_restored` events on the shared event bus. The Tauri app
-// subscribes via `crate::permission_events` over /ws/events. This module
+// subscribes via `crate::engine_events::permission` over /ws/events. This module
 // keeps the synchronous TCC/AV check helpers used by the onboarding UI
 // and the preflight startup check.

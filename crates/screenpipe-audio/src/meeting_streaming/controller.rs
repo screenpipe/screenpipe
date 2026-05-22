@@ -32,6 +32,12 @@ const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(5);
 const LIVE_INACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LIVE_NO_AUDIO_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LIVE_MAX_SESSION_DURATION: Duration = Duration::from_secs(2 * 60 * 60);
+/// Half of a typical 30s chunk. Chunks whose timestamp falls within this
+/// window of any live transcript are considered "live-covered" and get
+/// marked `transcribed` so the background reconciler skips them. Gaps wider
+/// than this (live provider drop, network blip) stay `pending` so background
+/// can still backfill them.
+const LIVE_COVERAGE_WINDOW_SECS: f64 = 15.0;
 /// After this long without audio frames or transcripts, fire a "live note
 /// looks broken" notification (once per session, per condition) so the user
 /// doesn't sit through a silent meeting wondering why nothing is appearing.
@@ -163,9 +169,13 @@ pub fn start_meeting_streaming_loop(
                         Some(session) if session.meeting_id == meeting_id => {
                             let provider = session.provider.clone();
                             let live = session.live_transcription_enabled;
+                            let live_covered = session.live_transcript_seen;
                             emit_session_ended(session);
                             audio_tap.set_active(false);
                             audio_tap.set_background_suppressed(false);
+                            if live_covered {
+                                mark_live_covered_chunks(&db, meeting_id).await;
+                            }
                             emit_status(false, None, &provider, live, None);
                         }
                         Some(session) => {
@@ -247,6 +257,7 @@ pub fn start_meeting_streaming_loop(
                         };
                         let provider = session.provider.clone();
                         let meeting_id = session.meeting_id;
+                        let live_covered = session.live_transcript_seen;
                         warn!(
                             "meeting streaming: requesting meeting auto-end ({}, meeting_id={})",
                             reason.log_message(),
@@ -262,6 +273,9 @@ pub fn start_meeting_streaming_loop(
                         emit_session_ended(session);
                         audio_tap.set_active(false);
                         audio_tap.set_background_suppressed(false);
+                        if live_covered {
+                            mark_live_covered_chunks(&db, meeting_id).await;
+                        }
                         emit_status(
                             false,
                             Some(meeting_id),
@@ -345,6 +359,37 @@ async fn start_streaming_session(
         readiness_error,
     );
     let _ = screenpipe_events::send_event("meeting_streaming_session_started", started);
+}
+
+/// Flip `audio_chunks` for chunks the live provider already transcribed to
+/// `transcription_status='transcribed'` so the post-meeting reconciler skips
+/// them. Without this, every live-transcribed meeting also gets fully
+/// re-transcribed by the background engine, doubling battery/CPU/storage and
+/// producing the duplicate rows the read endpoint surfaces.
+async fn mark_live_covered_chunks(db: &Arc<DatabaseManager>, meeting_id: i64) {
+    match db
+        .mark_chunks_covered_by_live(meeting_id, LIVE_COVERAGE_WINDOW_SECS)
+        .await
+    {
+        Ok(0) => {
+            debug!(
+                "meeting streaming: no pending chunks to mark for meeting {}",
+                meeting_id
+            );
+        }
+        Ok(n) => {
+            info!(
+                "meeting streaming: marked {} chunks as transcribed via live coverage (meeting_id={})",
+                n, meeting_id
+            );
+        }
+        Err(err) => {
+            warn!(
+                "meeting streaming: failed to mark live-covered chunks (meeting_id={}): {}",
+                meeting_id, err
+            );
+        }
+    }
 }
 
 async fn persist_live_final_with_retry(db: Arc<DatabaseManager>, event: MeetingTranscriptFinal) {

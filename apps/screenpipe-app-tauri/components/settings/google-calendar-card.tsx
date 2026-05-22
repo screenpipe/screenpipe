@@ -7,14 +7,19 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
+  AlertTriangle,
   Loader2,
+  Lock,
   Plus,
   RefreshCw,
   Users,
   LogOut,
 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
@@ -38,7 +43,10 @@ interface CalendarAccount {
 }
 
 export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void } = {}) {
+  const { settings } = useSettings();
+  const isPro = !!settings.user?.cloud_subscribed;
   const [accounts, setAccounts] = useState<CalendarAccount[]>([]);
+  const [needsAttention, setNeedsAttention] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [upcomingEvents, setUpcomingEvents] = useState<CalendarEventItem[]>([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
@@ -55,18 +63,24 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
             displayName: i.display_name ?? null,
           }))
         );
+        setNeedsAttention(false);
         return;
       }
 
       const status = await commands.oauthStatus("google-calendar", null);
       if (status.status === "ok" && status.data.connected) {
         setAccounts([{ instance: null, displayName: status.data.display_name ?? null }]);
+        setNeedsAttention(false);
       } else {
         setAccounts([]);
+        // Token row exists but can't be read — usually a keychain ACL mismatch
+        // after a bundle id switch. Surface it instead of treating as fresh disconnect.
+        setNeedsAttention(status.status === "ok" && !!status.data.needs_attention);
       }
     } catch (e) {
       console.error("failed to fetch google calendar status:", e);
       setAccounts([]);
+      setNeedsAttention(false);
     }
   }, []);
 
@@ -151,9 +165,24 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
         await fetchStatus();
         notifyConnectionsUpdated();
         onConnected?.();
+      } else if (res.status === "error") {
+        const msg = String(res.error ?? "");
+        const isProGate = msg.toLowerCase().includes("pro subscription");
+        toast({
+          title: isProGate ? "pro required" : "google calendar connect failed",
+          description: isProGate
+            ? "OAuth integrations need Pro. Upgrade to connect Google Calendar."
+            : msg || "Unknown error",
+          variant: "destructive",
+        });
       }
     } catch (e) {
       console.error("google calendar oauth failed:", e);
+      toast({
+        title: "google calendar connect failed",
+        description: String(e),
+        variant: "destructive",
+      });
     }
     setIsConnecting(false);
   };
@@ -215,22 +244,45 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
 
             {!connected ? (
               <div className="space-y-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleConnect}
-                  disabled={isConnecting}
-                  className="text-xs"
-                >
-                  {isConnecting ? (
-                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                  ) : (
-                    <img src="/google-calendar-icon.svg" alt="" className="h-3 w-3 mr-1.5" />
-                  )}
-                  {isConnecting
-                    ? "Waiting for Google..."
-                    : "Connect Google Calendar"}
-                </Button>
+                {needsAttention && (
+                  <div className="flex items-start gap-1.5 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded px-2 py-1.5">
+                    <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                    <span>
+                      A previous connection exists but its token can't be read on this
+                      build (usually a keychain mismatch). Reconnect to fix.
+                    </span>
+                  </div>
+                )}
+                {!isPro ? (
+                  <div className="flex flex-col gap-1.5">
+                    <Button disabled size="sm" className="gap-1.5 h-7 text-xs opacity-60">
+                      <Lock className="h-3 w-3" />pro required
+                    </Button>
+                    <button
+                      onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                      className="text-[10px] text-muted-foreground hover:text-foreground underline self-start"
+                    >
+                      upgrade to pro to connect
+                    </button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleConnect}
+                    disabled={isConnecting}
+                    className="text-xs"
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    ) : (
+                      <img src="/google-calendar-icon.svg" alt="" className="h-3 w-3 mr-1.5" />
+                    )}
+                    {isConnecting
+                      ? "Waiting for Google..."
+                      : "Connect Google Calendar"}
+                  </Button>
+                )}
                 <GoogleOAuthUnverifiedAppHint />
               </div>
             ) : (

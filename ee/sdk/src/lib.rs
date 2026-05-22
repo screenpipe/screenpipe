@@ -30,6 +30,19 @@ pub struct RecorderOptions {
     pub microphone: Option<bool>,
     /// Reserved for future system-audio muxing. Accepted today but not recorded.
     pub system_audio: Option<bool>,
+    /// Substring patterns matched against the focused app name and window title
+    /// (case-insensitive). While a matching window is in focus, the recorder
+    /// skips writing frames — the MP4 contains a hard cut over the filtered
+    /// period. Mirrors the engine's `--ignored-windows` CLI flag.
+    pub ignored_windows: Option<Vec<String>>,
+    /// Substring whitelist. If non-empty, frames are written ONLY while the
+    /// focused app name or window title matches at least one pattern.
+    /// Mirrors the engine's `--included-windows` CLI flag.
+    pub included_windows: Option<Vec<String>>,
+    /// URL patterns to skip (case-insensitive, domain-aware matching).
+    /// When the focused window is a browser navigated to a matching URL,
+    /// the recorder skips writing frames. Mirrors `--ignored-urls`.
+    pub ignored_urls: Option<Vec<String>>,
 }
 
 /// Permission status returned by `requestPermissions`.
@@ -51,6 +64,29 @@ pub struct FocusedApp {
     pub browser_url: Option<String>,
     pub node_count: u32,
     pub walk_ms: u32,
+}
+
+/// Current state of the window/URL filter. Returned by
+/// `Recorder.filterStatus()`. When `paused` is true, the capture loop is
+/// dropping frames — `reason` is a short tag identifying which rule fired
+/// (`"ignored_window"`, `"included_window_mismatch"`, `"ignored_url"`,
+/// `"incognito"`, `"excluded_app"`). Both fields are `null`/`false` when
+/// no filter is configured or when a11y permission has not been granted.
+#[napi(object)]
+pub struct FilterStatus {
+    pub paused: bool,
+    pub reason: Option<String>,
+}
+
+/// Patch passed to `Recorder.setFilters({...})` for live filter updates.
+/// Any field omitted (or sent as `null`) clears that list. All three fields
+/// follow the same matching semantics as the matching `RecorderOptions`
+/// fields.
+#[napi(object)]
+pub struct FilterPatch {
+    pub ignored_windows: Option<Vec<String>>,
+    pub included_windows: Option<Vec<String>>,
+    pub ignored_urls: Option<Vec<String>>,
 }
 
 /// Record a user's screen to an MP4 file.
@@ -134,6 +170,35 @@ impl Recorder {
             .map_err(|e| napi::Error::from_reason(format!("audio level task: {e}")))?
             .map(|v| v as f64)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Current state of the window/URL filter — see `FilterStatus`.
+    /// Polled by host integrations to drive UI ("⏸ paused — banking site")
+    /// or to count skipped frames. Returns `{ paused: false, reason: null }`
+    /// when no filter is configured.
+    #[napi]
+    pub async fn filter_status(&self) -> napi::Result<FilterStatus> {
+        let guard = self.inner.lock().await;
+        let (paused, reason) = guard.filter_status();
+        Ok(FilterStatus { paused, reason })
+    }
+
+    /// Replace the active filter lists at runtime. Each field in `patch`
+    /// either provides a new list or — when omitted/`null` — clears that
+    /// list. The next focus-watcher tick (≤ 1 s later) re-evaluates the
+    /// current focused window against the updated rules.
+    ///
+    /// Use this for "Pause on banking" toggles, per-session overrides, or
+    /// any flow where the filter set isn't known at construction time.
+    #[napi]
+    pub async fn set_filters(&self, patch: FilterPatch) -> napi::Result<()> {
+        let guard = self.inner.lock().await;
+        guard.set_filters(
+            patch.ignored_windows.unwrap_or_default(),
+            patch.included_windows.unwrap_or_default(),
+            patch.ignored_urls.unwrap_or_default(),
+        );
+        Ok(())
     }
 
     /// Snapshot of the currently focused window via accessibility APIs.

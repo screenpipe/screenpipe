@@ -20,12 +20,19 @@ import {
   isEnterpriseManagedPreset,
   normalizeEnterpriseAiPresetPolicy,
 } from "@/lib/enterprise-ai-preset-policy";
+import {
+  DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+  EnterpriseAppUpdatePolicy,
+  EnterpriseInstallMetadata,
+  normalizeEnterpriseAppUpdatePolicy,
+} from "@ee/lib/app-update-policy";
 
 interface EnterprisePolicy {
   hiddenSections: string[];
   lockedSettings: Record<string, unknown>;
   managedAiPreset: EnterpriseManagedAiPreset | null;
   aiPresetPolicy: EnterpriseAiPresetPolicy;
+  appUpdatePolicy: EnterpriseAppUpdatePolicy;
   managedPipes: ManagedPipe[];
   orgName: string;
 }
@@ -35,6 +42,7 @@ const EMPTY_POLICY: EnterprisePolicy = {
   lockedSettings: {},
   managedAiPreset: null,
   aiPresetPolicy: DEFAULT_ENTERPRISE_AI_PRESET_POLICY,
+  appUpdatePolicy: DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
   managedPipes: [],
   orgName: "",
 };
@@ -121,6 +129,35 @@ async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<vo
   await store.save();
 }
 
+async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata> {
+  try {
+    return await commands.getEnterpriseInstallMetadata();
+  } catch {
+    return {
+      install_source: "unknown",
+      update_manager: "unknown",
+      managed: false,
+      detected_by: [],
+    };
+  }
+}
+
+async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<EnterpriseInstallMetadata> {
+  const store = await getStore();
+  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  const metadata = await getEnterpriseInstallMetadata();
+  await store.set("settings", {
+    ...settings,
+    enterpriseAppUpdatePolicy: policy,
+    enterpriseInstallMetadata: metadata,
+    autoUpdate: policy.allow_employee_override
+      ? settings.autoUpdate ?? policy.default_auto_update
+      : policy.default_auto_update,
+  });
+  await store.save();
+  return metadata;
+}
+
 /**
  * Fire-and-forget heartbeat to report device status to the enterprise API.
  * Called after a successful policy fetch. Never throws, never blocks.
@@ -132,6 +169,10 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
     const deviceId = (settings.deviceId as string) || "unknown";
     const appVersion = await getVersion().catch(() => "unknown");
     const devicePlatform = getPlatform();
+    const appUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+      settings.enterpriseAppUpdatePolicy
+    );
+    const installMetadata = await getEnterpriseInstallMetadata();
 
     let frameStatus = "unknown";
     let audioStatus = "unknown";
@@ -166,6 +207,16 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
         platform: devicePlatform,
         app_version: appVersion,
         recording_status: { frame_status: frameStatus, audio_status: audioStatus },
+        update_manager: installMetadata.update_manager,
+        management_detected: installMetadata.managed,
+        install_source: installMetadata.install_source,
+        management_detected_by: installMetadata.detected_by,
+        update_status: {
+          policy_mode: appUpdatePolicy.mode,
+          default_auto_update: appUpdatePolicy.default_auto_update,
+          allow_employee_override: appUpdatePolicy.allow_employee_override,
+          channel: appUpdatePolicy.channel,
+        },
         pipe_statuses: pipeStatuses,
       }),
     });
@@ -181,7 +232,14 @@ function cachePolicy(policy: EnterprisePolicy) {
 function loadCachedPolicy(): EnterprisePolicy | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const policy = JSON.parse(raw);
+      return {
+        ...EMPTY_POLICY,
+        ...policy,
+        appUpdatePolicy: normalizeEnterpriseAppUpdatePolicy(policy.appUpdatePolicy),
+      };
+    }
   } catch {}
   return null;
 }
@@ -270,6 +328,9 @@ export function useEnterprisePolicy() {
       const aiPresetPolicy = normalizeEnterpriseAiPresetPolicy(
         data.aiPresetPolicy ?? data.managedAiPreset ?? null
       );
+      const appUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+        data.appUpdatePolicy ?? data.lockedSettings?.app_update_policy
+      );
       const lockedKeys = Object.keys(data.lockedSettings || {});
       const allHidden = [
         ...ENTERPRISE_DEFAULT_HIDDEN,
@@ -281,6 +342,7 @@ export function useEnterprisePolicy() {
         lockedSettings: data.lockedSettings || {},
         managedAiPreset: data.managedAiPreset || null,
         aiPresetPolicy,
+        appUpdatePolicy,
         managedPipes: data.managedPipes || [],
         orgName: data.orgName || "",
       };
@@ -288,9 +350,6 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
-
-      // Fire-and-forget heartbeat
-      sendHeartbeat(licenseKey);
 
       // Apply enterprise AI preset policy to settings store.
       if (result.aiPresetPolicy) {
@@ -303,6 +362,18 @@ export function useEnterprisePolicy() {
           console.warn("[enterprise] failed to apply AI preset policy:", e);
         }
       }
+
+      try {
+        const metadata = await applyAppUpdatePolicy(result.appUpdatePolicy);
+        console.log(
+          `[enterprise] applied app update policy: mode=${result.appUpdatePolicy.mode}, manager=${metadata.update_manager}, managed=${metadata.managed}`
+        );
+      } catch (e) {
+        console.warn("[enterprise] failed to apply app update policy:", e);
+      }
+
+      // Fire-and-forget heartbeat
+      sendHeartbeat(licenseKey);
 
       // Sync managed pipes to local filesystem
       if (result.managedPipes.length > 0) {

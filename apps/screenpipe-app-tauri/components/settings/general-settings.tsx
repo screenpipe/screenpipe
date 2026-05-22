@@ -20,6 +20,11 @@ import { commands } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import {
+  DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+  describeEnterpriseUpdateMode,
+  normalizeEnterpriseAppUpdatePolicy,
+} from "@ee/lib/app-update-policy";
 
 export default function GeneralSettings() {
   const isEnterprise = useIsEnterpriseBuild();
@@ -36,6 +41,10 @@ export default function GeneralSettings() {
       updateSettings(newSettings);
     }
   };
+  const enterpriseAppUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+    settings?.enterpriseAppUpdatePolicy || DEFAULT_ENTERPRISE_APP_UPDATE_POLICY
+  );
+  const enterpriseInstallMetadata = settings?.enterpriseInstallMetadata;
 
   const getDesktopPlatform = async () => {
     try {
@@ -121,6 +130,34 @@ export default function GeneralSettings() {
                 <Switch
                   id="auto-update-toggle"
                   checked={settings?.autoUpdate ?? false}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ autoUpdate: checked })
+                  }
+                  className="ml-4"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {isEnterprise && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center space-x-2.5">
+                  <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">App updates</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {describeEnterpriseUpdateMode(enterpriseAppUpdatePolicy)}
+                      {enterpriseInstallMetadata?.managed ? " · managed device detected" : ""}
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  id="enterprise-auto-update-toggle"
+                  checked={settings?.autoUpdate ?? enterpriseAppUpdatePolicy.default_auto_update}
+                  disabled={!enterpriseAppUpdatePolicy.allow_employee_override}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }

@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Default)]
 pub enum PowerMode {
     /// Automatically switch based on battery state.
+    #[default]
     Auto,
     /// Always use full performance (ignore battery).
-    #[default]
     Performance,
     /// Always use battery saver (even on AC).
     BatterySaver,

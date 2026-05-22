@@ -174,6 +174,7 @@ fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     let data_dir = base_dir.join("data");
 
     fs::create_dir_all(&data_dir)?;
+    paths::ensure_spotlight_excluded(&base_dir);
     Ok(base_dir)
 }
 

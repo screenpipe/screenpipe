@@ -43,6 +43,7 @@ import {
   X,
   MoreVertical,
   Pencil,
+  Square,
 } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
@@ -249,6 +250,21 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
 
   const { pinned, recents, archived } = useVisibleChatSections();
   const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+  // Resolve each running pipe to its SessionRecord so the Scheduled-row
+  // kebab can offer Pin / Rename / Archive / Delete with the same
+  // semantics as Recents. Subscribes to the raw sessions map (not
+  // useOrderedSessions) so lookups stay O(1) without re-sorting.
+  const sessionsMap = useChatStore((s) => s.sessions);
+  const runningPipeSessions = useMemo(() => {
+    const map = new Map<string, SessionRecord>();
+    for (const p of runningPipes) {
+      if (p.executionId === undefined) continue;
+      const sid = pipeSessionId(p.pipeName, p.executionId);
+      const sess = sessionsMap[sid];
+      if (sess) map.set(p.pipeName, sess);
+    }
+    return map;
+  }, [runningPipes, sessionsMap]);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -395,6 +411,22 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
   };
 
+  // Stop an in-flight pipe execution. Used by the Scheduled-row kebab so
+  // the user can cancel a run without dropping into Settings → Pipes. We
+  // don't optimistically remove the row — the next `useRunningPipes` poll
+  // (or the rust-side execution-end event) will clear it once the engine
+  // confirms the stop.
+  const handleStopRun = async (pipeName: string) => {
+    try {
+      await localFetch(`/pipes/${encodeURIComponent(pipeName)}/stop`, {
+        method: "POST",
+      });
+    } catch {
+      // best-effort — the user can retry; if the pipe already finished
+      // the next poll will remove the row anyway.
+    }
+  };
+
   return (
     // px-2 cancels the parent wrapper's -mx-2 (used to make the
     // border-t span the full sidebar width). Without this the chat
@@ -445,7 +477,19 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   bodyClassName=""
                 >
                   {runningPipes.map((p) => (
-                    <ScheduledRow key={p.pipeName} pipe={p} />
+                    <ScheduledRow
+                      key={p.pipeName}
+                      pipe={p}
+                      session={runningPipeSessions.get(p.pipeName)}
+                      onStopRun={handleStopRun}
+                      onTogglePin={handleTogglePin}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onRenameRequest={handleRenameRequest}
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
                   ))}
                 </Section>
               </div>
@@ -866,85 +910,28 @@ function ChatRowsSkeleton({ rows }: { rows: number }) {
   );
 }
 
-/** Scheduled (live pipe runs) container — own collapsible scroll
- *  viewport capped at ~25% of available height so even with many
- *  pipes running it never squeezes recents off the screen. Header
- *  shows the count + activity ring so it's obvious at a glance that
- *  something is running in the background. */
-function CollapsibleScheduled({
-  pipes,
-}: {
-  pipes: Array<{
-    pipeName: string;
-    title?: string;
-    executionId?: number;
-    startedAt?: string;
-  }>;
-}) {
-  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("screenpipe:scheduled-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const setCollapsed = (v: boolean) => {
-    setCollapsedRaw(v);
-    try {
-      localStorage.setItem("screenpipe:scheduled-collapsed", String(v));
-    } catch {
-      // ignore — collapse state is best-effort
-    }
-  };
-  return (
-    <div className="flex flex-col mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
-        aria-expanded={!collapsed}
-        aria-controls="chat-sidebar-scheduled"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-        )}
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
-          scheduled
-        </span>
-        <PipeActivityIndicator
-          kind="running"
-          label={pipes.length}
-          className="shrink-0"
-          labelClassName="text-muted-foreground/60"
-          ariaLabel={`${pipes.length} running pipe${pipes.length === 1 ? "" : "s"}`}
-        />
-      </button>
-      {!collapsed && (
-        <div
-          id="chat-sidebar-scheduled"
-          // Cap the scheduled scroll so a long list doesn't take the
-          // whole sidebar. ~max-h-40 ≈ 6 rows; users can scroll within
-          // it. Recents below still gets the rest of the column via
-          // its own flex-1 + min-h-0.
-          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
-        >
-          <div className="flex flex-col">
-            {pipes.map((p) => (
-              <ScheduledRow key={p.pipeName} pipe={p} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ScheduledRow({
   pipe,
+  session,
+  onStopRun,
+  onTogglePin,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
+  onRenameRequest,
+  openConversationMenuId,
+  setOpenConversationMenuId,
 }: {
   pipe: { pipeName: string; title?: string; startedAt?: string; executionId?: number };
+  session?: SessionRecord;
+  onStopRun: (pipeName: string) => void | Promise<void>;
+  onTogglePin: (id: string) => void | Promise<void>;
+  onArchive: (id: string) => void | Promise<void>;
+  onUnarchive: (id: string) => void | Promise<void>;
+  onDeleteRequest: (id: string | null) => void;
+  onRenameRequest: (id: string) => void;
+  openConversationMenuId?: string | null;
+  setOpenConversationMenuId?: (id: string | null) => void;
 }) {
   // Re-render once a minute so the elapsed badge ticks while the row is
   // mounted. Cheap — at most one timer per visible scheduled pipe and the
@@ -967,23 +954,11 @@ function ScheduledRow({
     });
   };
   const interactive = pipe.executionId != null;
+  const menuOpen = session ? openConversationMenuId === session.id : false;
   return (
     <div
-      role={interactive ? "button" : undefined}
-      tabIndex={interactive ? 0 : undefined}
-      onClick={interactive ? onClick : undefined}
-      onKeyDown={
-        interactive
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
       className={cn(
-        "flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
+        "group relative flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
         interactive
           ? "cursor-pointer hover:bg-muted/40"
           : "cursor-default"
@@ -991,15 +966,152 @@ function ScheduledRow({
       title={`pipe: ${pipe.pipeName}`}
       data-testid={`scheduled-row-${pipe.pipeName}`}
     >
-      <span className="truncate flex-1 text-xs">
-        {pipe.title || pipe.pipeName}
-      </span>
-      <PipeActivityIndicator
-        kind="running"
-        label={elapsed ?? "now"}
-        className="shrink-0"
-        ariaLabel={`running ${elapsed ?? "now"}`}
-      />
+      <div
+        role={interactive ? "button" : undefined}
+        tabIndex={interactive ? 0 : undefined}
+        onClick={interactive ? onClick : undefined}
+        onKeyDown={
+          interactive
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onClick();
+                }
+              }
+            : undefined
+        }
+        className="min-w-0 flex-1 flex items-center gap-2 text-left"
+      >
+        <span className="truncate flex-1 text-xs">
+          {pipe.title || pipe.pipeName}
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "min-w-5 shrink-0 inline-flex justify-end transition-opacity duration-150",
+                // Mirror the recents pattern: kebab overlays the status
+                // slot on hover so the right edge stays aligned with
+                // recents rows whether or not the menu is visible.
+                "group-hover:opacity-0",
+                menuOpen && "opacity-0"
+              )}
+            >
+              <LiveSignal ariaLabel={`running ${elapsed ?? "now"}`} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
+            {`running ${elapsed ?? "now"}`}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+
+      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={(open) => {
+            if (!session) return;
+            setOpenConversationMenuId?.(open ? session.id : null);
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
+                menuOpen
+                  ? "opacity-100 visible"
+                  : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
+              )}
+              aria-label="pipe actions"
+            >
+              <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            alignOffset={2}
+            side="bottom"
+            sideOffset={4}
+            collisionPadding={8}
+            className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <DropdownMenuItem
+              className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+              onSelect={(e) => {
+                e.stopPropagation();
+                void onStopRun(pipe.pipeName);
+              }}
+            >
+              <Square className="h-3 w-3 text-muted-foreground" />
+              Stop run
+            </DropdownMenuItem>
+            {session && (
+              <>
+                <DropdownMenuSeparator className="my-1 bg-border/70" />
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    void onTogglePin(session.id);
+                  }}
+                >
+                  <Pin className="h-3 w-3 text-muted-foreground" />
+                  {session.pinned ? "Unpin" : "Pin"}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    onRenameRequest(session.id);
+                  }}
+                >
+                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                  Rename
+                </DropdownMenuItem>
+                {!session.hidden ? (
+                  <DropdownMenuItem
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      void onArchive(session.id);
+                    }}
+                  >
+                    <Archive className="h-3 w-3 text-muted-foreground" />
+                    Archive
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      void onUnarchive(session.id);
+                    }}
+                  >
+                    <Undo2 className="h-3 w-3 text-muted-foreground" />
+                    Unarchive
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator className="my-1 bg-border/70" />
+                <DropdownMenuItem
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    onDeleteRequest(session.id);
+                  }}
+                >
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -1210,11 +1322,16 @@ function Section({
           </span>
         )}
       </button>
-      {!collapsed && (
-        <div className={bodyClassName} onScroll={onBodyScroll}>
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-in-out",
+          collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
+        )}
+      >
+        <div className={cn("overflow-hidden", bodyClassName)} onScroll={collapsed ? undefined : onBodyScroll}>
           <div className="flex flex-col">{children}</div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1320,7 +1437,7 @@ export function SidebarChatRow({
                 : "text-muted-foreground"
           )}
         >
-          {session.title || "untitled"}
+          {(session.title?.startsWith("<") ? undefined : session.title) || "untitled"}
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span
@@ -1343,7 +1460,11 @@ export function SidebarChatRow({
       </button>
 
       {canShowActions && (
-        <div className="shrink-0 relative h-5 w-5">
+        // Absolute so the menu overlays the age slot instead of reserving
+        // its own column. Without this, recents rows sit ~28px further from
+        // the right edge than scheduled rows (gap-2 + w-5) and read as
+        // misaligned even when the menu is invisible.
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
           <DropdownMenu
             open={menuOpen}
             onOpenChange={(open) => {
@@ -1356,7 +1477,7 @@ export function SidebarChatRow({
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
                 className={cn(
-                  "absolute inset-0 p-0.5 rounded hover:bg-muted transition-opacity duration-150",
+                  "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
                   menuOpen
                     ? "opacity-100 visible"
                     : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"

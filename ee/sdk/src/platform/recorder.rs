@@ -16,11 +16,15 @@
 
 use crate::{PermissionStatus, RecorderOptions};
 use anyhow::{anyhow, Context, Result};
+use screenpipe_a11y::tree::{
+    create_tree_walker, SkipReason, TreeWalkResult, TreeWalkerConfig,
+};
 use screenpipe_core::video::{finish_ffmpeg_process, start_ffmpeg_process, write_frame_to_ffmpeg};
+use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::monitor::{list_monitors_detailed, SafeMonitor};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -29,22 +33,90 @@ use tracing::{debug, info, warn};
 
 const TARGET_FPS: f64 = 15.0;
 const VIDEO_QUALITY: &str = "balanced";
+/// How often the focus-watcher task re-evaluates the filter against the
+/// currently focused window. 1 Hz is the slowest cadence that still feels
+/// "responsive" when a user alt-tabs into a banking site — and walking the
+/// AX tree more often than that would compete with the capture thread.
+const FILTER_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub struct RecorderImpl {
     options: RecorderOptions,
+    filter: Arc<FilterState>,
     stop_flag: Arc<AtomicBool>,
     frames_written: Arc<AtomicU64>,
     handle: Option<JoinHandle<Result<()>>>,
+    filter_handle: Option<JoinHandle<()>>,
+}
+
+/// Cached state shared between the focus-watcher task and the capture loop.
+/// `paused` is the only thing the capture loop reads per frame — keep it on
+/// a hot, lock-free path. The pattern lists themselves sit behind a
+/// `RwLock` so `set_filters` can swap them at runtime without restarting
+/// the recorder.
+struct FilterState {
+    config: StdRwLock<FilterConfig>,
+    paused: AtomicBool,
+    last_reason: StdRwLock<Option<String>>,
+}
+
+struct FilterConfig {
+    filters: WindowFilters,
+    ignored_windows: Vec<String>,
+    included_windows: Vec<String>,
+    ignored_urls: Vec<String>,
+}
+
+impl FilterConfig {
+    fn is_empty(&self) -> bool {
+        self.ignored_windows.is_empty()
+            && self.included_windows.is_empty()
+            && self.ignored_urls.is_empty()
+    }
 }
 
 impl RecorderImpl {
     pub fn new(options: RecorderOptions) -> Result<Self> {
+        let filter = build_filter_state(&options);
         Ok(Self {
             options,
+            filter,
             stop_flag: Arc::new(AtomicBool::new(false)),
             frames_written: Arc::new(AtomicU64::new(0)),
             handle: None,
+            filter_handle: None,
         })
+    }
+
+    /// Snapshot of the current pause + reason. Cheap — atomic load + a
+    /// short-held read lock on the reason string.
+    pub fn filter_status(&self) -> (bool, Option<String>) {
+        let paused = self.filter.paused.load(Ordering::Relaxed);
+        let reason = self
+            .filter
+            .last_reason
+            .read()
+            .ok()
+            .and_then(|g| g.clone());
+        (paused, reason)
+    }
+
+    /// Replace the filter lists. The next watcher tick (≤ 1 s) re-evaluates
+    /// against the new rules. Safe to call before, during, or after
+    /// `start()`.
+    pub fn set_filters(
+        &self,
+        ignored_windows: Vec<String>,
+        included_windows: Vec<String>,
+        ignored_urls: Vec<String>,
+    ) {
+        if let Ok(mut cfg) = self.filter.config.write() {
+            *cfg = FilterConfig {
+                filters: WindowFilters::new(&ignored_windows, &included_windows, &ignored_urls),
+                ignored_windows,
+                included_windows,
+                ignored_urls,
+            };
+        }
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -83,9 +155,10 @@ impl RecorderImpl {
         let stop_flag = Arc::clone(&self.stop_flag);
         let frames_written = Arc::clone(&self.frames_written);
         let stdin_loop = Arc::clone(&stdin_arc);
+        let filter_loop = Arc::clone(&self.filter);
 
         let handle = tokio::spawn(async move {
-            capture_loop(monitor, stdin_loop, stop_flag, frames_written).await;
+            capture_loop(monitor, stdin_loop, stop_flag, frames_written, filter_loop).await;
             // Hand ownership of the stdin back to finish_ffmpeg_process so
             // it can drop+close it before waiting for the child.
             let stdin_opt = Arc::try_unwrap(stdin_arc).ok().and_then(|m| m.into_inner());
@@ -94,6 +167,18 @@ impl RecorderImpl {
         });
 
         self.handle = Some(handle);
+
+        // Always spawn the focus-watcher. When all filter lists are empty
+        // the watcher short-circuits per tick (one lock + three is_empty
+        // checks) so an unconfigured recorder pays microseconds/sec.
+        // Always-on means `set_filters()` can flip behavior at runtime
+        // without needing to restart the capture pipeline.
+        let stop_flag_w = Arc::clone(&self.stop_flag);
+        self.filter_handle = Some(tokio::spawn(focus_watch_loop(
+            Arc::clone(&self.filter),
+            stop_flag_w,
+        )));
+
         Ok(())
     }
 
@@ -108,6 +193,17 @@ impl RecorderImpl {
                 Ok(Err(e)) => return Err(e.context("capture task")),
                 Err(e) => return Err(anyhow!("capture task panicked: {e}")),
             }
+        }
+        if let Some(h) = self.filter_handle.take() {
+            // The focus watcher exits on stop_flag — joining is cheap.
+            let _ = h.await;
+        }
+        // Reset the paused flag + reason so a subsequent `start()` on the
+        // same recorder begins from a clean "record" state until the
+        // watcher catches up.
+        self.filter.paused.store(false, Ordering::SeqCst);
+        if let Ok(mut r) = self.filter.last_reason.write() {
+            *r = None;
         }
         info!(
             "screenpipe-sdk: stopped. {} frames written to {}",
@@ -181,6 +277,7 @@ async fn capture_loop(
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stop_flag: Arc<AtomicBool>,
     frames_written: Arc<AtomicU64>,
+    filter: Arc<FilterState>,
 ) {
     let frame_interval = Duration::from_millis((1000.0 / TARGET_FPS) as u64);
     let mut ticker = interval(frame_interval);
@@ -190,6 +287,15 @@ async fn capture_loop(
 
     while !stop_flag.load(Ordering::Relaxed) {
         ticker.tick().await;
+
+        // Window/URL filter: when the focus-watcher has flagged the current
+        // window as a "skip", drop this tick entirely. Because ffmpeg's
+        // image2pipe input is paced by `-r` (TARGET_FPS), a dropped frame
+        // is a hard cut in the output — the MP4 never contains the filtered
+        // moment, matching the engine's filter semantics.
+        if filter.paused.load(Ordering::Relaxed) {
+            continue;
+        }
 
         let t_cap = std::time::Instant::now();
         // capture_image uses screenpipe-screen's persistent SCK stream
@@ -251,6 +357,118 @@ async fn capture_loop(
     }
 
     debug!("screenpipe-sdk: capture loop exiting");
+}
+
+/// Build the focus-filter state from `RecorderOptions`. Always returns a
+/// state object — `set_filters()` can populate it later even when all
+/// lists start empty.
+fn build_filter_state(options: &RecorderOptions) -> Arc<FilterState> {
+    let ignored = options.ignored_windows.clone().unwrap_or_default();
+    let included = options.included_windows.clone().unwrap_or_default();
+    let urls = options.ignored_urls.clone().unwrap_or_default();
+
+    Arc::new(FilterState {
+        config: StdRwLock::new(FilterConfig {
+            filters: WindowFilters::new(&ignored, &included, &urls),
+            ignored_windows: ignored,
+            included_windows: included,
+            ignored_urls: urls,
+        }),
+        paused: AtomicBool::new(false),
+        last_reason: StdRwLock::new(None),
+    })
+}
+
+/// Background task that re-evaluates the filter against the focused window
+/// at `FILTER_POLL_INTERVAL` and flips `paused` accordingly. The tree walker
+/// applies `ignored_windows` / `included_windows` itself (short-circuiting
+/// the expensive AX walk on a match); URL matching runs on the snapshot we
+/// get back for non-ignored windows.
+///
+/// Short-circuits when the filter config is empty so the recorder pays
+/// near-zero overhead for the common "no filter" case while still leaving
+/// `set_filters()` viable at runtime.
+async fn focus_watch_loop(filter: Arc<FilterState>, stop_flag: Arc<AtomicBool>) {
+    let mut ticker = interval(FILTER_POLL_INTERVAL);
+
+    while !stop_flag.load(Ordering::Relaxed) {
+        ticker.tick().await;
+
+        // Fast path: no filter configured → make sure paused is false and
+        // skip the (potentially expensive) a11y walk entirely.
+        let is_empty = filter
+            .config
+            .read()
+            .map(|c| c.is_empty())
+            .unwrap_or(true);
+        if is_empty {
+            filter.paused.store(false, Ordering::Relaxed);
+            if let Ok(mut r) = filter.last_reason.write() {
+                *r = None;
+            }
+            continue;
+        }
+
+        let filter_clone = Arc::clone(&filter);
+        let verdict = tokio::task::spawn_blocking(move || evaluate_focus(&filter_clone)).await;
+
+        match verdict {
+            Ok(Some((should_pause, reason))) => {
+                filter.paused.store(should_pause, Ordering::Relaxed);
+                if let Ok(mut r) = filter.last_reason.write() {
+                    *r = if should_pause { reason } else { None };
+                }
+            }
+            // None = couldn't determine focused window this tick; keep the
+            // previous verdict. A11y permission not granted yet falls here.
+            Ok(None) => {}
+            Err(e) => {
+                debug!("screenpipe-sdk: focus watcher task: {e}");
+            }
+        }
+    }
+}
+
+/// Returns `Some((true, reason))` if the current focus matches a configured
+/// filter (recording should pause), `Some((false, None))` if it cleanly does
+/// not, and `None` if we couldn't determine — caller keeps the previous
+/// verdict.
+fn evaluate_focus(filter: &FilterState) -> Option<(bool, Option<String>)> {
+    let (ignored_windows, included_windows) = {
+        let cfg = filter.config.read().ok()?;
+        (cfg.ignored_windows.clone(), cfg.included_windows.clone())
+    };
+
+    let mut config = TreeWalkerConfig::default();
+    config.ignored_windows = ignored_windows;
+    config.included_windows = included_windows;
+
+    let walker = create_tree_walker(config);
+    let result = walker.walk_focused_window().ok()?;
+
+    match result {
+        TreeWalkResult::Skipped(reason) => {
+            let tag = match reason {
+                SkipReason::Incognito => "incognito",
+                SkipReason::ExcludedApp => "excluded_app",
+                SkipReason::UserIgnored => "ignored_window",
+                SkipReason::NotInIncludeList => "included_window_mismatch",
+            };
+            Some((true, Some(tag.to_string())))
+        }
+        TreeWalkResult::Found(snap) => {
+            let cfg = filter.config.read().ok()?;
+            let url = snap.browser_url.as_deref().unwrap_or("");
+            let url_blocked = !url.is_empty() && cfg.filters.is_url_blocked(url);
+            let title_blocked = cfg.filters.is_title_suggesting_blocked_url(&snap.window_name);
+            if url_blocked || title_blocked {
+                Some((true, Some("ignored_url".to_string())))
+            } else {
+                Some((false, None))
+            }
+        }
+        TreeWalkResult::NotFound => None,
+    }
 }
 
 pub async fn request_permissions() -> Result<PermissionStatus> {

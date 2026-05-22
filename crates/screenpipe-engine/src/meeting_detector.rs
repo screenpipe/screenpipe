@@ -622,6 +622,7 @@ impl MeetingUiScanner {
         let max_depth = self.max_depth;
         let scan_timeout = self.scan_timeout;
         let precomputed = PrecomputedSignal::from_signals(&profile.call_signals);
+        let attr_needs = AttrNeeds::from_signals(&precomputed);
         let min_required = profile.min_signals_required;
 
         // Wrap in catch_unwind to survive cidre/ObjC FFI panics
@@ -662,6 +663,7 @@ impl MeetingUiScanner {
                     walk_for_signals(
                         window,
                         &precomputed,
+                        attr_needs,
                         0,
                         max_depth,
                         &start,
@@ -789,6 +791,7 @@ impl MeetingUiScanner {
 fn walk_for_signals(
     elem: &cidre::ax::UiElement,
     signals: &[PrecomputedSignal],
+    needs: AttrNeeds,
     depth: usize,
     max_depth: usize,
     start: &Instant,
@@ -808,9 +811,24 @@ fn walk_for_signals(
         Err(_) => return,
     };
 
-    let title = get_ax_string_attr(elem, cidre::ax::attr::title());
-    let desc = get_ax_string_attr(elem, cidre::ax::attr::desc());
-    let identifier = get_ax_identifier(elem);
+    // Only fetch attributes the current signal set actually consults — each
+    // get_* is a synchronous cross-process AX IPC and was the dominant cost
+    // in CPU profiling.
+    let title = if needs.title {
+        get_ax_string_attr(elem, cidre::ax::attr::title())
+    } else {
+        None
+    };
+    let desc = if needs.desc {
+        get_ax_string_attr(elem, cidre::ax::attr::desc())
+    } else {
+        None
+    };
+    let identifier = if needs.identifier {
+        get_ax_identifier(elem)
+    } else {
+        None
+    };
 
     // Lowercase node fields ONCE, not once per signal
     let title_lower = title.as_deref().map(|t| t.to_lowercase());
@@ -860,6 +878,7 @@ fn walk_for_signals(
             walk_for_signals(
                 child,
                 signals,
+                needs,
                 depth + 1,
                 max_depth,
                 start,
@@ -877,6 +896,56 @@ struct PrecomputedSignal {
     signal: CallSignal,
     /// Pre-lowercased match string (the substring to search for).
     lower: String,
+}
+
+/// Which AX attributes the current signal set actually consults.
+///
+/// Computed once per scan from a `PrecomputedSignal` slice and threaded
+/// through `walk_for_signals` so per-node AX IPC calls (each a cross-process
+/// roundtrip) are only paid for attrs at least one signal might match against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AttrNeeds {
+    title: bool,
+    desc: bool,
+    identifier: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl AttrNeeds {
+    fn from_signals(signals: &[PrecomputedSignal]) -> Self {
+        Self::from_call_signals(signals.iter().map(|ps| &ps.signal))
+    }
+}
+
+impl AttrNeeds {
+    /// Derive needs from a sequence of `CallSignal`s. Kept generic over the
+    /// iterator source so the same derivation drives both production
+    /// (`PrecomputedSignal` on macOS) and unit tests.
+    fn from_call_signals<'a>(signals: impl IntoIterator<Item = &'a CallSignal>) -> Self {
+        let mut n = Self::default();
+        for s in signals {
+            match s {
+                CallSignal::AutomationId(_)
+                | CallSignal::AutomationIdContains(_)
+                | CallSignal::MenuItemId(_) => {
+                    n.identifier = true;
+                }
+                CallSignal::KeyboardShortcut(_)
+                | CallSignal::RoleWithName { .. }
+                | CallSignal::NameContains(_) => {
+                    n.title = true;
+                    n.desc = true;
+                }
+                CallSignal::MenuBarItem { .. } | CallSignal::WindowTitle { .. } => {
+                    n.title = true;
+                }
+            }
+            if n.title && n.desc && n.identifier {
+                break;
+            }
+        }
+        n
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -2933,6 +3002,122 @@ async fn insert_new_meeting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── AttrNeeds tests ────────────────────────────────────────────────
+
+    #[test]
+    fn attr_needs_empty_signal_set_needs_nothing() {
+        let needs = AttrNeeds::from_call_signals(std::iter::empty());
+        assert_eq!(needs, AttrNeeds::default());
+    }
+
+    #[test]
+    fn attr_needs_identifier_only_signals() {
+        let signals = vec![
+            CallSignal::AutomationId("foo"),
+            CallSignal::AutomationIdContains("bar"),
+            CallSignal::MenuItemId("baz"),
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: false,
+                desc: false,
+                identifier: true
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_title_only_signals() {
+        let signals = vec![
+            CallSignal::MenuBarItem {
+                title_contains: "Meeting",
+            },
+            CallSignal::WindowTitle {
+                title_contains: "Zoom",
+            },
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: false,
+                identifier: false
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_title_and_desc_signals() {
+        let signals = vec![
+            CallSignal::NameContains("Leave call"),
+            CallSignal::KeyboardShortcut("⌘⇧M"),
+            CallSignal::RoleWithName {
+                role: "AXButton",
+                name_contains: "Mute",
+            },
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: false
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_mixed_signals_unions_all_attrs() {
+        let signals = vec![
+            CallSignal::AutomationId("foo"),
+            CallSignal::NameContains("Leave"),
+        ];
+        let needs = AttrNeeds::from_call_signals(signals.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: true
+            }
+        );
+    }
+
+    #[test]
+    fn attr_needs_covers_every_call_signal_variant() {
+        // Belt-and-suspenders: when a new CallSignal variant is added, this
+        // test forces an explicit match-arm decision in `from_call_signals`.
+        // If a contributor adds a variant without updating the derivation,
+        // they need to add it here too and consciously pick its attr needs.
+        let all_variants: Vec<CallSignal> = vec![
+            CallSignal::AutomationId(""),
+            CallSignal::AutomationIdContains(""),
+            CallSignal::KeyboardShortcut(""),
+            CallSignal::RoleWithName {
+                role: "",
+                name_contains: "",
+            },
+            CallSignal::MenuBarItem { title_contains: "" },
+            CallSignal::MenuItemId(""),
+            CallSignal::NameContains(""),
+            CallSignal::WindowTitle { title_contains: "" },
+        ];
+        let needs = AttrNeeds::from_call_signals(all_variants.iter());
+        assert_eq!(
+            needs,
+            AttrNeeds {
+                title: true,
+                desc: true,
+                identifier: true
+            },
+            "all variants together should require every attribute"
+        );
+    }
 
     // ── Profile tests ──────────────────────────────────────────────────
 

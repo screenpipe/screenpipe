@@ -116,6 +116,38 @@ export default function RootLayout({
       }
     }, 2_000);
 
+    // Top-level error capture for crashes that happen before React's error
+    // boundaries mount (or while they're tearing down their parent tree).
+    // The buffered console interceptor in app/providers.tsx flushes every
+    // 2s — that's enough for steady-state logs but loses entries when the
+    // page is mid-teardown. Going straight through __TAURI_INTERNALS__.invoke
+    // bypasses the buffer so the stack lands in ~/.screenpipe/screenpipe-app
+    // immediately. Wired in layout.tsx specifically because it mounts before
+    // providers.tsx finishes its first effect.
+    const directInvoke = (level: string, message: string) => {
+      try {
+        const i = (window as any).__TAURI_INTERNALS__?.invoke;
+        if (typeof i === "function") {
+          i("write_browser_logs", { entries: [{ level, message }] }).catch(() => {});
+        }
+      } catch {}
+    };
+    const handleWindowError = (e: ErrorEvent) => {
+      directInvoke(
+        "error",
+        `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno} :: stack=${e.error?.stack ?? "(no stack)"}`,
+      );
+    };
+    const handleUnhandled = (e: PromiseRejectionEvent) => {
+      const reason: any = e.reason;
+      directInvoke(
+        "error",
+        `unhandledrejection: ${reason?.message ?? String(reason)} :: stack=${reason?.stack ?? "(no stack)"}`,
+      );
+    };
+    window.addEventListener("error", handleWindowError);
+    window.addEventListener("unhandledrejection", handleUnhandled);
+
     // Auto-reload on IndexedDB disconnect (APP-2E, 27 users on v2.0.379)
     // WKWebView's IndexedDB server can crash; the page becomes unusable.
     // PostHog JS SDK uses IndexedDB for session replay — this is a known WebKit bug.
@@ -223,6 +255,8 @@ export default function RootLayout({
       window.removeEventListener("mousedown", handlePointerRecovery, true);
       window.removeEventListener("keydown", markKeyActivity, true);
       window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+      window.removeEventListener("error", handleWindowError);
+      window.removeEventListener("unhandledrejection", handleUnhandled);
       clearInterval(focusWatchdog);
     };
   }, []);

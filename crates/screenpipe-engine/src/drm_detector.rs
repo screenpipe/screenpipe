@@ -131,9 +131,12 @@ pub fn is_drm_url(url: &str) -> bool {
         .or_else(|| lower.strip_prefix("http://"))
         .unwrap_or(&lower);
     let normalized = host_and_path.strip_prefix("www.").unwrap_or(host_and_path);
+    // Extract just the host portion (before any path slash)
+    let host = normalized.split('/').next().unwrap_or(normalized);
 
     for &domain in DRM_DOMAINS {
-        if normalized.starts_with(domain) {
+        // Match exact host or any subdomain (e.g. "apps.disneyplus.com" matches "disneyplus.com")
+        if host == domain || host.strip_suffix(domain).is_some_and(|s| s.ends_with('.')) {
             return true;
         }
     }
@@ -269,6 +272,24 @@ fn get_drm_url_from_window_title(app: &cidre::ax::UiElement) -> Option<String> {
     }
     let title: &cf::String = unsafe { std::mem::transmute(&*title_val) };
     let title_lower = title.to_string().to_lowercase();
+
+    // Additional title keywords that don't match cleanly from the domain name.
+    // e.g. "disneyplus.com" → base "disneyplus" won't match title "Disney+".
+    const TITLE_ALIASES: &[(&str, &str)] = &[
+        ("disney+", "disneyplus.com"),
+        ("disney plus", "disneyplus.com"),
+        ("hbo max", "play.max.com"),
+    ];
+
+    for &(keyword, domain) in TITLE_ALIASES {
+        if title_lower.contains(keyword) {
+            debug!(
+                "DRM URL from window title alias: title='{}', matched keyword='{}' → domain={}",
+                title_lower, keyword, domain
+            );
+            return Some(format!("https://{}", domain));
+        }
+    }
 
     // Check each DRM domain's base name against the window title.
     // "netflix.com" → check for "netflix", "disneyplus.com" → "disneyplus", etc.
@@ -535,15 +556,40 @@ fn get_browser_url_ax(app: &cidre::ax::UiElement, app_name: &str) -> Option<Stri
         }
     }
 
-    // Tier 2: AppleScript for Arc
+    // Tier 2: AppleScript for browsers that don't expose AXDocument reliably
     let app_lower = app_name.to_lowercase();
-    if app_lower.contains("arc") {
+    if app_lower.contains("safari") {
+        if let Some(url) = get_safari_url_for_drm() {
+            return Some(url);
+        }
+    } else if app_lower.contains("arc") {
         if let Some(url) = get_arc_url_for_drm() {
             return Some(url);
         }
     }
 
     None
+}
+
+/// Get Safari's active tab URL via AppleScript (for DRM polling only).
+#[cfg(target_os = "macos")]
+fn get_safari_url_for_drm() -> Option<String> {
+    let script = r#"tell application "Safari" to return URL of current tab of front window"#;
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.starts_with("http://") || url.starts_with("https://") {
+        debug!("poll_drm: Safari AppleScript URL: {}", url);
+        Some(url)
+    } else {
+        None
+    }
 }
 
 /// Get Arc browser's active tab URL via AppleScript (for DRM polling only).
@@ -637,6 +683,9 @@ mod tests {
             "https://www.amazon.com/gp/video/detail/B0CXGTK4HY/ref=atv_hm"
         ));
         assert!(is_drm_url("https://amazon.com/gp/video/detail/something"));
+        // subdomain matching
+        assert!(is_drm_url("https://apps.disneyplus.com/il/shows/scrubs/123/watch"));
+        assert!(is_drm_url("https://watch.hulu.com/show/abc"));
     }
 
     #[test]
@@ -647,6 +696,9 @@ mod tests {
         assert!(!is_drm_url("https://example.com/netflix.com"));
         assert!(!is_drm_url("https://amazon.com/dp/B09V3KXJPB"));
         assert!(!is_drm_url("https://amazon.com/s?k=headphones"));
+        // subdomain anchor — must not match lookalike domains
+        assert!(!is_drm_url("https://netflix.com.evil.com/phish"));
+        assert!(!is_drm_url("https://notdisneyplus.com/page"));
     }
 
     #[test]

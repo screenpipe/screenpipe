@@ -643,7 +643,7 @@ pub struct SettingsStore {
     pub device_id: String,
     /// Auto-install updates and restart when a new version is available.
     /// When disabled, users must click "update now" in the tray menu.
-    #[serde(rename = "autoUpdate", default = "default_true")]
+    #[serde(rename = "autoUpdate", default = "default_false")]
     pub auto_update: bool,
     /// Auto-update store-installed pipes that haven't been locally modified.
     #[serde(rename = "autoUpdatePipes", default = "default_true")]
@@ -697,6 +697,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_overlay_size() -> String {
@@ -1518,6 +1522,32 @@ mod tests {
     use serde_json::json;
 
     const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
+
+    #[test]
+    fn auto_update_defaults_to_disabled() {
+        assert!(!SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn missing_auto_update_deserializes_disabled() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+
+        assert!(!settings.auto_update);
+    }
+
+    #[test]
+    fn explicit_auto_update_true_is_respected() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "autoUpdate": true
+        }))
+        .unwrap();
+
+        assert!(settings.auto_update);
+    }
 
     #[test]
     fn screenpipe_cloud_falls_back_when_not_logged_in() {

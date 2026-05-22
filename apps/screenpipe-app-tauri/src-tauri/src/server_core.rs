@@ -379,6 +379,20 @@ impl ServerCore {
                     refresher.start(store_arc.clone());
                     server.oauth_refresher = Some(refresher);
 
+                    // Background sync of memories → Claude Code's CLAUDE.md
+                    // and Codex's AGENTS.md. Runs every 5 minutes; no-ops
+                    // when neither destination is enabled in the
+                    // connections store, so it's safe to always start.
+                    let memory_sync = Arc::new(
+                        screenpipe_engine::external_memory_sync::ExternalMemorySyncScheduler::new(),
+                    );
+                    memory_sync.start(
+                        db.clone(),
+                        Some(store_arc.clone()),
+                        local_data_dir.clone(),
+                    );
+                    server.external_memory_sync = Some(memory_sync);
+
                     server.secret_store = Some(store_arc);
                 }
                 Err(e) => {

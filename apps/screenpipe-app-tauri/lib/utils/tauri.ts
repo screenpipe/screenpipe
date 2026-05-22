@@ -271,6 +271,9 @@ async getBootPhase() : Promise<BootPhaseSnapshot> {
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
 },
+async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
+    return await TAURI_INVOKE("get_enterprise_install_metadata");
+},
 /**
  * Toggle the "Cloud audio + video + image analysis" capability
  * in the screenpipe-api skill that Pi installs on every run.
@@ -976,9 +979,9 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null, displayPreview: string | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
+    return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images, displayPreview }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1502,6 +1505,7 @@ export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
+export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
@@ -1510,7 +1514,7 @@ export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null; needs_attention?: boolean }
-export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
+export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null; 

@@ -7,14 +7,14 @@
 </p>
 
 <p align="center">
-   <a href="README.md">English</a> | <a href="README-zh_CN.md">简体中文</a> | <a href="README-ja.md">日本語</a>
+   <a href="../README.md">English</a> | <a href="README-zh_CN.md">简体中文</a> | <a href="README-ja.md">日本語</a> | <a href="README-fr.md">Français</a> | <a href="README-es.md">Español</a> | <a href="README-pt_BR.md">Português (BR)</a> | <a href="README-de.md">Deutsch</a>
 </p>
 
 <h1 align="center">[ screenpipe ]</h1>
 
 
-<p align="center">桌面的 24/7 记忆</p>
-<p align="center">开源版 rewind。100% 本地运行。数据完全属于你。</p>
+<p align="center">a memória 24/7 do seu computador</p>
+<p align="center">rewind open source. 100% local. seus dados são seus.</p>
 
 
 
@@ -26,10 +26,10 @@
 
 <p align="center">
     <a href="https://screenpi.pe" target="_blank">
-        <img src="https://img.shields.io/badge/下载-桌面应用-black?style=for-the-badge" alt="下载">
+        <img src="https://img.shields.io/badge/baixar-aplicativo%20desktop-black?style=for-the-badge" alt="baixar">
     </a>
     <a href="https://github.com/screenpipe/screenpipe/releases?q=mcp-v&expanded=true" target="_blank">
-        <img src="https://img.shields.io/badge/安装-Claude%20扩展-D97706?style=for-the-badge&logo=anthropic&logoColor=white" alt="安装 claude 扩展">
+        <img src="https://img.shields.io/badge/instalar-extens%C3%A3o%20Claude-D97706?style=for-the-badge&logo=anthropic&logoColor=white" alt="instalar extensão claude">
     </a>
 </p>
 
@@ -38,7 +38,7 @@
         <img src="https://img.shields.io/discord/823813159592001537?color=5865F2&logo=discord&logoColor=white&style=flat-square" alt="discord">
     </a>
     <a href="https://twitter.com/screenpipe">
-        <img alt="x" src="https://img.shields.io/twitter/url/https/twitter.com/diffuserslib.svg?style=social&label=关注%20%40screenpipe">
+        <img alt="x" src="https://img.shields.io/twitter/url/https/twitter.com/diffuserslib.svg?style=social&label=seguir%20%40screenpipe">
     </a>
 </p>
 
@@ -50,36 +50,36 @@
 
 ---
 
-## 这是什么？
+## o que é isso?
 
-screenpipe 全天候录制你的屏幕和音频，所有数据存储在本地，让你将数字历史与 AI 连接起来。
+screenpipe grava sua tela e áudio 24/7, armazena tudo localmente e permite que você conecte seu histórico digital à IA.
 
 ```
 ┌─────────────────────────────────────────┐
-│  屏幕 + 音频 → 本地存储 → AI            │
+│  tela + áudio → local → ia              │
 └─────────────────────────────────────────┘
 ```
 
-- **记住一切** - 永远不会忘记你看到、听到或做过的事情
-- **AI 搜索** - 用自然语言查找任何内容
-- **100% 本地** - 你的数据永远不会离开你的设备
-- **开源** - 可检查、可修改、完全拥有
+- **lembre-se de tudo** — nunca esqueça o que você viu, ouviu ou fez
+- **busca com IA** — encontre qualquer coisa em linguagem natural
+- **100% local** — seus dados nunca saem da sua máquina
+- **open source** — inspecionável, modificável, seu
 
-## 安装
+## instalação
 
-[下载桌面应用](https://screenpi.pe) — 支持 macOS、Windows、Linux
+[baixar o aplicativo desktop](https://screenpi.pe) — macOS, Windows, Linux
 
-## 配置要求
+## requisitos
 
-- 10% CPU 使用率
-- 4GB 内存
-- 约 15GB 存储/月
-- 支持离线运行
+- 10% de CPU
+- 4 GB de RAM
+- ~15 GB de armazenamento por mês
+- funciona offline
 
 ---
 
 <p align="center">
-    <a href="https://docs.screenpi.pe">文档</a> ·
+    <a href="https://docs.screenpi.pe">documentação</a> ·
     <a href="https://discord.gg/screenpipe">discord</a> ·
     <a href="https://twitter.com/screenpipe">x</a>
 </p>

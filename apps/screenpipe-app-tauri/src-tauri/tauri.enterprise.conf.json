@@ -9,7 +9,7 @@
     "devUrl": "http://localhost:3000"
   },
   "bundle": {
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "active": true,
     "publisher": "Screenpipe Inc.",
     "category": "DeveloperTool",
@@ -60,8 +60,12 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [],
-      "pubkey": ""
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://screenpi.pe/api/app-update/enterprise/{{target}}-{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIyQjQ2RkQzMUNBOUFDMTcKUldRWHJLa2MwMiswSWl3RlBGUW5zYUE0Zm0vNFFRRTltNUZZTUVxR2FxUDNtSWdUSHgyL3JNcmcK"
     },
     "deep-link": {
       "desktop": {

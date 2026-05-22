@@ -15,7 +15,9 @@ pub mod brex;
 pub mod browser;
 pub mod calcom;
 pub mod calendly;
+pub mod claude_code;
 pub mod clickup;
+pub mod codex;
 pub mod confluence;
 pub mod discord;
 pub mod email;
@@ -296,6 +298,8 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(resend::Resend),
         Box::new(supabase::Supabase),
         Box::new(zoom::Zoom),
+        Box::new(claude_code::ClaudeCode),
+        Box::new(codex::Codex),
     ]
 }
 

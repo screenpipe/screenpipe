@@ -4,9 +4,6 @@
   "description": "screenpipe CLI binary for macOS x64",
   "os": ["darwin"],
   "cpu": ["x64"],
-  "bin": {
-    "screenpipe": "bin/screenpipe"
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/screenpipe/screenpipe"
