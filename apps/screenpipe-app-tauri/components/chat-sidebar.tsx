@@ -1214,11 +1214,16 @@ function Section({
           </span>
         )}
       </button>
-      {!collapsed && (
-        <div className={bodyClassName} onScroll={onBodyScroll}>
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-in-out",
+          collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
+        )}
+      >
+        <div className={cn("overflow-hidden", bodyClassName)} onScroll={collapsed ? undefined : onBodyScroll}>
           <div className="flex flex-col">{children}</div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1324,7 +1329,7 @@ export function SidebarChatRow({
                 : "text-muted-foreground"
           )}
         >
-          {session.title || "untitled"}
+          {(session.title?.startsWith("<") ? undefined : session.title) || "untitled"}
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span
