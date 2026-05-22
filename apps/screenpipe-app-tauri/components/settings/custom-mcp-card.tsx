@@ -223,8 +223,8 @@ export function CustomMcpCard() {
             </span>
             <span className="ml-auto">
               {servers.some((s) => s.enabled)
-                ? "● connected"
-                : "○ not connected"}
+                ? "● enabled"
+                : "○ disabled"}
             </span>
           </div>
         </div>
@@ -414,6 +414,16 @@ function ServerEditor({
     () => name.trim().length > 0 && url.trim().length > 0 && !saving,
     [name, url, saving]
   );
+
+  // Auto-probe on open in edit mode so the user immediately sees
+  // whether the server is reachable without having to click "Test connection".
+  useEffect(() => {
+    if (mode === "edit" && url.trim().length > 0) {
+      handleTest();
+    }
+    // Only run once on mount — eslint-disable-next-line is intentional.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const updateHeader = (idx: number, patch: Partial<McpHeader>) => {
     setHeaders((prev) =>

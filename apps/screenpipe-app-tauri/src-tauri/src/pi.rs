@@ -1474,6 +1474,12 @@ pub async fn pi_start_inner(
         }
     }
 
+    // Pass the screenpipe API auth key so mcp-bridge.ts can authenticate
+    // its GET /mcp-servers calls (returns 403 without this).
+    if let Some(key) = crate::store::resolved_api_auth_key() {
+        cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+    }
+
     // Spawn process
     let mut child = cmd
         .spawn()
