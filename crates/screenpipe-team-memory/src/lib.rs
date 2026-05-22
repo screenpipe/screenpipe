@@ -32,9 +32,9 @@
 //!
 //! ## Protocol guarantees
 //!
-//! - **Four reserved keys** in the frontmatter: `id`, `created_at`,
-//!   `kind`, `source`. All are optional in the file but recommended;
-//!   missing values surface as `None` on [`Memory`].
+//! - **Five reserved keys** in the frontmatter: `id`, `created_at`,
+//!   `kind`, `source`, `provenance`. All are optional in the file but
+//!   recommended; missing values surface as `None` on [`Memory`].
 //! - **Everything else in the frontmatter** is preserved verbatim in
 //!   [`Memory::extra`] (a `serde_yaml::Mapping`) — pipes can attach
 //!   arbitrary metadata without us teaching this crate about it.
@@ -45,6 +45,31 @@
 //! - **`kind` is freeform** — not an enum, not validated. Pipe authors
 //!   pick what they emit (`session-summary`, `playbook`, `sop`,
 //!   `agent-spec`, anything). MCP clients filter by string match.
+//!
+//! ## Provenance & worker tiers
+//!
+//! [`Provenance`] records *which worker tier and model produced the
+//! memory* so consumers (MCP audit tools, compliance dashboards) can
+//! filter on it generically without parsing pipe-specific strings.
+//!
+//! The three worker tiers that the team-workspace stack ships against:
+//!
+//! | tier          | typical model        | trust story                      |
+//! |---------------|----------------------|----------------------------------|
+//! | `cloud`       | `claude-opus-4-7`    | standard SaaS, fastest path      |
+//! | `tinfoil`     | open model in TEE    | remote-attested enclave, no logs |
+//! | `self-hosted` | customer's choice    | customer's own infra + key       |
+//!
+//! Tier strings are *not* enforced — pipes write whatever string the
+//! deployment uses (a new tier doesn't need a code change here). The
+//! [`Provenance::attestation`] field is where Tinfoil deployments record
+//! the image SHA, and self-hosted records a git commit SHA or whatever
+//! the customer's audit story expects.
+//!
+//! DirectEncrypted telemetry (see `ee/desktop-rust/enterprise_upload.rs`)
+//! is only readable by `tinfoil` and `self-hosted` workers; if a memory
+//! produced from encrypted telemetry shows `provenance.worker == cloud`,
+//! that's an audit-trail violation worth investigating.
 //!
 //! ## What this crate is *not*
 //!
@@ -96,11 +121,42 @@ pub struct Memory {
     /// Identifier of the pipe (or human) that produced this memory.
     /// Used for `git blame`-style provenance in MCP clients.
     pub source: Option<String>,
+    /// Which worker tier + model produced this memory. See [`Provenance`]
+    /// and the crate-level "Provenance & worker tiers" section.
+    pub provenance: Option<Provenance>,
     /// Everything else in the frontmatter, untouched. Empty if the
     /// file had no frontmatter or only the reserved keys.
     pub extra: serde_yaml::Mapping,
     /// Markdown body. Empty string if the file was frontmatter-only.
     pub body: String,
+}
+
+/// Audit trail for the compute that produced a memory.
+///
+/// Every field is optional — partial provenance (e.g. `worker` known but
+/// `attestation` unknown for `cloud`) is the normal case. Pipes that
+/// don't care about provenance can omit the whole block.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Provenance {
+    /// Deployment tier: typically `cloud`, `tinfoil`, or `self-hosted`,
+    /// but freeform — adding a tier doesn't require a code change here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    /// Model identifier as the producing pipe knows it
+    /// (e.g. `claude-opus-4-7`, `google/gemma-3-27b-it`, `gpt-5.5`).
+    /// Freeform — we don't validate against a known-models list because
+    /// the set changes faster than this crate is released.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Audit anchor: Tinfoil image SHA, self-hosted container's git
+    /// commit SHA, or whatever the deployment uses to prove "this exact
+    /// code touched the data". `None` for `cloud` (no attestation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<String>,
+    /// Additional provenance keys preserved verbatim (region, cost
+    /// center, request id, etc.).
+    #[serde(flatten, default, skip_serializing_if = "serde_yaml::Mapping::is_empty")]
+    pub extra: serde_yaml::Mapping,
 }
 
 const FRONTMATTER_DELIM: &str = "---";
@@ -115,6 +171,8 @@ struct ReservedFrontmatter {
     kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance: Option<Provenance>,
 }
 
 impl Memory {
@@ -195,6 +253,7 @@ impl Memory {
             created_at: reserved.created_at,
             kind: reserved.kind,
             source: reserved.source,
+            provenance: reserved.provenance,
             extra: mapping,
             body: body.to_string(),
         })
@@ -210,7 +269,8 @@ impl Memory {
         let has_reserved = self.id.is_some()
             || self.created_at.is_some()
             || self.kind.is_some()
-            || self.source.is_some();
+            || self.source.is_some()
+            || self.provenance.is_some();
         let has_extra = !self.extra.is_empty();
 
         if !has_reserved && !has_extra {
@@ -231,6 +291,9 @@ impl Memory {
         }
         if let Some(v) = &self.source {
             combined.insert("source".into(), YamlValue::String(v.clone()));
+        }
+        if let Some(p) = &self.provenance {
+            combined.insert("provenance".into(), serde_yaml::to_value(p)?);
         }
         for (k, v) in &self.extra {
             combined.insert(k.clone(), v.clone());
@@ -289,7 +352,7 @@ fn find_close(haystack: &str) -> Option<(&str, &str)> {
 
 fn extract_reserved(mapping: &mut serde_yaml::Mapping) -> serde_yaml::Mapping {
     let mut out = serde_yaml::Mapping::new();
-    for key in ["id", "created_at", "kind", "source"] {
+    for key in ["id", "created_at", "kind", "source", "provenance"] {
         if let Some(v) = mapping.remove(YamlValue::String(key.to_string())) {
             out.insert(YamlValue::String(key.to_string()), v);
         }
@@ -447,9 +510,108 @@ tags:\n  - salesforce\n  - q3\n\
             source: Some("workflow-discovery".into()),
             extra,
             body: "# title\n\nbody text".into(),
+            ..Memory::default()
         };
         let rendered = original.render().unwrap();
         let parsed = Memory::parse(&rendered).unwrap();
         assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn parse_provenance_cloud_tier() {
+        let raw = "---\n\
+id: m\n\
+provenance:\n  worker: cloud\n  model: claude-opus-4-7\n\
+---\nbody";
+        let m = Memory::parse(raw).unwrap();
+        let p = m.provenance.unwrap();
+        assert_eq!(p.worker.as_deref(), Some("cloud"));
+        assert_eq!(p.model.as_deref(), Some("claude-opus-4-7"));
+        assert!(p.attestation.is_none());
+        assert!(p.extra.is_empty());
+    }
+
+    #[test]
+    fn parse_provenance_tinfoil_with_attestation() {
+        let raw = "---\n\
+id: m\n\
+provenance:\n  worker: tinfoil\n  model: google/gemma-3-27b-it\n  attestation: sha256:abc123\n\
+---\nbody";
+        let m = Memory::parse(raw).unwrap();
+        let p = m.provenance.unwrap();
+        assert_eq!(p.worker.as_deref(), Some("tinfoil"));
+        assert_eq!(p.attestation.as_deref(), Some("sha256:abc123"));
+    }
+
+    #[test]
+    fn parse_provenance_preserves_unknown_keys_in_extra() {
+        // A future deployment might attach `region` or `request_id` —
+        // those round-trip via `Provenance::extra` without us teaching
+        // this crate about them.
+        let raw = "---\n\
+provenance:\n  worker: cloud\n  region: us-east-1\n  request_id: r-42\n\
+---\nbody";
+        let m = Memory::parse(raw).unwrap();
+        let p = m.provenance.unwrap();
+        assert_eq!(p.worker.as_deref(), Some("cloud"));
+        assert_eq!(
+            p.extra.get("region").and_then(|v| v.as_str()),
+            Some("us-east-1")
+        );
+        assert_eq!(
+            p.extra.get("request_id").and_then(|v| v.as_str()),
+            Some("r-42")
+        );
+    }
+
+    #[test]
+    fn render_provenance_roundtrips() {
+        let mut prov_extra = serde_yaml::Mapping::new();
+        prov_extra.insert(
+            "region".into(),
+            YamlValue::String("us-east-1".into()),
+        );
+        let original = Memory {
+            id: Some("m1".into()),
+            provenance: Some(Provenance {
+                worker: Some("tinfoil".into()),
+                model: Some("google/gemma-3-27b-it".into()),
+                attestation: Some("sha256:deadbeef".into()),
+                extra: prov_extra,
+            }),
+            body: "body".into(),
+            ..Memory::default()
+        };
+        let rendered = original.render().unwrap();
+        let parsed = Memory::parse(&rendered).unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn render_omits_provenance_when_none() {
+        // A `Memory::default()` with body only must NOT render an empty
+        // `provenance: null` line — that would clutter every memory that
+        // doesn't bother with attestation.
+        let m = Memory {
+            id: Some("m".into()),
+            body: "body".into(),
+            ..Memory::default()
+        };
+        let rendered = m.render().unwrap();
+        assert!(!rendered.contains("provenance"), "got: {rendered}");
+    }
+
+    #[test]
+    fn provenance_reserved_keys_not_leaked_into_top_level_extra() {
+        // Bug guard: an earlier shape of extract_reserved forgot
+        // `provenance`, which left the whole nested block in
+        // `Memory::extra` AND duplicated in `Memory::provenance`.
+        let raw = "---\nprovenance:\n  worker: cloud\n---\nbody";
+        let m = Memory::parse(raw).unwrap();
+        assert!(m.provenance.is_some());
+        assert!(
+            !m.extra.contains_key(YamlValue::String("provenance".into())),
+            "provenance leaked into extras"
+        );
     }
 }
