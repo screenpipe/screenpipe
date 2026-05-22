@@ -155,7 +155,11 @@ pub struct Provenance {
     pub attestation: Option<String>,
     /// Additional provenance keys preserved verbatim (region, cost
     /// center, request id, etc.).
-    #[serde(flatten, default, skip_serializing_if = "serde_yaml::Mapping::is_empty")]
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "serde_yaml::Mapping::is_empty"
+    )]
     pub extra: serde_yaml::Mapping,
 }
 
@@ -239,14 +243,15 @@ impl Memory {
             }
         };
 
-        let reserved: ReservedFrontmatter = serde_yaml::from_value(YamlValue::Mapping(
-            extract_reserved(&mut mapping),
-        ))?;
+        let reserved: ReservedFrontmatter =
+            serde_yaml::from_value(YamlValue::Mapping(extract_reserved(&mut mapping)))?;
 
         // Strip exactly one newline after the closing `---` so the
         // body doesn't start with a phantom blank line that wasn't in
         // the producer's intent.
-        let body = body_after_close.strip_prefix('\n').unwrap_or(body_after_close);
+        let body = body_after_close
+            .strip_prefix('\n')
+            .unwrap_or(body_after_close);
 
         Ok(Memory {
             id: reserved.id,
@@ -567,10 +572,7 @@ provenance:\n  worker: cloud\n  region: us-east-1\n  request_id: r-42\n\
     #[test]
     fn render_provenance_roundtrips() {
         let mut prov_extra = serde_yaml::Mapping::new();
-        prov_extra.insert(
-            "region".into(),
-            YamlValue::String("us-east-1".into()),
-        );
+        prov_extra.insert("region".into(), YamlValue::String("us-east-1".into()));
         let original = Memory {
             id: Some("m1".into()),
             provenance: Some(Provenance {
