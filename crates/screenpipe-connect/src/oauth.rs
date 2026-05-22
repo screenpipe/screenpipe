@@ -104,10 +104,14 @@ pub struct OAuthConfig {
 // SecretStore key helper
 // ---------------------------------------------------------------------------
 
+/// Prefix every OAuth secret key starts with. Public so the background
+/// refresh scheduler can enumerate stored tokens via `SecretStore::list`.
+pub const STORE_KEY_PREFIX: &str = "oauth:";
+
 fn store_key(integration_id: &str, instance: Option<&str>) -> String {
     match instance {
-        Some(inst) => format!("oauth:{}:{}", integration_id, inst),
-        None => format!("oauth:{}", integration_id),
+        Some(inst) => format!("{}{}:{}", STORE_KEY_PREFIX, integration_id, inst),
+        None => format!("{}{}", STORE_KEY_PREFIX, integration_id),
     }
 }
 
@@ -205,17 +209,32 @@ pub async fn load_oauth_json(
         return None;
     }
     let instances = list_oauth_instances(store, integration_id).await;
-    let named: Vec<Option<String>> = instances.into_iter().filter(|i| i.is_some()).collect();
-    if named.len() == 1 {
-        let inst = named[0].as_deref();
-        tracing::debug!(
-            "oauth: {} default lookup empty, falling back to single instance {:?}",
-            integration_id,
-            inst
-        );
-        return load_oauth_json_exact(store, integration_id, inst).await;
+    let named: Vec<String> = instances.into_iter().flatten().collect();
+    match named.len() {
+        0 => None,
+        1 => {
+            let inst = named[0].as_str();
+            tracing::debug!(
+                "oauth: {} default lookup empty, falling back to single instance {:?}",
+                integration_id,
+                inst
+            );
+            load_oauth_json_exact(store, integration_id, Some(inst)).await
+        }
+        _ => {
+            // Ambiguous: multiple instances, caller didn't pick. Surface
+            // the available list so debugging beats grep. The caller still
+            // gets None (returning a random instance would be worse — we
+            // could leak the wrong account's data).
+            tracing::warn!(
+                "oauth: {} default lookup empty and {} instances exist ({}) — caller passed instance=None; pick one explicitly",
+                integration_id,
+                named.len(),
+                named.join(", "),
+            );
+            None
+        }
     }
-    None
 }
 
 fn oauth_json_has_valid_access_token(v: &Value) -> bool {
@@ -400,6 +419,13 @@ pub async fn write_oauth_token_instance(
     if let Some(expires_in) = data["expires_in"].as_u64() {
         stored["expires_at"] = Value::from(unix_now() + expires_in);
     }
+    // Stamp every write. Every path into this function — initial
+    // `exchange_code`, lazy `refresh_token_instance`, and the background
+    // scheduler — has just round-tripped the provider's token endpoint,
+    // so "last_refreshed_at" is accurate for all of them. The background
+    // scheduler uses this field to decide whether providers with sliding
+    // refresh-token windows (Zoom: 15h) need a keep-alive refresh.
+    stored["last_refreshed_at"] = Value::from(unix_now());
 
     // SecretStore path — no plaintext shadow on disk.
     if let Some(s) = store {

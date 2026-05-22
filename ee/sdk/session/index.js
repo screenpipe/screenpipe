@@ -93,6 +93,9 @@ function createScreenpipeSession(options = {}) {
   let startedAt = null;
   let stopping = null;
   let operationQueue = Promise.resolve();
+  let filterWatcherTimer = null;
+  let lastFilterPaused = false;
+  let lastFilterReason = null;
 
   const baseRecorderOptions = options.recorderOptions || {};
   const outputDir =
@@ -141,6 +144,47 @@ function createScreenpipeSession(options = {}) {
     };
   }
 
+  // Poll the native recorder's filter state at ~1 Hz and emit
+  // `paused`/`resumed` events whenever the verdict flips. The native
+  // watcher already runs at 1 Hz; matching that here keeps event latency
+  // bounded to one tick without ever leading the recorder.
+  async function pollFilterState() {
+    if (!recorder || !recorder.filterStatus) return;
+    let status;
+    try {
+      status = await recorder.filterStatus();
+    } catch {
+      return;
+    }
+    const paused = !!status.paused;
+    const reason = status.reason || null;
+    if (paused !== lastFilterPaused || reason !== lastFilterReason) {
+      const event = paused ? "paused" : "resumed";
+      lastFilterPaused = paused;
+      lastFilterReason = reason;
+      emit(event, { paused, reason });
+    }
+  }
+
+  function startFilterWatcher() {
+    stopFilterWatcher();
+    lastFilterPaused = false;
+    lastFilterReason = null;
+    filterWatcherTimer = setInterval(() => {
+      pollFilterState().catch(() => {});
+    }, 1000);
+    if (typeof filterWatcherTimer.unref === "function") {
+      filterWatcherTimer.unref();
+    }
+  }
+
+  function stopFilterWatcher() {
+    if (filterWatcherTimer) {
+      clearInterval(filterWatcherTimer);
+      filterWatcherTimer = null;
+    }
+  }
+
   function getPreviewRecorder() {
     if (!previewRecorder) {
       previewRecorder = new Recorder({
@@ -174,6 +218,7 @@ function createScreenpipeSession(options = {}) {
     recorder = next;
     output = nextOutput;
     startedAt = now();
+    startFilterWatcher();
     const nextStatus = await status();
     emit("start", nextStatus);
     return nextStatus;
@@ -187,6 +232,7 @@ function createScreenpipeSession(options = {}) {
     const finalOutput = output;
     const finalStartedAt = startedAt;
     stopping = (async () => {
+      stopFilterWatcher();
       let frames = 0;
       try {
         frames = await active.framesWritten();
@@ -240,6 +286,30 @@ function createScreenpipeSession(options = {}) {
 
     async stop() {
       return await runSerialized(stop);
+    },
+
+    async setFilters(patch = {}) {
+      const active = recorder || getPreviewRecorder();
+      if (active && typeof active.setFilters === "function") {
+        await active.setFilters(patch);
+      }
+      // Re-poll immediately so the event fires without waiting for the
+      // next 1 s tick when callers flip filters in response to a user
+      // action.
+      await pollFilterState();
+    },
+
+    async filterStatus() {
+      const active = recorder || getPreviewRecorder();
+      if (!active || typeof active.filterStatus !== "function") {
+        return { paused: false, reason: null };
+      }
+      try {
+        const s = await active.filterStatus();
+        return { paused: !!s.paused, reason: s.reason || null };
+      } catch {
+        return { paused: false, reason: null };
+      }
     },
 
     async snapshot() {

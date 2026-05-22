@@ -112,12 +112,43 @@ fn get_target_arch() -> &'static str {
 pub fn is_source_build(_app: &tauri::AppHandle) -> bool {
     // The official-build feature is only enabled during CI releases
     // Source builds will not have this feature enabled
-    !cfg!(feature = "official-build")
+    !cfg!(feature = "official-build") && !cfg!(feature = "enterprise-build")
 }
 
 /// Enterprise build: updates are managed by IT (Intune/RoboPack), not in-app.
 pub fn is_enterprise_build(_app: &tauri::AppHandle) -> bool {
     cfg!(feature = "enterprise-build")
+}
+
+fn enterprise_app_update_policy(app: &tauri::AppHandle) -> Option<serde_json::Value> {
+    SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.extra.get("enterpriseAppUpdatePolicy").cloned())
+}
+
+fn enterprise_update_mode(app: &tauri::AppHandle) -> Option<String> {
+    enterprise_app_update_policy(app)
+        .and_then(|policy| {
+            policy
+                .get("mode")
+                .and_then(|mode| mode.as_str())
+                .map(str::to_string)
+        })
+        .map(|mode| mode.to_lowercase())
+}
+
+fn enterprise_updates_managed_locally(app: &tauri::AppHandle) -> bool {
+    let metadata = crate::enterprise_install_metadata::get_enterprise_install_metadata();
+    match enterprise_update_mode(app).as_deref() {
+        Some("screenpipe") => false,
+        Some("auto_detect") => metadata.managed,
+        Some("mdm") | Some("manual") => true,
+        // Missing/unknown policy → behave like a new org with the consumer
+        // banner flow. Existing orgs are explicitly pinned to "manual" via
+        // the website migration so they hit the arm above, not this one.
+        _ => false,
+    }
 }
 
 pub struct UpdatesManager {
@@ -179,9 +210,13 @@ impl UpdatesManager {
         }
         let _guard = CheckGuard(&self.is_checking);
 
-        // Enterprise: updates managed by IT (Intune/RoboPack), no in-app check
-        if is_enterprise_build(&self.app) {
-            info!("enterprise build, updates managed by IT");
+        // Enterprise: default to IT-managed updates unless the dashboard policy
+        // explicitly allows the Screenpipe updater for this install context.
+        if is_enterprise_build(&self.app) && enterprise_updates_managed_locally(&self.app) {
+            info!(
+                "enterprise build, updates managed outside app (mode={:?})",
+                enterprise_update_mode(&self.app)
+            );
             return Result::Ok(false);
         }
 
@@ -219,7 +254,11 @@ impl UpdatesManager {
         );
         // Build updater with auth header so paid users can download from R2
         let mut builder = self.app.updater_builder();
-        if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
+        if is_enterprise_build(&self.app) {
+            if let Some(license_key) = crate::commands::get_enterprise_license_key() {
+                builder = builder.header("X-License-Key", license_key)?;
+            }
+        } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
             if let Some(ref token) = settings.user.token {
                 builder = builder.header("Authorization", format!("Bearer {}", token))?;
             }
@@ -255,7 +294,7 @@ impl UpdatesManager {
                 .ok()
                 .flatten()
                 .map(|s| s.auto_update)
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(true)?;
@@ -292,51 +331,9 @@ impl UpdatesManager {
                 });
             }
 
-            let should_download_now = if show_dialog {
-                let (tx, rx) = oneshot::channel();
-                let update_dialog = self
-                    .app
-                    .dialog()
-                    .message("update available")
-                    .title("screenpipe update")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "update now".to_string(),
-                        "later".to_string(),
-                    ));
-
-                update_dialog.show(move |answer| {
-                    let _ = tx.send(answer);
-                });
-
-                rx.await?
-            } else {
-                auto_update
-            };
-
-            if !should_download_now {
-                let app_notif = self.app.clone();
-                let version_str = update.version.clone();
-                // std::thread::spawn (not spawn_blocking) to escape tokio runtime context entirely.
-                // notify_rust on Linux internally calls block_on for D-Bus, which panics
-                // if any tokio runtime exists on the current thread — even blocking threads.
-                std::thread::spawn(move || {
-                    if let Err(e) = app_notif
-                        .notification()
-                        .builder()
-                        .title("screenpipe update available")
-                        .body(format!(
-                            "v{} is ready — update when you choose",
-                            version_str
-                        ))
-                        .show()
-                    {
-                        error!("failed to send update notification: {}", e);
-                    }
-                });
-                return Result::Ok(true);
-            }
-
-            // Emit "update-downloading" only when we are actually downloading.
+            // Always download in the background. auto_update only controls
+            // whether we restart automatically after — the banner is the user's
+            // "restart now" trigger when auto_update is off.
             let download_info = serde_json::json!({
                 "version": update.version,
                 "body": update.body.clone().unwrap_or_default(),
@@ -434,6 +431,11 @@ impl UpdatesManager {
                 }
             }
 
+            // Stash the current version so the "what's new" notification can fire
+            // after restart — needs to happen here because banner-driven restarts
+            // bypass the auto_update path below.
+            save_pre_update_version(&self.app, update.body.clone());
+
             // Emit event to frontend for in-app banner (visible if window is open)
             let update_info = serde_json::json!({
                 "version": update.version,
@@ -445,10 +447,9 @@ impl UpdatesManager {
 
             let app_notif = self.app.clone();
             let version_str = update.version.clone();
-            let restarting_automatically = auto_update && !show_dialog;
             std::thread::spawn(move || {
                 let notification = app_notif.notification().builder();
-                let result = if restarting_automatically {
+                let result = if auto_update {
                     notification
                         .title("screenpipe updating")
                         .body(format!("v{} downloaded — restarting now", version_str))
@@ -464,19 +465,7 @@ impl UpdatesManager {
                 }
             });
 
-            if show_dialog {
-                save_pre_update_version(&self.app, update.body.clone());
-
-                #[cfg(not(target_os = "windows"))]
-                {
-                    if let Err(err) =
-                        stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()).await
-                    {
-                        error!("Failed to stop recording: {}", err);
-                    }
-                }
-                self.update_screenpipe();
-            } else if auto_update && *self.update_installed.lock().await {
+            if auto_update && *self.update_installed.lock().await {
                 info!(
                     "auto-update enabled, restarting to apply update v{}",
                     update.version
@@ -488,7 +477,6 @@ impl UpdatesManager {
                         "delay_secs": 30,
                     }),
                 );
-                save_pre_update_version(&self.app, update.body.clone());
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 if let Err(err) =
                     stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()).await
@@ -524,10 +512,6 @@ impl UpdatesManager {
 
     pub async fn has_update_installed(&self) -> bool {
         *self.update_installed.lock().await
-    }
-
-    pub fn update_screenpipe(&self) -> Option<Error> {
-        self.app.restart();
     }
 
     /// Show dialog explaining auto-updates are not available for source builds

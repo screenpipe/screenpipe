@@ -32,6 +32,18 @@ impl RecorderImpl {
     pub fn frames_written(&self) -> u64 {
         0
     }
+
+    pub fn filter_status(&self) -> (bool, Option<String>) {
+        (false, None)
+    }
+
+    pub fn set_filters(
+        &self,
+        _ignored_windows: Vec<String>,
+        _included_windows: Vec<String>,
+        _ignored_urls: Vec<String>,
+    ) {
+    }
 }
 
 pub async fn request_permissions() -> Result<PermissionStatus> {

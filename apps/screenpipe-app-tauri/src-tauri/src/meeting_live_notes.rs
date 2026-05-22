@@ -10,13 +10,20 @@
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::notifications::client;
 use crate::store::SettingsStore;
+
+/// How long a calendar prewarm suppresses the audio/UI-driven `meeting_started`
+/// toast for the same event. Long enough to cover the back half of the call,
+/// short enough that a recurring standup tomorrow gets its own toast.
+const PREWARM_SUPPRESS_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct MeetingStartedEvent {
@@ -34,6 +41,26 @@ struct MeetingStartedEvent {
     timestamp: Option<String>,
     #[serde(default)]
     detection_source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingPrewarmEvent {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    start: String,
+    #[serde(default)]
+    meeting_url: Option<String>,
+    #[serde(default)]
+    seconds_until_start: i64,
+}
+
+/// Stable key shared with the events crate's prewarm dedup: title (trimmed,
+/// lowercased) + start time. Used here to suppress the later audio/UI-driven
+/// `meeting_started` toast for the same calendar event.
+fn prewarm_key(title: &str, start: &str) -> String {
+    format!("{}|{}", title.trim().to_lowercase(), start)
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -153,6 +180,67 @@ pub fn start(app: AppHandle) {
         }
     });
 
+    // Suppression map: when a prewarm toast fires for a calendar event, we
+    // also remember its key so the later audio/UI-driven `meeting_started`
+    // doesn't re-toast the same call. Cleared after PREWARM_SUPPRESS_TTL.
+    let suppressed_titles: Arc<RwLock<HashMap<String, Instant>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+
+    let prewarm_app = app.clone();
+    let prewarm_suppressed = Arc::clone(&suppressed_titles);
+    tauri::async_runtime::spawn(async move {
+        let mut sub = screenpipe_events::subscribe_to_event::<MeetingPrewarmEvent>(
+            "meeting_about_to_start",
+        );
+        while let Some(event) = sub.next().await {
+            if !meeting_notifications_enabled(&prewarm_app) {
+                debug!("meeting prewarm: notification skipped by preference");
+                continue;
+            }
+            let data = event.data;
+            let title = if data.title.trim().is_empty() {
+                "meeting".to_string()
+            } else {
+                data.title.clone()
+            };
+
+            // Record suppression BEFORE firing the toast so a fast audio
+            // detection can't slip a duplicate through.
+            {
+                let mut guard = prewarm_suppressed.write().await;
+                guard.insert(prewarm_key(&data.title, &data.start), Instant::now());
+                guard.retain(|_, t| t.elapsed() < PREWARM_SUPPRESS_TTL);
+            }
+
+            let mut actions = Vec::new();
+            if let Some(url) = data.meeting_url.as_ref().filter(|u| !u.trim().is_empty()) {
+                actions.push(json!({
+                    "id": "join-meeting",
+                    "action": "join-meeting",
+                    "label": "join and take notes",
+                    "type": "meeting_join",
+                    "url": url,
+                    "primary": true,
+                }));
+            }
+
+            let minutes = ((data.seconds_until_start as f64) / 60.0).ceil() as i64;
+            let header = if minutes <= 1 {
+                "meeting starting in 1 min".to_string()
+            } else {
+                format!("meeting starting in {minutes} min")
+            };
+            client::send_typed_with_actions(
+                &header,
+                format!("screenpipe is ready to transcribe: {title}"),
+                "meeting",
+                Some(30_000),
+                actions,
+            );
+        }
+    });
+
+    let started_suppressed = Arc::clone(&suppressed_titles);
     tauri::async_runtime::spawn(async move {
         let mut sub =
             screenpipe_events::subscribe_to_event::<MeetingStartedEvent>("meeting_started");
@@ -201,6 +289,23 @@ pub fn start(app: AppHandle) {
                 .cloned()
                 .unwrap_or_else(|| event.data.display_title());
 
+            // Dedup: if a prewarm toast already fired for this calendar
+            // event, don't fire a second toast when audio/UI later
+            // confirms the same call. Match by both the matched event
+            // title and the meeting's display title to catch the case
+            // where calendar enrichment hasn't completed yet.
+            if was_prewarmed(
+                &started_suppressed,
+                &calendar_match,
+                &event.data.display_title(),
+                &title,
+            )
+            .await
+            {
+                debug!("meeting live notes: suppressed duplicate after prewarm: {title}");
+                continue;
+            }
+
             let mut actions = Vec::new();
             if let Some(join) = calendar_match.and_then(|m| m.join_link) {
                 actions.push(json!({
@@ -243,6 +348,39 @@ fn forward_screenpipe_event(app: AppHandle, source: &'static str, target: &'stat
             }
         }
     });
+}
+
+/// Returns true when we have already prewarmed the live-note toast for the
+/// calendar event that this `meeting_started` corresponds to. Matches by
+/// both the calendar-enriched title and the raw display title (the prewarm
+/// suppression key is `title|start` from the events crate).
+async fn was_prewarmed(
+    suppressed: &Arc<RwLock<HashMap<String, Instant>>>,
+    calendar_match: &Option<CalendarMatch>,
+    display_title: &str,
+    chosen_title: &str,
+) -> bool {
+    let mut guard = suppressed.write().await;
+    guard.retain(|_, t| t.elapsed() < PREWARM_SUPPRESS_TTL);
+    if guard.is_empty() {
+        return false;
+    }
+    let candidate_titles: Vec<String> = [
+        Some(chosen_title.to_string()),
+        Some(display_title.to_string()),
+        calendar_match
+            .as_ref()
+            .and_then(|m| m.title.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|s| s.trim().to_lowercase())
+    .filter(|s| !s.is_empty())
+    .collect();
+    guard.keys().any(|key| {
+        let key_title = key.split('|').next().unwrap_or("");
+        candidate_titles.iter().any(|t| t == key_title)
+    })
 }
 
 fn meeting_notifications_enabled(app: &AppHandle) -> bool {

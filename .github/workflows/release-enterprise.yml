@@ -627,6 +627,9 @@ jobs:
           for pkg in "${BUNDLE_DIR}"/pkg/*.pkg; do
             [ -f "$pkg" ] && aws s3 cp "$pkg" "${R2_PREFIX}/$(basename "$pkg")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$pkg")"
           done
+          for updater in "${BUNDLE_DIR}"/macos/*.app.tar.gz "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig; do
+            [ -f "$updater" ] && aws s3 cp "$updater" "${R2_PREFIX}/$(basename "$updater")" --endpoint-url "$R2_ENDPOINT" && echo "  $(basename "$updater")"
+          done
           echo "R2 enterprise upload complete for macOS"
 
       - name: Upload enterprise macOS artifacts

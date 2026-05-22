@@ -30,6 +30,7 @@ import { useChatStore, type SessionStatus } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { UpdateBanner, useUpdateListener } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
@@ -87,6 +88,7 @@ const SETTINGS_SECTIONS = new Set<string>([
 ]);
 
 function HomeContent() {
+  useUpdateListener();
   const router = useRouter();
   const { isMac } = usePlatform();
   // In fullscreen, macOS hides the traffic lights — collapse the
@@ -1177,6 +1179,8 @@ function HomeContent() {
               ) : (
                 <div className="flex-1" />
               )}
+
+              {!sidebarCollapsed && <UpdateBanner variant="sidebar" className="mb-2" />}
 
               {/* Bottom items */}
               <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>

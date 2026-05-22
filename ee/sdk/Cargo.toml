@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Screenpipe SDK — Rust core for screen recording exposed via napi-rs"
 license = "LicenseRef-Screenpipe-Enterprise"

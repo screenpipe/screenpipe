@@ -166,7 +166,7 @@ impl UiRecorder {
     pub fn check_permissions(&self) -> PermissionStatus {
         PermissionStatus {
             accessibility: ax::is_process_trusted(),
-            input_monitoring: cg_access::listen_preflight(),
+            input_monitoring: check_input_monitoring(),
         }
     }
 
@@ -174,7 +174,7 @@ impl UiRecorder {
     pub fn request_permissions(&self) -> PermissionStatus {
         PermissionStatus {
             accessibility: ax::is_process_trusted_with_prompt(true),
-            input_monitoring: cg_access::listen_request(),
+            input_monitoring: request_input_monitoring(),
         }
     }
 
@@ -261,7 +261,8 @@ impl UiRecorder {
             // actually wants clipboard capture; otherwise the recorder
             // emits app_switch / window_focus events only.
             if self.config.capture_clipboard {
-                let clipboard_tx = spawn_clipboard_worker_thread();
+                let clipboard_tx =
+                    spawn_clipboard_worker_thread(current_app.clone(), current_window.clone());
                 let stop_p = stop.clone();
                 let tx_p = tx.clone();
                 let config_p = self.config.clone();
@@ -303,8 +304,27 @@ impl UiRecorder {
 
 /// Check whether the current process has macOS Input Monitoring granted.
 /// Polling-safe — does not trigger the system prompt.
+///
+/// `CGPreflightListenEventAccess` alone is unreliable: it returns true for
+/// "ghost" TCC records (orphaned grants from a previous build at the same
+/// signature/path that's been removed from System Settings → Input
+/// Monitoring, or responsibility-attributed grants from a parent process).
+/// When that happens the UI shows "Enabled" but the running CGEventTap can
+/// still fail to create — keystroke capture silently runs in reduced mode.
+/// We verify by actually attempting to create a tap: if it fails the
+/// preflight is lying and we report "not granted" so the user can re-grant.
 pub fn check_input_monitoring() -> bool {
-    cg_access::listen_preflight()
+    if !cg_access::listen_preflight() {
+        return false;
+    }
+    if probe_listen_event_tap() {
+        return true;
+    }
+    debug!(
+        "input monitoring: CGPreflightListenEventAccess=true but CGEventTapCreate failed — \
+         likely a stale TCC record (ghost). User should run tccutil reset ListenEvent."
+    );
+    false
 }
 
 /// Trigger the macOS Input Monitoring permission flow for the current
@@ -313,7 +333,33 @@ pub fn check_input_monitoring() -> bool {
 /// Privacy & Security → Input Monitoring); subsequent calls return the
 /// current status without re-prompting.
 pub fn request_input_monitoring() -> bool {
-    cg_access::listen_request()
+    cg_access::listen_request() && probe_listen_event_tap()
+}
+
+/// Attempt to create a no-op CGEventTap as ground-truth verification that
+/// Input Monitoring is actually granted to *this* process. `CGEventTapCreate`
+/// returns null if TCC denies the listen-event capability — unlike the
+/// preflight API it can't be fooled by ghost records. Cheap (microseconds)
+/// and side-effect-free: the tap is created in LISTEN_ONLY mode and dropped
+/// immediately without ever being added to a run loop.
+fn probe_listen_event_tap() -> bool {
+    extern "C" fn noop(
+        _proxy: *mut cg::EventTapProxy,
+        _event_type: cg::EventType,
+        event: &mut cg::Event,
+        _user_info: *mut c_void,
+    ) -> Option<&cg::Event> {
+        Some(event)
+    }
+    cg::EventTap::new::<c_void>(
+        cg::EventTapLocation::Session,
+        cg::EventTapPlacement::TailAppend,
+        cg::EventTapOpts::LISTEN_ONLY,
+        cg::EventType::KEY_DOWN.mask(),
+        noop,
+        std::ptr::null_mut(),
+    )
+    .is_some()
 }
 
 // ============================================================================
@@ -334,7 +380,10 @@ pub fn request_input_monitoring() -> bool {
 /// to a single dedicated thread keeps NSPasteboard access on a stable
 /// thread (the worker hops to the main queue itself) and bounds the
 /// in-flight read count.
-fn spawn_clipboard_worker_thread() -> Sender<ClipboardRequest> {
+fn spawn_clipboard_worker_thread(
+    current_app: Arc<ArcSwap<Option<String>>>,
+    current_window: Arc<ArcSwap<Option<String>>>,
+) -> Sender<ClipboardRequest> {
     let (clipboard_tx, clipboard_rx) = bounded::<ClipboardRequest>(4);
     thread::Builder::new()
         .name("clipboard-capture".into())
@@ -364,8 +413,8 @@ fn spawn_clipboard_worker_thread() -> Sender<ClipboardRequest> {
                         operation: req.operation,
                         content,
                     },
-                    app_name: None,
-                    window_title: None,
+                    app_name: current_app.load().as_ref().clone(),
+                    window_title: current_window.load().as_ref().clone(),
                     browser_url: None,
                     element: None,
                     frame_id: None,
@@ -596,7 +645,7 @@ fn run_event_tap(
 
     // Single worker thread for clipboard capture — avoids spawning a thread per
     // Cmd+C/X and avoids blocking the event tap callback on Cmd+V.
-    let clipboard_tx = spawn_clipboard_worker_thread();
+    let clipboard_tx = spawn_clipboard_worker_thread(current_app.clone(), current_window.clone());
 
     let state = Box::leak(Box::new(TapState {
         tx,
@@ -1376,12 +1425,16 @@ fn get_focused_element_context(config: &UiCaptureConfig) -> Option<ElementContex
 // The dead-man-switch below is kept as defense-in-depth: even with main-
 // thread dispatch, a future macOS regression or a bug in AppKit/arboard
 // could still SIGSEGV the read. SIGSEGV can't be caught in-process, so we
-// write a marker file before each read and delete it after. On startup, if
-// the marker exists, we know the previous run crashed mid-read and we
-// disable clipboard capture permanently for this install. The user can
-// re-enable by deleting `~/.screenpipe/clipboard-disabled-after-crash`.
+// write an inflight marker before each read and delete it after. On startup,
+// if the marker exists, the previous run crashed mid-read: we disable
+// clipboard capture for THIS session only and retry next launch. A
+// persistent crash will be obvious in logs (every other launch fails) and
+// addressable, rather than silently killing the feature forever.
 const CLIPBOARD_INFLIGHT_FILE: &str = "clipboard-read-inflight";
-const CLIPBOARD_DISABLED_FILE: &str = "clipboard-disabled-after-crash";
+// Legacy marker from a previous design that permanently disabled clipboard
+// capture after a single crash and required `rm` to recover. We auto-delete
+// it on startup so upgraded installs recover without manual intervention.
+const CLIPBOARD_LEGACY_DISABLED_FILE: &str = "clipboard-disabled-after-crash";
 
 static CLIPBOARD_DISABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -1391,26 +1444,22 @@ fn check_clipboard_crash_marker() {
     CLIPBOARD_CRASH_CHECK.call_once(|| {
         let dir = screenpipe_core::paths::default_screenpipe_data_dir();
         let inflight = dir.join(CLIPBOARD_INFLIGHT_FILE);
-        let disabled = dir.join(CLIPBOARD_DISABLED_FILE);
+        let legacy_disabled = dir.join(CLIPBOARD_LEGACY_DISABLED_FILE);
 
-        if disabled.exists() {
-            CLIPBOARD_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-            tracing::warn!(
-                "clipboard capture disabled — prior NSPasteboard crash detected. \
-                 delete {} to re-enable",
-                disabled.display()
+        if legacy_disabled.exists() {
+            let _ = std::fs::remove_file(&legacy_disabled);
+            tracing::info!(
+                "clipboard capture: cleared legacy permanent-disable marker; \
+                 clipboard reads will resume this session"
             );
-            // Best-effort cleanup of any stale inflight marker
-            let _ = std::fs::remove_file(&inflight);
-        } else if inflight.exists() {
-            // Previous run died mid-clipboard read — promote to permanent disable.
+        }
+
+        if inflight.exists() {
             CLIPBOARD_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = std::fs::write(&disabled, "");
             let _ = std::fs::remove_file(&inflight);
             tracing::warn!(
-                "clipboard capture disabled for this session — previous run crashed \
-                 during NSPasteboard read. delete {} to re-enable",
-                disabled.display()
+                "clipboard capture disabled for this session — previous run \
+                 crashed during NSPasteboard read. will retry on next launch."
             );
         }
     });

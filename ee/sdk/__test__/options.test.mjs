@@ -36,6 +36,52 @@ test("accepts undefined microphone + systemAudio (all optional)", () => {
   assert.ok(r);
 });
 
+test("accepts ignoredWindows / includedWindows / ignoredUrls filter lists", () => {
+  // Construction only — verifies the filter fields are accepted by the
+  // native binding. The actual pause behavior is exercised in
+  // recording.test.mjs against a focused app the host controls.
+  const r = new Recorder({
+    output: tempMp4("filters"),
+    ignoredWindows: ["1password", "private"],
+    includedWindows: [],
+    ignoredUrls: ["wellsfargo.com", "chase"],
+  });
+  assert.ok(r);
+});
+
+test("accepts empty filter arrays (zero-overhead fast path)", () => {
+  const r = new Recorder({
+    output: tempMp4("filters-empty"),
+    ignoredWindows: [],
+    includedWindows: [],
+    ignoredUrls: [],
+  });
+  assert.ok(r);
+});
+
+test("filterStatus is { paused: false } before start() with no filter", async (t) => {
+  const r = new Recorder({ output: tempMp4("filter-status") });
+  if (typeof r.filterStatus !== "function") {
+    t.skip("native binding predates filterStatus");
+    return;
+  }
+  const s = await r.filterStatus();
+  assert.equal(s.paused, false);
+});
+
+test("setFilters({}) is accepted and clears filter lists", async (t) => {
+  const r = new Recorder({
+    output: tempMp4("set-filters"),
+    ignoredUrls: ["chase"],
+  });
+  if (typeof r.setFilters !== "function") {
+    t.skip("native binding predates setFilters");
+    return;
+  }
+  await r.setFilters({});
+  await r.setFilters({ ignoredWindows: ["1password"] });
+});
+
 test("start() with a non-existent monitor id reports a useful error", async (t) => {
   if (!hasFfmpeg()) { t.skip("ffmpeg not on PATH"); return; }
   const r = new Recorder({ output: tempMp4("bad-mon"), monitorId: 999_999 });

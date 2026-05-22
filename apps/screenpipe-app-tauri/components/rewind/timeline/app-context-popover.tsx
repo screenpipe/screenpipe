@@ -24,17 +24,19 @@ function formatUiEvent(ev: UiEventSummary): { icon: string; label: string } | nu
 	const truncate = (s: string, max = 40) => s.length > max ? s.slice(0, max) + "\u2026" : s;
 	switch (ev.event_type) {
 		case "text":
-			return ev.text_content
-				? { icon: "\u2328", label: `typed "${truncate(ev.text_content)}"` }
-				: null;
+			return { icon: "\u2328", label: ev.text_content ? `typed "${truncate(ev.text_content)}"` : "typed" };
 		case "clipboard":
-			return ev.text_content
-				? { icon: "\ud83d\udccb", label: `copied "${truncate(ev.text_content)}"` }
-				: null;
+			return { icon: "\ud83d\udccb", label: ev.text_content ? `copied "${truncate(ev.text_content)}"` : "copied" };
 		case "click":
 			return { icon: "\ud83d\uddb1", label: `clicked "${truncate(ev.text_content || "element")}"` };
 		case "app_switch":
 			return { icon: "\u21d4", label: `switched to ${ev.app_name || "app"}` };
+		case "key":
+			return { icon: "\u2303", label: ev.text_content ? `pressed ${truncate(ev.text_content)}` : "key press" };
+		case "scroll":
+			return { icon: "\u21f3", label: `scrolled${ev.window_title ? ` in ${truncate(ev.window_title)}` : ""}` };
+		case "window_focus":
+			return { icon: "\ud83d\udd32", label: `focused ${ev.window_title ? truncate(ev.window_title) : ev.app_name || "window"}` };
 		default:
 			return null;
 	}

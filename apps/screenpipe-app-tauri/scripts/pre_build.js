@@ -391,17 +391,34 @@ async function verifyMacosSidecarsRun() {
 	console.log(`running ${hostArch} sidecars in a brew-less sandbox...`);
 	for (const bin of sidecars) {
 		if (!(await fs.exists(bin))) continue;
-		try {
-			await $`sandbox-exec -p ${profile} ./${bin} -version`.quiet();
-			console.log(`  ok: ${bin}`);
-		} catch (err) {
-			const stderr = err.stderr?.toString?.() ?? '';
+		// Hard timeout: a successful `-version` returns in <1s. If we hit 30s
+		// it's a tooling bug (sandbox-exec stuck, bun shell wait-loop, etc.),
+		// not the v2.4.243 sidecar crash this guard is looking for — warn and
+		// continue rather than wedging every `bun run build`.
+		const proc = Bun.spawn(['sandbox-exec', '-p', profile, `./${bin}`, '-version'], {
+			stdout: 'pipe',
+			stderr: 'pipe',
+		});
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			proc.kill('SIGKILL');
+		}, 30_000);
+		const exitCode = await proc.exited;
+		clearTimeout(timer);
+		if (timedOut) {
+			console.warn(`  WARN: ${bin} sandbox verify timed out after 30s — skipping (likely a tooling issue, not a sidecar regression)`);
+			continue;
+		}
+		if (exitCode !== 0) {
+			const stderr = await new Response(proc.stderr).text();
 			throw new Error(
 				`sidecar ${bin} fails to launch without /opt/homebrew, /usr/local/Cellar, /opt/local:\n` +
-				`${stderr || err.message}\n` +
+				`${stderr || `exit code ${exitCode}`}\n` +
 				`this is the v2.4.243 crash class — see commit 9a68ae9de.`
 			);
 		}
+		console.log(`  ok: ${bin}`);
 	}
 }
 

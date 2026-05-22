@@ -115,6 +115,10 @@ pub struct OCRResultRaw {
     pub browser_url: Option<String>,
     pub focused: Option<bool>,
     pub device_name: String,
+    /// Origin of the row's text: `"accessibility"` (OS-native tree, primary)
+    /// or `"ocr"` (fallback for terminals, canvas-rendered apps, weak a11y).
+    /// `None` for legacy rows captured before text_source was tracked.
+    pub text_source: Option<String>,
 }
 
 #[derive(OaSchema, Debug, Serialize, Deserialize)]
@@ -133,6 +137,10 @@ pub struct OCRResult {
     pub browser_url: Option<String>,
     pub focused: Option<bool>,
     pub device_name: String,
+    /// Origin of `ocr_text`: `"accessibility"` (OS-native tree, primary) or
+    /// `"ocr"` (fallback). `None` for legacy rows. Despite the field name
+    /// `ocr_text`, the content is accessibility-derived for most captures.
+    pub text_source: Option<String>,
 }
 
 /// Content type for search queries.
@@ -524,6 +532,8 @@ pub struct SearchMatch {
     // pub context: Option<String>,
     pub text: String,
     pub url: String,
+    /// Origin of `text`: `"accessibility"` or `"ocr"`. `None` for legacy rows.
+    pub text_source: Option<String>,
 }
 
 #[derive(OaSchema, Serialize)]
@@ -546,6 +556,8 @@ pub struct FrameRow {
     pub text_json: String,
     /// Accessibility tree JSON — used as fallback for bounding boxes when OCR text_json is empty
     pub accessibility_tree_json: Option<String>,
+    /// Origin of `ocr_text`: `"accessibility"` or `"ocr"`. `None` for legacy rows.
+    pub text_source: Option<String>,
 }
 
 /// Lightweight frame row for grouped search — skips text/text_json columns.

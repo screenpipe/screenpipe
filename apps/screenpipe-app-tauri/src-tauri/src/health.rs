@@ -539,7 +539,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             // it was slow (60s startup + 120s restart grace + 10s debounce) and
             // frequently missed transitions because CGPreflightScreenCaptureAccess
             // returns stale results. The app now subscribes to `permission_lost`
-            // / `permission_restored` events via /ws/events (see permission_events.rs).
+            // / `permission_restored` events via /ws/events (see engine_events.rs).
 
             // Parse device info from health response, filtered by monitor settings
             let mut devices = parse_devices_from_health(&health_result);

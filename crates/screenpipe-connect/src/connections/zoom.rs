@@ -72,6 +72,16 @@ impl Integration for Zoom {
         Some(&OAUTH)
     }
 
+    fn refresh_policy(&self) -> super::RefreshPolicy {
+        // Zoom invalidates refresh tokens after 15h of inactivity (per Zoom
+        // OAuth docs, "refresh token TTL"). Force a proactive refresh well
+        // inside that window so an idle overnight laptop doesn't return to
+        // a permanently `invalid_grant` connection.
+        super::RefreshPolicy {
+            keep_alive: Some(std::time::Duration::from_secs(12 * 60 * 60)),
+        }
+    }
+
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         // Zoom REST API — every endpoint under /v2 takes a Bearer token
         // and shares the same base URL. Proxy keeps the access_token off
