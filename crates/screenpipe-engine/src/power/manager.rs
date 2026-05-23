@@ -119,7 +119,13 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
             profile.name, power_state.on_ac, power_state.battery_pct
         );
         // Apply audio VAD threshold from initial profile
+        // audio_disabled uses ratio=1.0 to block all VAD segments.
         screenpipe_audio::vad::set_min_speech_ratio(profile.vad_min_speech_ratio);
+        if profile.capture_paused {
+            info!("initial power state: capture paused (battery critically low or OS low-power)");
+        } else if profile.audio_disabled {
+            info!("initial power state: audio disabled (battery <=20%)");
+        }
         let _ = handle_ref.profile_tx.send(profile);
 
         loop {
@@ -152,8 +158,30 @@ pub fn start_power_manager_with_pref(initial_pref: PowerMode) -> Arc<PowerManage
                 );
             }
 
-            // Apply audio VAD threshold from profile
+            // Apply audio VAD threshold from profile.
+            // audio_disabled sets ratio=1.0 so no segment passes VAD — effectively
+            // pauses Whisper without needing a separate code path.
             screenpipe_audio::vad::set_min_speech_ratio(new_profile.vad_min_speech_ratio);
+
+            if new_profile.capture_paused && current_name != ProfileName::FullPause {
+                info!(
+                    "battery critically low (<=10%) or OS low-power active — \
+                    pausing all capture (server stays up for search/timeline)"
+                );
+            } else if new_profile.audio_disabled
+                && !matches!(
+                    current_name,
+                    ProfileName::AudioPaused | ProfileName::FullPause
+                )
+            {
+                info!(
+                    "battery low (<=20%) — pausing audio/Whisper, \
+                    vision capture continues"
+                );
+            } else if !new_profile.capture_paused && matches!(current_name, ProfileName::FullPause)
+            {
+                info!("power restored — resuming capture");
+            }
 
             let _ = handle_ref.profile_tx.send(new_profile);
         }
