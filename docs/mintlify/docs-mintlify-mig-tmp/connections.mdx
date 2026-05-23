@@ -56,6 +56,7 @@ this takes you straight to where you need to be — no more hunting through docs
 | **Obsidian** | sync daily logs, meeting notes, and journals to your vault |
 | **Google Calendar** | enrich meetings with attendees and schedule context |
 | **Google Docs** | read and write Google Docs through OAuth |
+| **Google Drive** | create and work with selected Drive files through OAuth |
 | **Google Sheets** | query spreadsheet metadata and values |
 | **Linear** | access issues and projects |
 | **Todoist** | manage tasks and projects |
@@ -145,6 +146,7 @@ connections can expose a local proxy endpoint so pipes can call third-party APIs
 
 ```bash
 curl "http://localhost:3030/connections/gmail/proxy/users/me/profile"
+curl "http://localhost:3030/connections/google-drive/proxy/drive/v3/files?pageSize=1&fields=files(id,name,mimeType)"
 curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
 curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
 ```
@@ -182,7 +184,7 @@ this makes pipes significantly more accurate and useful.
 
 ### Google OAuth: "app isn't verified" or "unsafe"
 
-when connecting Gmail, Google Calendar, or Google Docs, you may see a warning that says the app is "unverified" or "unsafe." this is normal — screenpipe is a local app and Google requires additional verification steps for third-party apps.
+when connecting Gmail, Google Calendar, Google Docs, or Google Drive, you may see a warning that says the app is "unverified" or "unsafe." this is normal — screenpipe is a local app and Google requires additional verification steps for third-party apps.
 
 **how to proceed:**
 1. on the Google warning screen, click **Advanced** (bottom-left corner)
