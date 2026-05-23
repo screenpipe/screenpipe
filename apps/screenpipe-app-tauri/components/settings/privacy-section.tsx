@@ -20,6 +20,7 @@ import {
   Lock,
   Copy,
   ClipboardX,
+  FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { WindowPicker } from "./window-picker";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useTeam } from "@/lib/hooks/use-team";
@@ -261,6 +263,7 @@ export function PrivacySection() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const [pushingFilter, setPushingFilter] = useState<string | null>(null);
+  const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
   const [liveApiKey, setLiveApiKey] = useState<string | null>(null);
   const [revealApiKey, setRevealApiKey] = useState(false);
@@ -522,6 +525,20 @@ export function PrivacySection() {
         variant: "destructive",
       });
     }
+  };
+
+  // Add one pattern from the WindowPicker. Reuses the MultiSelect change
+  // handler so the mutual-exclusion logic (a pattern in ignore is removed
+  // from include and vice versa) stays in one place.
+  const addIgnoredPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.ignoredWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIgnoredWindowsChange([...settings.ignoredWindows, pattern]);
+  };
+  const addIncludedPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.includedWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIncludedWindowsChange([...settings.includedWindows, pattern]);
   };
 
   const handleIgnoredWindowsChange = (values: string[]) => {
@@ -1197,6 +1214,14 @@ export function PrivacySection() {
                     placeholder="Select apps to ignore..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("ignored")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -1288,6 +1313,14 @@ export function PrivacySection() {
                     placeholder="Only capture these apps (optional)..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("included")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.includedWindows?.length ?? 0) >
                       0 && (
@@ -1668,6 +1701,20 @@ export function PrivacySection() {
           </Button>
         </div>
       )}
+      <WindowPicker
+        open={picker !== null}
+        onOpenChange={(o) => {
+          if (!o) setPicker(null);
+        }}
+        selected={
+          picker === "included" ? settings.includedWindows : settings.ignoredWindows
+        }
+        onAdd={(p) => {
+          if (picker === "included") addIncludedPattern(p);
+          else addIgnoredPattern(p);
+        }}
+        action={picker === "included" ? "include" : "ignore"}
+      />
     </div>
   );
 }
