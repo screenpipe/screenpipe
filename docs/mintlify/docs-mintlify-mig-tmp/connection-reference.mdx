@@ -28,7 +28,7 @@ this works for all API key, webhook, and custom credential fields.
 
 | pattern | examples | notes |
 | --- | --- | --- |
-| OAuth | Gmail, Google Calendar, Google Docs, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom | best user experience; tokens are stored locally; no API key needed |
+| OAuth | Gmail, Google Calendar, Google Docs, Google Drive, Notion, Jira, Microsoft 365, Teams, Vercel, Supabase, Zoom | best user experience; tokens are stored locally; no API key needed |
 | API key | Linear, HubSpot, PostHog, Sentry, Stripe, Toggl, Pipedrive, Glean | simple and reliable; help links guide you to API settings pages; rotate keys if a device is lost |
 | webhook URL | n8n, Make, Zapier, Pushover, ntfy, Resend | best for one-way notifications or workflow triggers |
 | local path | Obsidian, Logseq | keeps notes local |
@@ -53,7 +53,7 @@ The app registry currently includes these connection IDs:
 | category | integrations |
 | --- | --- |
 | communication | Slack, Discord, Email (SMTP), Gmail, Telegram, WhatsApp, Microsoft Teams, Zoom |
-| productivity | Notion, Obsidian, Google Calendar, Google Docs, Google Sheets, Microsoft 365, Logseq, Airtable, Confluence |
+| productivity | Notion, Obsidian, Google Calendar, Google Docs, Google Drive, Google Sheets, Microsoft 365, Logseq, Airtable, Confluence |
 | project management | Linear, Jira, Asana, Monday.com, Trello, ClickUp, Todoist, Cal.com, Calendly |
 | CRM and support | HubSpot, Salesforce, Pipedrive, Intercom, Zendesk, Bitrix24 |
 | developer and ops | GitHub, Sentry, Vercel, Supabase, PostHog |
@@ -81,6 +81,7 @@ after connecting, run a tiny request before relying on a pipe:
 ```bash
 curl "http://localhost:3030/connections/gmail/proxy/users/me/profile"
 curl "http://localhost:3030/connections/google-calendar/proxy/users/me/calendarList"
+curl "http://localhost:3030/connections/google-drive/proxy/drive/v3/files?pageSize=1&fields=files(id,name,mimeType)"
 curl "http://localhost:3030/connections/notion/proxy/v1/users/me"
 curl "http://localhost:3030/connections/hubspot/proxy/crm/v3/objects/contacts?limit=1"
 curl "http://localhost:3030/connections/linear/proxy/graphql"
