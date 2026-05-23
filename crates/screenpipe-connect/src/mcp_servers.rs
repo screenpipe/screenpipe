@@ -17,11 +17,8 @@
 //! * Header values are secret — stored in [`SecretStore`] under
 //!   `mcp:{id}` and never written to the JSON file.
 //!
-//! Only HTTP transports are supported. stdio is deliberately out of
-//! scope for this iteration — orphan reaping, TCC inheritance, and
-//! per-server mutexes more than triple the implementation cost without
-//! the matching value (Brave, Linear, Notion, Sentry, most internal
-//! MCPs are HTTP-native).
+//! Both HTTP (streamable-HTTP, JSON-RPC 2.0) and stdio (spawn-per-call,
+//! JSON-RPC 2.0 over stdin/stdout) transports are supported.
 
 use anyhow::{anyhow, Result};
 use screenpipe_secrets::SecretStore;
@@ -32,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio as ProcessStdio;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs as tfs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
 
@@ -113,21 +111,63 @@ fn store_path(screenpipe_dir: &Path) -> PathBuf {
     screenpipe_dir.join("mcp_servers.json")
 }
 
-fn load_file(screenpipe_dir: &Path) -> McpServersFile {
+/// Read the servers file. Returns an empty file when it doesn't exist yet.
+/// Returns `Err` (and quarantines the broken file) when the JSON is corrupt,
+/// so callers never silently clobber a hand-edited or partially-written file.
+async fn load_file(screenpipe_dir: &Path) -> Result<McpServersFile> {
     let path = store_path(screenpipe_dir);
-    match std::fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => McpServersFile::default(),
+    let data = match tfs::read_to_string(&path).await {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(McpServersFile::default())
+        }
+        Err(e) => return Err(anyhow!("failed to read mcp_servers.json: {}", e)),
+    };
+    match serde_json::from_str::<McpServersFile>(&data) {
+        Ok(f) => Ok(f),
+        Err(e) => {
+            // Quarantine the corrupt file before any subsequent write can wipe it.
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let broken = path.with_extension(format!("json.broken-{}", ts));
+            tracing::error!(
+                "[mcp-store] corrupt JSON in {} ({}); quarantining to {}",
+                path.display(),
+                e,
+                broken.display()
+            );
+            let _ = tfs::rename(&path, &broken).await;
+            Err(anyhow!("mcp_servers.json is corrupt (quarantined): {}", e))
+        }
     }
 }
 
-fn save_file(screenpipe_dir: &Path, file: &McpServersFile) -> Result<()> {
+/// Write the servers file atomically: write → sync → rename.
+/// A crash mid-write leaves a `.tmp` stale file rather than a corrupt live file.
+async fn save_file(screenpipe_dir: &Path, file: &McpServersFile) -> Result<()> {
     let path = store_path(screenpipe_dir);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_string_pretty(file)?;
-    std::fs::write(&path, json)?;
+    // spawn_blocking so sync_all doesn't park the executor thread.
+    let tmp = path.with_extension("json.tmp");
+    let tmp2 = tmp.clone();
+    let path2 = path.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if let Some(parent) = path2.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::File::create(&tmp2)?;
+            f.write_all(json.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp2, &path2)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("save_file task panicked: {}", e))??;
     Ok(())
 }
 
@@ -143,6 +183,9 @@ pub struct McpServerStore {
     /// take this lock (they're hand-driven from the settings UI and
     /// it's fine if they race against a tool call).
     call_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// Serialises all file writes so concurrent upsert/delete never
+    /// interleave or see a half-written file.
+    file_lock: Arc<Mutex<()>>,
 }
 
 impl McpServerStore {
@@ -161,6 +204,7 @@ impl McpServerStore {
             secret_store,
             client,
             call_locks: Arc::new(Mutex::new(HashMap::new())),
+            file_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -172,15 +216,16 @@ impl McpServerStore {
             .clone()
     }
 
-    pub async fn list(&self) -> Vec<McpServerConfig> {
-        load_file(&self.screenpipe_dir).servers
+    pub async fn list(&self) -> Result<Vec<McpServerConfig>> {
+        Ok(load_file(&self.screenpipe_dir).await?.servers)
     }
 
-    pub async fn get(&self, id: &str) -> Option<McpServerConfig> {
-        load_file(&self.screenpipe_dir)
+    pub async fn get(&self, id: &str) -> Result<Option<McpServerConfig>> {
+        Ok(load_file(&self.screenpipe_dir)
+            .await?
             .servers
             .into_iter()
-            .find(|s| s.id == id)
+            .find(|s| s.id == id))
     }
 
     /// Insert or replace a server entry. Header values, if supplied,
@@ -194,32 +239,34 @@ impl McpServerStore {
     ) -> Result<McpServerConfig> {
         validate_config(&cfg)?;
 
-        let mut file = load_file(&self.screenpipe_dir);
-        if let Some(existing) = file.servers.iter_mut().find(|s| s.id == cfg.id) {
-            *existing = cfg.clone();
-        } else {
-            file.servers.push(cfg.clone());
+        {
+            let _lock = self.file_lock.lock().await;
+            let mut file = load_file(&self.screenpipe_dir).await?;
+            if let Some(existing) = file.servers.iter_mut().find(|s| s.id == cfg.id) {
+                *existing = cfg.clone();
+            } else {
+                file.servers.push(cfg.clone());
+            }
+            save_file(&self.screenpipe_dir, &file).await?;
         }
-        save_file(&self.screenpipe_dir, &file)?;
-
         if let Some(values) = header_values {
             self.write_headers(&cfg.id, &values).await?;
         }
-
         Ok(cfg)
     }
 
     /// Remove a server. Best-effort wipes any cached header secrets.
     pub async fn delete(&self, id: &str) -> Result<()> {
-        let mut file = load_file(&self.screenpipe_dir);
-        let before = file.servers.len();
-        file.servers.retain(|s| s.id != id);
-        if file.servers.len() != before {
-            save_file(&self.screenpipe_dir, &file)?;
+        {
+            let _lock = self.file_lock.lock().await;
+            let mut file = load_file(&self.screenpipe_dir).await?;
+            let before = file.servers.len();
+            file.servers.retain(|s| s.id != id);
+            if file.servers.len() != before {
+                save_file(&self.screenpipe_dir, &file).await?;
+            }
         }
-
         if let Some(ss) = &self.secret_store {
-            // delete is idempotent; ignore "not found" failures
             let _ = ss.delete(&secret_key(id)).await;
         }
         Ok(())
@@ -230,22 +277,22 @@ impl McpServerStore {
     /// secret store. Names without a value are skipped — that means
     /// the secret was wiped or the file is hand-edited.
     pub async fn get_headers(&self, id: &str) -> Vec<McpHeader> {
-        let Some(cfg) = self.get(id).await else {
+        let Ok(Some(cfg)) = self.get(id).await else {
             return Vec::new();
         };
         let stored = self.read_headers(id).await;
         cfg.header_names
             .into_iter()
             .filter_map(|name| {
-                stored
-                    .iter()
-                    .find(|h| h.name == name)
-                    .cloned()
-                    .or(Some(McpHeader {
+                let found = stored.iter().find(|h| h.name == name).cloned();
+                if found.is_none() {
+                    tracing::warn!(
+                        "[mcp-store] no stored secret for header '{}' on server '{}'",
                         name,
-                        value: String::new(),
-                    }))
-                    .filter(|h| !h.value.is_empty())
+                        id
+                    );
+                }
+                found
             })
             .collect()
     }
@@ -254,11 +301,13 @@ impl McpServerStore {
         let Some(ss) = &self.secret_store else {
             return Vec::new();
         };
-        ss.get_json::<Vec<McpHeader>>(&secret_key(id))
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default()
+        match ss.get_json::<Vec<McpHeader>>(&secret_key(id)).await {
+            Ok(v) => v.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!("[mcp-store] failed to read headers for '{}': {}", id, e);
+                Vec::new()
+            }
+        }
     }
 
     async fn write_headers(&self, id: &str, headers: &[McpHeader]) -> Result<()> {
@@ -282,7 +331,7 @@ impl McpServerStore {
     pub async fn probe_tools(&self, id: &str) -> Result<Vec<McpToolDescriptor>> {
         let cfg = self
             .get(id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("unknown MCP server: {}", id))?;
         match cfg.transport {
             McpTransport::Http => {
@@ -329,7 +378,7 @@ impl McpServerStore {
     pub async fn call_tool(&self, id: &str, tool: &str, args: Value) -> Result<Value> {
         let cfg = self
             .get(id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("unknown MCP server: {}", id))?;
         if !cfg.enabled {
             return Err(anyhow!("MCP server '{}' is disabled", cfg.name));
@@ -444,12 +493,11 @@ struct StdioSession {
     next_id: u64,
     /// Stderr lines buffered so we can include them in error messages.
     stderr_buf: Arc<Mutex<String>>,
-    // Kept alive via kill_on_drop — dropped (and process killed) when session is dropped.
-    _child: tokio::process::Child,
-    /// On Windows, the real MCP server is a grandchild of cmd.exe.
-    /// kill_on_drop kills cmd.exe but can leave the grandchild alive.
-    /// We store the cmd.exe PID so Drop can run `taskkill /F /T` on the tree.
-    #[cfg(windows)]
+    /// Kept alive via kill_on_drop — dropped (and process killed) when session is dropped.
+    #[allow(dead_code)]
+    child: tokio::process::Child,
+    /// PID of the spawned process. On Windows this is cmd.exe; on Unix it's the
+    /// direct child. Stored so Drop can kill the whole process tree / group.
     pid: u32,
 }
 
@@ -480,6 +528,11 @@ impl StdioSession {
         let mut child = {
             let mut c = tokio::process::Command::new(command);
             c.args(args);
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt as _;
+                c.as_std_mut().process_group(0);
+            }
             c
         };
         tracing::info!("[stdio-mcp] spawning: {} {:?}", command, args);
@@ -511,7 +564,6 @@ impl StdioSession {
             });
         }
 
-        #[cfg(windows)]
         let pid = child.id().unwrap_or(0);
 
         Ok(Self {
@@ -519,8 +571,7 @@ impl StdioSession {
             reader: BufReader::new(stdout).lines(),
             next_id: 0,
             stderr_buf,
-            _child: child,
-            #[cfg(windows)]
+            child,
             pid,
         })
     }
@@ -632,12 +683,22 @@ impl Drop for StdioSession {
         }
         // kill_on_drop kills cmd.exe but the grandchild MCP server is its
         // own process group on Windows. `taskkill /F /T` kills the whole tree.
-        let pid = self.pid;
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .output();
-        });
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &self.pid.to_string()])
+            .output();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StdioSession {
+    fn drop(&mut self) {
+        if self.pid == 0 {
+            return;
+        }
+        // Kill the whole process group (pgid == pid since process_group(0)).
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &format!("-{}", self.pid)])
+            .output();
     }
 }
 
@@ -649,7 +710,7 @@ async fn probe_stdio_server(
     let probe_timeout = Duration::from_secs(30);
     let mut session = StdioSession::spawn(command, args, env).await?;
 
-    let _ = session
+    if let Err(e) = session
         .send(
             "initialize",
             json!({
@@ -659,7 +720,10 @@ async fn probe_stdio_server(
             }),
             probe_timeout,
         )
-        .await;
+        .await
+    {
+        tracing::warn!("[stdio-mcp] initialize failed (continuing): {}", e);
+    }
     session.notify("notifications/initialized", json!({})).await;
 
     let mut all_tools = Vec::new();
@@ -707,7 +771,7 @@ async fn call_stdio_tool(
     let call_timeout = Duration::from_secs(300);
     let mut session = StdioSession::spawn(command, args, env).await?;
 
-    let _ = session
+    if let Err(e) = session
         .send(
             "initialize",
             json!({
@@ -717,7 +781,10 @@ async fn call_stdio_tool(
             }),
             init_timeout,
         )
-        .await;
+        .await
+    {
+        tracing::warn!("[stdio-mcp] initialize failed (continuing): {}", e);
+    }
     session.notify("notifications/initialized", json!({})).await;
 
     session
@@ -749,7 +816,7 @@ async fn probe_mcp_server(
     let probe_timeout = Duration::from_secs(20);
 
     // Step 1 — initialize. Some servers gate tool listing on this.
-    let _ = send_jsonrpc(
+    if let Err(e) = send_jsonrpc(
         client,
         url,
         headers,
@@ -761,7 +828,10 @@ async fn probe_mcp_server(
         }),
         Some(probe_timeout),
     )
-    .await;
+    .await
+    {
+        tracing::warn!("[mcp] initialize failed (continuing): {}", e);
+    }
 
     // Step 2 — tools/list, paginated. MCP's `tools/list` may return
     // `nextCursor` when the catalogue is large (Notion, GitHub,
@@ -818,7 +888,7 @@ async fn call_mcp_tool(
     tool: &str,
     args: Value,
 ) -> Result<Value> {
-    let _ = send_jsonrpc(
+    if let Err(e) = send_jsonrpc(
         client,
         url,
         headers,
@@ -830,7 +900,10 @@ async fn call_mcp_tool(
         }),
         Some(Duration::from_secs(20)),
     )
-    .await;
+    .await
+    {
+        tracing::warn!("[mcp] initialize failed (continuing): {}", e);
+    }
 
     // tools/call uses the client-level ceiling (5 min) — real MCP
     // tools routinely take 30-60s.
@@ -912,15 +985,23 @@ async fn send_jsonrpc(
             .unwrap_or(false);
 
     let payload = if looks_like_sse {
-        parse_sse_data(&text)?
+        parse_sse_data(&text, &id)?
     } else {
-        serde_json::from_str::<Value>(&text).map_err(|e| {
+        let v = serde_json::from_str::<Value>(&text).map_err(|e| {
             anyhow!(
                 "MCP server returned non-JSON body ({}): {}",
                 e,
                 truncate(&text, 200)
             )
-        })?
+        })?;
+        if v.get("id").and_then(|i| i.as_str()) != Some(id.as_str()) {
+            tracing::warn!(
+                "[mcp] response id mismatch: expected {}, got {:?}",
+                id,
+                v.get("id")
+            );
+        }
+        v
     };
 
     if let Some(err) = payload.get("error") {
@@ -937,7 +1018,7 @@ async fn send_jsonrpc(
         .ok_or_else(|| anyhow!("MCP response missing `result` field"))
 }
 
-fn parse_sse_data(text: &str) -> Result<Value> {
+fn parse_sse_data(text: &str, expected_id: &str) -> Result<Value> {
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("data:") else {
             continue;
@@ -946,19 +1027,40 @@ fn parse_sse_data(text: &str) -> Result<Value> {
         if payload.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<Value>(payload) {
-            return Ok(v);
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        // Skip notification frames (they have `method` but no `id`).
+        if v.get("method").is_some() {
+            continue;
         }
+        // Log when ids mismatch; some servers echo a synthetic id in SSE
+        // frames — accept the first non-notification frame regardless.
+        if let Some(got_id) = v.get("id").and_then(|i| i.as_str()) {
+            if got_id != expected_id {
+                tracing::debug!(
+                    "[mcp] SSE response id mismatch: expected {}, got {}",
+                    expected_id,
+                    got_id
+                );
+            }
+        }
+        return Ok(v);
     }
     Err(anyhow!("MCP SSE response had no data lines"))
 }
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+        return s.to_string();
     }
+    let end = s
+        .char_indices()
+        .take_while(|(i, _)| *i < max)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}…", &s[..end])
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +1071,13 @@ fn truncate(s: &str, max: usize) -> String {
 /// loopback endpoints the pi-agent extension uses. Returns an empty
 /// string when no servers are registered.
 pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
-    let file = load_file(screenpipe_dir);
+    let file = match load_file(screenpipe_dir).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("[mcp-store] failed to read servers for context: {}", e);
+            return String::new();
+        }
+    };
     let enabled: Vec<_> = file.servers.iter().filter(|s| s.enabled).collect();
     if enabled.is_empty() {
         return String::new();
@@ -1039,7 +1147,7 @@ mod tests {
         let store = McpServerStore::new(dir.clone(), None);
 
         store.upsert(sample_config("a"), None).await.unwrap();
-        let list = store.list().await;
+        let list = store.list().await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "a");
         assert!(list[0].enabled);
@@ -1057,7 +1165,7 @@ mod tests {
         updated.name = "renamed".to_string();
         store.upsert(updated, None).await.unwrap();
 
-        let list = store.list().await;
+        let list = store.list().await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "renamed");
 
@@ -1073,7 +1181,7 @@ mod tests {
         store.upsert(sample_config("b"), None).await.unwrap();
         store.delete("a").await.unwrap();
 
-        let list = store.list().await;
+        let list = store.list().await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "b");
 
@@ -1139,7 +1247,7 @@ mod tests {
     #[test]
     fn parse_sse_picks_first_data_event() {
         let text = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"ok\":true}}\r\n\r\n";
-        let v = parse_sse_data(text).unwrap();
+        let v = parse_sse_data(text, "1").unwrap();
         assert_eq!(v["result"]["ok"], json!(true));
     }
 

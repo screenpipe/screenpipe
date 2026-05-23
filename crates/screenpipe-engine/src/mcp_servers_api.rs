@@ -19,9 +19,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-pub type SharedMcpServerStore = Arc<Mutex<McpServerStore>>;
+pub type SharedMcpServerStore = Arc<McpServerStore>;
 
 #[derive(Clone)]
 pub struct McpServersState {
@@ -85,18 +84,19 @@ pub struct CallBody {
 // ---------------------------------------------------------------------------
 
 /// GET /mcp-servers — list all registered servers (no header values).
-async fn list_servers(State(state): State<McpServersState>) -> Json<Value> {
-    let store = state.store.lock().await;
-    let list = store.list().await;
-    Json(json!({ "data": list }))
+async fn list_servers(State(state): State<McpServersState>) -> Response {
+    match state.store.list().await {
+        Ok(list) => Json(json!({ "data": list })).into_response(),
+        Err(e) => internal_error(&e.to_string()),
+    }
 }
 
 /// GET /mcp-servers/:id — single server detail (no header values).
 async fn get_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
-    let store = state.store.lock().await;
-    match store.get(&id).await {
-        Some(cfg) => Json(json!({ "data": cfg })).into_response(),
-        None => not_found(&id),
+    match state.store.get(&id).await {
+        Ok(Some(cfg)) => Json(json!({ "data": cfg })).into_response(),
+        Ok(None) => not_found(&id),
+        Err(e) => internal_error(&e.to_string()),
     }
 }
 
@@ -135,8 +135,10 @@ async fn upsert_server(
         }
     }
 
-    let store = state.store.lock().await;
-    let existing = store.get(&id).await;
+    let existing = match state.store.get(&id).await {
+        Ok(e) => e,
+        Err(e) => return internal_error(&e.to_string()),
+    };
     let created_at = existing
         .as_ref()
         .map(|c| c.created_at)
@@ -152,7 +154,7 @@ async fn upsert_server(
                 return bad_request(&msg);
             }
             let header_names: Vec<String> = supplied.iter().map(|h| h.name.clone()).collect();
-            let existing_headers = store.get_headers(&id).await;
+            let existing_headers = state.store.get_headers(&id).await;
             let merged = merge_headers(&existing_headers, &supplied);
             let cfg = McpServerConfig {
                 id: id.clone(),
@@ -191,7 +193,7 @@ async fn upsert_server(
         }
     };
 
-    match store.upsert(cfg, header_values).await {
+    match state.store.upsert(cfg, header_values).await {
         Ok(saved) => Json(json!({ "data": saved })).into_response(),
         Err(e) => bad_request(&e.to_string()),
     }
@@ -199,10 +201,9 @@ async fn upsert_server(
 
 /// DELETE /mcp-servers/:id — remove a server.
 async fn delete_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
-    let store = state.store.lock().await;
-    match store.delete(&id).await {
+    match state.store.delete(&id).await {
         Ok(()) => Json(json!({ "success": true })).into_response(),
-        Err(e) => bad_request(&e.to_string()),
+        Err(e) => internal_error(&e.to_string()),
     }
 }
 
@@ -305,12 +306,11 @@ fn merge_headers(existing: &[McpHeader], supplied: &[McpHeader]) -> Vec<McpHeade
 
 /// POST /mcp-servers/:id/test — probe stored server.
 async fn test_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
-    let store = state.store.lock().await;
-    match store.probe_tools(&id).await {
+    match state.store.probe_tools(&id).await {
         Ok(tools) => {
             Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
         }
-        Err(e) => bad_request(&e.to_string()),
+        Err(e) => bad_gateway(&e.to_string()),
     }
 }
 
@@ -320,30 +320,28 @@ async fn test_ad_hoc(
     State(state): State<McpServersState>,
     Json(body): Json<ProbeBody>,
 ) -> Response {
-    let store = state.store.lock().await;
     let result = if body.transport.as_deref() == Some("stdio") {
         let command = body.command.as_deref().unwrap_or("");
         let args = body.args.as_deref().unwrap_or(&[]);
         let env = body.env.as_ref().cloned().unwrap_or_default();
-        store.probe_stdio_ad_hoc(command, args, &env).await
+        state.store.probe_stdio_ad_hoc(command, args, &env).await
     } else {
-        store.probe_ad_hoc(&body.url, &body.headers).await
+        state.store.probe_ad_hoc(&body.url, &body.headers).await
     };
     match result {
         Ok(tools) => {
             Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
         }
-        Err(e) => bad_request(&e.to_string()),
+        Err(e) => bad_gateway(&e.to_string()),
     }
 }
 
 /// GET /mcp-servers/:id/tools — cached tools list (same wire format as
 /// `/test`, but suitable for the bridge extension to call cheaply).
 async fn list_tools(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
-    let store = state.store.lock().await;
-    match store.probe_tools(&id).await {
+    match state.store.probe_tools(&id).await {
         Ok(tools) => Json(json!({ "data": { "tools": tools } })).into_response(),
-        Err(e) => bad_request(&e.to_string()),
+        Err(e) => bad_gateway(&e.to_string()),
     }
 }
 
@@ -353,10 +351,9 @@ async fn call_tool(
     Path(id): Path<String>,
     Json(body): Json<CallBody>,
 ) -> Response {
-    let store = state.store.lock().await;
-    match store.call_tool(&id, &body.tool, body.arguments).await {
+    match state.store.call_tool(&id, &body.tool, body.arguments).await {
         Ok(result) => Json(json!({ "data": result })).into_response(),
-        Err(e) => bad_request(&e.to_string()),
+        Err(e) => bad_gateway(&e.to_string()),
     }
 }
 
@@ -366,6 +363,18 @@ async fn call_tool(
 
 fn bad_request(msg: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response()
+}
+
+fn bad_gateway(msg: &str) -> Response {
+    (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
+}
+
+fn internal_error(msg: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": msg })),
+    )
+        .into_response()
 }
 
 fn not_found(id: &str) -> Response {
