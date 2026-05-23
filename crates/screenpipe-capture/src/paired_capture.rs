@@ -73,6 +73,10 @@ pub struct CaptureContext<'a> {
     pub languages: Vec<screenpipe_core::Language>,
     /// When Some, this frame references another frame's elements (dedup).
     pub elements_ref_frame_id: Option<i64>,
+    /// When true, skip screenshot acquisition and JPEG encode.
+    /// The accessibility tree walk still runs — metadata row is still written.
+    /// Set by AudioPaused and FullPause power profiles.
+    pub screenshot_disabled: bool,
 }
 
 /// Result of a paired capture operation.
@@ -112,17 +116,26 @@ pub async fn paired_capture(
 ) -> Result<PairedCaptureResult> {
     let start = Instant::now();
 
-    // Write JPEG snapshot to disk
-    let snapshot_path = ctx
-        .snapshot_writer
-        .write(&ctx.image, ctx.captured_at, ctx.monitor_id)?;
-    let snapshot_path_str = snapshot_path.to_string_lossy().to_string();
-
-    debug!(
-        "paired_capture: snapshot written in {:?} (trigger={})",
-        start.elapsed(),
-        ctx.capture_trigger
-    );
+    // Write JPEG snapshot to disk — skipped when screenshot_disabled (AudioPaused / FullPause).
+    // The accessibility tree walk still runs so metadata rows keep timestamp,
+    // app_name, window_name, and full_text for search/timeline queries.
+    let snapshot_path_str = if ctx.screenshot_disabled {
+        debug!(
+            "paired_capture: screenshot skipped (screenshot_disabled, trigger={})",
+            ctx.capture_trigger
+        );
+        String::new()
+    } else {
+        let snapshot_path =
+            ctx.snapshot_writer
+                .write(&ctx.image, ctx.captured_at, ctx.monitor_id)?;
+        debug!(
+            "paired_capture: snapshot written in {:?} (trigger={})",
+            start.elapsed(),
+            ctx.capture_trigger
+        );
+        snapshot_path.to_string_lossy().to_string()
+    };
 
     // --- Check if accessibility tree already provides text ---
     // When the tree snapshot has text we skip OCR entirely. This avoids
@@ -625,6 +638,7 @@ mod tests {
             use_pii_removal: false,
             languages: vec![],
             elements_ref_frame_id: None,
+            screenshot_disabled: false,
         };
 
         let result = paired_capture(&ctx, None).await.unwrap();
@@ -663,6 +677,7 @@ mod tests {
             use_pii_removal: false,
             languages: vec![],
             elements_ref_frame_id: None,
+            screenshot_disabled: false,
         };
 
         let snap = TreeSnapshot {
@@ -725,6 +740,7 @@ mod tests {
             use_pii_removal: false,
             languages: vec![],
             elements_ref_frame_id: None,
+            screenshot_disabled: false,
         };
 
         // Empty accessibility text should be treated as no text

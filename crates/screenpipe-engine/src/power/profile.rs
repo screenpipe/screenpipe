@@ -70,6 +70,11 @@ pub struct PowerProfile {
     /// When true, audio capture and Whisper transcription are fully disabled.
     /// Vision capture continues. Set at <=20% battery.
     pub audio_disabled: bool,
+    /// When true, screenshot acquisition, JPEG encode, frame comparer, and
+    /// video chunk writes are skipped. The accessibility tree walk continues
+    /// so search/timeline metadata (app_name, window_name, full_text) still works.
+    /// Set at <=20% battery (AudioPaused) and <=10% (FullPause).
+    pub screenshot_disabled: bool,
 
     // ── Capture pause ────────────────────────────────────────────────────
     /// When true, all capture (vision + audio) is paused.
@@ -96,6 +101,7 @@ impl PowerProfile {
             fps_interval_multiplier: 1.0,
             vad_min_speech_ratio: 0.02,
             audio_disabled: false,
+            screenshot_disabled: false,
             capture_paused: false,
             video_quality_override: None,
         }
@@ -113,6 +119,7 @@ impl PowerProfile {
             fps_interval_multiplier: 2.0,
             vad_min_speech_ratio: 0.05,
             audio_disabled: false,
+            screenshot_disabled: false,
             capture_paused: false,
             video_quality_override: Some("low".to_string()),
         }
@@ -130,6 +137,7 @@ impl PowerProfile {
             fps_interval_multiplier: 4.0,
             vad_min_speech_ratio: 0.10,
             audio_disabled: false,
+            screenshot_disabled: false,
             capture_paused: false,
             video_quality_override: Some("low".to_string()),
         }
@@ -149,6 +157,7 @@ impl PowerProfile {
             // ratio=1.0 means no segment ever passes VAD — effectively off
             vad_min_speech_ratio: 1.0,
             audio_disabled: true,
+            screenshot_disabled: true,
             capture_paused: false,
             video_quality_override: Some("low".to_string()),
         }
@@ -169,6 +178,7 @@ impl PowerProfile {
             fps_interval_multiplier: 8.0,
             vad_min_speech_ratio: 1.0,
             audio_disabled: true,
+            screenshot_disabled: true,
             capture_paused: true,
             video_quality_override: Some("low".to_string()),
         }
@@ -188,12 +198,14 @@ impl PowerProfile {
                     return Self::saver();
                 }
 
-                // AC power → full performance regardless of battery level
-                if state.on_ac {
+                // AC power → full performance, UNLESS OS low-power mode is on.
+                // Users who enable Low Power Mode while plugged in (fan noise /
+                // thermal budget) expect the system to respect that preference.
+                if state.on_ac && !state.os_low_power {
                     return Self::performance();
                 }
 
-                // OS low-power mode → full pause
+                // OS low-power mode → full pause (battery or AC)
                 if state.os_low_power {
                     return Self::full_pause();
                 }
@@ -350,6 +362,34 @@ mod tests {
     }
 
     #[test]
+    fn test_ac_with_os_low_power_gets_full_pause() {
+        // Regression: AC + Low Power Mode must NOT return Performance.
+        // Users enabling Low Power Mode while plugged in (thermal / fan noise)
+        // expect the system to respect that preference.
+        let state = PowerState {
+            on_ac: true,
+            battery_pct: Some(80),
+            thermal_state: ThermalState::Nominal,
+            os_low_power: true,
+        };
+        let profile = PowerProfile::for_state(&state, PowerMode::Auto);
+        assert_eq!(profile.name, ProfileName::FullPause);
+        assert!(profile.capture_paused);
+    }
+
+    #[test]
+    fn test_ac_without_os_low_power_gets_performance() {
+        let state = PowerState {
+            on_ac: true,
+            battery_pct: Some(80),
+            thermal_state: ThermalState::Nominal,
+            os_low_power: false,
+        };
+        let profile = PowerProfile::for_state(&state, PowerMode::Auto);
+        assert_eq!(profile.name, ProfileName::Performance);
+    }
+
+    #[test]
     fn test_boundary_exactly_40_percent() {
         let state = PowerState {
             on_ac: false,
@@ -422,6 +462,38 @@ mod tests {
         let profile = PowerProfile::full_pause();
         assert!(profile.audio_disabled);
         assert!(profile.capture_paused);
+    }
+
+    #[test]
+    fn test_audio_paused_skips_screenshot_keeps_a11y() {
+        // AudioPaused: no JPEG, no Whisper — but a11y tree walk continues.
+        // This is the key behavior: metadata rows (app_name, window_name,
+        // full_text) still land in the DB for search/timeline.
+        let profile = PowerProfile::audio_paused();
+        assert!(profile.screenshot_disabled, "screenshot must be skipped");
+        assert!(profile.audio_disabled, "audio must be disabled");
+        assert!(!profile.capture_paused, "capture loop must keep running");
+        // vad_min_speech_ratio=1.0 means no segment ever passes VAD
+        assert_eq!(profile.vad_min_speech_ratio, 1.0);
+    }
+
+    #[test]
+    fn test_full_pause_skips_everything() {
+        // FullPause: no screenshot, no audio, capture loop gated off entirely.
+        let profile = PowerProfile::full_pause();
+        assert!(profile.screenshot_disabled);
+        assert!(profile.audio_disabled);
+        assert!(profile.capture_paused, "capture loop must be fully gated");
+    }
+
+    #[test]
+    fn test_saver_still_takes_screenshots() {
+        // Saver is NOT AudioPaused — it still writes snapshot rows,
+        // just at lower quality and longer intervals.
+        let profile = PowerProfile::saver();
+        assert!(!profile.screenshot_disabled);
+        assert!(!profile.audio_disabled);
+        assert!(!profile.capture_paused);
     }
 
     #[test]
