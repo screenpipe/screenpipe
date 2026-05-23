@@ -747,7 +747,14 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         return;
     }
 
-    // Recurse into children
+    // Recurse into children.
+    // Reset the depth counter to 0 when entering an AXWebArea so that Electron
+    // apps (VS Code, Slack, Discord, Obsidian, Notion, …) get the full
+    // max_depth budget for their DOM content tree. Without this reset, the
+    // budget is partially consumed by the Electron shell layers above the
+    // AXWebArea (typically 7-9 AXGroup levels), leaving fewer levels for the
+    // actual app content — silently dropping terminal output, editor text, etc.
+    let next_depth = if role_str == "AXWebArea" { 0 } else { depth + 1 };
     let children = elem.children();
     if let Ok(children) = children {
         for i in 0..children.len() {
@@ -755,7 +762,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
                 break;
             }
             let child = &children[i];
-            walk_element(child, depth + 1, state);
+            walk_element(child, next_depth, state);
         }
     }
 }
