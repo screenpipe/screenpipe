@@ -374,11 +374,17 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
 
-    /// Windows to ignore (by title, uses contains matching)
+    /// Windows to ignore (case-insensitive contains). Use `App::Title` to
+    /// scope to one window of one app (e.g. `Slack::#hr`). `::title` matches
+    /// any app whose focused window title contains `title`. `App::` blocks
+    /// the entire app (equivalent to bare `App`).
     #[arg(long)]
     pub ignored_windows: Vec<String>,
 
-    /// Windows to include (by title, uses contains matching)
+    /// Windows to include (case-insensitive contains). Scoped entries
+    /// (`App::Title`) create a per-app whitelist; other apps remain
+    /// unaffected. Unscoped entries keep the legacy "must match app or
+    /// title" global-include semantics.
     #[arg(long)]
     pub included_windows: Vec<String>,
 

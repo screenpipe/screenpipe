@@ -7,6 +7,7 @@
 //! Provides settings for what to capture, privacy filters, and performance tuning.
 
 use regex::Regex;
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -244,19 +245,21 @@ impl UiCaptureConfig {
             .collect();
     }
 
-    fn matches_user_pattern(patterns: &[String], value: &str) -> bool {
-        if value.is_empty() {
-            return false;
-        }
-
-        let value_lower = value.to_lowercase();
-        patterns.iter().any(|pattern| {
-            let pattern = pattern.trim();
-            !pattern.is_empty() && value_lower.contains(&pattern.to_lowercase())
-        })
+    /// Parse the user-configured ignore list (supports `App::Title` scoped form
+    /// via `screenpipe-core::window_pattern`).
+    pub fn ignored_patterns(&self) -> Vec<WindowPattern> {
+        WindowPattern::parse_list(&self.ignored_windows)
     }
 
-    /// Check if an app should be captured
+    /// Parse the user-configured include list.
+    pub fn included_patterns(&self) -> Vec<WindowPattern> {
+        WindowPattern::parse_list(&self.included_windows)
+    }
+
+    /// Check if an app should be captured. Called before window title is known,
+    /// so only legacy (unscoped) ignore patterns can block here — scoped
+    /// patterns like `Slack::#general` defer to `should_capture_target` where
+    /// the full (app, title) pair is available.
     pub fn should_capture_app(&self, app_name: &str) -> bool {
         if !self.enabled {
             return false;
@@ -271,10 +274,13 @@ impl UiCaptureConfig {
             return false;
         }
 
-        !Self::matches_user_pattern(&self.ignored_windows, app_name)
+        // Pass empty title: scoped patterns naturally do not match here.
+        !window_pattern::matches_any(&self.ignored_patterns(), &app_lower, "")
     }
 
-    /// Check if a window should be captured
+    /// Check if a window should be captured by title alone. Like
+    /// `should_capture_app`, scoped patterns are deferred to
+    /// `should_capture_target`.
     pub fn should_capture_window(&self, window_title: &str) -> bool {
         if !self.enabled {
             return false;
@@ -288,7 +294,8 @@ impl UiCaptureConfig {
             return false;
         }
 
-        !Self::matches_user_pattern(&self.ignored_windows, window_title)
+        let title_lower = window_title.to_lowercase();
+        !window_pattern::matches_any(&self.ignored_patterns(), "", &title_lower)
     }
 
     /// Check a concrete app/window pair against all capture filters.
@@ -303,14 +310,17 @@ impl UiCaptureConfig {
             }
         }
 
-        if self.included_windows.is_empty() {
-            return true;
+        let app_lower = app_name.to_lowercase();
+        let title_lower = window_title.unwrap_or_default().to_lowercase();
+
+        // Scoped ignore patterns (e.g. `Slack::#general`) are evaluated here —
+        // they require both app and title context, which is only present at
+        // this layer.
+        if window_pattern::matches_any(&self.ignored_patterns(), &app_lower, &title_lower) {
+            return false;
         }
 
-        Self::matches_user_pattern(&self.included_windows, app_name)
-            || window_title
-                .map(|title| Self::matches_user_pattern(&self.included_windows, title))
-                .unwrap_or(false)
+        window_pattern::passes_includes(&self.included_patterns(), &app_lower, &title_lower)
     }
 
     /// Check if element appears to be a password field
@@ -438,6 +448,34 @@ mod tests {
         assert!(config.should_capture_target("Chrome", Some("Docs")));
         assert!(config.should_capture_target("Terminal", Some("ScreenPipe logs")));
         assert!(!config.should_capture_target("Slack", Some("DM")));
+    }
+
+    #[test]
+    fn test_scoped_ignore_per_window() {
+        // `Slack::#hr` should block Slack #hr only; Slack #engineering and
+        // Chrome should still be captured. The app-only check must NOT block
+        // Slack (since we'd lose #engineering too).
+        let mut config = UiCaptureConfig::new();
+        config.ignored_windows = vec!["Slack::#hr".to_string()];
+
+        assert!(config.should_capture_app("Slack"));
+        assert!(!config.should_capture_target("Slack", Some("#hr - mycompany")));
+        assert!(config.should_capture_target("Slack", Some("#engineering")));
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
+    }
+
+    #[test]
+    fn test_scoped_include_per_app_whitelist() {
+        // `Greenhouse::Candidates` should whitelist only that window in
+        // Greenhouse; other apps stay unaffected (regression target — naive
+        // semantics would block everything but Greenhouse).
+        let mut config = UiCaptureConfig::new();
+        config.included_windows = vec!["Greenhouse::Candidates".to_string()];
+
+        assert!(config.should_capture_target("Greenhouse", Some("Candidates")));
+        assert!(!config.should_capture_target("Greenhouse", Some("Compensation")));
+        assert!(config.should_capture_target("Slack", Some("#general")));
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
     }
 
     #[test]

@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use screenpipe_a11y::{ExtractionThreadPriority, UiCaptureConfig, UiRecorder};
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -532,6 +533,12 @@ pub async fn start_ui_recording(
         true,
     );
 
+    // Parse user-configured ignore patterns once — the spawned task fires on
+    // every UI event, so re-parsing per-event would burn CPU in keystroke
+    // storms. Supports both legacy unscoped strings and `App::Title` scoped
+    // patterns (see `screenpipe-core::window_pattern`).
+    let ignored_patterns = WindowPattern::parse_list(&ignored_windows);
+
     // Spawn the event processing task
     let task_handle = tokio::spawn(async move {
         let session_id = Uuid::new_v4().to_string();
@@ -569,7 +576,7 @@ pub async fn start_ui_recording(
                     let is_scroll =
                         matches!(db_event.event_type, screenpipe_db::UiEventType::Scroll);
                     let trigger_kind =
-                        capture_trigger_kind(&db_event, &ignored_windows, trigger_gates);
+                        capture_trigger_kind(&db_event, &ignored_patterns, trigger_gates);
                     let want_corr_id = (trigger_kind.is_some() || is_scroll)
                         && (capture_trigger_tx.is_some() || linker_tx.is_some());
                     let correlation_id = if want_corr_id {
@@ -591,7 +598,8 @@ pub async fn start_ui_recording(
                     }
 
                     if record_input_events {
-                        // Don't store input events from ignored windows/apps
+                        // Don't store input events from ignored windows/apps.
+                        // Supports both legacy and scoped `App::Title` patterns.
                         let app_lower = db_event
                             .app_name
                             .as_deref()
@@ -602,10 +610,11 @@ pub async fn start_ui_recording(
                             .as_deref()
                             .unwrap_or_default()
                             .to_lowercase();
-                        let is_ignored = ignored_windows.iter().any(|ig| {
-                            let ig_lower = ig.to_lowercase();
-                            app_lower.contains(&ig_lower) || title_lower.contains(&ig_lower)
-                        });
+                        let is_ignored = window_pattern::matches_any(
+                            &ignored_patterns,
+                            &app_lower,
+                            &title_lower,
+                        );
                         if !is_ignored {
                             batch.push(db_event, correlation_id);
                         }
@@ -802,30 +811,28 @@ struct TriggerGates {
 /// capture loop will drop at the same gate.
 fn capture_trigger_kind(
     db_event: &InsertUiEvent,
-    ignored_windows: &[String],
+    ignored_patterns: &[WindowPattern],
     gates: TriggerGates,
 ) -> Option<crate::event_driven_capture::CaptureTrigger> {
     use crate::event_driven_capture::CaptureTrigger;
+    // Both AppSwitch and WindowFocus events carry app_name (set by the
+    // a11y observer when the focused app or window changes), so we can pass
+    // both sides to the matcher and have scoped `App::Title` patterns work.
+    let app = db_event.app_name.clone().unwrap_or_default();
+    let title = db_event.window_title.clone().unwrap_or_default();
+    let app_lower = app.to_lowercase();
+    let title_lower = title.to_lowercase();
+    let is_ignored = window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower);
     match &db_event.event_type {
         screenpipe_db::UiEventType::AppSwitch => {
-            let app = db_event.app_name.clone().unwrap_or_default();
-            let app_lower = app.to_lowercase();
-            if ignored_windows
-                .iter()
-                .any(|ig| app_lower.contains(&ig.to_lowercase()))
-            {
+            if is_ignored {
                 None
             } else {
                 Some(CaptureTrigger::AppSwitch { app_name: app })
             }
         }
         screenpipe_db::UiEventType::WindowFocus => {
-            let title = db_event.window_title.clone().unwrap_or_default();
-            let title_lower = title.to_lowercase();
-            if ignored_windows
-                .iter()
-                .any(|ig| title_lower.contains(&ig.to_lowercase()))
-            {
+            if is_ignored {
                 None
             } else {
                 Some(CaptureTrigger::WindowFocus { window_name: title })
@@ -1072,6 +1079,49 @@ mod capture_trigger_kind_tests {
     fn move_and_idle_never_trigger() {
         let m = capture_trigger_kind(&evt(UiEventType::Move), &[], gates(true, true));
         assert!(m.is_none());
+    }
+
+    fn parse(raw: &[&str]) -> Vec<WindowPattern> {
+        WindowPattern::parse_list(&raw.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn legacy_pattern_blocks_app_switch_trigger() {
+        let mut e = evt(UiEventType::AppSwitch);
+        e.app_name = Some("Slack".to_string());
+        let patterns = parse(&["Slack"]);
+        assert!(capture_trigger_kind(&e, &patterns, gates(true, true)).is_none());
+    }
+
+    #[test]
+    fn scoped_pattern_does_not_block_app_switch_when_title_missing() {
+        // AppSwitch carries app but typically no window title; scoped
+        // patterns require both, so they defer to the later vision/a11y
+        // gate where the title is available.
+        let mut e = evt(UiEventType::AppSwitch);
+        e.app_name = Some("Slack".to_string());
+        let patterns = parse(&["Slack::#hr"]);
+        let result = capture_trigger_kind(&e, &patterns, gates(true, true));
+        assert!(matches!(result, Some(CaptureTrigger::AppSwitch { .. })));
+    }
+
+    #[test]
+    fn scoped_pattern_blocks_window_focus_with_full_context() {
+        let mut e = evt(UiEventType::WindowFocus);
+        e.app_name = Some("Slack".to_string());
+        e.window_title = Some("#hr - mycompany".to_string());
+        let patterns = parse(&["Slack::#hr"]);
+        assert!(capture_trigger_kind(&e, &patterns, gates(true, true)).is_none());
+    }
+
+    #[test]
+    fn scoped_pattern_allows_unscoped_window_in_same_app() {
+        let mut e = evt(UiEventType::WindowFocus);
+        e.app_name = Some("Slack".to_string());
+        e.window_title = Some("#engineering".to_string());
+        let patterns = parse(&["Slack::#hr"]);
+        let result = capture_trigger_kind(&e, &patterns, gates(true, true));
+        assert!(matches!(result, Some(CaptureTrigger::WindowFocus { .. })));
     }
 }
 

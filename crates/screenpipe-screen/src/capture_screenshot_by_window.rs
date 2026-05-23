@@ -1,5 +1,6 @@
 use image::DynamicImage;
 use once_cell::sync::Lazy;
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -220,16 +221,16 @@ pub struct CapturedWindow {
 }
 
 pub struct WindowFilters {
-    ignore_set: HashSet<String>,
-    include_set: HashSet<String>,
+    ignore_patterns: Vec<WindowPattern>,
+    include_patterns: Vec<WindowPattern>,
     ignored_urls: HashSet<String>,
 }
 
 impl WindowFilters {
     pub fn new(ignore_list: &[String], include_list: &[String], ignored_urls: &[String]) -> Self {
         Self {
-            ignore_set: ignore_list.iter().map(|s| s.to_lowercase()).collect(),
-            include_set: include_list.iter().map(|s| s.to_lowercase()).collect(),
+            ignore_patterns: WindowPattern::parse_list(ignore_list),
+            include_patterns: WindowPattern::parse_list(include_list),
             ignored_urls: ignored_urls.iter().map(|s| s.to_lowercase()).collect(),
         }
     }
@@ -237,7 +238,9 @@ impl WindowFilters {
     /// Apps that are always excluded — system lock screen processes.
     const BUILTIN_IGNORED: &'static [&'static str] = &["loginwindow", "logonui"];
 
-    // O(n) - we could figure out a better way to do this
+    /// O(n) over ignore + include patterns. Patterns support an optional
+    /// `AppName::WindowTitle` scope (parsed in `screenpipe-core::window_pattern`);
+    /// legacy unscoped strings keep the historical "app OR title contains" behavior.
     pub fn is_valid(&self, app_name: &str, title: &str) -> bool {
         let app_name_lower = app_name.to_lowercase();
         let title_lower = title.to_lowercase();
@@ -248,12 +251,7 @@ impl WindowFilters {
         }
 
         // Check ignore list first — always reject ignored windows
-        if !self.ignore_set.is_empty()
-            && self
-                .ignore_set
-                .iter()
-                .any(|ignore| app_name_lower.contains(ignore) || title_lower.contains(ignore))
-        {
+        if window_pattern::matches_any(&self.ignore_patterns, &app_name_lower, &title_lower) {
             return false;
         }
 
@@ -263,16 +261,8 @@ impl WindowFilters {
             return false;
         }
 
-        // If include list is set, only allow windows that match it
-        if !self.include_set.is_empty() {
-            return self
-                .include_set
-                .iter()
-                .any(|include| app_name_lower.contains(include) || title_lower.contains(include));
-        }
-
-        // No include list and not ignored — allow
-        true
+        // Include list: empty = pass; non-empty applies scoped/legacy semantics.
+        window_pattern::passes_includes(&self.include_patterns, &app_name_lower, &title_lower)
     }
 
     /// Check if a URL should be filtered out for privacy
@@ -969,7 +959,7 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
 /// Returns an empty vec if no windows match the filters or on error.
 #[cfg(target_os = "macos")]
 pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.ignore_set.is_empty() && window_filters.include_set.is_empty() {
+    if window_filters.ignore_patterns.is_empty() && window_filters.include_patterns.is_empty() {
         return Vec::new();
     }
 

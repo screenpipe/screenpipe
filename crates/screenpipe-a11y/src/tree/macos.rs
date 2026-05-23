@@ -12,6 +12,7 @@ use crate::tree::macos_lines::{self, NormalizeRefs};
 use anyhow::Result;
 use chrono::Utc;
 use cidre::{ax, cf, ns};
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::process::Command;
 use std::time::Instant;
 use tracing::debug;
@@ -322,11 +323,12 @@ impl MacosTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
-        // Apply user-configured ignored windows (check app name)
-        if self.config.ignored_windows.iter().any(|pattern| {
-            let p = pattern.to_lowercase();
-            app_lower.contains(&p)
-        }) {
+        // Apply user-configured ignored windows (app-name pre-check).
+        // Scoped patterns (`App::Title`) defer to the post-title check below
+        // since the window title isn't known yet — see `window_pattern`.
+        let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
+        let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
+        if window_pattern::matches_any(&ignored_patterns, &app_lower, "") {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
@@ -398,32 +400,27 @@ impl MacosTreeWalker {
             return Ok(TreeWalkResult::Skipped(SkipReason::Incognito));
         }
 
-        // Apply user-configured ignored windows (also check window title)
+        // Full app + title check — scoped patterns (`App::Title`) and any
+        // legacy pattern matching the title are evaluated here.
         let window_lower = window_name.to_lowercase();
-        if self.config.ignored_windows.iter().any(|pattern| {
-            let p = pattern.to_lowercase();
-            window_lower.contains(&p)
-        }) {
+        if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
-        // Apply user-configured included windows (also check window title)
-        if !self.config.included_windows.is_empty() {
-            let matches_app = self.config.included_windows.iter().any(|pattern| {
-                let p = pattern.to_lowercase();
-                app_lower.contains(&p)
-            });
-            let matches_window = self.config.included_windows.iter().any(|pattern| {
-                let p = pattern.to_lowercase();
-                window_lower.contains(&p)
-            });
-            if !matches_app && !matches_window {
-                return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
-            }
+        // Apply user-configured included windows. Scoped includes act as
+        // per-app whitelists; apps without a scoped include rule fall back to
+        // global semantics — see `window_pattern::passes_includes`.
+        if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+            return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
         // 3. Read window frame for normalizing element bounds to 0-1 coords
-        let mut state = WalkState::new(&self.config, start);
+        let mut state = WalkState::new(
+            &self.config,
+            start,
+            ignored_patterns.clone(),
+            app_lower.clone(),
+        );
         if let Some((wx, wy, ww, wh)) = get_element_frame(window) {
             if ww > 0.0 && wh > 0.0 {
                 state.window_x = wx;
@@ -540,9 +537,13 @@ struct WalkState {
     monitor_y: f64,
     monitor_w: f64,
     monitor_h: f64,
-    /// User-configured ignored window patterns (lowercase) for filtering browser
+    /// Parsed user-configured ignored window patterns for filtering browser
     /// extension popups whose AXWebArea title matches an ignored keyword.
-    ignored_windows_lower: Vec<String>,
+    /// Supports `App::Title` scoping — `focused_app_lower` is the app side.
+    ignored_patterns: Vec<WindowPattern>,
+    /// Lowercase focused app name, used as the app side when matching scoped
+    /// patterns against AXWebArea titles/urls.
+    focused_app_lower: String,
     /// Set to true when a browser extension popup matching an ignored pattern is
     /// detected. Signals the caller to skip the entire capture (including screenshot).
     hit_ignored_extension: bool,
@@ -556,7 +557,12 @@ struct WalkState {
 }
 
 impl WalkState {
-    fn new(config: &TreeWalkerConfig, start: Instant) -> Self {
+    fn new(
+        config: &TreeWalkerConfig,
+        start: Instant,
+        ignored_patterns: Vec<WindowPattern>,
+        focused_app_lower: String,
+    ) -> Self {
         Self {
             text_buffer: String::with_capacity(4096),
             nodes: Vec::with_capacity(256),
@@ -577,11 +583,8 @@ impl WalkState {
             monitor_y: config.monitor_y,
             monitor_w: config.monitor_width,
             monitor_h: config.monitor_height,
-            ignored_windows_lower: config
-                .ignored_windows
-                .iter()
-                .map(|s| s.to_lowercase())
-                .collect(),
+            ignored_patterns,
+            focused_app_lower,
             hit_ignored_extension: false,
             line_budget: if config.enable_line_bounds {
                 Some(LineBudget::new(
@@ -710,13 +713,13 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
         // carry the extension name as their title and a chrome-extension:// URL.
         // If the title matches an ignored-window pattern, skip the entire subtree
         // to prevent capturing password manager or other sensitive extension content.
-        if !state.ignored_windows_lower.is_empty() {
+        // Uses the full `window_pattern` semantics so scoped rules like
+        // `Chrome::1Password` correctly target browser-specific extensions.
+        if !state.ignored_patterns.is_empty() {
+            let app_lc = state.focused_app_lower.as_str();
             let matches = |val: &str| {
                 let lower = val.to_lowercase();
-                state
-                    .ignored_windows_lower
-                    .iter()
-                    .any(|ig| lower.contains(ig.as_str()))
+                window_pattern::matches_any(&state.ignored_patterns, app_lc, &lower)
             };
             if get_string_attr(elem, ax::attr::title()).is_some_and(|t| matches(&t))
                 || get_string_attr(elem, ax::attr::url()).is_some_and(|u| matches(&u))

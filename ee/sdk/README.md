@@ -52,7 +52,8 @@ const recorder = new Recorder({
   output: "/tmp/session.mp4",
   // Optional privacy filters — recording pauses (hard cut in the MP4)
   // while a matching window/URL is focused.
-  ignoredWindows: ["1password", "private"],
+  // Plain strings match anywhere; `App::Title` scopes to one window of one app.
+  ignoredWindows: ["1password", "private", "Slack::#hr"],
   ignoredUrls: ["wellsfargo.com", "chase"],
 });
 await recorder.start();
@@ -75,9 +76,16 @@ await recorder.stop();
   matching window is in focus, the recorder skips writing frames — the MP4
   contains a hard cut over the filtered period. Mirrors the engine's
   `--ignored-windows` CLI flag.
+
+  Each pattern may use an optional `App::Title` scope: `"Slack::#hr"` skips
+  only the #hr window inside Slack and leaves other Slack channels recording.
+  `"::Confidential"` matches any app whose title contains "Confidential".
+  Plain `"Slack"` keeps the legacy "app OR title contains" behavior.
 - `options.includedWindows` (string[], optional): substring whitelist. If
-  non-empty, frames are written ONLY while the focused app name or window
-  title matches at least one pattern. Mirrors `--included-windows`.
+  non-empty, frames are written ONLY while a matching window is focused.
+  Scoped entries (`"Greenhouse::Candidates"`) create a per-app whitelist —
+  other apps stay unaffected. Unscoped entries keep the legacy "must match
+  app or title" global semantics. Mirrors `--included-windows`.
 - `options.ignoredUrls` (string[], optional): URL patterns to skip
   (case-insensitive, domain-aware match — `chase` matches `chase.com` and
   `online.chase.com` but not `purchase.com`). When the focused browser is on
