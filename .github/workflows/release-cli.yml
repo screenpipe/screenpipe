@@ -563,8 +563,9 @@ jobs:
       - name: Prepare platform packages
         run: |
           # macOS ARM64
+          mkdir -p /tmp/darwin-arm64
           mkdir -p packages/cli/screenpipe-darwin-arm64/bin
-          tar -xzf artifacts/screenpipe-macos-aarch64-apple-darwin/screenpipe-*.tar.gz -C /tmp/darwin-arm64 || true
+          tar -xzf artifacts/screenpipe-macos-aarch64-apple-darwin/screenpipe-*.tar.gz -C /tmp/darwin-arm64
           cp /tmp/darwin-arm64/bin/screenpipe packages/cli/screenpipe-darwin-arm64/bin/ 2>/dev/null || \
             (cd artifacts/screenpipe-macos-aarch64-apple-darwin && tar -xzf screenpipe-*.tar.gz && cp bin/screenpipe ../../packages/cli/screenpipe-darwin-arm64/bin/)
           # Bundle mlx.metallib for Parakeet MLX GPU support
@@ -572,6 +573,7 @@ jobs:
             (cd artifacts/screenpipe-macos-aarch64-apple-darwin && cp bin/mlx.metallib ../../packages/cli/screenpipe-darwin-arm64/bin/ 2>/dev/null) || \
             echo "⚠️ mlx.metallib not found in artifact"
           chmod +x packages/cli/screenpipe-darwin-arm64/bin/screenpipe
+          test -f packages/cli/screenpipe-darwin-arm64/bin/screenpipe
 
           # macOS x64
           mkdir -p packages/cli/screenpipe-darwin-x64/bin
@@ -582,6 +584,7 @@ jobs:
           mkdir -p packages/cli/screenpipe-linux-x64/bin
           cd artifacts/screenpipe-linux-x86_64-unknown-linux-gnu && tar -xzf screenpipe-*.tar.gz && cp bin/screenpipe ../../packages/cli/screenpipe-linux-x64/bin/ && cd ../..
           chmod +x packages/cli/screenpipe-linux-x64/bin/screenpipe
+          test -f packages/cli/screenpipe-linux-x64/bin/screenpipe
 
           # Windows x64
           mkdir -p packages/cli/screenpipe-win32-x64/bin
