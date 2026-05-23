@@ -170,7 +170,11 @@ test("registerScreenpipeIpc wires and removes Electron IPC handlers", async () =
       sessionOptions: { native },
     });
 
-    assert.equal(handlers.size, Object.keys(DEFAULT_CHANNELS).length);
+    // Event channel is one-way main→renderer; not registered with
+    // ipcMain.handle() but still owned by the wiring layer, so
+    // removeHandler is called on dispose. Six RPC handlers, one event
+    // channel = 7 keys in DEFAULT_CHANNELS, 6 in handlers.
+    assert.equal(handlers.size, Object.keys(DEFAULT_CHANNELS).length - 1);
     const started = await handlers.get(registered.channels.start)(null, { filename: "ipc.mp4" });
     assert.equal(started.recording, true);
 
@@ -185,6 +189,96 @@ test("registerScreenpipeIpc wires and removes Electron IPC handlers", async () =
   } finally {
     cleanup();
   }
+});
+
+test("registerScreenpipeIpc broadcasts session events through the event channel", async () => {
+  const { dir, cleanup } = scratch();
+  const { native } = makeNative();
+  const handlers = new Map();
+  const broadcasts = [];
+
+  const ipcMain = {
+    handle(channel, fn) {
+      handlers.set(channel, fn);
+    },
+    removeHandler(channel) {
+      handlers.delete(channel);
+    },
+  };
+  const app = { getPath: () => dir, on() {} };
+  const shell = { showItemInFolder() {} };
+
+  try {
+    const registered = registerScreenpipeIpc({
+      ipcMain,
+      app,
+      shell,
+      sessionOptions: { native },
+      broadcast: (eventName, payload) => {
+        broadcasts.push({ event: eventName, data: payload });
+      },
+    });
+
+    await handlers.get(registered.channels.start)(null, { filename: "broadcast.mp4" });
+
+    // `start` event fires synchronously off `session.emit`; check the
+    // broadcast captured at least one start frame.
+    const startEvents = broadcasts.filter((b) => b.event === "start");
+    assert.ok(startEvents.length >= 1, "broadcast should receive a start event");
+    assert.equal(startEvents[0].data.recording, true);
+
+    // The `recording_started` alias fires alongside `start`.
+    const aliasEvents = broadcasts.filter((b) => b.event === "recording_started");
+    assert.ok(aliasEvents.length >= 1, "broadcast should receive a recording_started alias");
+
+    await handlers.get(registered.channels.stop)();
+    const stopEvents = broadcasts.filter((b) => b.event === "stop");
+    assert.ok(stopEvents.length >= 1, "broadcast should receive a stop event");
+
+    await registered.dispose();
+  } finally {
+    cleanup();
+  }
+});
+
+test("preload onEvent forwards filtered ipcRenderer events to the callback", async () => {
+  const listeners = new Map();
+  const ipcRenderer = {
+    async invoke() {},
+    on(channel, listener) {
+      const list = listeners.get(channel) || [];
+      list.push(listener);
+      listeners.set(channel, list);
+    },
+    removeListener(channel, listener) {
+      const list = listeners.get(channel) || [];
+      listeners.set(channel, list.filter((l) => l !== listener));
+    },
+  };
+
+  const api = createScreenpipeRendererApi(ipcRenderer);
+  const received = [];
+  const unsubscribe = api.onEvent((payload) => {
+    received.push(payload);
+  }, { filter: ["app_switched"] });
+
+  const dispatch = (payload) => {
+    for (const listener of listeners.get(DEFAULT_CHANNELS.event) || []) {
+      listener({}, payload);
+    }
+  };
+
+  dispatch({ event: "app_switched", data: { focused: { appName: "X" } } });
+  dispatch({ event: "frames_progress", data: { frames: 5 } });
+  dispatch({ event: "app_switched", data: { focused: { appName: "Y" } } });
+
+  assert.equal(received.length, 2);
+  assert.equal(received[0].event, "app_switched");
+  assert.equal(received[1].data.focused.appName, "Y");
+
+  unsubscribe();
+  dispatch({ event: "app_switched", data: { focused: { appName: "Z" } } });
+  assert.equal(received.length, 2, "unsubscribe should silence further events");
 });
 
 test("preload helper exposes a renderer-safe API over configured channels", async () => {

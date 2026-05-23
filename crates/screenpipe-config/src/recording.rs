@@ -104,6 +104,11 @@ pub struct RecordingSettings {
     #[serde(rename = "windowsInputAecEnabled", default)]
     pub windows_input_aec_enabled: bool,
 
+    /// Experimental: request Apple VoiceProcessingIO (AEC) on the default macOS microphone.
+    /// Ignored on non-macOS platforms. Only the system default input uses VPIO; other devices use HAL.
+    #[serde(rename = "macosInputVpioEnabled", default)]
+    pub macos_input_vpio_enabled: bool,
+
     /// Duration of each audio chunk in seconds before transcription.
     /// Stored as i32 to match existing store.bin schema (cast to u64 by engine).
     #[serde(rename = "audioChunkDuration")]
@@ -475,6 +480,7 @@ impl Default for RecordingSettings {
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
             windows_input_aec_enabled: false,
+            macos_input_vpio_enabled: false,
             audio_chunk_duration: 30,
             deepgram_api_key: String::new(),
             filter_music: false,

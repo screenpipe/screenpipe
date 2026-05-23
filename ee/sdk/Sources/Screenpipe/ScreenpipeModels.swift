@@ -290,3 +290,142 @@ public struct ScreenpipeRevealOptions: Codable, Equatable, Sendable {
 }
 
 struct EmptyParams: Codable, Sendable {}
+
+/// Stable taxonomy of session event names the Node bridge can forward.
+/// Mirrors `SCREENPIPE_EVENTS` in `session/index.js`. Use `.raw(...)` to
+/// keep forward-compatible if a newer SDK ships an event the host app
+/// doesn't have a case for yet.
+public enum ScreenpipeEventName: Sendable, Hashable, Equatable {
+  case start
+  case stop
+  case recordingStarted
+  case recordingStopped
+  case paused
+  case resumed
+  case recordingPaused
+  case recordingResumed
+  case appSwitched
+  case framesProgress
+  case permissionsChanged
+  case error
+  case raw(String)
+
+  public init(rawValue: String) {
+    switch rawValue {
+    case "start": self = .start
+    case "stop": self = .stop
+    case "recording_started": self = .recordingStarted
+    case "recording_stopped": self = .recordingStopped
+    case "paused": self = .paused
+    case "resumed": self = .resumed
+    case "recording_paused": self = .recordingPaused
+    case "recording_resumed": self = .recordingResumed
+    case "app_switched": self = .appSwitched
+    case "frames_progress": self = .framesProgress
+    case "permissions_changed": self = .permissionsChanged
+    case "error": self = .error
+    default: self = .raw(rawValue)
+    }
+  }
+
+  public var rawValue: String {
+    switch self {
+    case .start: return "start"
+    case .stop: return "stop"
+    case .recordingStarted: return "recording_started"
+    case .recordingStopped: return "recording_stopped"
+    case .paused: return "paused"
+    case .resumed: return "resumed"
+    case .recordingPaused: return "recording_paused"
+    case .recordingResumed: return "recording_resumed"
+    case .appSwitched: return "app_switched"
+    case .framesProgress: return "frames_progress"
+    case .permissionsChanged: return "permissions_changed"
+    case .error: return "error"
+    case .raw(let name): return name
+    }
+  }
+}
+
+/// One event frame from the Node bridge. `data` is the raw JSON-encoded
+/// payload — decode it with `decode(_:)` once you know the expected
+/// shape for a given event name.
+public struct ScreenpipeEvent: Sendable {
+  public let name: ScreenpipeEventName
+  public let data: Data
+
+  public init(name: ScreenpipeEventName, data: Data) {
+    self.name = name
+    self.data = data
+  }
+
+  /// Decode the event payload as a concrete type. Throws on shape
+  /// mismatch — callers should branch on `name` first.
+  public func decode<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) throws -> T {
+    return try decoder.decode(type, from: data)
+  }
+}
+
+/// Payload for `paused` / `resumed` (and their `recording_*` aliases).
+public struct ScreenpipeFilterEventPayload: Codable, Equatable, Sendable {
+  public let paused: Bool
+  public let reason: String?
+
+  public init(paused: Bool, reason: String?) {
+    self.paused = paused
+    self.reason = reason
+  }
+}
+
+/// Payload for `app_switched`.
+public struct ScreenpipeAppSwitchedPayload: Codable, Equatable, Sendable {
+  public let focused: ScreenpipeFocusedApp?
+  public let previous: ScreenpipeFocusedApp?
+
+  public init(focused: ScreenpipeFocusedApp?, previous: ScreenpipeFocusedApp?) {
+    self.focused = focused
+    self.previous = previous
+  }
+}
+
+/// Payload for `frames_progress` — periodic coverage tick.
+public struct ScreenpipeFramesProgressPayload: Codable, Equatable, Sendable {
+  public let frames: Int
+  public let bytes: Int
+  public let elapsedMs: Int
+  public let output: String?
+
+  public init(frames: Int, bytes: Int, elapsedMs: Int, output: String?) {
+    self.frames = frames
+    self.bytes = bytes
+    self.elapsedMs = elapsedMs
+    self.output = output
+  }
+}
+
+/// Payload for `permissions_changed`.
+public struct ScreenpipePermissionsChangedPayload: Codable, Equatable, Sendable {
+  public let current: ScreenpipePermissions
+  public let previous: ScreenpipePermissions?
+
+  public init(current: ScreenpipePermissions, previous: ScreenpipePermissions?) {
+    self.current = current
+    self.previous = previous
+  }
+}
+
+/// Payload for `error`. `fatal=true` means the session is no longer
+/// recording.
+public struct ScreenpipeErrorPayload: Codable, Equatable, Sendable {
+  public let component: String
+  public let name: String
+  public let message: String
+  public let fatal: Bool
+
+  public init(component: String, name: String, message: String, fatal: Bool) {
+    self.component = component
+    self.name = name
+    self.message = message
+    self.fatal = fatal
+  }
+}

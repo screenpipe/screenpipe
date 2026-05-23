@@ -61,6 +61,8 @@ pub struct RecordingConfig {
     pub experimental_coreaudio_system_audio: bool,
     /// Experimental: request Windows WASAPI microphone AEC when supported.
     pub windows_input_aec_enabled: bool,
+    /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
+    pub macos_input_vpio_enabled: bool,
     pub monitor_ids: Vec<String>,
     pub use_all_monitors: bool,
 
@@ -246,6 +248,7 @@ impl RecordingConfig {
             use_system_default_audio: settings.use_system_default_audio,
             experimental_coreaudio_system_audio: settings.experimental_coreaudio_system_audio,
             windows_input_aec_enabled: settings.windows_input_aec_enabled,
+            macos_input_vpio_enabled: settings.macos_input_vpio_enabled,
             monitor_ids: settings.monitor_ids.clone(),
             use_all_monitors: settings.use_all_monitors,
             ignored_windows: settings.ignored_windows.clone(),
@@ -386,6 +389,7 @@ impl RecordingConfig {
             .use_system_default_audio(self.use_system_default_audio)
             .experimental_coreaudio_system_audio(self.experimental_coreaudio_system_audio)
             .windows_input_aec_enabled(self.windows_input_aec_enabled)
+            .macos_input_vpio_enabled(self.macos_input_vpio_enabled)
             .deepgram_config(self.deepgram_config.clone())
             .output_path(output_path)
             .use_pii_removal(self.use_pii_removal)

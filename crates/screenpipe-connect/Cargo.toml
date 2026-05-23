@@ -42,6 +42,10 @@ mdns-sd = "0.13"
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 eventkit-rs = "0.1"
 objc2 = "0.6"
@@ -56,6 +60,3 @@ windows = { version = "0.58", features = [
     "Foundation_Collections",
 ] }
 chrono = "0.4"
-
-[dev-dependencies]
-tempfile = "3"

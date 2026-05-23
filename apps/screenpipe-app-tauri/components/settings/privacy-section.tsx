@@ -20,6 +20,7 @@ import {
   Lock,
   Copy,
   ClipboardX,
+  FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { WindowPicker } from "./window-picker";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
 import { ScheduleSettings } from "./schedule-settings";
 import { useTeam } from "@/lib/hooks/use-team";
@@ -60,28 +62,70 @@ const createWindowOptions = (
   windowItems: { name: string; count: number; app_name?: string }[],
   existingPatterns: string[]
 ) => {
-  const windowOptions = [...windowItems]
-    .sort((a, b) => b.count - a.count)
-    .map((item) => ({
-      value: item.name,
-      label: item.name,
+  // For each observed window, surface BOTH the bare title (matches anywhere)
+  // and a scoped `App::Title` variant (matches that one window of that one
+  // app). Users can pick whichever matches their intent.
+  const seen = new Set<string>();
+  const windowOptions: ReturnType<typeof toOption>[] = [];
+  const sorted = [...windowItems].sort((a, b) => b.count - a.count);
+
+  function toOption(args: {
+    value: string;
+    label: string;
+    iconHint?: string;
+    description: string;
+  }) {
+    return {
+      value: args.value,
+      label: args.label,
       icon: AppWindowMac,
-      iconUrl: getAppIconUrl(item.app_name || item.name),
-      description: [
-        item.app_name && item.app_name !== item.name ? item.app_name : null,
-        `${formatCount(item.count)} captures`,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    }));
+      iconUrl: getAppIconUrl(args.iconHint || args.value),
+      description: args.description,
+    };
+  }
+
+  for (const item of sorted) {
+    if (!seen.has(item.name)) {
+      seen.add(item.name);
+      windowOptions.push(
+        toOption({
+          value: item.name,
+          label: item.name,
+          iconHint: item.app_name || item.name,
+          description: [
+            item.app_name && item.app_name !== item.name
+              ? item.app_name
+              : null,
+            `${formatCount(item.count)} captures`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        })
+      );
+    }
+    if (item.app_name && item.app_name !== item.name) {
+      const scoped = `${item.app_name}::${item.name}`;
+      if (!seen.has(scoped)) {
+        seen.add(scoped);
+        windowOptions.push(
+          toOption({
+            value: scoped,
+            label: scoped,
+            iconHint: item.app_name,
+            description: `scoped: only this window of ${item.app_name}`,
+          })
+        );
+      }
+    }
+  }
 
   const customOptions = existingPatterns
-    .filter((pattern) => !windowItems.some((item) => item.name === pattern))
+    .filter((pattern) => !seen.has(pattern))
     .map((pattern) => ({
       value: pattern,
       label: pattern,
       icon: AppWindowMac,
-      iconUrl: getAppIconUrl(pattern),
+      iconUrl: getAppIconUrl(pattern.includes("::") ? pattern.split("::")[0] : pattern),
     }));
 
   return [...windowOptions, ...customOptions];
@@ -219,6 +263,7 @@ export function PrivacySection() {
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const [pushingFilter, setPushingFilter] = useState<string | null>(null);
+  const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
   const [liveApiKey, setLiveApiKey] = useState<string | null>(null);
   const [revealApiKey, setRevealApiKey] = useState(false);
@@ -480,6 +525,20 @@ export function PrivacySection() {
         variant: "destructive",
       });
     }
+  };
+
+  // Add one pattern from the WindowPicker. Reuses the MultiSelect change
+  // handler so the mutual-exclusion logic (a pattern in ignore is removed
+  // from include and vice versa) stays in one place.
+  const addIgnoredPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.ignoredWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIgnoredWindowsChange([...settings.ignoredWindows, pattern]);
+  };
+  const addIncludedPattern = (pattern: string) => {
+    const lower = pattern.toLowerCase();
+    if (settings.includedWindows.some((w) => w.toLowerCase() === lower)) return;
+    handleIncludedWindowsChange([...settings.includedWindows, pattern]);
   };
 
   const handleIgnoredWindowsChange = (values: string[]) => {
@@ -1117,7 +1176,7 @@ export function PrivacySection() {
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Ignored Apps
-                      <HelpTooltip text="Apps matching these patterns will not be captured. Matches against window titles — e.g. add 'Password Manager' to skip sensitive apps." />
+                      <HelpTooltip text="Skip captures for these patterns. Plain text (e.g. '1Password') matches the app or any window title that contains it. Use 'App::Title' to scope to one window of an app (e.g. 'Slack::#hr' blocks only #hr in Slack)." />
                     </h3>
                     {isTeamAdmin && (
                       <Button
@@ -1155,6 +1214,14 @@ export function PrivacySection() {
                     placeholder="Select apps to ignore..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("ignored")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.ignoredWindows?.length ?? 0) > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -1208,7 +1275,7 @@ export function PrivacySection() {
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Included Apps
-                      <HelpTooltip text="When set, ONLY apps matching these patterns will be captured. Everything else is ignored. Leave empty to capture all apps (except ignored ones)." />
+                      <HelpTooltip text="When set, only matching windows are captured. Plain text is a global include (e.g. 'Slack' = only Slack). 'App::Title' creates a per-app whitelist (e.g. 'Slack::#engineering' keeps only that channel in Slack; other apps stay unaffected)." />
                     </h3>
                     {isTeamAdmin && (
                       <Button
@@ -1246,6 +1313,14 @@ export function PrivacySection() {
                     placeholder="Only capture these apps (optional)..."
                     allowCustomValues
                   />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px] mt-1.5 gap-1.5"
+                    onClick={() => setPicker("included")}
+                  >
+                    <FolderTree className="h-3 w-3" /> browse apps & windows
+                  </Button>
                   {filterView === "all" &&
                     (settings.teamFilters?.includedWindows?.length ?? 0) >
                       0 && (
@@ -1626,6 +1701,20 @@ export function PrivacySection() {
           </Button>
         </div>
       )}
+      <WindowPicker
+        open={picker !== null}
+        onOpenChange={(o) => {
+          if (!o) setPicker(null);
+        }}
+        selected={
+          picker === "included" ? settings.includedWindows : settings.ignoredWindows
+        }
+        onAdd={(p) => {
+          if (picker === "included") addIncludedPattern(p);
+          else addIgnoredPattern(p);
+        }}
+        action={picker === "included" ? "include" : "ignore"}
+      />
     </div>
   );
 }

@@ -78,6 +78,32 @@ public actor ScreenpipeClient {
     try await transport.call("snapshot")
   }
 
+  /// Names of every event the Node bridge can forward. Use this for
+  /// allow-listing without hard-coding the taxonomy at the call site.
+  public func eventNames() async throws -> [String] {
+    try await transport.call("events")
+  }
+
+  /// Stream every screenpipe session event forwarded by the Node bridge.
+  /// Returns a fresh stream each call — multiple subscribers are
+  /// supported. The stream ends when the caller cancels the task or
+  /// `dispose()` is called.
+  ///
+  /// ```swift
+  /// for await event in await client.events() {
+  ///   switch event.name {
+  ///   case .appSwitched:
+  ///     let payload = try event.decode(ScreenpipeAppSwitchedPayload.self)
+  ///     print("now focused: \(payload.focused?.appName ?? "nothing")")
+  ///   default:
+  ///     break
+  ///   }
+  /// }
+  /// ```
+  public func events() -> AsyncStream<ScreenpipeEvent> {
+    transport.events()
+  }
+
   @discardableResult
   public func reveal(file: String? = nil) async throws -> Bool {
     try await transport.call("reveal", params: ScreenpipeRevealOptions(file: file))

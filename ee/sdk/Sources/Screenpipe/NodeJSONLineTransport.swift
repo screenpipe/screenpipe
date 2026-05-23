@@ -26,6 +26,10 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
   private var pending: [Int: Pending] = [:]
   private var isClosed = false
   private var isClosing = false
+  // Active event subscribers. Keyed by a per-stream UUID so close() can
+  // tear them down deterministically. Each continuation receives every
+  // event frame the bridge emits from the moment it was registered.
+  private var eventContinuations: [UUID: AsyncStream<ScreenpipeEvent>.Continuation] = [:]
 
   init(configuration: ScreenpipeClient.Configuration) throws {
     self.configuration = configuration
@@ -48,6 +52,29 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
     } catch {
       let payload = String(data: data, encoding: .utf8) ?? "<binary>"
       throw ScreenpipeError.invalidResponse("\(method): \(error.localizedDescription); payload: \(payload)")
+    }
+  }
+
+  func events() -> AsyncStream<ScreenpipeEvent> {
+    let id = UUID()
+    // `.bufferingNewest(256)` keeps memory bounded if a consumer is
+    // slow — frames_progress alone can fire 12/min, app_switched can
+    // burst during alt-tab. Old events are dropped to make room for
+    // current state, which is what an "is recording happening right
+    // now" UI actually wants.
+    return AsyncStream(bufferingPolicy: .bufferingNewest(256)) { continuation in
+      queue.async {
+        if self.isClosed {
+          continuation.finish()
+          return
+        }
+        self.eventContinuations[id] = continuation
+      }
+      continuation.onTermination = { [weak self] _ in
+        self?.queue.async {
+          self?.eventContinuations.removeValue(forKey: id)
+        }
+      }
     }
   }
 
@@ -225,8 +252,33 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
   private func handleLineLocked(_ line: Data) {
     do {
       let object = try JSONSerialization.jsonObject(with: line)
+      guard let envelope = object as? [String: Any] else {
+        throw ScreenpipeError.invalidResponse(String(data: line, encoding: .utf8) ?? "<binary>")
+      }
+
+      // Notification frame: `{event: "...", data: ...}` (no `id` field).
+      // Forward to every active subscriber and continue — these don't
+      // interact with pending RPCs.
+      if let eventName = envelope["event"] as? String {
+        let dataObject = envelope["data"] ?? NSNull()
+        let payload: Data
+        if dataObject is NSNull {
+          payload = Data("null".utf8)
+        } else {
+          payload = (try? JSONSerialization.data(withJSONObject: dataObject, options: [.fragmentsAllowed])) ?? Data()
+        }
+        let event = ScreenpipeEvent(
+          name: ScreenpipeEventName(rawValue: eventName),
+          data: payload
+        )
+        for (_, continuation) in eventContinuations {
+          continuation.yield(event)
+        }
+        return
+      }
+
+      // RPC response frame: `{id, ok, result?, error?}`.
       guard
-        let envelope = object as? [String: Any],
         let id = envelope["id"] as? Int,
         let ok = envelope["ok"] as? Bool
       else {
@@ -266,6 +318,7 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
     outputBuffer.removeAll(keepingCapacity: false)
     stderrBuffer.removeAll(keepingCapacity: false)
     failAllLocked(ScreenpipeError.processExited(detail))
+    finishAllEventStreamsLocked()
   }
 
   private func failAllLocked(_ error: Error) {
@@ -276,8 +329,16 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
     }
   }
 
+  private func finishAllEventStreamsLocked() {
+    for (_, continuation) in eventContinuations {
+      continuation.finish()
+    }
+    eventContinuations.removeAll()
+  }
+
   private func restartAfterProtocolFailureLocked(_ error: Error) {
     failAllLocked(error)
+    finishAllEventStreamsLocked()
     clearReadabilityHandlersLocked()
     inputHandle?.closeFile()
     inputHandle = nil
@@ -305,6 +366,7 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
       pending.resume(.failure(ScreenpipeError.bridgeNotRunning))
     }
     pending.removeAll()
+    finishAllEventStreamsLocked()
 
     guard process != nil, let inputHandle else {
       forceCloseLocked()
@@ -340,6 +402,7 @@ final class NodeJSONLineTransport: ScreenpipeTransport, @unchecked Sendable {
     stderrBuffer.removeAll(keepingCapacity: false)
     process?.terminate()
     process = nil
+    finishAllEventStreamsLocked()
   }
 
   private func clearReadabilityHandlersLocked() {

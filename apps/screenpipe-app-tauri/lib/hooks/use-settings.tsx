@@ -254,6 +254,8 @@ export type Settings = SettingsStore & {
 	experimentalCoreaudioSystemAudio?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
+	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
+	macosInputVpioEnabled?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -537,6 +539,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClipboardCapture: false,
 			experimentalCoreaudioSystemAudio: false,
 			windowsInputAecEnabled: false,
+			macosInputVpioEnabled: false,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,

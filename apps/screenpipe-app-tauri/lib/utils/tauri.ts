@@ -1162,6 +1162,14 @@ async chatgptOauthGetToken() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async chatgptOauthCheckToken() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_check_token") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatgptOauthLogout() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_logout") };
@@ -1660,6 +1668,11 @@ experimentalCoreaudioSystemAudio?: boolean;
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
  */
 windowsInputAecEnabled?: boolean; 
+/**
+ * Experimental: request Apple VoiceProcessingIO (AEC) on the default macOS microphone.
+ * Ignored on non-macOS platforms. Only the system default input uses VPIO; other devices use HAL.
+ */
+macosInputVpioEnabled?: boolean; 
 /**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).

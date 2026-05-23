@@ -39,10 +39,111 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
-    Manager, Runtime, State,
+    AppHandle, Emitter, Manager, Runtime, State,
 };
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
+
+// ─── events ────────────────────────────────────────────────────────────
+
+/// Tauri event channel the plugin emits every screenpipe session event
+/// on. Listen from the renderer with `@tauri-apps/api/event`:
+///
+/// ```ts
+/// import { listen } from "@tauri-apps/api/event";
+/// listen<{ event: string; data: unknown }>(
+///   "screenpipe://event",
+///   (e) => console.log(e.payload.event, e.payload.data),
+/// );
+/// ```
+///
+/// Or use the `onEvent` helper on `createScreenpipeTauriClient()`.
+pub const SCREENPIPE_EVENT_CHANNEL: &str = "screenpipe://event";
+
+/// Stable taxonomy of event names the plugin will emit on
+/// [`SCREENPIPE_EVENT_CHANNEL`]. Keep in sync with `SCREENPIPE_EVENTS`
+/// in `ee/sdk/session/index.js` — both sides should describe the same
+/// universe so renderers can allow-list without redeclaring.
+pub const SCREENPIPE_EVENTS: &[&str] = &[
+    "start",
+    "stop",
+    "recording_started",
+    "recording_stopped",
+    "paused",
+    "resumed",
+    "recording_paused",
+    "recording_resumed",
+    "app_switched",
+    "frames_progress",
+    "error",
+];
+
+const DEFAULT_FOCUS_WATCHER_MS: u64 = 1000;
+const DEFAULT_FRAMES_PROGRESS_MS: u64 = 5000;
+/// After this many back-to-back failures, the focus-watcher poller
+/// disables itself for the session. Guards against log spam on
+/// platforms where the AX API is unavailable or revoked.
+const MAX_CONSECUTIVE_FOCUS_ERRORS: u32 = 3;
+
+/// Per-session event-loop cadences. Both fields optional — unset falls
+/// through to the constants above. Pass via [`StartOptions::event_intervals`].
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventIntervals {
+    /// Drives `paused`/`resumed`/`recording_paused`/`recording_resumed`
+    /// AND `app_switched`. Default 1000 ms.
+    pub focus_watcher_ms: Option<u64>,
+    /// Drives `frames_progress`. Default 5000 ms. `0` disables the loop.
+    pub frames_progress_ms: Option<u64>,
+}
+
+/// Envelope written to every Tauri event emission. `data` is the
+/// concrete payload for the named event. Serialized as
+/// `{event: "...", data: {...}}` — same shape consumers see from the
+/// Node bridge for Swift / Electron, so allow-list logic ports
+/// 1-for-1.
+#[derive(Debug, Clone, Serialize)]
+struct EventEnvelope<T: Clone + Serialize> {
+    event: &'static str,
+    data: T,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilterEventPayload {
+    paused: bool,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSwitchedPayload {
+    focused: Option<FocusedApp>,
+    previous: Option<FocusedApp>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FramesProgressPayload {
+    frames: u32,
+    bytes: u64,
+    elapsed_ms: u64,
+    output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorPayload {
+    component: &'static str,
+    name: &'static str,
+    message: String,
+    fatal: bool,
+}
+
+fn emit_event<R: Runtime, T: Clone + Serialize>(app: &AppHandle<R>, event: &'static str, data: T) {
+    let _ = app.emit(SCREENPIPE_EVENT_CHANNEL, EventEnvelope { event, data });
+}
 
 // ─── public config + types ────────────────────────────────────────────
 
@@ -79,7 +180,9 @@ pub enum ScreenpipeTauriError {
     AlreadyStarted,
     #[error("recorder not started")]
     NotStarted,
-    #[error("output not configured — pass `output` to start() or set ScreenpipeConfig::output_dir")]
+    #[error(
+        "output not configured — pass `output` to start() or set ScreenpipeConfig::output_dir"
+    )]
     OutputUnconfigured,
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
@@ -135,6 +238,10 @@ pub struct StartOptions {
     pub paired_monitors: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_capture: Option<UiCaptureOptions>,
+    /// Per-session event-loop cadences. `None` keeps the per-field
+    /// defaults (1000 ms focus watcher, 5000 ms frames_progress).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_intervals: Option<EventIntervals>,
 }
 
 /// Per-event-type toggles for the platform UI hooks. Each `None` field
@@ -188,7 +295,7 @@ pub struct PermissionStatus {
     pub microphone: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenpipeStatus {
     pub recording: bool,
@@ -201,7 +308,7 @@ pub struct ScreenpipeStatus {
     pub bytes: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FocusedApp {
     pub app_name: String,
@@ -259,6 +366,25 @@ struct SessionInner {
     /// jump.
     started_at_mono: Option<Instant>,
     started_at_unix_ms: Option<u64>,
+    /// Polling task that diffs `filter_status` + `focused_app` each
+    /// tick and emits the lifecycle events. Aborted on `stop`/`dispose`
+    /// so the loop never observes a dropped recorder.
+    focus_task: Option<JoinHandle<()>>,
+    /// Periodic "is recording actually happening" tick. Independent
+    /// cadence from `focus_task` so dashboards can dial it down on
+    /// battery without sacrificing focus-watcher latency.
+    frames_task: Option<JoinHandle<()>>,
+}
+
+impl SessionInner {
+    fn abort_event_tasks(&mut self) {
+        if let Some(h) = self.focus_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.frames_task.take() {
+            h.abort();
+        }
+    }
 }
 
 impl ScreenpipeState {
@@ -301,7 +427,11 @@ fn resolve_output(
         .ok_or(ScreenpipeTauriError::OutputUnconfigured)?;
     if let Some(filename) = options.filename.clone() {
         let stem_has_ext = Path::new(&filename).extension().is_some();
-        let file = if stem_has_ext { filename } else { format!("{filename}.mp4") };
+        let file = if stem_has_ext {
+            filename
+        } else {
+            format!("{filename}.mp4")
+        };
         std::fs::create_dir_all(&dir)?;
         return Ok(dir.join(file).to_string_lossy().into_owned());
     }
@@ -344,10 +474,7 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn build_status(
-    inner: &SessionInner,
-    frames: u32,
-) -> ScreenpipeStatus {
+fn build_status(inner: &SessionInner, frames: u32) -> ScreenpipeStatus {
     let recording = inner.recorder.is_some();
     let bytes = inner
         .output
@@ -375,10 +502,210 @@ fn ser_err(name: &str, message: impl ToString) -> SerializableError {
     }
 }
 
+fn focused_app_key(f: &Option<FocusedApp>) -> Option<String> {
+    f.as_ref().map(|w| {
+        format!(
+            "{}|{}|{}",
+            w.app_name,
+            w.window_title,
+            w.browser_url.as_deref().unwrap_or("")
+        )
+    })
+}
+
+/// Spawn the focus-watcher tick. Polls `filter_status` + `focused_app`
+/// from the active recorder on every interval and emits whichever
+/// events flip. Task exits cleanly when the recorder is removed
+/// (e.g. `stop`) or when its `JoinHandle` is aborted.
+fn spawn_focus_loop<R: Runtime>(
+    app: AppHandle<R>,
+    state: Arc<ScreenpipeState>,
+    interval_ms: u64,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_paused: Option<bool> = None;
+        let mut last_reason: Option<String> = None;
+        let mut last_focused_key: Option<String> = None;
+        let mut last_focused: Option<FocusedApp> = None;
+        let mut focused_errors: u32 = 0;
+        let mut focused_disabled = false;
+
+        let mut tick = tokio::time::interval(Duration::from_millis(interval_ms.max(50)));
+        // Skip the first immediate tick — the recorder was just started
+        // and the very next `status()` will already show the right
+        // initial state. Avoids a redundant `paused: false` emission.
+        tick.tick().await;
+
+        loop {
+            tick.tick().await;
+
+            // Snapshot filter state under a short-held lock — drop
+            // before any await so we don't tie up the session mutex
+            // for the focused_window walk.
+            let filter_snapshot = {
+                let inner = state.session.lock().await;
+                inner.recorder.as_ref().map(|r| r.filter_status())
+            };
+            let Some((paused, reason)) = filter_snapshot else {
+                // Recorder gone — session was stopped while we were
+                // sleeping. Exit cleanly.
+                return;
+            };
+
+            if Some(paused) != last_paused || reason != last_reason {
+                let payload = FilterEventPayload {
+                    paused,
+                    reason: reason.clone(),
+                };
+                if paused {
+                    emit_event(&app, "paused", payload.clone());
+                    emit_event(&app, "recording_paused", payload);
+                } else {
+                    emit_event(&app, "resumed", payload.clone());
+                    emit_event(&app, "recording_resumed", payload);
+                }
+                last_paused = Some(paused);
+                last_reason = reason;
+            }
+
+            if focused_disabled {
+                continue;
+            }
+
+            // focused_window walks the AX tree — run on the blocking
+            // pool so the multi-thread tokio runtime stays responsive.
+            let focused_res = tokio::task::spawn_blocking(recorder::focused_window).await;
+            let focus = match focused_res {
+                Ok(Ok(opt)) => {
+                    focused_errors = 0;
+                    opt.map(|w| FocusedApp {
+                        app_name: w.app_name,
+                        window_title: w.window_name,
+                        browser_url: w.browser_url,
+                        node_count: w.node_count as u32,
+                        walk_ms: w.walk_ms as u32,
+                    })
+                }
+                Ok(Err(e)) => {
+                    focused_errors += 1;
+                    emit_event(
+                        &app,
+                        "error",
+                        ErrorPayload {
+                            component: "focused_app",
+                            name: "Error",
+                            message: e.to_string(),
+                            fatal: false,
+                        },
+                    );
+                    if focused_errors >= MAX_CONSECUTIVE_FOCUS_ERRORS {
+                        focused_disabled = true;
+                        emit_event(
+                            &app,
+                            "error",
+                            ErrorPayload {
+                                component: "focused_app",
+                                name: "Disabled",
+                                message: format!(
+                                    "focused_app polling disabled after {MAX_CONSECUTIVE_FOCUS_ERRORS} consecutive failures"
+                                ),
+                                fatal: true,
+                            },
+                        );
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    focused_errors += 1;
+                    emit_event(
+                        &app,
+                        "error",
+                        ErrorPayload {
+                            component: "focused_app_task",
+                            name: "JoinError",
+                            message: e.to_string(),
+                            fatal: false,
+                        },
+                    );
+                    continue;
+                }
+            };
+
+            let key = focused_app_key(&focus);
+            if key != last_focused_key {
+                let previous = last_focused.take();
+                last_focused = focus.clone();
+                last_focused_key = key;
+                emit_event(
+                    &app,
+                    "app_switched",
+                    AppSwitchedPayload {
+                        focused: focus,
+                        previous,
+                    },
+                );
+            }
+        }
+    })
+}
+
+/// Spawn the frames-progress tick. Periodic emission of `{frames,
+/// bytes, elapsedMs, output}` so dashboards can plot a coverage gauge
+/// without polling `status()` themselves. `interval_ms = 0` disables
+/// the loop (returned handle is still valid but does nothing).
+fn spawn_frames_loop<R: Runtime>(
+    app: AppHandle<R>,
+    state: Arc<ScreenpipeState>,
+    interval_ms: u64,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        if interval_ms == 0 {
+            return;
+        }
+        let mut tick = tokio::time::interval(Duration::from_millis(interval_ms.max(50)));
+        tick.tick().await;
+
+        loop {
+            tick.tick().await;
+
+            let snapshot = {
+                let inner = state.session.lock().await;
+                let Some(rec) = inner.recorder.as_ref() else {
+                    return;
+                };
+                let frames = rec.frames_written() as u32;
+                let output = inner.output.clone();
+                let bytes = output
+                    .as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let elapsed_ms = inner
+                    .started_at_mono
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                (frames, output, bytes, elapsed_ms)
+            };
+            let (frames, output, bytes, elapsed_ms) = snapshot;
+
+            emit_event(
+                &app,
+                "frames_progress",
+                FramesProgressPayload {
+                    frames,
+                    bytes,
+                    elapsed_ms,
+                    output,
+                },
+            );
+        }
+    })
+}
+
 // ─── tauri commands ────────────────────────────────────────────────────
 
 #[tauri::command]
-async fn permissions(
+async fn screenpipe_permissions(
     options: Option<PermissionOptions>,
 ) -> Result<PermissionStatus, String> {
     let timeout_ms = options.and_then(|o| o.timeout_ms);
@@ -397,11 +724,20 @@ async fn permissions(
 }
 
 #[tauri::command]
-async fn start(
+async fn screenpipe_start<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, Arc<ScreenpipeState>>,
     options: Option<StartOptions>,
 ) -> Result<ScreenpipeStatus, String> {
     let opts = options.unwrap_or_default();
+    let intervals = opts.event_intervals.clone().unwrap_or_default();
+    let focus_ms = intervals
+        .focus_watcher_ms
+        .unwrap_or(DEFAULT_FOCUS_WATCHER_MS);
+    let frames_ms = intervals
+        .frames_progress_ms
+        .unwrap_or(DEFAULT_FRAMES_PROGRESS_MS);
+
     let mut inner = state.session.lock().await;
     if inner.recorder.is_some() {
         return Err(ScreenpipeTauriError::AlreadyStarted.into());
@@ -409,12 +745,24 @@ async fn start(
     let output = resolve_output(&state.config, &opts, now_unix_ms())?;
     let rec_opts = opts.into_recorder_options(output.clone());
 
-    let mut rec = Recorder::new(rec_opts).map_err(|e| {
-        ScreenpipeTauriError::Recorder(e.to_string()).to_string()
-    })?;
-    rec.start().await.map_err(|e| {
-        ScreenpipeTauriError::Recorder(e.to_string()).to_string()
-    })?;
+    let mut rec = Recorder::new(rec_opts)
+        .map_err(|e| ScreenpipeTauriError::Recorder(e.to_string()).to_string())?;
+    if let Err(e) = rec.start().await {
+        let msg = e.to_string();
+        // Surface the start failure on the event channel as `fatal:true`
+        // so renderers can react without polling status.
+        emit_event(
+            &app,
+            "error",
+            ErrorPayload {
+                component: "start",
+                name: "Error",
+                message: msg.clone(),
+                fatal: true,
+            },
+        );
+        return Err(ScreenpipeTauriError::Recorder(msg).to_string());
+    }
 
     inner.recorder = Some(rec);
     inner.output = Some(output);
@@ -425,29 +773,57 @@ async fn start(
         .as_ref()
         .map(|r| r.frames_written() as u32)
         .unwrap_or(0);
-    Ok(build_status(&inner, frames))
-}
 
-#[tauri::command]
-async fn stop(
-    state: State<'_, Arc<ScreenpipeState>>,
-) -> Result<ScreenpipeStatus, String> {
-    let mut inner = state.session.lock().await;
-    let Some(mut rec) = inner.recorder.take() else {
-        return Ok(build_status(&inner, 0));
-    };
-    let frames = rec.frames_written() as u32;
-    rec.stop().await.map_err(|e| {
-        ScreenpipeTauriError::Recorder(e.to_string()).to_string()
-    })?;
     let status = build_status(&inner, frames);
-    inner.started_at_mono = None;
-    inner.started_at_unix_ms = None;
+
+    // Spawn the polling loops AFTER inner is fully populated so the
+    // first focus tick sees the recorder. The handles live in
+    // SessionInner — stopped/disposed paths abort them deterministically.
+    let state_arc: Arc<ScreenpipeState> = (*state).clone();
+    inner.focus_task = Some(spawn_focus_loop(app.clone(), state_arc.clone(), focus_ms));
+    inner.frames_task = Some(spawn_frames_loop(app.clone(), state_arc, frames_ms));
+
+    emit_event(&app, "start", status.clone());
+    emit_event(&app, "recording_started", status.clone());
+
     Ok(status)
 }
 
 #[tauri::command]
-async fn status(
+async fn screenpipe_stop<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<ScreenpipeState>>,
+) -> Result<ScreenpipeStatus, String> {
+    let mut inner = state.session.lock().await;
+    inner.abort_event_tasks();
+    let Some(mut rec) = inner.recorder.take() else {
+        return Ok(build_status(&inner, 0));
+    };
+    let frames = rec.frames_written() as u32;
+    if let Err(e) = rec.stop().await {
+        let msg = e.to_string();
+        emit_event(
+            &app,
+            "error",
+            ErrorPayload {
+                component: "stop",
+                name: "Error",
+                message: msg.clone(),
+                fatal: false,
+            },
+        );
+        return Err(ScreenpipeTauriError::Recorder(msg).to_string());
+    }
+    let status = build_status(&inner, frames);
+    inner.started_at_mono = None;
+    inner.started_at_unix_ms = None;
+    emit_event(&app, "stop", status.clone());
+    emit_event(&app, "recording_stopped", status.clone());
+    Ok(status)
+}
+
+#[tauri::command]
+async fn screenpipe_status(
     state: State<'_, Arc<ScreenpipeState>>,
 ) -> Result<ScreenpipeStatus, String> {
     let inner = state.session.lock().await;
@@ -460,7 +836,7 @@ async fn status(
 }
 
 #[tauri::command]
-async fn snapshot(
+async fn screenpipe_snapshot(
     state: State<'_, Arc<ScreenpipeState>>,
 ) -> Result<ScreenpipeSnapshot, String> {
     let inner = state.session.lock().await;
@@ -476,7 +852,10 @@ async fn snapshot(
             Ok(bytes) => (BASE64.encode(&bytes), None),
             Err(e) => (String::new(), Some(ser_err("snapshot", e))),
         },
-        None => (String::new(), Some(ser_err("not_started", "recorder not started"))),
+        None => (
+            String::new(),
+            Some(ser_err("not_started", "recorder not started")),
+        ),
     };
 
     let audio_level_res = tokio::task::spawn_blocking(recorder::audio_level).await;
@@ -522,7 +901,7 @@ async fn snapshot(
 }
 
 #[tauri::command]
-async fn reveal<R: Runtime>(
+async fn screenpipe_reveal<R: Runtime>(
     _app: tauri::AppHandle<R>,
     state: State<'_, Arc<ScreenpipeState>>,
     file: Option<String>,
@@ -564,10 +943,9 @@ fn open_in_finder(path: &str) -> Result<(), ScreenpipeTauriError> {
 }
 
 #[tauri::command]
-async fn dispose(
-    state: State<'_, Arc<ScreenpipeState>>,
-) -> Result<bool, String> {
+async fn screenpipe_dispose(state: State<'_, Arc<ScreenpipeState>>) -> Result<bool, String> {
     let mut inner = state.session.lock().await;
+    inner.abort_event_tasks();
     if let Some(mut rec) = inner.recorder.take() {
         let _ = rec.stop().await;
     }
@@ -577,6 +955,14 @@ async fn dispose(
     Ok(true)
 }
 
+/// Returns the stable list of event names the plugin can emit on
+/// [`SCREENPIPE_EVENT_CHANNEL`]. Mirrors `SCREENPIPE_EVENTS` from the
+/// Node SDK so renderers can allow-list without redeclaring.
+#[tauri::command]
+async fn screenpipe_events() -> Result<Vec<&'static str>, String> {
+    Ok(SCREENPIPE_EVENTS.to_vec())
+}
+
 // ─── plugin builder ────────────────────────────────────────────────────
 
 /// Build the Tauri v2 plugin. Register on your `tauri::Builder` and
@@ -584,13 +970,14 @@ async fn dispose(
 pub fn init<R: Runtime>(config: ScreenpipeConfig) -> TauriPlugin<R> {
     PluginBuilder::new("screenpipe")
         .invoke_handler(tauri::generate_handler![
-            permissions,
-            start,
-            stop,
-            status,
-            snapshot,
-            reveal,
-            dispose,
+            screenpipe_permissions,
+            screenpipe_start,
+            screenpipe_stop,
+            screenpipe_status,
+            screenpipe_snapshot,
+            screenpipe_reveal,
+            screenpipe_dispose,
+            screenpipe_events,
         ])
         .setup(move |app, _api| {
             app.manage(Arc::new(ScreenpipeState::new(config.clone())));
@@ -691,14 +1078,21 @@ mod tests {
                 capture_scroll: Some(true),
                 ..Default::default()
             }),
+            event_intervals: None,
         };
         let rec = opts.into_recorder_options("/out.mp4".into());
         assert_eq!(rec.output, "/out.mp4");
         assert_eq!(rec.monitor_id, Some(2));
         assert_eq!(rec.microphone, Some(true));
         assert_eq!(rec.system_audio, Some(false));
-        assert_eq!(rec.ignored_windows.as_deref(), Some(&["1Password".to_string()][..]));
-        assert_eq!(rec.included_windows.as_deref(), Some(&["Code".to_string()][..]));
+        assert_eq!(
+            rec.ignored_windows.as_deref(),
+            Some(&["1Password".to_string()][..])
+        );
+        assert_eq!(
+            rec.included_windows.as_deref(),
+            Some(&["Code".to_string()][..])
+        );
         assert_eq!(rec.ignored_urls.as_deref(), Some(&["bank".to_string()][..]));
         assert_eq!(rec.data_dir.as_deref(), Some("/data"));
         assert_eq!(rec.mp4_monitors.as_deref(), Some(&[1u32, 2][..]));

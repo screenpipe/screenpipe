@@ -8,6 +8,23 @@ import "./styles.css";
 const screenpipe = createScreenpipeTauriClient();
 const status = document.querySelector("#status");
 const preview = document.querySelector("#preview");
+const eventList = document.querySelector("#events");
+const MAX_EVENT_ROWS = 25;
+
+// Subscribe immediately so the user sees `recording_started` /
+// `frames_progress` / `paused` etc. land as they happen. Returns an
+// unsubscribe function — we don't call it here because the page itself
+// is the lifetime boundary.
+screenpipe.onEvent((payload) => {
+  if (!eventList) return;
+  const li = document.createElement("li");
+  const ts = new Date().toISOString().slice(11, 19);
+  li.textContent = `${ts}  ${payload.event}  ${JSON.stringify(payload.data ?? null)}`;
+  eventList.prepend(li);
+  while (eventList.childElementCount > MAX_EVENT_ROWS) {
+    eventList.lastElementChild?.remove();
+  }
+});
 
 // dataDir opts into the SDK's event-driven paired-capture pipeline.
 // Writes one row per click / typing_pause / app_switch / window_focus /

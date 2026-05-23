@@ -1852,6 +1852,7 @@ function SortablePresetCard({
   isTeamAdmin,
   readOnly = false,
   defaultLocked = false,
+  chatgptTokenExpired = false,
 }: {
   preset: AIPreset;
   isDefault: boolean;
@@ -1865,6 +1866,7 @@ function SortablePresetCard({
   isTeamAdmin?: boolean;
   readOnly?: boolean;
   defaultLocked?: boolean;
+  chatgptTokenExpired?: boolean;
 }) {
   const {
     attributes,
@@ -1926,6 +1928,21 @@ function SortablePresetCard({
             )}
             {!hasValidation && (
               <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+            )}
+            {!hasValidation && (
+              <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+            )}
+            {chatgptTokenExpired && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    ChatGPT session expired — open Connections to reconnect
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
           {hasValidation ? (
@@ -1990,6 +2007,7 @@ export const AIPresets = () => {
   );
   const canManageEmployeePresets = !isEnterprise || aiPresetPolicy.allow_employee_custom_presets;
   const [piAvailable, setPiAvailable] = useState(false);
+  const [chatgptTokenValid, setChatgptTokenValid] = useState<boolean | null>(null);
   const team = useTeam();
   const isTeamAdmin = !!team.team && team.role === "admin";
 
@@ -2045,11 +2063,26 @@ export const AIPresets = () => {
   }, [isEnterprise, aiPresetPolicy.allow_screenpipe_cloud]);
 
   useEffect(() => {
-    if (!createPresetsDialog) {
-      setSelectedPreset(undefined);
-      setIsDuplicating(false);
-    }
-  }, [createPresetsDialog]);
+  const hasChatGptPreset = settings.aiPresets?.some(
+    (p) => p.provider === "openai-chatgpt"
+  );
+  if (!hasChatGptPreset) {
+    setChatgptTokenValid(null);
+    return;
+  }
+  commands.chatgptOauthCheckToken().then((res) => {
+    setChatgptTokenValid(res.status === "ok" ? res.data : null);
+  }).catch(() => {
+    setChatgptTokenValid(null);
+  });
+}, [settings.aiPresets]);
+
+useEffect(() => {
+  if (!createPresetsDialog) {
+    setSelectedPreset(undefined);
+    setIsDuplicating(false);
+  }
+}, [createPresetsDialog]);
 
   if (createPresetsDialog)
     return (
@@ -2291,6 +2324,7 @@ export const AIPresets = () => {
                   preset={preset}
                   isDefault={preset.defaultPreset}
                   hasValidation={!!(preset.provider && preset.model && (preset.url || preset.provider === "screenpipe-cloud" || preset.provider === "openai-chatgpt"))}
+                  chatgptTokenExpired={preset.provider === "openai-chatgpt" && chatgptTokenValid === false}
                   onEdit={() => {
                     setSelectedPreset(preset);
                     setIsDuplicating(false);

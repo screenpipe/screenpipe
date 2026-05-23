@@ -6697,7 +6697,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6708,7 +6708,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6741,7 +6741,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6779,7 +6779,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6804,7 +6804,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6840,7 +6840,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -6876,7 +6876,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sdk"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -6904,12 +6904,13 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-tauri"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "screenpipe-recorder",
  "serde",
  "tauri",
+ "tauri-plugin",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -8033,6 +8034,22 @@ dependencies = [
  "syn 2.0.117",
  "tauri-codegen",
  "tauri-utils",
+]
+
+[[package]]
+name = "tauri-plugin"
+version = "2.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e126abc9e84e35cdfd01596140a73a1850cdb0df0a23acf0185776c30b469a6e"
+dependencies = [
+ "anyhow",
+ "glob",
+ "plist",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tauri-utils",
+ "walkdir",
 ]
 
 [[package]]

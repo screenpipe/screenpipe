@@ -152,8 +152,17 @@ impl AudioManager {
         let device_manager = DeviceManager::new(
             options.experimental_coreaudio_system_audio,
             options.windows_input_aec_enabled,
+            options.macos_input_vpio_enabled,
         )
         .await?;
+        if options.windows_input_aec_enabled {
+            info!("screenpipe-audio: Windows WASAPI microphone AEC enabled in settings");
+        }
+        if options.macos_input_vpio_enabled {
+            info!(
+                "screenpipe-audio: macOS VoiceProcessingIO (AEC) enabled in settings (default input only)"
+            );
+        }
         let segmentation_manager = Arc::new(SegmentationManager::new(options.is_disabled).await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
         let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = if options.is_disabled {
@@ -249,6 +258,7 @@ impl AudioManager {
         self.device_manager.configure_backend_flags(
             options.experimental_coreaudio_system_audio,
             options.windows_input_aec_enabled,
+            options.macos_input_vpio_enabled,
         );
         *self.meeting_detector.write().await = options.meeting_detector.clone();
         *self.options.write().await = options;

@@ -785,6 +785,26 @@ fn ensure_web_search_extension(
     Ok(())
 }
 
+/// Install the MCP bridge extension. Registers proxy tools that route
+/// `mcp_call` / `mcp_list_tools` requests through the local
+/// `/mcp-servers/*` API. Always installed — does nothing when zero
+/// servers are registered.
+fn ensure_mcp_bridge_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("mcp-bridge.ts");
+    let ext_content = include_str!("../assets/extensions/mcp-bridge.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write mcp-bridge extension: {}", e))?;
+
+    debug!("mcp-bridge extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 /// Configuration for which AI provider Pi should use
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1169,6 +1189,9 @@ pub async fn pi_start_inner(
     // Install web-search extension only for screenpipe-cloud presets
     ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
 
+    // MCP bridge: lets the agent reach user-registered MCP servers.
+    ensure_mcp_bridge_extension(&project_dir)?;
+
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
 
@@ -1516,6 +1539,12 @@ pub async fn pi_start_inner(
                 }
             }
         }
+    }
+
+    // Pass the screenpipe API auth key so mcp-bridge.ts can authenticate
+    // its GET /mcp-servers calls (returns 403 without this).
+    if let Some(key) = crate::store::resolved_api_auth_key() {
+        cmd.env("SCREENPIPE_API_AUTH_KEY", key);
     }
 
     // Spawn process

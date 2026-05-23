@@ -39,6 +39,68 @@ test("createScreenpipeTauriClient invokes the plugin commands", async () => {
   ]);
 });
 
+test("eventNames forwards the plugin events command", async () => {
+  const calls = [];
+  const client = createScreenpipeTauriClient({
+    async invoke(command) {
+      calls.push(command);
+      if (command === DEFAULT_TAURI_COMMANDS.events) {
+        return ["start", "stop", "app_switched"];
+      }
+      return null;
+    },
+  });
+
+  assert.deepEqual(await client.eventNames(), ["start", "stop", "app_switched"]);
+  assert.deepEqual(calls, [DEFAULT_TAURI_COMMANDS.events]);
+});
+
+test("onEvent dispatches filtered Tauri events to the callback", async () => {
+  const channelListeners = new Map();
+  const fakeListen = async (channel, callback) => {
+    const list = channelListeners.get(channel) || [];
+    list.push(callback);
+    channelListeners.set(channel, list);
+    return () => {
+      channelListeners.set(
+        channel,
+        (channelListeners.get(channel) || []).filter((cb) => cb !== callback),
+      );
+    };
+  };
+
+  const client = createScreenpipeTauriClient({
+    async invoke() {},
+    listen: fakeListen,
+  });
+
+  const received = [];
+  const unlisten = await client.onEvent(
+    (payload) => {
+      received.push(payload);
+    },
+    { filter: ["app_switched"] },
+  );
+
+  const dispatch = (payload) => {
+    for (const cb of channelListeners.get("screenpipe://event") || []) {
+      cb({ payload });
+    }
+  };
+
+  dispatch({ event: "app_switched", data: { focused: null } });
+  dispatch({ event: "frames_progress", data: { frames: 3 } });
+  dispatch({ event: "app_switched", data: { focused: { appName: "X" } } });
+
+  assert.equal(received.length, 2);
+  assert.equal(received[0].event, "app_switched");
+  assert.equal(received[1].data.focused.appName, "X");
+
+  await unlisten();
+  dispatch({ event: "app_switched", data: { focused: { appName: "Y" } } });
+  assert.equal(received.length, 2, "unlisten should silence further events");
+});
+
 test("snapshot decodes jpegBase64 into Uint8Array", async () => {
   const client = createScreenpipeTauriClient({
     async invoke() {

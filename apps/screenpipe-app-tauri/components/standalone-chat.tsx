@@ -57,6 +57,7 @@ import {
   buildAppMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
+  isConversationHistorySyncPrompt,
 } from "@/lib/chat-utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
@@ -2661,10 +2662,15 @@ function ChatTitleMenu({
     conversationId ? s.sessions[conversationId] : undefined
   );
   const isPinned = session?.pinned ?? false;
-  const firstUserMsg = messages.find((m) => m.role === "user");
+  const firstUserMsg = messages.find(
+    (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
+  );
   const derivedTitle = firstUserMsg?.content?.slice(0, 50);
   const title =
-    storeTitle && storeTitle !== "new chat" && storeTitle !== "untitled"
+    storeTitle &&
+    storeTitle !== "new chat" &&
+    storeTitle !== "untitled" &&
+    !isConversationHistorySyncPrompt(storeTitle)
       ? storeTitle
       : derivedTitle || "";
 
@@ -3063,6 +3069,8 @@ export function StandaloneChat({
   const [renameValue, setRenameValue] = useState("");
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
+  const pendingPresetRef = useRef<AIPreset | null>(null);
+  const isStreamingRef = useRef(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -3988,6 +3996,10 @@ export function StandaloneChat({
     if (storeChatIsLoading === false) setIsLoading(false);
   }, [storeChatIsStreaming, storeChatIsLoading]);
 
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
   // clicks a chat), `activePipeExecution` would otherwise stay set
@@ -4575,6 +4587,12 @@ export function StandaloneChat({
   //
   // Called directly from the AIPresetsSelector onPresetSaved callback.
   const handlePiRestart = useCallback((preset: AIPreset) => {
+    if (isStreamingRef.current) {
+      pendingPresetRef.current = preset;
+      toast({ title: "model will switch after this response finishes" });
+      return;
+    }
+
     const providerConfig = buildProviderConfig(preset);
     if (!providerConfig) return;
 
@@ -4644,6 +4662,14 @@ export function StandaloneChat({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.token, setRunningConfigFromProviderConfig, restartCurrentPiSession]);
+
+  useEffect(() => {
+    if (!isStreaming && pendingPresetRef.current) {
+      const preset = pendingPresetRef.current;
+      pendingPresetRef.current = null;
+      handlePiRestart(preset);
+    }
+  }, [isStreaming, handlePiRestart]);
 
   // Listen for Pi / pipe events.
   //
@@ -7737,7 +7763,7 @@ export function StandaloneChat({
                         >
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-medium truncate">
-                              {conv.title}
+                              {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
                             </p>
                             <p className="text-[10px] text-muted-foreground">
                               {conv.messageCount} messages
@@ -7763,7 +7789,7 @@ export function StandaloneChat({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setOpenConvMenuId(null);
-                                  setRenameValue(conv.title);
+                                  setRenameValue(isConversationHistorySyncPrompt(conv.title) ? "" : conv.title);
                                   setRenamingConvId(conv.id);
                                 }}
                               >

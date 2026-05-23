@@ -309,6 +309,11 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub windows_input_aec_enabled: bool,
 
+    /// [experimental, macOS] Request VoiceProcessingIO AEC on the default microphone.
+    /// Ignored on non-macOS platforms and non-default input devices.
+    #[arg(long, default_value_t = false)]
+    pub macos_input_vpio_enabled: bool,
+
     /// Data directory. Default to $HOME/.screenpipe
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<String>,
@@ -374,11 +379,17 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
 
-    /// Windows to ignore (by title, uses contains matching)
+    /// Windows to ignore (case-insensitive contains). Use `App::Title` to
+    /// scope to one window of one app (e.g. `Slack::#hr`). `::title` matches
+    /// any app whose focused window title contains `title`. `App::` blocks
+    /// the entire app (equivalent to bare `App`).
     #[arg(long)]
     pub ignored_windows: Vec<String>,
 
-    /// Windows to include (by title, uses contains matching)
+    /// Windows to include (case-insensitive contains). Scoped entries
+    /// (`App::Title`) create a per-app whitelist; other apps remain
+    /// unaffected. Unscoped entries keep the legacy "must match app or
+    /// title" global-include semantics.
     #[arg(long)]
     pub included_windows: Vec<String>,
 
@@ -566,6 +577,7 @@ pub struct RecordArgSources {
     pub use_system_default_audio: bool,
     pub experimental_coreaudio_system_audio: bool,
     pub windows_input_aec_enabled: bool,
+    pub macos_input_vpio_enabled: bool,
     pub audio_transcription_engine: bool,
     pub monitor_id: bool,
     pub use_all_monitors: bool,
@@ -609,6 +621,7 @@ impl RecordArgSources {
                 "experimental_coreaudio_system_audio",
             ),
             windows_input_aec_enabled: from_command_line(record, "windows_input_aec_enabled"),
+            macos_input_vpio_enabled: from_command_line(record, "macos_input_vpio_enabled"),
             audio_transcription_engine: from_command_line(record, "audio_transcription_engine"),
             monitor_id: from_command_line(record, "monitor_id"),
             use_all_monitors: from_command_line(record, "use_all_monitors"),
@@ -644,6 +657,7 @@ impl RecordArgSources {
             || self.use_system_default_audio
             || self.experimental_coreaudio_system_audio
             || self.windows_input_aec_enabled
+            || self.macos_input_vpio_enabled
             || self.audio_transcription_engine
             || self.monitor_id
             || self.use_all_monitors
@@ -739,6 +753,7 @@ impl RecordArgs {
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
             windows_input_aec_enabled: self.windows_input_aec_enabled,
+            macos_input_vpio_enabled: self.macos_input_vpio_enabled,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             // Explicit `--monitor-id` implies opting out of `--use-all-monitors`.
             // `use_all_monitors` has `default_value_t = true`, so without this
@@ -937,6 +952,9 @@ impl RecordArgs {
         }
         if sources.windows_input_aec_enabled {
             settings.windows_input_aec_enabled = self.windows_input_aec_enabled;
+        }
+        if sources.macos_input_vpio_enabled {
+            settings.macos_input_vpio_enabled = self.macos_input_vpio_enabled;
         }
         if sources.audio_transcription_engine {
             settings.audio_transcription_engine =

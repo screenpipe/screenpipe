@@ -7,6 +7,7 @@
 //! Provides settings for what to capture, privacy filters, and performance tuning.
 
 use regex::Regex;
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -88,13 +89,25 @@ pub struct UiCaptureConfig {
     /// Raw patterns for serialization
     pub excluded_window_pattern_strings: Vec<String>,
 
-    /// User-configured app/window names to skip (case-insensitive substring match)
+    /// User-configured app/window names to skip (case-insensitive substring match).
+    /// Supports `App::Title` scoping — see `screenpipe-core::window_pattern`.
     #[serde(default)]
     pub ignored_windows: Vec<String>,
 
-    /// Optional user-configured allow-list for app/window names
+    /// Optional user-configured allow-list for app/window names.
+    /// Supports `App::Title` scoping — see `screenpipe-core::window_pattern`.
     #[serde(default)]
     pub included_windows: Vec<String>,
+
+    /// Cached parse of `ignored_windows`. Populated by `compile_patterns()`;
+    /// read by the `should_capture_*` methods on the hot path of every tree
+    /// walk. `#[serde(skip)]` so it never round-trips through settings.json.
+    #[serde(skip)]
+    pub ignored_window_patterns: Vec<WindowPattern>,
+
+    /// Cached parse of `included_windows`. See `ignored_window_patterns`.
+    #[serde(skip)]
+    pub included_window_patterns: Vec<WindowPattern>,
 
     // === Retention Settings ===
     /// Days to keep UI events
@@ -210,6 +223,8 @@ impl Default for UiCaptureConfig {
             excluded_window_pattern_strings: vec![],
             ignored_windows: Vec::new(),
             included_windows: Vec::new(),
+            ignored_window_patterns: Vec::new(),
+            included_window_patterns: Vec::new(),
 
             // Retention
             retention_days: 30,
@@ -235,28 +250,45 @@ impl UiCaptureConfig {
         config
     }
 
-    /// Compile regex patterns from strings
+    /// Compile regex patterns from strings AND parse window-filter scope syntax.
+    /// Callers that mutate `ignored_windows` / `included_windows` (or the
+    /// excluded-window regex strings) must invoke this to refresh the
+    /// hot-path caches the matchers read.
     pub fn compile_patterns(&mut self) {
         self.excluded_window_patterns = self
             .excluded_window_pattern_strings
             .iter()
             .filter_map(|s| Regex::new(s).ok())
             .collect();
+        self.ignored_window_patterns = WindowPattern::parse_list(&self.ignored_windows);
+        self.included_window_patterns = WindowPattern::parse_list(&self.included_windows);
     }
 
-    fn matches_user_pattern(patterns: &[String], value: &str) -> bool {
-        if value.is_empty() {
-            return false;
+    /// Lazily resolve the parsed ignore patterns. Returns the cache if it's
+    /// already populated; otherwise parses on the fly. This keeps callers
+    /// correct even if they forget to call `compile_patterns()` after
+    /// mutating the raw `ignored_windows` Vec (e.g. via `Default::default()`).
+    fn resolved_ignored(&self) -> std::borrow::Cow<'_, [WindowPattern]> {
+        if self.ignored_window_patterns.is_empty() && !self.ignored_windows.is_empty() {
+            std::borrow::Cow::Owned(WindowPattern::parse_list(&self.ignored_windows))
+        } else {
+            std::borrow::Cow::Borrowed(&self.ignored_window_patterns)
         }
-
-        let value_lower = value.to_lowercase();
-        patterns.iter().any(|pattern| {
-            let pattern = pattern.trim();
-            !pattern.is_empty() && value_lower.contains(&pattern.to_lowercase())
-        })
     }
 
-    /// Check if an app should be captured
+    /// Lazily resolve the parsed include patterns. See `resolved_ignored`.
+    fn resolved_included(&self) -> std::borrow::Cow<'_, [WindowPattern]> {
+        if self.included_window_patterns.is_empty() && !self.included_windows.is_empty() {
+            std::borrow::Cow::Owned(WindowPattern::parse_list(&self.included_windows))
+        } else {
+            std::borrow::Cow::Borrowed(&self.included_window_patterns)
+        }
+    }
+
+    /// Check if an app should be captured. Called before window title is known,
+    /// so only legacy (unscoped) ignore patterns can block here — scoped
+    /// patterns like `Slack::#general` defer to `should_capture_target` where
+    /// the full (app, title) pair is available.
     pub fn should_capture_app(&self, app_name: &str) -> bool {
         if !self.enabled {
             return false;
@@ -271,10 +303,13 @@ impl UiCaptureConfig {
             return false;
         }
 
-        !Self::matches_user_pattern(&self.ignored_windows, app_name)
+        // Pass empty title: scoped patterns naturally do not match here.
+        !window_pattern::matches_any(&self.resolved_ignored(), &app_lower, "")
     }
 
-    /// Check if a window should be captured
+    /// Check if a window should be captured by title alone. Like
+    /// `should_capture_app`, scoped patterns are deferred to
+    /// `should_capture_target`.
     pub fn should_capture_window(&self, window_title: &str) -> bool {
         if !self.enabled {
             return false;
@@ -288,7 +323,8 @@ impl UiCaptureConfig {
             return false;
         }
 
-        !Self::matches_user_pattern(&self.ignored_windows, window_title)
+        let title_lower = window_title.to_lowercase();
+        !window_pattern::matches_any(&self.resolved_ignored(), "", &title_lower)
     }
 
     /// Check a concrete app/window pair against all capture filters.
@@ -303,14 +339,17 @@ impl UiCaptureConfig {
             }
         }
 
-        if self.included_windows.is_empty() {
-            return true;
+        let app_lower = app_name.to_lowercase();
+        let title_lower = window_title.unwrap_or_default().to_lowercase();
+
+        // Scoped ignore patterns (e.g. `Slack::#general`) are evaluated here —
+        // they require both app and title context, which is only present at
+        // this layer.
+        if window_pattern::matches_any(&self.resolved_ignored(), &app_lower, &title_lower) {
+            return false;
         }
 
-        Self::matches_user_pattern(&self.included_windows, app_name)
-            || window_title
-                .map(|title| Self::matches_user_pattern(&self.included_windows, title))
-                .unwrap_or(false)
+        window_pattern::passes_includes(&self.resolved_included(), &app_lower, &title_lower)
     }
 
     /// Check if element appears to be a password field
@@ -438,6 +477,71 @@ mod tests {
         assert!(config.should_capture_target("Chrome", Some("Docs")));
         assert!(config.should_capture_target("Terminal", Some("ScreenPipe logs")));
         assert!(!config.should_capture_target("Slack", Some("DM")));
+    }
+
+    #[test]
+    fn test_scoped_ignore_per_window() {
+        // `Slack::#hr` should block Slack #hr only; Slack #engineering and
+        // Chrome should still be captured. The app-only check must NOT block
+        // Slack (since we'd lose #engineering too).
+        let mut config = UiCaptureConfig::new();
+        config.ignored_windows = vec!["Slack::#hr".to_string()];
+
+        assert!(config.should_capture_app("Slack"));
+        assert!(!config.should_capture_target("Slack", Some("#hr - mycompany")));
+        assert!(config.should_capture_target("Slack", Some("#engineering")));
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
+    }
+
+    #[test]
+    fn test_scoped_include_per_app_whitelist() {
+        // `Greenhouse::Candidates` should whitelist only that window in
+        // Greenhouse; other apps stay unaffected (regression target — naive
+        // semantics would block everything but Greenhouse).
+        let mut config = UiCaptureConfig::new();
+        config.included_windows = vec!["Greenhouse::Candidates".to_string()];
+
+        assert!(config.should_capture_target("Greenhouse", Some("Candidates")));
+        assert!(!config.should_capture_target("Greenhouse", Some("Compensation")));
+        assert!(config.should_capture_target("Slack", Some("#general")));
+        assert!(config.should_capture_target("Chrome", Some("Docs")));
+    }
+
+    #[test]
+    fn test_cached_pattern_path_is_consistent_with_lazy_path() {
+        // Exercise both code paths in `resolved_ignored()` — verify they
+        // produce identical decisions whether `compile_patterns()` was
+        // called or not. This regression-guards the lazy fallback.
+        let mut lazy = UiCaptureConfig::new();
+        lazy.ignored_windows = vec!["Slack::#hr".to_string(), "1Password".to_string()];
+        // Note: NOT calling compile_patterns — hits the lazy fallback.
+
+        let mut cached = UiCaptureConfig::new();
+        cached.ignored_windows = vec!["Slack::#hr".to_string(), "1Password".to_string()];
+        cached.compile_patterns(); // hot-path cache populated.
+
+        let cases: &[(&str, Option<&str>, bool)] = &[
+            ("Slack", Some("#hr - private"), false),
+            ("Slack", Some("#engineering"), true),
+            ("1Password 7", Some("Dashboard"), false),
+            ("Chrome", Some("Google Docs"), true),
+        ];
+        for (app, title, expected) in cases {
+            assert_eq!(
+                lazy.should_capture_target(app, *title),
+                *expected,
+                "lazy: {} / {:?}",
+                app,
+                title
+            );
+            assert_eq!(
+                cached.should_capture_target(app, *title),
+                *expected,
+                "cached: {} / {:?}",
+                app,
+                title
+            );
+        }
     }
 
     #[test]

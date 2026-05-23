@@ -23,6 +23,7 @@ pub mod frame_linker;
 pub mod frame_linker_actor;
 pub mod hot_frame_cache;
 pub mod logging;
+pub mod mcp_servers_api;
 pub mod meeting_detector;
 pub mod meeting_persister;
 mod meeting_telemetry;

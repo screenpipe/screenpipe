@@ -866,6 +866,16 @@ impl SCServer {
             ),
         );
 
+        // User-supplied MCP servers (issue #3282).
+        // Mounted at the top level so /mcp-servers/:id doesn't shadow
+        // /connections/:id and vice versa.
+        let mcp_store: crate::mcp_servers_api::SharedMcpServerStore =
+            Arc::new(screenpipe_connect::mcp_servers::McpServerStore::new(
+                self.screenpipe_dir.clone(),
+                self.secret_store.clone(),
+            ));
+        let router = router.nest("/mcp-servers", crate::mcp_servers_api::router(mcp_store));
+
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {
             let power_routes = Router::new()

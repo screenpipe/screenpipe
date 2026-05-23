@@ -29,4 +29,5 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   notion: "Knowledge",
   linear: "Productivity",
   perplexity: "Research",
+  "custom-mcp": "AI",
 };

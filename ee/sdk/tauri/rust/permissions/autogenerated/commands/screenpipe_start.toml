@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-screenpipe-start"
+description = "Enables the screenpipe_start command without any pre-configured scope."
+commands.allow = ["screenpipe_start"]
+
+[[permission]]
+identifier = "deny-screenpipe-start"
+description = "Denies the screenpipe_start command without any pre-configured scope."
+commands.deny = ["screenpipe_start"]

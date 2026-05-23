@@ -22,6 +22,7 @@ use super::{
 use crate::tree::linux_lines::{self, AtspiRef, NormalizeRefs};
 use anyhow::{Context, Result};
 use chrono::Utc;
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::cell::UnsafeCell;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -479,9 +480,13 @@ struct WalkState {
     monitor_y: f64,
     monitor_w: f64,
     monitor_h: f64,
-    /// User-configured ignored window patterns (lowercase) for filtering browser
+    /// Parsed user-configured ignored window patterns for filtering browser
     /// extension popups whose DocumentWeb name matches an ignored keyword.
-    ignored_windows_lower: Vec<String>,
+    /// Supports `App::Title` scoping — `focused_app_lower` is the app side.
+    ignored_patterns: Vec<WindowPattern>,
+    /// Lowercase focused app name, used as the app side when matching scoped
+    /// patterns against extension UI text.
+    focused_app_lower: String,
     /// Set to true when a browser extension popup matching an ignored pattern is detected.
     hit_ignored_extension: bool,
     /// Per-frame budget for AT-SPI Text-interface calls used by line capture.
@@ -491,7 +496,12 @@ struct WalkState {
 }
 
 impl WalkState {
-    fn new(config: &TreeWalkerConfig, start: Instant) -> Self {
+    fn new(
+        config: &TreeWalkerConfig,
+        start: Instant,
+        ignored_patterns: Vec<WindowPattern>,
+        focused_app_lower: String,
+    ) -> Self {
         Self {
             text_buffer: String::with_capacity(4096),
             nodes: Vec::with_capacity(256),
@@ -511,11 +521,8 @@ impl WalkState {
             monitor_y: config.monitor_y,
             monitor_w: config.monitor_width,
             monitor_h: config.monitor_height,
-            ignored_windows_lower: config
-                .ignored_windows
-                .iter()
-                .map(|s| s.to_lowercase())
-                .collect(),
+            ignored_patterns,
+            focused_app_lower,
             hit_ignored_extension: false,
             line_budget: if config.enable_line_bounds {
                 Some(LineBudget::new(
@@ -587,14 +594,12 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
 
     // Browser extension popup detection: DocumentWeb/DocumentFrame nodes in
     // Chromium carry the extension name as their accessible name. If it matches
-    // an ignored-window pattern, skip the entire subtree.
-    if matches!(role, 95 | 94 | 82) && !state.ignored_windows_lower.is_empty() {
+    // an ignored-window pattern, skip the entire subtree. Uses full
+    // `window_pattern` semantics so scoped rules like `Chrome::1Password` work.
+    if matches!(role, 95 | 94 | 82) && !state.ignored_patterns.is_empty() {
         let name = get_accessible_name(conn, aref).to_lowercase();
         if !name.is_empty()
-            && state
-                .ignored_windows_lower
-                .iter()
-                .any(|ig| name.contains(ig.as_str()))
+            && window_pattern::matches_any(&state.ignored_patterns, &state.focused_app_lower, &name)
         {
             state.hit_ignored_extension = true;
             return;
@@ -1050,27 +1055,27 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
         let app_lower = app_name.to_lowercase();
         let window_lower = window_title.to_lowercase();
 
-        // Apply user-configured ignored windows
-        if self.config.ignored_windows.iter().any(|pattern| {
-            let p = pattern.to_lowercase();
-            app_lower.contains(&p) || window_lower.contains(&p)
-        }) {
+        // Apply user-configured ignored windows. Supports legacy unscoped
+        // patterns and scoped `App::Title` patterns.
+        let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
+        let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
+        if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
-        // Apply user-configured included windows (whitelist)
-        if !self.config.included_windows.is_empty() {
-            let matches = self.config.included_windows.iter().any(|pattern| {
-                let p = pattern.to_lowercase();
-                app_lower.contains(&p) || window_lower.contains(&p)
-            });
-            if !matches {
-                return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
-            }
+        // Scoped includes act as per-app whitelists — see
+        // `window_pattern::passes_includes`.
+        if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+            return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
 
         // Get window extents for bounds normalization
-        let mut state = WalkState::new(&self.config, start);
+        let mut state = WalkState::new(
+            &self.config,
+            start,
+            ignored_patterns.clone(),
+            app_lower.clone(),
+        );
         if let Some((wx, wy, ww, wh)) = get_component_extents(conn, &window_ref) {
             if ww > 0 && wh > 0 {
                 state.window_x = wx as f64;
