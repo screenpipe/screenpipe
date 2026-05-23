@@ -14,9 +14,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use screenpipe_connect::mcp_servers::{McpHeader, McpServerConfig, McpServerStore};
+use screenpipe_connect::mcp_servers::{McpHeader, McpServerConfig, McpServerStore, McpTransport};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -30,9 +31,21 @@ pub struct McpServersState {
 #[derive(Deserialize)]
 pub struct UpsertBody {
     pub name: String,
+    /// Transport selector: "http" (default) or "stdio".
+    #[serde(default)]
+    pub transport: Option<String>,
+    // HTTP transport fields
+    #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub headers: Vec<McpHeader>,
+    // Stdio transport fields
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -43,9 +56,21 @@ fn default_true() -> bool {
 
 #[derive(Deserialize)]
 pub struct ProbeBody {
+    /// Transport selector: "http" (default) or "stdio".
+    #[serde(default)]
+    pub transport: Option<String>,
+    // HTTP
+    #[serde(default)]
     pub url: String,
     #[serde(default)]
     pub headers: Vec<McpHeader>,
+    // Stdio
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -89,9 +114,25 @@ async fn upsert_server(
     if name.is_empty() {
         return bad_request("name must not be empty");
     }
-    let url = body.url.trim().to_string();
-    if url.is_empty() {
-        return bad_request("url must not be empty");
+
+    let transport = match body.transport.as_deref() {
+        Some("stdio") => McpTransport::Stdio,
+        _ => McpTransport::Http,
+    };
+
+    // Validate transport-specific required fields early so we return a
+    // clear error before touching the store.
+    match transport {
+        McpTransport::Http => {
+            if body.url.trim().is_empty() {
+                return bad_request("url must not be empty for HTTP transport");
+            }
+        }
+        McpTransport::Stdio => {
+            if body.command.as_deref().unwrap_or("").trim().is_empty() {
+                return bad_request("command must not be empty for stdio transport");
+            }
+        }
     }
 
     let store = state.store.lock().await;
@@ -101,31 +142,53 @@ async fn upsert_server(
         .map(|c| c.created_at)
         .unwrap_or_else(|| Utc::now().timestamp());
 
-    let supplied = normalise_supplied(body.headers);
-    // CRLF / NUL in a header value would let a malicious config
-    // smuggle an extra HTTP request through reqwest. reqwest *might*
-    // reject these at .send() but the behaviour isn't documented as
-    // load-bearing — block them at the API edge so we don't depend on
-    // it.
-    if let Err(msg) = validate_headers(&supplied) {
-        return bad_request(&msg);
-    }
-    let header_names: Vec<String> = supplied.iter().map(|h| h.name.clone()).collect();
-    let existing_headers: Vec<McpHeader> = store.get_headers(&id).await;
-    let merged = merge_headers(&existing_headers, &supplied);
-
-    // Always pass `Some(...)` — even when empty — so deleting the last
-    // header actually wipes the secret blob instead of silently
-    // preserving it.
-    let header_values: Option<Vec<McpHeader>> = Some(merged);
-
-    let cfg = McpServerConfig {
-        id: id.clone(),
-        name,
-        url,
-        header_names,
-        enabled: body.enabled,
-        created_at,
+    let (cfg, header_values) = match transport {
+        McpTransport::Http => {
+            let url = body.url.trim().to_string();
+            let supplied = normalise_supplied(body.headers);
+            // CRLF / NUL in a header value would let a malicious config
+            // smuggle an extra HTTP request through reqwest.
+            if let Err(msg) = validate_headers(&supplied) {
+                return bad_request(&msg);
+            }
+            let header_names: Vec<String> = supplied.iter().map(|h| h.name.clone()).collect();
+            let existing_headers = store.get_headers(&id).await;
+            let merged = merge_headers(&existing_headers, &supplied);
+            let cfg = McpServerConfig {
+                id: id.clone(),
+                name,
+                url,
+                transport: McpTransport::Http,
+                command: None,
+                args: None,
+                env: None,
+                header_names,
+                enabled: body.enabled,
+                created_at,
+            };
+            // Always pass Some(...) so deleting the last header wipes the secret.
+            (cfg, Some(merged))
+        }
+        McpTransport::Stdio => {
+            let command = body
+                .command
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty());
+            let cfg = McpServerConfig {
+                id: id.clone(),
+                name,
+                url: String::new(),
+                transport: McpTransport::Stdio,
+                command,
+                args: body.args,
+                env: body.env,
+                header_names: vec![],
+                enabled: body.enabled,
+                created_at,
+            };
+            // Clear any leftover HTTP secrets if this server was previously HTTP.
+            (cfg, Some(vec![]))
+        }
     };
 
     match store.upsert(cfg, header_values).await {
@@ -251,14 +314,22 @@ async fn test_server(State(state): State<McpServersState>, Path(id): Path<String
     }
 }
 
-/// POST /mcp-servers/test — probe an unsaved (url, headers) pair.
+/// POST /mcp-servers/test — probe an unsaved server config.
 /// Used by the UI's "Test connection" button before the user saves.
 async fn test_ad_hoc(
     State(state): State<McpServersState>,
     Json(body): Json<ProbeBody>,
 ) -> Response {
     let store = state.store.lock().await;
-    match store.probe_ad_hoc(&body.url, &body.headers).await {
+    let result = if body.transport.as_deref() == Some("stdio") {
+        let command = body.command.as_deref().unwrap_or("");
+        let args = body.args.as_deref().unwrap_or(&[]);
+        let env = body.env.as_ref().cloned().unwrap_or_default();
+        store.probe_stdio_ad_hoc(command, args, &env).await
+    } else {
+        store.probe_ad_hoc(&body.url, &body.headers).await
+    };
+    match result {
         Ok(tools) => {
             Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
         }

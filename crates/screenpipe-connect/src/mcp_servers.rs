@@ -29,9 +29,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Stdio as ProcessStdio;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::Mutex;
+
+/// Transport type for a registered MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    /// Stateless HTTP POST (streamable HTTP, JSON-RPC 2.0). Default.
+    #[default]
+    Http,
+    /// Spawn a local subprocess; speak JSON-RPC 2.0 over stdin/stdout.
+    Stdio,
+}
 
 /// One header pair stored on disk / sent with every request.
 ///
@@ -53,8 +66,22 @@ pub struct McpHeader {
 pub struct McpServerConfig {
     pub id: String,
     pub name: String,
+    /// HTTP endpoint URL. Empty for Stdio transport.
+    #[serde(default)]
     pub url: String,
-    /// Header *names* only. Values come from the secret store on
+    /// Transport type. Defaults to Http for backwards compatibility.
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// Stdio: executable (e.g. "uvx", "node"). None for Http transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Stdio: arguments after the executable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// Stdio: extra environment variables for the subprocess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
+    /// HTTP header *names* only. Values come from the secret store on
     /// demand via [`McpServerStore::get_headers`].
     #[serde(default)]
     pub header_names: Vec<String>,
@@ -165,7 +192,7 @@ impl McpServerStore {
         cfg: McpServerConfig,
         header_values: Option<Vec<McpHeader>>,
     ) -> Result<McpServerConfig> {
-        validate_url(&cfg.url)?;
+        validate_config(&cfg)?;
 
         let mut file = load_file(&self.screenpipe_dir);
         if let Some(existing) = file.servers.iter_mut().find(|s| s.id == cfg.id) {
@@ -257,12 +284,23 @@ impl McpServerStore {
             .get(id)
             .await
             .ok_or_else(|| anyhow!("unknown MCP server: {}", id))?;
-        let headers = self.get_headers(id).await;
-        probe_mcp_server(&self.client, &cfg.url, &headers).await
+        match cfg.transport {
+            McpTransport::Http => {
+                let headers = self.get_headers(id).await;
+                probe_mcp_server(&self.client, &cfg.url, &headers).await
+            }
+            McpTransport::Stdio => {
+                probe_stdio_server(
+                    cfg.command.as_deref().unwrap_or(""),
+                    cfg.args.as_deref().unwrap_or(&[]),
+                    &cfg.env.unwrap_or_default(),
+                )
+                .await
+            }
+        }
     }
 
-    /// Like [`probe_tools`] but operates on a config that hasn't been
-    /// persisted yet — used by the UI's pre-save "Test connection".
+    /// Like [`probe_tools`] but for an HTTP config that hasn't been persisted.
     pub async fn probe_ad_hoc(
         &self,
         url: &str,
@@ -270,6 +308,19 @@ impl McpServerStore {
     ) -> Result<Vec<McpToolDescriptor>> {
         validate_url(url)?;
         probe_mcp_server(&self.client, url, headers).await
+    }
+
+    /// Like [`probe_ad_hoc`] but for a stdio config that hasn't been persisted.
+    pub async fn probe_stdio_ad_hoc(
+        &self,
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+    ) -> Result<Vec<McpToolDescriptor>> {
+        if command.trim().is_empty() {
+            return Err(anyhow!("stdio MCP server requires a non-empty command"));
+        }
+        probe_stdio_server(command, args, env).await
     }
 
     /// Forward a tool call to a registered server. The bridge
@@ -283,14 +334,28 @@ impl McpServerStore {
         if !cfg.enabled {
             return Err(anyhow!("MCP server '{}' is disabled", cfg.name));
         }
-        let headers = self.get_headers(id).await;
         // Serialise tool calls per server. The mutex is held for the
         // full request lifetime; concurrent callers will queue. For
         // truly long-running tools the 5-minute client timeout caps
         // the worst-case stall.
         let lock = self.lock_for(id).await;
         let _guard = lock.lock().await;
-        call_mcp_tool(&self.client, &cfg.url, &headers, tool, args).await
+        match cfg.transport {
+            McpTransport::Http => {
+                let headers = self.get_headers(id).await;
+                call_mcp_tool(&self.client, &cfg.url, &headers, tool, args).await
+            }
+            McpTransport::Stdio => {
+                call_stdio_tool(
+                    cfg.command.as_deref().unwrap_or(""),
+                    cfg.args.as_deref().unwrap_or(&[]),
+                    &cfg.env.unwrap_or_default(),
+                    tool,
+                    args,
+                )
+                .await
+            }
+        }
     }
 }
 
@@ -307,6 +372,361 @@ fn validate_url(url: &str) -> Result<()> {
             other
         )),
     }
+}
+
+fn validate_config(cfg: &McpServerConfig) -> Result<()> {
+    match cfg.transport {
+        McpTransport::Http => validate_url(&cfg.url),
+        McpTransport::Stdio => {
+            if cfg.command.as_deref().unwrap_or("").trim().is_empty() {
+                Err(anyhow!("stdio MCP server requires a non-empty command"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP stdio transport (spawn-per-call, JSON-RPC 2.0 over stdin/stdout)
+// ---------------------------------------------------------------------------
+//
+// Each probe/call spawns a fresh child process, runs the MCP handshake,
+// and drops (kills) the process when done. This keeps the implementation
+// simple — no persistent process lifecycle, no orphan reaping, no
+// reconnect logic. The per-server call_locks mutex in McpServerStore
+// serialises concurrent calls so the process doesn't see interleaved
+// JSON-RPC requests from different tasks.
+
+/// Return the full Windows PATH by querying both Machine and User entries
+/// from the registry via PowerShell, then expanding %VAR% references.
+///
+/// Tauri launches the backend without a login shell so the inherited PATH
+/// often lacks per-user tools (bun, npx, uv, cargo). Reading from the
+/// registry gives the same PATH a normal cmd.exe / PowerShell window sees.
+/// The result is cached so the PowerShell query only happens once per run.
+#[cfg(windows)]
+fn registry_path() -> &'static str {
+    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHED.get_or_init(|| {
+        // Single PowerShell one-liner: read Machine + User PATH from registry,
+        // combine them, and expand any %ENVVAR% placeholders.
+        let ps = concat!(
+            "$m=[Environment]::GetEnvironmentVariable('PATH','Machine');",
+            "$u=[Environment]::GetEnvironmentVariable('PATH','User');",
+            "[Environment]::ExpandEnvironmentVariables($m+';'+$u)"
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !s.is_empty() {
+                    tracing::debug!("[stdio-mcp] resolved registry PATH ({} chars)", s.len());
+                    return s;
+                }
+                tracing::warn!("[stdio-mcp] PowerShell PATH query returned empty; falling back");
+            }
+            Ok(o) => tracing::warn!(
+                "[stdio-mcp] PowerShell PATH query failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => tracing::warn!("[stdio-mcp] could not run powershell for PATH: {e}"),
+        }
+        std::env::var("PATH").unwrap_or_default()
+    })
+}
+
+struct StdioSession {
+    writer: BufWriter<tokio::process::ChildStdin>,
+    reader: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    next_id: u64,
+    /// Stderr lines buffered so we can include them in error messages.
+    stderr_buf: Arc<Mutex<String>>,
+    // Kept alive via kill_on_drop — dropped (and process killed) when session is dropped.
+    _child: tokio::process::Child,
+    /// On Windows, the real MCP server is a grandchild of cmd.exe.
+    /// kill_on_drop kills cmd.exe but can leave the grandchild alive.
+    /// We store the cmd.exe PID so Drop can run `taskkill /F /T` on the tree.
+    #[cfg(windows)]
+    pid: u32,
+}
+
+impl StdioSession {
+    async fn spawn(command: &str, args: &[String], env: &HashMap<String, String>) -> Result<Self> {
+        // On Windows, tools like `npx`, `bunx`, `uvx` are `.cmd` shell scripts
+        // that can't be spawned directly — they require cmd.exe as the
+        // interpreter. Wrapping with `cmd /c` also picks up the full user
+        // PATH (Node, Bun, Python) which isn't always visible when Tauri
+        // launches the backend without a shell.
+        //
+        // CREATE_NO_WINDOW (0x08000000): prevents cmd.exe from allocating a new
+        // console. Without it, cmd.exe can steal the piped stdio handles and the
+        // child process never receives our stdin writes.
+        #[cfg(windows)]
+        let mut child = {
+            use std::os::windows::process::CommandExt as _;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let mut c = tokio::process::Command::new("cmd");
+            c.arg("/c").arg(command).args(args);
+            c.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+            // Use the full registry PATH so per-user tools (bun, npx, uv,
+            // cargo) are findable even when Tauri launched without a login shell.
+            c.env("PATH", registry_path());
+            c
+        };
+        #[cfg(not(windows))]
+        let mut child = {
+            let mut c = tokio::process::Command::new(command);
+            c.args(args);
+            c
+        };
+        tracing::info!("[stdio-mcp] spawning: {} {:?}", command, args);
+        let mut child = child
+            .envs(env)
+            .stdin(ProcessStdio::piped())
+            .stdout(ProcessStdio::piped())
+            .stderr(ProcessStdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| anyhow!("failed to spawn '{}': {}", command, e))?;
+        tracing::info!("[stdio-mcp] pid={:?}", child.id());
+
+        let stdin = child.stdin.take().expect("stdin piped");
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let buf = stderr_buf.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::debug!("[stdio-mcp stderr] {}", line);
+                    let mut b = buf.lock().await;
+                    if b.len() < 2000 {
+                        b.push_str(&line);
+                        b.push('\n');
+                    }
+                }
+            });
+        }
+
+        #[cfg(windows)]
+        let pid = child.id().unwrap_or(0);
+
+        Ok(Self {
+            writer: BufWriter::new(stdin),
+            reader: BufReader::new(stdout).lines(),
+            next_id: 0,
+            stderr_buf,
+            _child: child,
+            #[cfg(windows)]
+            pid,
+        })
+    }
+
+    async fn send(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let mut line = serde_json::to_string(&req)?;
+        line.push('\n');
+        if let Err(write_err) = self.writer.write_all(line.as_bytes()).await {
+            // Give the stderr reader task a moment to flush.
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let stderr = self.stderr_buf.lock().await;
+            return Err(if stderr.is_empty() {
+                anyhow!("stdio MCP process closed stdin ({write_err})")
+            } else {
+                anyhow!(
+                    "stdio MCP process exited early. stderr:\n{}",
+                    truncate(&stderr, 600)
+                )
+            });
+        }
+        if let Err(flush_err) = self.writer.flush().await {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let stderr = self.stderr_buf.lock().await;
+            return Err(if stderr.is_empty() {
+                anyhow!("stdio MCP stdin flush failed ({flush_err})")
+            } else {
+                anyhow!(
+                    "stdio MCP process exited early. stderr:\n{}",
+                    truncate(&stderr, 600)
+                )
+            });
+        }
+
+        // Extract disjoint borrows before the async block so the
+        // compiler sees them as independent (writer is already flushed).
+        let reader = &mut self.reader;
+        let stderr_buf = self.stderr_buf.clone();
+        match tokio::time::timeout(timeout, async move {
+            loop {
+                let raw = match reader.next_line().await {
+                    Ok(Some(line)) => line,
+                    Ok(None) => {
+                        let stderr = stderr_buf.lock().await;
+                        return if stderr.is_empty() {
+                            Err(anyhow!("stdio MCP process exited before responding"))
+                        } else {
+                            Err(anyhow!(
+                                "stdio MCP process exited. stderr:\n{}",
+                                truncate(&stderr, 600)
+                            ))
+                        };
+                    }
+                    Err(e) => return Err(anyhow!("stdio read: {}", e)),
+                };
+                if raw.trim().is_empty() {
+                    continue;
+                }
+                let v: Value = match serde_json::from_str(&raw) {
+                    Ok(v) => v,
+                    Err(_) => continue, // skip non-JSON lines (e.g. startup banners)
+                };
+                if v.get("id").and_then(|i| i.as_u64()) == Some(id) {
+                    if let Some(err) = v.get("error") {
+                        let msg = err
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("MCP error");
+                        return Err(anyhow!("MCP error: {}", msg));
+                    }
+                    return v
+                        .get("result")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("stdio MCP response missing `result`"));
+                }
+                // Notification or response for a different id — ignore.
+            }
+        })
+        .await
+        {
+            Ok(inner) => inner,
+            Err(_elapsed) => Err(anyhow!("stdio MCP timeout on '{}'", method)),
+        }
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) {
+        let req = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        if let Ok(mut line) = serde_json::to_string(&req) {
+            line.push('\n');
+            let _ = self.writer.write_all(line.as_bytes()).await;
+            let _ = self.writer.flush().await;
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StdioSession {
+    fn drop(&mut self) {
+        if self.pid == 0 {
+            return;
+        }
+        // kill_on_drop kills cmd.exe but the grandchild MCP server is its
+        // own process group on Windows. `taskkill /F /T` kills the whole tree.
+        let pid = self.pid;
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output();
+        });
+    }
+}
+
+async fn probe_stdio_server(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<Vec<McpToolDescriptor>> {
+    let probe_timeout = Duration::from_secs(30);
+    let mut session = StdioSession::spawn(command, args, env).await?;
+
+    let _ = session
+        .send(
+            "initialize",
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "screenpipe", "version": env!("CARGO_PKG_VERSION") },
+            }),
+            probe_timeout,
+        )
+        .await;
+    session.notify("notifications/initialized", json!({})).await;
+
+    let mut all_tools = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let params = match cursor.as_deref() {
+            Some(c) => json!({ "cursor": c }),
+            None => json!({}),
+        };
+        let result = session.send("tools/list", params, probe_timeout).await?;
+        let tools = result
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .ok_or_else(|| anyhow!("stdio MCP returned no `tools` array"))?;
+        for t in tools {
+            if let Some(name) = t.get("name").and_then(|n| n.as_str()) {
+                all_tools.push(McpToolDescriptor {
+                    name: name.to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .map(|s| s.to_string()),
+                });
+            }
+        }
+        cursor = result
+            .get("nextCursor")
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string());
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(all_tools)
+}
+
+async fn call_stdio_tool(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    tool: &str,
+    tool_args: Value,
+) -> Result<Value> {
+    let init_timeout = Duration::from_secs(20);
+    let call_timeout = Duration::from_secs(300);
+    let mut session = StdioSession::spawn(command, args, env).await?;
+
+    let _ = session
+        .send(
+            "initialize",
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "screenpipe", "version": env!("CARGO_PKG_VERSION") },
+            }),
+            init_timeout,
+        )
+        .await;
+    session.notify("notifications/initialized", json!({})).await;
+
+    session
+        .send(
+            "tools/call",
+            json!({ "name": tool, "arguments": tool_args }),
+            call_timeout,
+        )
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +1023,10 @@ mod tests {
             id: id.to_string(),
             name: format!("server {}", id),
             url: "https://mcp.example.com/v1".to_string(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            env: None,
             header_names: vec![],
             enabled: true,
             created_at: 0,

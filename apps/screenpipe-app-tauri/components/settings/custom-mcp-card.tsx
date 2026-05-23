@@ -18,6 +18,7 @@ import {
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   Loader2,
   Plus,
   Trash2,
@@ -35,6 +36,9 @@ interface McpServer {
   id: string;
   name: string;
   url: string;
+  transport?: "http" | "stdio";
+  command?: string;
+  args?: string[];
   header_names: string[];
   enabled: boolean;
   created_at: number;
@@ -155,16 +159,11 @@ export function CustomMcpCard() {
             </div>
 
             <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-              Register HTTP MCP (Model Context Protocol) servers — Brave
-              Search, Linear, Notion, internal company MCPs — so pipes and
-              chat can call their tools. Pipes invoke them through{" "}
-              <code className="text-xs bg-muted px-1 rounded">
-                mcp_call
-              </code>{" "}
-              and{" "}
-              <code className="text-xs bg-muted px-1 rounded">
-                mcp_list_tools
-              </code>
+              Register MCP (Model Context Protocol) servers — HTTP endpoints
+              like Brave Search, Linear, Notion, or local stdio processes like{" "}
+              <code className="text-xs bg-muted px-1 rounded">uvx mcp-server-brave</code>
+              {" "}— so pipes and chat can call their tools via{" "}
+              <code className="text-xs bg-muted px-1 rounded">mcp_call</code>
               .
             </p>
 
@@ -213,7 +212,7 @@ export function CustomMcpCard() {
               {(() => {
                 const enabled = servers.filter((s) => s.enabled).length;
                 if (servers.length === 0)
-                  return "HTTP MCP only — stdio support coming later";
+                  return "Supports HTTP and stdio MCP servers";
                 if (enabled === 0)
                   return `${servers.length} server${servers.length === 1 ? "" : "s"} registered, none enabled`;
                 if (enabled === servers.length)
@@ -351,7 +350,9 @@ function ServerRow({
         />
         <span className="font-medium truncate">{server.name}</span>
         <span className="text-muted-foreground truncate font-mono text-[10px]">
-          {server.url}
+          {server.transport === "stdio"
+            ? [server.command, ...(server.args ?? [])].filter(Boolean).join(" ")
+            : server.url}
         </span>
         <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
           {probing
@@ -399,9 +400,28 @@ function ServerEditor({
   onCancel: () => void;
 }) {
   const [name, setName] = useState(initial.name);
+  const [transport, setTransport] = useState<"http" | "stdio">(
+    initial.transport ?? "http"
+  );
   const [url, setUrl] = useState(initial.url);
+  // For stdio: full command line, e.g. "uvx mcp-server-brave" or "node server.js --port 8080".
+  // First whitespace-split token becomes the executable; the rest become args.
+  const [command, setCommand] = useState(
+    initial.command
+      ? [initial.command, ...(initial.args ?? [])].join(" ")
+      : ""
+  );
   const [enabled, setEnabled] = useState(initial.enabled);
-  const [headers, setHeaders] = useState<McpHeader[]>(initialHeaders);
+
+  // Split initialHeaders: Authorization → apiKey field; everything else → custom headers list.
+  const authHeader = initialHeaders.find(
+    (h) => h.name.toLowerCase() === "authorization"
+  );
+  const [apiKey, setApiKey] = useState(authHeader?.value ?? "");
+  const [headers, setHeaders] = useState<McpHeader[]>(
+    initialHeaders.filter((h) => h.name.toLowerCase() !== "authorization")
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<
@@ -410,16 +430,19 @@ function ServerEditor({
     | null
   >(null);
 
-  const canSave = useMemo(
-    () => name.trim().length > 0 && url.trim().length > 0 && !saving,
-    [name, url, saving]
-  );
+  const canSave = useMemo(() => {
+    const nameOk = name.trim().length > 0;
+    const connectionOk =
+      transport === "stdio" ? command.trim().length > 0 : url.trim().length > 0;
+    return nameOk && connectionOk && !saving;
+  }, [name, url, command, transport, saving]);
 
-  // Auto-probe on open in edit mode so the user immediately sees
-  // whether the server is reachable without having to click "Test connection".
+  // Auto-probe on open in edit mode so the user immediately sees tool count.
   useEffect(() => {
-    if (mode === "edit" && url.trim().length > 0) {
-      handleTest();
+    if (mode === "edit") {
+      const hasConnection =
+        transport === "stdio" ? command.trim().length > 0 : url.trim().length > 0;
+      if (hasConnection) handleTest();
     }
     // Only run once on mount — eslint-disable-next-line is intentional.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,29 +460,47 @@ function ServerEditor({
   const removeHeader = (idx: number) =>
     setHeaders((prev) => prev.filter((_, i) => i !== idx));
 
-  // Headers ready to send. Placeholder values are dropped — the
-  // server-side handler keeps the existing secret untouched when only
-  // the name is supplied.
+  // Headers ready to send. Placeholder values are sent as empty strings —
+  // the server-side handler keeps the existing secret when the value is empty.
   const headersForRequest = useCallback((): McpHeader[] => {
-    return headers
+    // API Key → Authorization header. Empty string preserves existing secret.
+    const authHeaders: McpHeader[] =
+      apiKey.length > 0
+        ? [
+            {
+              name: "Authorization",
+              value:
+                apiKey === PLACEHOLDER_VALUE
+                  ? "" // preserve existing secret
+                  : `Bearer ${apiKey.trim()}`,
+            },
+          ]
+        : [];
+
+    const customHeaders = headers
       .filter((h) => h.name.trim().length > 0)
       .map((h) => ({
         name: h.name.trim(),
         value: h.value === PLACEHOLDER_VALUE ? "" : h.value,
       }));
-  }, [headers]);
+
+    return [...authHeaders, ...customHeaders];
+  }, [apiKey, headers]);
 
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
+      const isStdio = transport === "stdio";
+      const [cmd, ...cmdArgs] = command.trim().split(/\s+/);
       const res = await localFetch("/mcp-servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: url.trim(),
-          headers: headersForRequest(),
-        }),
+        body: JSON.stringify(
+          isStdio
+            ? { transport: "stdio", command: cmd, args: cmdArgs }
+            : { url: url.trim(), headers: headersForRequest() }
+        ),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -480,17 +521,29 @@ function ServerEditor({
   const handleSave = async () => {
     setSaving(true);
     try {
+      const isStdio = transport === "stdio";
+      const [cmd, ...cmdArgs] = command.trim().split(/\s+/);
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(initial.id)}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            url: url.trim(),
-            headers: headersForRequest(),
-            enabled,
-          }),
+          body: JSON.stringify(
+            isStdio
+              ? {
+                  name: name.trim(),
+                  transport: "stdio",
+                  command: cmd,
+                  args: cmdArgs,
+                  enabled,
+                }
+              : {
+                  name: name.trim(),
+                  url: url.trim(),
+                  headers: headersForRequest(),
+                  enabled,
+                }
+          ),
         }
       );
       if (!res.ok) {
@@ -522,64 +575,166 @@ function ServerEditor({
         />
       </div>
 
+      {/* Transport selector */}
       <div className="space-y-1.5">
-        <Label htmlFor="mcp-url" className="text-xs">
-          Server URL
-        </Label>
-        <Input
-          id="mcp-url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://mcp.example.com/v1"
-          className="h-8 text-sm font-mono"
-        />
-        <p className="text-[11px] text-muted-foreground">
-          HTTP/HTTPS only. stdio MCP support is on the roadmap.
-        </p>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label className="text-xs">Headers (optional)</Label>
-        <div className="space-y-1.5">
-          {headers.map((h, i) => (
-            <div key={i} className="flex items-center gap-1.5">
-              <Input
-                value={h.name}
-                onChange={(e) => updateHeader(i, { name: e.target.value })}
-                placeholder="Authorization"
-                className="h-7 text-xs font-mono flex-1"
-              />
-              <Input
-                value={h.value}
-                onChange={(e) => updateHeader(i, { value: e.target.value })}
-                placeholder="Bearer …"
-                className="h-7 text-xs font-mono flex-1"
-                type={h.value === PLACEHOLDER_VALUE ? "password" : "text"}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => removeHeader(i)}
-                className="h-7 w-7 p-0 text-muted-foreground"
-                aria-label="Remove header"
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          ))}
-          <Button
+        <Label className="text-xs">Transport</Label>
+        <div className="flex rounded-md border border-border overflow-hidden text-xs">
+          <button
             type="button"
-            variant="outline"
-            size="sm"
-            onClick={addHeader}
-            className="text-xs h-7"
+            onClick={() => { setTransport("http"); setTestResult(null); }}
+            className={`flex-1 py-1.5 px-3 transition-colors ${
+              transport === "http"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
           >
-            <Plus className="h-3 w-3 mr-1" />
-            Add header
-          </Button>
+            HTTP
+          </button>
+          <button
+            type="button"
+            onClick={() => { setTransport("stdio"); setTestResult(null); }}
+            className={`flex-1 py-1.5 px-3 transition-colors ${
+              transport === "stdio"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            stdio
+          </button>
         </div>
       </div>
+
+      {transport === "http" ? (
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="mcp-url" className="text-xs">
+              Server URL
+            </Label>
+            <Input
+              id="mcp-url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://mcp.example.com/v1"
+              className="h-8 text-sm font-mono"
+            />
+          </div>
+
+          {/* API Key — covers the most common auth pattern without
+              requiring users to know the header name convention. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="mcp-apikey" className="text-xs">
+              API Key{" "}
+              <span className="text-muted-foreground font-normal">
+                (optional — sent as{" "}
+                <code className="text-[10px] bg-muted px-0.5 rounded">
+                  Authorization: Bearer …
+                </code>
+                )
+              </span>
+            </Label>
+            <Input
+              id="mcp-apikey"
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-…"
+              className="h-8 text-sm font-mono"
+              autoComplete="off"
+            />
+          </div>
+
+          {/* Advanced: arbitrary custom headers, collapsed by default */}
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown
+                className={`h-3 w-3 transition-transform ${
+                  showAdvanced ? "" : "-rotate-90"
+                }`}
+              />
+              Advanced headers
+              {headers.length > 0 && (
+                <span className="ml-1 text-foreground">({headers.length})</span>
+              )}
+            </button>
+            {showAdvanced && (
+              <div className="space-y-1.5 pl-2 border-l border-border">
+                <p className="text-[11px] text-muted-foreground">
+                  Additional HTTP headers sent with every request. Avoid
+                  duplicating{" "}
+                  <code className="text-[10px] bg-muted px-0.5 rounded">
+                    Authorization
+                  </code>{" "}
+                  — use the API Key field above instead.
+                </p>
+                {headers.map((h, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <Input
+                      value={h.name}
+                      onChange={(e) =>
+                        updateHeader(i, { name: e.target.value })
+                      }
+                      placeholder="X-Custom-Header"
+                      className="h-7 text-xs font-mono flex-1"
+                    />
+                    <Input
+                      value={h.value}
+                      onChange={(e) =>
+                        updateHeader(i, { value: e.target.value })
+                      }
+                      placeholder="value"
+                      className="h-7 text-xs font-mono flex-1"
+                      type={
+                        h.value === PLACEHOLDER_VALUE ? "password" : "text"
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeHeader(i)}
+                      className="h-7 w-7 p-0 text-muted-foreground"
+                      aria-label="Remove header"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addHeader}
+                  className="text-xs h-7"
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add header
+                </Button>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="space-y-1.5">
+          <Label htmlFor="mcp-command" className="text-xs">
+            Command
+          </Label>
+          <Input
+            id="mcp-command"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="uvx mcp-server-brave"
+            className="h-8 text-sm font-mono"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Executable + arguments (space-separated). Screenpipe spawns this
+            process locally and speaks JSON-RPC 2.0 over stdin/stdout.
+          </p>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 text-xs">
         <input
@@ -629,7 +784,12 @@ function ServerEditor({
           variant="outline"
           size="sm"
           onClick={handleTest}
-          disabled={testing || url.trim().length === 0}
+          disabled={
+            testing ||
+            (transport === "stdio"
+              ? command.trim().length === 0
+              : url.trim().length === 0)
+          }
           className="text-xs"
         >
           {testing ? (
