@@ -118,9 +118,7 @@ async fn load_file(screenpipe_dir: &Path) -> Result<McpServersFile> {
     let path = store_path(screenpipe_dir);
     let data = match tfs::read_to_string(&path).await {
         Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(McpServersFile::default())
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(McpServersFile::default()),
         Err(e) => return Err(anyhow!("failed to read mcp_servers.json: {}", e)),
     };
     match serde_json::from_str::<McpServersFile>(&data) {
