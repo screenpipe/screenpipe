@@ -13,9 +13,11 @@ import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
+import { RecentChatSwitcherController } from "@/components/chat/recent-chat-switcher-controller";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { openChatConversationGlobally } from "@/lib/chat-utils";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -34,8 +36,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isOverlay = pathname === "/shortcut-reminder";
   const isSearch = pathname === "/search";
+  const globalRecentChatSwitcherRoutes = new Set([
+    "/home",
+    "/settings",
+    "/chat",
+    "/search",
+    "/overlay",
+    "/notification-panel",
+    "/viewer",
+  ]);
+  const isRecentChatSwitcherEnabled = globalRecentChatSwitcherRoutes.has(pathname);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -308,6 +321,15 @@ export default function RootLayout({
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
+          {isRecentChatSwitcherEnabled && (
+            <RecentChatSwitcherController
+              onActivateConversation={(id) => {
+                void openChatConversationGlobally(id, {
+                  navigateHome: (href) => router.push(href),
+                });
+              }}
+            />
+          )}
           {/* TODO: vault lock UI disabled — CLI-only for now */}
           {/* {!isOverlay && <VaultLockDialog />} */}
           {children}

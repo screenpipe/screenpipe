@@ -54,7 +54,10 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
-import { formatShortcutDisplay } from "@/lib/chat-utils";
+import {
+  formatShortcutDisplay,
+  type ChatLoadConversationPayload,
+} from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -308,8 +311,9 @@ function HomeContent() {
     let cancelled = false;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
-      const u = await listen("chat-load-conversation", () => {
+      const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
         if (cancelled) return;
+        if (event.payload?.targetWindow === "chat") return;
         setActiveSection("home");
       });
       unlistenFn = u;

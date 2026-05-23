@@ -9,6 +9,7 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
+import { useChatStore } from "@/lib/stores/chat-store";
 
 export function isConversationHistorySyncPrompt(value?: string | null): boolean {
   return typeof value === "string" && value.startsWith("<conversation_history>");
@@ -28,53 +29,87 @@ export interface ChatPrefillData {
   useHomeChat?: boolean;
 }
 
+export type ChatTargetWindow = "home" | "chat";
+
+export interface ChatLoadConversationPayload {
+  conversationId: string;
+  targetWindow?: ChatTargetWindow;
+}
+
 const CHAT_READY_TIMEOUT_MS = 2500;
 const CHAT_READY_MAX_ATTEMPTS = 3;
+const PENDING_CHAT_CONVERSATION_KEY = "pendingChatConversationId";
+const PENDING_CHAT_PREFILL_KEY = "pendingChatPrefill";
+const HOME_CHAT_ROUTE = "/home?section=home";
 
-/**
- * Show a chat window and reliably deliver a chat-prefill event.
- *
- * By default opens the Chat overlay. Pass `useHomeChat: true` to open the
- * Home window's embedded chat instead (e.g. for meeting summaries).
- *
- * The chat webview may be freshly created (destroyed on close), so we use a
- * handshake: the chat component emits "chat-ready" on mount and responds to
- * "chat-ping". We wait for "chat-ready" before emitting the prefill event,
- * with a 5-second timeout fallback.
- */
-export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> {
-  const targetWindow = data.useHomeChat ? "home" : "chat";
-  const currentWindowLabel = getCurrentWindow().label;
+interface HomeChatNavigationOptions {
+  navigateHome?: (href: string) => void;
+}
 
-  // If we're already in the Home window but on another route (e.g. /settings),
-  // route locally and pass prefill through sessionStorage so the embedded chat
-  // can consume it after /home mounts.
-  if (data.useHomeChat && currentWindowLabel === "home") {
-    const url = new URL(window.location.href);
-    const isHomeRoute = url.pathname === "/home";
-    const isHomeSection = url.searchParams.get("section") === "home";
+export function readPendingChatConversation():
+  | ChatLoadConversationPayload
+  | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_CHAT_CONVERSATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ChatLoadConversationPayload;
+    if (!parsed?.conversationId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
-    if (!isHomeRoute || !isHomeSection) {
-      sessionStorage.setItem(
-        "pendingChatPrefill",
-        JSON.stringify({ ...data, targetWindow }),
-      );
-      window.location.assign("/home?section=home");
-      return;
-    }
+export function clearPendingChatConversation(): void {
+  try {
+    sessionStorage.removeItem(PENDING_CHAT_CONVERSATION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function navigateHomeChatRoute(
+  href: string,
+  options?: HomeChatNavigationOptions,
+): void {
+  if (options?.navigateHome) {
+    options.navigateHome(href);
+    return;
   }
 
-  if (data.useHomeChat) {
-    // Home chat only mounts when section=home; focusing a non-home section can
-    // drop prefill events because no chat listener exists yet.
-    await commands.showWindow({ Home: { page: "home" } });
-  } else {
-    await commands.showWindow("Chat");
+  try {
+    window.history.pushState({}, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch {
+    window.location.assign(href);
   }
+}
 
+function handoffWithinHomeWindow<T>(
+  payloadKey: typeof PENDING_CHAT_CONVERSATION_KEY | typeof PENDING_CHAT_PREFILL_KEY,
+  payload: T,
+  options: HomeChatNavigationOptions | undefined,
+  requireHomeSection: boolean,
+): boolean {
+  if (getCurrentWindow().label !== "home") return false;
+
+  const url = new URL(window.location.href);
+  const isHomeRoute = url.pathname === "/home";
+  const isHomeSection = url.searchParams.get("section") === "home";
+  if (isHomeRoute && (!requireHomeSection || isHomeSection)) return false;
+
+  try {
+    sessionStorage.setItem(payloadKey, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+  navigateHomeChatRoute(HOME_CHAT_ROUTE, options);
+  return true;
+}
+
+export async function waitForChatReady(targetWindow: ChatTargetWindow): Promise<void> {
   let chatReady = false;
   for (let attempt = 1; attempt <= CHAT_READY_MAX_ATTEMPTS; attempt++) {
-    // Wait for the chat component to signal readiness in the intended window.
     chatReady = await new Promise<boolean>((resolve) => {
       let resolved = false;
       const done = (ready: boolean) => {
@@ -95,21 +130,89 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
         },
       );
 
-      // Ping in case chat is already mounted and won't re-emit on its own.
       setTimeout(() => {
         emit("chat-ping", { targetWindow });
       }, 50);
     });
 
-    if (chatReady) {
-      break;
+    if (chatReady) return;
+  }
+
+  throw new Error(`chat did not become ready in ${targetWindow} window`);
+}
+
+export async function openChatConversationGlobally(
+  conversationId: string,
+  options?: HomeChatNavigationOptions,
+): Promise<void> {
+  const currentWindowLabel = getCurrentWindow().label;
+  const payload: ChatLoadConversationPayload = {
+    conversationId,
+    targetWindow: currentWindowLabel === "chat" ? "chat" : "home",
+  };
+
+  if (currentWindowLabel === "chat") {
+    useChatStore.getState().actions.setCurrent(conversationId);
+    await emit("chat-load-conversation", payload);
+    return;
+  }
+
+  if (currentWindowLabel === "home") {
+    if (handoffWithinHomeWindow(PENDING_CHAT_CONVERSATION_KEY, payload, options, false)) {
+      return;
     }
+
+    useChatStore.getState().actions.setCurrent(conversationId);
+    await emit("chat-load-conversation", payload);
+    return;
   }
 
-  if (!chatReady) {
-    throw new Error(`chat did not become ready in ${targetWindow} window`);
+  await commands.showWindow({ Home: { page: "home" } });
+  await waitForChatReady("home");
+  await emit("chat-load-conversation", payload);
+}
+
+/**
+ * Show a chat window and reliably deliver a chat-prefill event.
+ *
+ * By default opens the Chat overlay. Pass `useHomeChat: true` to open the
+ * Home window's embedded chat instead (e.g. for meeting summaries).
+ *
+ * The chat webview may be freshly created (destroyed on close), so we use a
+ * handshake: the chat component emits "chat-ready" on mount and responds to
+ * "chat-ping". We wait for "chat-ready" before emitting the prefill event,
+ * with a 5-second timeout fallback.
+ */
+export async function showChatWithPrefill(
+  data: ChatPrefillData,
+  options?: HomeChatNavigationOptions,
+): Promise<void> {
+  const targetWindow = data.useHomeChat ? "home" : "chat";
+
+  // If we're already in the Home window but on another route (e.g. /settings),
+  // route locally and pass prefill through sessionStorage so the embedded chat
+  // can consume it after /home mounts.
+  if (
+    data.useHomeChat &&
+    handoffWithinHomeWindow(
+      PENDING_CHAT_PREFILL_KEY,
+      { ...data, targetWindow },
+      options,
+      true,
+    )
+  ) {
+    return;
   }
 
+  if (data.useHomeChat) {
+    // Home chat only mounts when section=home; focusing a non-home section can
+    // drop prefill events because no chat listener exists yet.
+    await commands.showWindow({ Home: { page: "home" } });
+  } else {
+    await commands.showWindow("Chat");
+  }
+
+  await waitForChatReady(targetWindow);
   await emit("chat-prefill", { ...data, targetWindow });
 }
 

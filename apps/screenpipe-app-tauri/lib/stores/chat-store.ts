@@ -73,6 +73,10 @@ export interface SessionRecord {
   pinned: boolean;
   /** Archived conversation hidden from recents. */
   hidden?: boolean;
+  /** ms since epoch of the most recent time this chat was actively viewed
+   *  in the current app session. Ephemeral UI signal for recent-switching;
+   *  never persisted to disk and does not affect the sidebar order. */
+  lastViewedAt?: number;
   /** True when there's new assistant activity (delta or completion) that
    *  the user hasn't seen yet. Set by the event router when content lands
    *  for a session that is NOT the currently-viewed one; cleared the
@@ -308,16 +312,17 @@ export const useChatStore = create<ChatStore>((set) => ({
 
     setCurrent: (id) =>
       set((s) => {
+        const viewedAt = Date.now();
         // Viewing a session counts as reading it — clear the unread flag
         // for the new current. Same atomic update so the row's unread
         // state can't transiently flicker between the setCurrent call and
         // a follow-up markRead call.
-        if (id && s.sessions[id]?.unread) {
+        if (id && s.sessions[id]) {
           return {
             currentId: id,
             sessions: {
               ...s.sessions,
-              [id]: { ...s.sessions[id], unread: false },
+              [id]: { ...s.sessions[id], unread: false, lastViewedAt: viewedAt },
             },
           };
         }
@@ -644,6 +649,18 @@ export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
   const pinned = all.filter((s) => s.pinned).sort(compareForSidebar);
   const recents = all.filter((s) => !s.pinned).sort(compareForSidebar);
   return [...pinned, ...recents];
+}
+
+export function selectRecentSwitcherSessions(state: ChatStore): SessionRecord[] {
+  const ordered = selectOrderedSessions(state);
+  const viewedThisSession = ordered
+    .filter((session) => !session.hidden && !session.draft && session.lastViewedAt)
+    .sort((a, b) => (b.lastViewedAt ?? 0) - (a.lastViewedAt ?? 0));
+  const seen = new Set(viewedThisSession.map((session) => session.id));
+  const fallback = ordered.filter(
+    (session) => !session.hidden && !session.draft && !seen.has(session.id)
+  );
+  return [...viewedThisSession, ...fallback];
 }
 
 /**

@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   useChatStore,
   selectOrderedSessions,
+  selectRecentSwitcherSessions,
   getOrCreateEmptyChatId,
   type SessionRecord,
 } from "../stores/chat-store";
@@ -264,6 +265,36 @@ describe("chat-store: setCurrent clears unread atomically", () => {
     const state = useChatStore.getState();
     expect(state.currentId).toBe("A");
     expect(state.sessions.A.unread).toBe(false);
+    expect(typeof state.sessions.A.lastViewedAt).toBe("number");
+  });
+});
+
+describe("chat-store: recent switcher ordering", () => {
+  beforeEach(reset);
+
+  it("prefers chats viewed this session before falling back to sidebar order", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "older-viewed", createdAt: 100 }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "sidebar-top", createdAt: 300 }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "newer-viewed", createdAt: 200 }));
+
+    useChatStore.getState().actions.setCurrent("older-viewed");
+    useChatStore.getState().actions.setCurrent("newer-viewed");
+
+    const ordered = selectRecentSwitcherSessions(useChatStore.getState());
+    expect(ordered.map((s) => s.id)).toEqual([
+      "newer-viewed",
+      "older-viewed",
+      "sidebar-top",
+    ]);
+  });
+
+  it("excludes hidden and draft chats from the switcher", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "visible", createdAt: 300 }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "hidden", createdAt: 200, hidden: true }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "draft", createdAt: 100, draft: true }));
+
+    const ordered = selectRecentSwitcherSessions(useChatStore.getState());
+    expect(ordered.map((s) => s.id)).toEqual(["visible"]);
   });
 });
 
