@@ -57,6 +57,7 @@ import {
   buildAppMentionSuggestions,
   normalizeAppTag,
   formatShortcutDisplay,
+  isConversationHistorySyncPrompt,
 } from "@/lib/chat-utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
@@ -2661,10 +2662,15 @@ function ChatTitleMenu({
     conversationId ? s.sessions[conversationId] : undefined
   );
   const isPinned = session?.pinned ?? false;
-  const firstUserMsg = messages.find((m) => m.role === "user");
+  const firstUserMsg = messages.find(
+    (m) => m.role === "user" && !isConversationHistorySyncPrompt(m.content)
+  );
   const derivedTitle = firstUserMsg?.content?.slice(0, 50);
   const title =
-    storeTitle && storeTitle !== "new chat" && storeTitle !== "untitled"
+    storeTitle &&
+    storeTitle !== "new chat" &&
+    storeTitle !== "untitled" &&
+    !isConversationHistorySyncPrompt(storeTitle)
       ? storeTitle
       : derivedTitle || "";
 
@@ -7737,7 +7743,7 @@ export function StandaloneChat({
                         >
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-medium truncate">
-                              {conv.title}
+                              {(isConversationHistorySyncPrompt(conv.title) ? undefined : conv.title) || "untitled"}
                             </p>
                             <p className="text-[10px] text-muted-foreground">
                               {conv.messageCount} messages
@@ -7763,7 +7769,7 @@ export function StandaloneChat({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setOpenConvMenuId(null);
-                                  setRenameValue(conv.title);
+                                  setRenameValue(isConversationHistorySyncPrompt(conv.title) ? "" : conv.title);
                                   setRenamingConvId(conv.id);
                                 }}
                               >
