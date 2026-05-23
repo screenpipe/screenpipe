@@ -1,18 +1,18 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.18.5",
+  "version": "0.18.6",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",
   "bin": {
-    "screenpipe-mcp": "dist/index.js",
+    "screenpipe-mcp": "dist/cli.js",
     "screenpipe-mcp-http": "dist/http-server.js"
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "start:http": "node dist/http-server.js",
-    "dev": "ts-node src/index.ts",
-    "dev:http": "ts-node src/http-server.ts",
+    "start": "node dist/cli.js",
+    "start:http": "node dist/cli.js --http",
+    "dev": "ts-node src/cli.ts",
+    "dev:http": "ts-node src/cli.ts --http",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build"
