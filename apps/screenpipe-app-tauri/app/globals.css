@@ -303,6 +303,11 @@
     background-color: rgba(59, 130, 246, 0.35) !important;
   }
 
+  .prose a,
+  .prose a * {
+    cursor: pointer !important;
+  }
+
   /* Allow video/audio controls to work normally */
   video, audio {
     -webkit-user-drag: auto !important;
