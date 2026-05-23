@@ -140,7 +140,7 @@ export function useTeam() {
       }
       const tokenData = await tokenRes.json();
       const base64Key = await exportTeamKey(key);
-      return `https://screenpi.pe/join/${tokenData.invite_token}#key=${encodeURIComponent(base64Key)}`;
+      return `https://screenpipe.com/join/${tokenData.invite_token}#key=${encodeURIComponent(base64Key)}`;
     },
     [headers]
   );

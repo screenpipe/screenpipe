@@ -18,10 +18,10 @@ let lastToastTime = 0;
 function openLogin() {
   // dynamic import to avoid SSR/test crashes from tauri plugins
   import("@tauri-apps/plugin-shell").then(({ open }) => {
-    open("https://screenpi.pe/login");
+    open("https://screenpipe.com/login");
   }).catch(() => {
     // fallback: window.open works in tauri webview
-    window.open("https://screenpi.pe/login", "_blank");
+    window.open("https://screenpipe.com/login", "_blank");
   });
 }
 

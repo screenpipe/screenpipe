@@ -992,7 +992,7 @@ if the input is sparse, just describe what little you have warmly. don't apologi
             stays on your machine ·{" "}
             <button
               type="button"
-              onClick={() => openUrl("https://screenpi.pe/security")}
+              onClick={() => openUrl("https://screenpipe.com/security")}
               className="underline hover:text-muted-foreground transition-colors"
             >
               how it works ↗
