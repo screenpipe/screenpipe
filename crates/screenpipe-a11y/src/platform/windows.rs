@@ -489,10 +489,9 @@ fn run_native_hooks(
                         // SCROLL_AGGREGATION_WINDOW_MS has elapsed without a new wheel
                         // tick.  The 100ms SetTimer above bounds worst-case latency to
                         // ~600ms.
-                        let needs_idle_flush = s
-                            .scroll_aggregator
-                            .as_ref()
-                            .is_some_and(|agg| agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS);
+                        let needs_idle_flush = s.scroll_aggregator.as_ref().is_some_and(|agg| {
+                            agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS
+                        });
                         if needs_idle_flush {
                             if let Some(agg) = s.scroll_aggregator.take() {
                                 emit_aggregated_scroll(&s.tx, agg);
