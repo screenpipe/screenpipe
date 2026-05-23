@@ -169,7 +169,7 @@ impl Default for TreeWalkerConfig {
     fn default() -> Self {
         Self {
             walk_interval: Duration::from_secs(3),
-            max_depth: 30,
+            max_depth: 35,
             max_nodes: 5000,
             walk_timeout: Duration::from_millis(250),
             max_text_length: 50_000,
