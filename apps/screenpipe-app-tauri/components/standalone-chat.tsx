@@ -1715,6 +1715,8 @@ const STATIC_APP_ICONS: Record<string, string> = {
   "google calendar": "/images/google-calendar.svg",
   "google-docs": "/images/google-docs.svg",
   "google docs": "/images/google-docs.svg",
+  "google-drive": "/images/google-drive.svg",
+  "google drive": "/images/google-drive.svg",
   "google-sheets": "/images/google-sheets.svg",
   "google sheets": "/images/google-sheets.svg",
   logseq: "/images/logseq.png",

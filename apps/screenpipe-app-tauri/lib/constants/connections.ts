@@ -15,6 +15,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   "apple-intelligence": "Productivity",
   "google-calendar": "Calendar",
   "google-docs": "Documents",
+  "google-drive": "Documents",
   "google-sheets": "Documents",
   gmail: "Communication",
   "ics-calendar": "Calendar",

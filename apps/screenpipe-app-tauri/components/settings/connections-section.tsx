@@ -32,6 +32,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
+import { GoogleDriveCard } from "./google-drive-card";
 import { GoogleSheetsCard } from "./google-sheets-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
@@ -298,6 +299,7 @@ export function IntegrationIcon({
     "input-monitoring": <Keyboard className="h-5 w-5 text-muted-foreground" />,
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
+    "google-drive": <img src="/images/google-drive.svg" alt="Google Drive" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     openclaw: <img src="/images/openclaw.png" alt="OpenClaw" className="w-5 h-5" />,
     hermes: <img src="/images/hermes.png" alt="Hermes" className="w-5 h-5 rounded" />,
@@ -2346,6 +2348,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
       ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
+      { id: "google-drive", name: "Google Drive", icon: "google-drive", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "openclaw", name: "OpenClaw", icon: "openclaw", connected: false },
@@ -2461,6 +2464,7 @@ export function ConnectionsSection({ focusConnectionId, focusRequestId = 0 }: Co
         onDisconnected={() => { setGoogleCalendarConnected(false); notifyConnectionsUpdated(); fetchIntegrations(); }}
       />;
       case "google-docs": return <GoogleDocsCard />;
+      case "google-drive": return <GoogleDriveCard />;
       case "google-sheets": return <GoogleSheetsCard onConnectionChange={fetchIntegrations} />;
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
