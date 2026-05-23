@@ -754,7 +754,11 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
     // budget is partially consumed by the Electron shell layers above the
     // AXWebArea (typically 7-9 AXGroup levels), leaving fewer levels for the
     // actual app content — silently dropping terminal output, editor text, etc.
-    let next_depth = if role_str == "AXWebArea" { 0 } else { depth + 1 };
+    let next_depth = if role_str == "AXWebArea" {
+        0
+    } else {
+        depth + 1
+    };
     let children = elem.children();
     if let Ok(children) = children {
         for i in 0..children.len() {
