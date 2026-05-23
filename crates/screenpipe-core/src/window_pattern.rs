@@ -120,30 +120,48 @@ pub fn passes_includes(patterns: &[WindowPattern], app_lc: &str, title_lc: &str)
         return true;
     }
 
-    let scoped_for_this_app: Vec<&WindowPattern> = patterns
-        .iter()
-        .filter(|p| match &p.app {
-            Some(app_constraint) => app_lc.contains(app_constraint.as_str()),
-            None => false,
-        })
-        .collect();
+    // Single pass, no allocation. Track four bits of state instead of building
+    // two intermediate Vecs.
+    let mut has_app_scoped = false;
+    let mut app_scoped_matched = false;
+    let mut has_global = false;
+    let mut global_matched = false;
 
-    if !scoped_for_this_app.is_empty() {
-        return scoped_for_this_app
-            .iter()
-            .any(|p| p.title.is_empty() || title_lc.contains(p.title.as_str()));
+    for p in patterns {
+        match &p.app {
+            Some(app_constraint) => {
+                if app_lc.contains(app_constraint.as_str()) {
+                    has_app_scoped = true;
+                    if !app_scoped_matched
+                        && (p.title.is_empty() || title_lc.contains(p.title.as_str()))
+                    {
+                        app_scoped_matched = true;
+                    }
+                }
+            }
+            None => {
+                has_global = true;
+                if !global_matched
+                    && (app_lc.contains(p.title.as_str()) || title_lc.contains(p.title.as_str()))
+                {
+                    global_matched = true;
+                }
+            }
+        }
     }
 
-    let globals: Vec<&WindowPattern> = patterns.iter().filter(|p| p.app.is_none()).collect();
-    if globals.is_empty() {
-        // List contained only scoped patterns, none of which target this app.
-        // The user didn't restrict this app, so it passes.
-        return true;
+    if has_app_scoped {
+        // App is in explicit per-app whitelist mode — at least one of its
+        // scoped rules must match. Globals are ignored here.
+        return app_scoped_matched;
     }
-
-    globals
-        .iter()
-        .any(|p| app_lc.contains(p.title.as_str()) || title_lc.contains(p.title.as_str()))
+    if has_global {
+        // Legacy global include — at least one must match app or title.
+        return global_matched;
+    }
+    // List contained only scoped patterns, none of which targeted this app.
+    // The user didn't restrict this app, so it passes.
+    true
 }
 
 #[cfg(test)]

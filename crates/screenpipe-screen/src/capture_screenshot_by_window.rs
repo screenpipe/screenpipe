@@ -1476,6 +1476,64 @@ mod tests {
         assert!(filters.is_valid("Arc", "GitHub"));
     }
 
+    #[test]
+    fn test_is_valid_scoped_ignore_per_window() {
+        // `Slack::#hr` should block ONLY the #hr window inside Slack; other
+        // Slack channels and other apps must still be captured. This is the
+        // core scoped-pattern contract — guards against the helper getting
+        // re-wired incorrectly through WindowFilters in the future.
+        let filters = WindowFilters::new(&["Slack::#hr".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Slack", "#hr - mycompany"));
+        assert!(filters.is_valid("Slack", "#engineering"));
+        assert!(filters.is_valid("Chrome", "docs"));
+        assert!(filters.is_valid("WezTerm", "#hr (just a tab name)"));
+    }
+
+    #[test]
+    fn test_is_valid_scoped_ignore_app_only_form() {
+        // `Slack::` is equivalent to legacy `Slack` — blocks the whole app.
+        let filters = WindowFilters::new(&["Slack::".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Slack", "anything"));
+        assert!(!filters.is_valid("Slack", ""));
+        assert!(filters.is_valid("Chrome", "slack chat"));
+    }
+
+    #[test]
+    fn test_is_valid_global_title_via_empty_app_form() {
+        // `::Confidential` matches any app whose title contains "Confidential".
+        let filters = WindowFilters::new(&["::confidential".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Notion", "Confidential Memo"));
+        assert!(!filters.is_valid("Word", "Q4 Confidential.docx"));
+        assert!(filters.is_valid("Chrome", "Google Docs"));
+    }
+
+    #[test]
+    fn test_is_valid_scoped_include_per_app_whitelist() {
+        // `Greenhouse::Candidates` allows ONLY that window in Greenhouse;
+        // other apps stay unaffected (no global include to gate them).
+        // Regression target: naïve include semantics would block Slack/Chrome.
+        let filters = WindowFilters::new(&[], &["Greenhouse::Candidates".to_string()], &[]);
+        assert!(filters.is_valid("Greenhouse", "Candidates"));
+        assert!(!filters.is_valid("Greenhouse", "Compensation"));
+        assert!(filters.is_valid("Chrome", "google docs"));
+        assert!(filters.is_valid("Slack", "#general"));
+    }
+
+    #[test]
+    fn test_is_valid_mixed_legacy_and_scoped_includes() {
+        // Legacy `Slack` + scoped `Slack::#engineering`: scoped wins for Slack,
+        // legacy global gates everything else.
+        let filters = WindowFilters::new(
+            &[],
+            &["Slack".to_string(), "Slack::#engineering".to_string()],
+            &[],
+        );
+        assert!(filters.is_valid("Slack", "#engineering"));
+        assert!(!filters.is_valid("Slack", "#hr"));
+        // Non-Slack apps fall back to the legacy `Slack` global — they don't match.
+        assert!(!filters.is_valid("Chrome", "google docs"));
+    }
+
     // Note: The overlay_pids CGWindowLayer detection in capture_all_visible_windows
     // is macOS-only and requires actual system calls, so it can only be tested
     // as an integration test on macOS. The unit tests above verify the filter

@@ -1340,14 +1340,17 @@ async fn do_capture(
     // matches an ignored-window pattern, bail out now to prevent OCR from
     // capturing text from an excluded window (e.g. startup capture while
     // Bitwarden is focused but AX hadn't initialized yet).
+    // Parse ignored-window patterns once per capture — the two gates below
+    // (tree-missing fallback + post-resolution final gate) share this slice.
+    let ignored_patterns = WindowPattern::parse_list(&params.tree_walker_config.ignored_windows);
+
     if tree_snapshot.is_none() {
         if let Some(ref app) = trigger_app {
             let app_lower = app.to_lowercase();
             // Without window title we can only fire legacy unscoped patterns;
             // scoped `App::Title` patterns defer to the post-resolution gate
             // below where the full pair is known.
-            let patterns = WindowPattern::parse_list(&params.tree_walker_config.ignored_windows);
-            if window_pattern::matches_any(&patterns, &app_lower, "") {
+            if window_pattern::matches_any(&ignored_patterns, &app_lower, "") {
                 debug!(
                     "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
                     app, params.monitor_id
@@ -1441,15 +1444,15 @@ async fn do_capture(
     // ignored patterns. This catches edge cases where the tree walk succeeded but
     // didn't return Skipped (e.g. the trigger carried the app name, not the tree).
     // Uses full `window_pattern` semantics, so scoped `App::Title` patterns fire
-    // here even though earlier app-only gates intentionally skipped them.
+    // here even though earlier app-only gates intentionally skipped them. Reuses
+    // the patterns parsed above.
     {
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
         let check_win = window_name_owned
             .as_deref()
             .unwrap_or_default()
             .to_lowercase();
-        let patterns = WindowPattern::parse_list(&params.tree_walker_config.ignored_windows);
-        if window_pattern::matches_any(&patterns, &check_app, &check_win) {
+        if window_pattern::matches_any(&ignored_patterns, &check_app, &check_win) {
             debug!(
                 "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
                 check_app, check_win, params.monitor_id
