@@ -36,6 +36,13 @@ export interface ChatLoadConversationPayload {
   targetWindow?: ChatTargetWindow;
 }
 
+export const RECENT_CHAT_SEARCH_HANDOFF_EVENT = "recent-chat-search-handoff";
+
+export interface RecentChatSearchHandoffPayload {
+  direction: 1 | -1;
+  targetWindow: ChatTargetWindow;
+}
+
 export function shouldHandleChatLoadConversationForWindow(
   payload: ChatLoadConversationPayload | null | undefined,
   windowLabel: ChatTargetWindow,
@@ -52,6 +59,39 @@ export function shouldActivateHomeSectionForChatLoadConversation(
 const CHAT_READY_TIMEOUT_MS = 2500;
 const CHAT_READY_MAX_ATTEMPTS = 3;
 const PENDING_CHAT_PREFILL_KEY = "pendingChatPrefill";
+const RECENT_CHAT_SEARCH_ORIGIN_KEY = "recentChatSearchOrigin";
+
+export function markSearchOpenedFromChatSurface(targetWindow: ChatTargetWindow): void {
+  try {
+    localStorage.setItem(
+      RECENT_CHAT_SEARCH_ORIGIN_KEY,
+      JSON.stringify({ targetWindow }),
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export function clearSearchOpenedFromChatSurface(): void {
+  try {
+    localStorage.removeItem(RECENT_CHAT_SEARCH_ORIGIN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function readSearchOpenedFromChatSurface(): ChatTargetWindow | null {
+  try {
+    const raw = localStorage.getItem(RECENT_CHAT_SEARCH_ORIGIN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { targetWindow?: ChatTargetWindow };
+    if (parsed.targetWindow !== "home" && parsed.targetWindow !== "chat") return null;
+    return parsed.targetWindow;
+  } catch {
+    clearSearchOpenedFromChatSurface();
+    return null;
+  }
+}
 
 export async function waitForChatReady(targetWindow: ChatTargetWindow): Promise<void> {
   let chatReady = false;

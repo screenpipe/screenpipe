@@ -6,6 +6,36 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RecentChatSwitcherController } from "./recent-chat-switcher-controller";
 import { useChatStore, type SessionRecord } from "@/lib/stores/chat-store";
+import { RECENT_CHAT_SEARCH_HANDOFF_EVENT } from "@/lib/chat-utils";
+
+const {
+  eventHandlers,
+  getCurrentWindowMock,
+} = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(event: { payload: unknown }) => void>>();
+  return {
+    eventHandlers: handlers,
+    getCurrentWindowMock: vi.fn(() => ({ label: "home" })),
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (event: string, handler: (event: { payload: unknown }) => void) => {
+    let handlers = eventHandlers.get(event);
+    if (!handlers) {
+      handlers = new Set();
+      eventHandlers.set(event, handlers);
+    }
+    handlers.add(handler);
+    return () => {
+      handlers?.delete(handler);
+    };
+  }),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: getCurrentWindowMock,
+}));
 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -43,6 +73,9 @@ function seed(record: Partial<SessionRecord> & Pick<SessionRecord, "id">) {
 describe("RecentChatSwitcherController", () => {
   beforeEach(() => {
     resetStore();
+    eventHandlers.clear();
+    getCurrentWindowMock.mockReset();
+    getCurrentWindowMock.mockReturnValue({ label: "home" });
     HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
@@ -110,5 +143,30 @@ describe("RecentChatSwitcherController", () => {
 
     expect(screen.queryByText("Recently viewed")).not.toBeInTheDocument();
     expect(onActivateConversation).not.toHaveBeenCalled();
+  });
+
+  it("opens from a chat-origin search handoff and commits on Control release", async () => {
+    seed({ id: "chat-a", lastViewedAt: 300, createdAt: 300, updatedAt: 300 });
+    seed({ id: "chat-b", lastViewedAt: 200, createdAt: 200, updatedAt: 200 });
+    useChatStore.setState({ currentId: "chat-a" });
+    const onActivateConversation = vi.fn(async () => {});
+
+    render(<RecentChatSwitcherController onActivateConversation={onActivateConversation} />);
+
+    await act(async () => {
+      eventHandlers.get(RECENT_CHAT_SEARCH_HANDOFF_EVENT)?.forEach((handler) => {
+        handler({ payload: { direction: 1, targetWindow: "home" } });
+      });
+    });
+
+    expect(screen.getByText("Recently viewed")).toBeInTheDocument();
+    const buttons = screen.getAllByRole("button");
+    expect(buttons[1]).toHaveClass("bg-muted/55");
+
+    await act(async () => {
+      fireEvent.keyUp(window, { key: "Control" });
+    });
+
+    expect(onActivateConversation).toHaveBeenCalledWith("chat-b");
   });
 });

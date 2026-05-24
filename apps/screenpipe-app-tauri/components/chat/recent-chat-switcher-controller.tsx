@@ -4,10 +4,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   useChatStore,
   selectRecentSwitcherSessions,
 } from "@/lib/stores/chat-store";
+import {
+  RECENT_CHAT_SEARCH_HANDOFF_EVENT,
+  type ChatTargetWindow,
+  type RecentChatSearchHandoffPayload,
+} from "@/lib/chat-utils";
 import { RecentChatSwitcher } from "@/components/chat/recent-chat-switcher";
 
 interface RecentChatSwitcherControllerProps {
@@ -122,6 +129,21 @@ export function RecentChatSwitcherController({
       window.removeEventListener("blur", handleBlur);
     };
   }, [closeSwitcher, commitConversationById, moveSelection]);
+
+  useEffect(() => {
+    const targetWindow: ChatTargetWindow =
+      getCurrentWindow().label === "chat" ? "chat" : "home";
+    const unlisten = listen<RecentChatSearchHandoffPayload>(
+      RECENT_CHAT_SEARCH_HANDOFF_EVENT,
+      (event) => {
+        if (event.payload?.targetWindow !== targetWindow) return;
+        moveSelection(event.payload.direction);
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [moveSelection]);
 
   return (
     <RecentChatSwitcher

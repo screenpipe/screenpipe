@@ -30,7 +30,10 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 import {
+  clearSearchOpenedFromChatSurface,
+  markSearchOpenedFromChatSurface,
   openChatConversationInCurrentChatSurface,
+  readSearchOpenedFromChatSurface,
   shouldActivateHomeSectionForChatLoadConversation,
   shouldHandleChatLoadConversationForWindow,
 } from "./chat-utils";
@@ -42,6 +45,7 @@ describe("chat-utils", () => {
     showWindowMock.mockClear();
     getCurrentWindowMock.mockReset();
     getCurrentWindowMock.mockReturnValue({ label: "chat" });
+    localStorage.clear();
     useChatStore.setState({
       sessions: {},
       currentId: null,
@@ -113,5 +117,19 @@ describe("chat-utils", () => {
         targetWindow: "chat",
       })
     ).toBe(false);
+  });
+
+  it("tracks the current chat-origin search handoff target", () => {
+    markSearchOpenedFromChatSurface("home");
+
+    expect(readSearchOpenedFromChatSurface()).toBe("home");
+    expect(readSearchOpenedFromChatSurface()).toBe("home");
+  });
+
+  it("clears the chat-origin search handoff target", () => {
+    markSearchOpenedFromChatSurface("chat");
+    clearSearchOpenedFromChatSurface();
+
+    expect(readSearchOpenedFromChatSurface()).toBeNull();
   });
 });

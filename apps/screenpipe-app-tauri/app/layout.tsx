@@ -17,7 +17,11 @@ import { RecentChatSwitcherController } from "@/components/chat/recent-chat-swit
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
 import { usePathname, useSearchParams } from "next/navigation";
-import { openChatConversationInCurrentChatSurface } from "@/lib/chat-utils";
+import {
+  clearSearchOpenedFromChatSurface,
+  markSearchOpenedFromChatSurface,
+  openChatConversationInCurrentChatSurface,
+} from "@/lib/chat-utils";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -52,6 +56,17 @@ export default function RootLayout({
     pathname,
     searchParams.get("section"),
   );
+
+  useEffect(() => {
+    // /search runs in its own window. Preserve the marker so that search can
+    // yield Ctrl+Tab back to the chat surface that opened it.
+    if (pathname === "/search") return;
+    if (!isRecentChatSwitcherEnabled) {
+      clearSearchOpenedFromChatSurface();
+      return;
+    }
+    markSearchOpenedFromChatSurface(pathname === "/chat" ? "chat" : "home");
+  }, [isRecentChatSwitcherEnabled, pathname]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
