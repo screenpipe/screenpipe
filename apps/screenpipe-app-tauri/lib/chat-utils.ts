@@ -51,73 +51,7 @@ export function shouldActivateHomeSectionForChatLoadConversation(
 
 const CHAT_READY_TIMEOUT_MS = 2500;
 const CHAT_READY_MAX_ATTEMPTS = 3;
-const PENDING_CHAT_CONVERSATION_KEY = "pendingChatConversationId";
 const PENDING_CHAT_PREFILL_KEY = "pendingChatPrefill";
-const HOME_CHAT_ROUTE = "/home?section=home";
-
-interface HomeChatNavigationOptions {
-  navigateHome?: (href: string) => void;
-}
-
-export function readPendingChatConversation():
-  | ChatLoadConversationPayload
-  | null {
-  try {
-    const raw = sessionStorage.getItem(PENDING_CHAT_CONVERSATION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as ChatLoadConversationPayload;
-    if (!parsed?.conversationId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-export function clearPendingChatConversation(): void {
-  try {
-    sessionStorage.removeItem(PENDING_CHAT_CONVERSATION_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-function navigateHomeChatRoute(
-  href: string,
-  options?: HomeChatNavigationOptions,
-): void {
-  if (options?.navigateHome) {
-    options.navigateHome(href);
-    return;
-  }
-
-  // Preserve the long-standing full route transition for existing
-  // non-switcher Home-chat handoffs. Those callers do not pass a router
-  // callback and already rely on a real navigation to remount /home and let
-  // the embedded chat consume the pending payload.
-  window.location.assign(href);
-}
-
-function handoffWithinHomeWindow<T>(
-  payloadKey: typeof PENDING_CHAT_CONVERSATION_KEY | typeof PENDING_CHAT_PREFILL_KEY,
-  payload: T,
-  options: HomeChatNavigationOptions | undefined,
-  requireHomeSection: boolean,
-): boolean {
-  if (getCurrentWindow().label !== "home") return false;
-
-  const url = new URL(window.location.href);
-  const isHomeRoute = url.pathname === "/home";
-  const isHomeSection = url.searchParams.get("section") === "home";
-  if (isHomeRoute && (!requireHomeSection || isHomeSection)) return false;
-
-  try {
-    sessionStorage.setItem(payloadKey, JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-  navigateHomeChatRoute(HOME_CHAT_ROUTE, options);
-  return true;
-}
 
 export async function waitForChatReady(targetWindow: ChatTargetWindow): Promise<void> {
   let chatReady = false;
@@ -153,34 +87,15 @@ export async function waitForChatReady(targetWindow: ChatTargetWindow): Promise<
   throw new Error(`chat did not become ready in ${targetWindow} window`);
 }
 
-export async function openChatConversationGlobally(
+export async function openChatConversationInCurrentChatSurface(
   conversationId: string,
-  options?: HomeChatNavigationOptions,
 ): Promise<void> {
   const currentWindowLabel = getCurrentWindow().label;
   const payload: ChatLoadConversationPayload = {
     conversationId,
     targetWindow: currentWindowLabel === "chat" ? "chat" : "home",
   };
-
-  if (currentWindowLabel === "chat") {
-    useChatStore.getState().actions.setCurrent(conversationId);
-    await emit("chat-load-conversation", payload);
-    return;
-  }
-
-  if (currentWindowLabel === "home") {
-    if (handoffWithinHomeWindow(PENDING_CHAT_CONVERSATION_KEY, payload, options, false)) {
-      return;
-    }
-
-    useChatStore.getState().actions.setCurrent(conversationId);
-    await emit("chat-load-conversation", payload);
-    return;
-  }
-
-  await commands.showWindow({ Home: { page: "home" } });
-  await waitForChatReady("home");
+  useChatStore.getState().actions.setCurrent(conversationId);
   await emit("chat-load-conversation", payload);
 }
 
@@ -195,25 +110,25 @@ export async function openChatConversationGlobally(
  * "chat-ping". We wait for "chat-ready" before emitting the prefill event,
  * with a 5-second timeout fallback.
  */
-export async function showChatWithPrefill(
-  data: ChatPrefillData,
-  options?: HomeChatNavigationOptions,
-): Promise<void> {
+export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> {
   const targetWindow = data.useHomeChat ? "home" : "chat";
+  const currentWindowLabel = getCurrentWindow().label;
 
   // If we're already in the Home window but on another route (e.g. /settings),
   // route locally and pass prefill through sessionStorage so the embedded chat
   // can consume it after /home mounts.
-  if (
-    data.useHomeChat &&
-    handoffWithinHomeWindow(
-      PENDING_CHAT_PREFILL_KEY,
-      { ...data, targetWindow },
-      options,
-      true,
-    )
-  ) {
-    return;
+  if (data.useHomeChat && currentWindowLabel === "home") {
+    const url = new URL(window.location.href);
+    const isHomeRoute = url.pathname === "/home";
+    const isHomeSection = url.searchParams.get("section") === "home";
+    if (!isHomeRoute || !isHomeSection) {
+      sessionStorage.setItem(
+        PENDING_CHAT_PREFILL_KEY,
+        JSON.stringify({ ...data, targetWindow }),
+      );
+      window.location.assign("/home?section=home");
+      return;
+    }
   }
 
   if (data.useHomeChat) {

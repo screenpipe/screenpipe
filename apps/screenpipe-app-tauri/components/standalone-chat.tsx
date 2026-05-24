@@ -58,8 +58,6 @@ import {
   normalizeAppTag,
   formatShortcutDisplay,
   isConversationHistorySyncPrompt,
-  readPendingChatConversation,
-  clearPendingChatConversation,
   type ChatLoadConversationPayload,
   shouldHandleChatLoadConversationForWindow,
 } from "@/lib/chat-utils";
@@ -3732,21 +3730,6 @@ export function StandaloneChat({
     await startNewConversationRef.current(convId);
     emit("chat-current-session", { id: convId });
   }, []);
-
-  useEffect(() => {
-    const pendingConversation = readPendingChatConversation();
-    const windowLabel = getCurrentWindow().label;
-    if (!pendingConversation?.conversationId) return;
-    if (!shouldHandleChatLoadConversationForWindow(
-      pendingConversation,
-      windowLabel === "chat" ? "chat" : "home",
-    )) {
-      return;
-    }
-
-    clearPendingChatConversation();
-    void openConversationLocally(pendingConversation.conversationId);
-  }, [openConversationLocally]);
 
   useEffect(() => {
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {

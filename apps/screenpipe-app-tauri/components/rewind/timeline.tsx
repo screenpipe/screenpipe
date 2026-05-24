@@ -39,10 +39,6 @@ import { useScrollZoom } from "@/components/rewind/hooks/use-scroll-zoom";
 import { useDateNavigation } from "@/components/rewind/hooks/use-date-navigation";
 import { useTimelineKeyboard } from "@/components/rewind/hooks/use-timeline-keyboard";
 import { localFetch } from "@/lib/api";
-import {
-	RECENT_CHAT_SWITCHER_YIELD_SEARCH_EVENT,
-	type RecentChatSwitcherYieldSearchPayload,
-} from "@/lib/recent-chat-switcher-events";
 
 export interface StreamTimeSeriesResponse {
 	timestamp: string;
@@ -157,27 +153,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const [currentIndex, setCurrentIndex] = useState(0);
 	const [showAudioTranscript, setShowAudioTranscript] = useState(false);
 	const [showSearchModal, setShowSearchModal] = useState(false);
-
-	useEffect(() => {
-		if (!embedded) return;
-
-		const unlisten = listen<RecentChatSwitcherYieldSearchPayload>(
-			RECENT_CHAT_SWITCHER_YIELD_SEARCH_EVENT,
-			(event) => {
-				if (
-					event.payload?.targetWindow &&
-					event.payload.targetWindow !== "home"
-				) {
-					return;
-				}
-				setShowSearchModal(false);
-			}
-		);
-
-		return () => {
-			unlisten.then((fn) => fn());
-		};
-	}, [embedded]);
 
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const navBarRef = useRef<HTMLDivElement | null>(null);

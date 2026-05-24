@@ -654,40 +654,19 @@ export function selectOrderedSessions(state: ChatSessionsState): SessionRecord[]
 
 export function selectRecentSwitcherSessions(state: ChatSessionsState): SessionRecord[] {
   const ordered = selectOrderedSessions(state);
+  const isEligibleSwitcherSession = (session: SessionRecord) =>
+    !session.hidden &&
+    !session.draft &&
+    session.kind !== "pipe-watch" &&
+    session.kind !== "pipe-run";
   const viewedThisSession = ordered
-    .filter((session) => !session.hidden && !session.draft && session.lastViewedAt)
+    .filter((session) => isEligibleSwitcherSession(session) && session.lastViewedAt)
     .sort((a, b) => (b.lastViewedAt ?? 0) - (a.lastViewedAt ?? 0));
   const seen = new Set(viewedThisSession.map((session) => session.id));
   const fallback = ordered.filter(
-    (session) => !session.hidden && !session.draft && !seen.has(session.id)
+    (session) => isEligibleSwitcherSession(session) && !seen.has(session.id)
   );
   return [...viewedThisSession, ...fallback];
-}
-
-export function partitionSidebarVisibleSessions(
-  sessions: SessionRecord[],
-  liveScheduledSids: ReadonlySet<string> = new Set(),
-): {
-  pinned: SessionRecord[];
-  recents: SessionRecord[];
-  archived: SessionRecord[];
-} {
-  const pinned: SessionRecord[] = [];
-  const recents: SessionRecord[] = [];
-  const archived: SessionRecord[] = [];
-
-  for (const session of sessions) {
-    const isPipeKind = session.kind === "pipe-watch" || session.kind === "pipe-run";
-    if (isPipeKind && liveScheduledSids.has(session.id)) continue;
-    if (session.draft) continue;
-    if (session.hidden) {
-      archived.push(session);
-      continue;
-    }
-    (session.pinned ? pinned : recents).push(session);
-  }
-
-  return { pinned, recents, archived };
 }
 
 /**

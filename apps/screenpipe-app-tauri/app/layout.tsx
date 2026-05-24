@@ -13,41 +13,21 @@ import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
-import { RecentChatShortcutCoordinator } from "@/components/chat/recent-chat-shortcut-coordinator";
 import { RecentChatSwitcherController } from "@/components/chat/recent-chat-switcher-controller";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
-import { usePathname, useRouter } from "next/navigation";
-import { openChatConversationGlobally } from "@/lib/chat-utils";
+import { usePathname, useSearchParams } from "next/navigation";
+import { openChatConversationInCurrentChatSurface } from "@/lib/chat-utils";
 
 const inter = Inter({ subsets: ["latin"] });
 
-// /search captures Ctrl+Tab, but the switcher itself renders in Home after handoff.
-const GLOBAL_RECENT_CHAT_SWITCHER_ROUTES = new Set([
-  "/home",
-  "/settings",
-  "/chat",
-  "/overlay",
-  "/notification-panel",
-  "/viewer",
-]);
-
-const GLOBAL_RECENT_CHAT_SHORTCUT_ROUTES = new Set([
-  "/home",
-  "/settings",
-  "/chat",
-  "/search",
-  "/overlay",
-  "/notification-panel",
-  "/viewer",
-]);
-
-function isGlobalRecentChatSwitcherRoute(pathname: string | null): boolean {
-  return pathname ? GLOBAL_RECENT_CHAT_SWITCHER_ROUTES.has(pathname) : false;
-}
-
-function isGlobalRecentChatShortcutRoute(pathname: string | null): boolean {
-  return pathname ? GLOBAL_RECENT_CHAT_SHORTCUT_ROUTES.has(pathname) : false;
+function isChatFocusedRecentSwitcherRoute(
+  pathname: string | null,
+  section: string | null,
+): boolean {
+  if (pathname === "/chat") return true;
+  if (pathname !== "/home") return false;
+  return !section || section === "home";
 }
 
 // Debounced localStorage writer
@@ -65,11 +45,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
+  const searchParams = useSearchParams();
   const isOverlay = pathname === "/shortcut-reminder";
   const isSearch = pathname === "/search";
-  const isRecentChatShortcutEnabled = isGlobalRecentChatShortcutRoute(pathname);
-  const isRecentChatSwitcherEnabled = isGlobalRecentChatSwitcherRoute(pathname);
+  const isRecentChatSwitcherEnabled = isChatFocusedRecentSwitcherRoute(
+    pathname,
+    searchParams.get("section"),
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -342,15 +324,10 @@ export default function RootLayout({
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
-          {isRecentChatShortcutEnabled && (
-            <RecentChatShortcutCoordinator pathname={pathname} />
-          )}
           {isRecentChatSwitcherEnabled && (
             <RecentChatSwitcherController
               onActivateConversation={(id) => {
-                void openChatConversationGlobally(id, {
-                  navigateHome: (href) => router.push(href),
-                });
+                void openChatConversationInCurrentChatSurface(id);
               }}
             />
           )}

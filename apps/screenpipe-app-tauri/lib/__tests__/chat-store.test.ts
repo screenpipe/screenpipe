@@ -13,7 +13,6 @@ import {
   useChatStore,
   selectOrderedSessions,
   selectRecentSwitcherSessions,
-  partitionSidebarVisibleSessions,
   getOrCreateEmptyChatId,
   type SessionRecord,
 } from "../stores/chat-store";
@@ -298,23 +297,17 @@ describe("chat-store: recent switcher ordering", () => {
     expect(ordered.map((s) => s.id)).toEqual(["visible"]);
   });
 
-  it("shares the sidebar visibility rules for live scheduled pipe sessions", () => {
+  it("excludes pipe-run and pipe-watch sessions from the switcher", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "visible", createdAt: 300 }));
     useChatStore.getState().actions.upsert(
-      baseRecord({ id: "pipe-live", createdAt: 300, kind: "pipe-watch" })
+      baseRecord({ id: "pipe-run", kind: "pipe-run", createdAt: 200, lastViewedAt: 500 })
     );
     useChatStore.getState().actions.upsert(
-      baseRecord({ id: "visible-chat", createdAt: 200, lastViewedAt: 500 })
+      baseRecord({ id: "pipe-watch", kind: "pipe-watch", createdAt: 100, lastViewedAt: 400 })
     );
 
     const ordered = selectRecentSwitcherSessions(useChatStore.getState());
-    const visible = partitionSidebarVisibleSessions(
-      ordered,
-      new Set(["pipe-live"])
-    );
-
-    expect(visible.pinned.map((s) => s.id)).toEqual([]);
-    expect(visible.recents.map((s) => s.id)).toEqual(["visible-chat"]);
-    expect(visible.archived.map((s) => s.id)).toEqual([]);
+    expect(ordered.map((s) => s.id)).toEqual(["visible"]);
   });
 });
 

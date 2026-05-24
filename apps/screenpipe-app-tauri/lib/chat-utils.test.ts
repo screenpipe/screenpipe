@@ -11,7 +11,7 @@ const {
 } = vi.hoisted(() => ({
   emitMock: vi.fn(async () => undefined),
   showWindowMock: vi.fn(async () => undefined),
-  getCurrentWindowMock: vi.fn(() => ({ label: "home" })),
+  getCurrentWindowMock: vi.fn(() => ({ label: "chat" })),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -30,7 +30,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 import {
-  openChatConversationGlobally,
+  openChatConversationInCurrentChatSurface,
   shouldActivateHomeSectionForChatLoadConversation,
   shouldHandleChatLoadConversationForWindow,
 } from "./chat-utils";
@@ -41,56 +41,37 @@ describe("chat-utils", () => {
     emitMock.mockClear();
     showWindowMock.mockClear();
     getCurrentWindowMock.mockReset();
-    getCurrentWindowMock.mockReturnValue({ label: "home" });
-    sessionStorage.clear();
+    getCurrentWindowMock.mockReturnValue({ label: "chat" });
     useChatStore.setState({
       sessions: {},
       currentId: null,
       panelSessionId: null,
       diskHydrated: false,
     });
-    window.history.replaceState({}, "", "/home");
   });
 
-  it("routes same-window settings handoff through pending conversation storage and home navigation", async () => {
-    getCurrentWindowMock.mockReturnValue({ label: "home" });
-    window.history.replaceState({}, "", "/settings?section=general");
-    const navigateHome = vi.fn();
+  it("opens an existing conversation in the already-mounted Chat window only", async () => {
+    await openChatConversationInCurrentChatSurface("chat-123");
 
-    await openChatConversationGlobally("chat-123", {
-      navigateHome,
+    expect(useChatStore.getState().currentId).toBe("chat-123");
+    expect(emitMock).toHaveBeenCalledWith("chat-load-conversation", {
+      conversationId: "chat-123",
+      targetWindow: "chat",
     });
-
-    expect(navigateHome).toHaveBeenCalledWith("/home?section=home");
-    expect(sessionStorage.getItem("pendingChatConversationId")).toBe(
-      JSON.stringify({
-        conversationId: "chat-123",
-        targetWindow: "home",
-      })
-    );
-    expect(emitMock).not.toHaveBeenCalled();
-    expect(useChatStore.getState().currentId).toBeNull();
+    expect(showWindowMock).not.toHaveBeenCalled();
   });
 
-  it("handles untargeted and same-window chat-load-conversation payloads for home", () => {
-    expect(
-      shouldHandleChatLoadConversationForWindow(
-        { conversationId: "chat-1" },
-        "home",
-      )
-    ).toBe(true);
-    expect(
-      shouldHandleChatLoadConversationForWindow(
-        { conversationId: "chat-1", targetWindow: "home" },
-        "home",
-      )
-    ).toBe(true);
-    expect(
-      shouldHandleChatLoadConversationForWindow(
-        { conversationId: "chat-1", targetWindow: "chat" },
-        "home",
-      )
-    ).toBe(false);
+  it("opens an existing conversation in the already-mounted Home chat surface", async () => {
+    getCurrentWindowMock.mockReturnValue({ label: "home" });
+
+    await openChatConversationInCurrentChatSurface("chat-123");
+
+    expect(useChatStore.getState().currentId).toBe("chat-123");
+    expect(emitMock).toHaveBeenCalledWith("chat-load-conversation", {
+      conversationId: "chat-123",
+      targetWindow: "home",
+    });
+    expect(showWindowMock).not.toHaveBeenCalled();
   });
 
   it("handles untargeted and same-window chat-load-conversation payloads for chat", () => {
@@ -114,7 +95,7 @@ describe("chat-utils", () => {
     ).toBe(false);
   });
 
-  it("activates the home section for untargeted and home-targeted chat loads only", () => {
+  it("activates Home for untargeted and Home-targeted loads only", () => {
     expect(
       shouldActivateHomeSectionForChatLoadConversation({
         conversationId: "chat-1",
