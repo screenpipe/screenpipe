@@ -153,6 +153,9 @@ pub struct RecordingConfig {
     pub visual_check_interval_ms: Option<u64>,
     pub visual_change_threshold: Option<f64>,
     pub min_capture_interval_ms: Option<u64>,
+    /// Suppress Idle captures after this many ms of AFK. 0 = disabled.
+    /// None = follow PowerProfile / engine default (300_000 ms).
+    pub afk_suppression_after_ms: Option<u64>,
     /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
     /// None = engine default (false). See `RecordingSettings.capture_on_keystroke`.
     pub capture_on_keystroke: Option<bool>,
@@ -315,6 +318,7 @@ impl RecordingConfig {
             visual_check_interval_ms: settings.visual_check_interval_ms,
             visual_change_threshold: settings.visual_change_threshold,
             min_capture_interval_ms: settings.min_capture_interval_ms,
+            afk_suppression_after_ms: settings.afk_suppression_after_ms,
             capture_on_keystroke: settings.capture_on_keystroke,
             capture_on_clipboard: settings.capture_on_clipboard,
             capture_scroll: settings.capture_scroll,
@@ -423,6 +427,7 @@ impl RecordingConfig {
             visual_check_interval_ms: self.visual_check_interval_ms,
             visual_change_threshold: self.visual_change_threshold,
             min_capture_interval_ms: self.min_capture_interval_ms,
+            afk_suppression_after_ms: self.afk_suppression_after_ms,
             capture_on_keystroke: self.capture_on_keystroke,
             capture_on_clipboard: self.capture_on_clipboard,
         }

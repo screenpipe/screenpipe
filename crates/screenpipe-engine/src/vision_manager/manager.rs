@@ -52,6 +52,9 @@ pub struct VisionManagerConfig {
     pub visual_check_interval_ms: Option<u64>,
     pub visual_change_threshold: Option<f64>,
     pub min_capture_interval_ms: Option<u64>,
+    /// Suppress Idle captures after this many ms of AFK.
+    /// None = engine default. PowerProfile sets the baseline; this overrides it.
+    pub afk_suppression_after_ms: Option<u64>,
     /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
     /// None = engine default (false). PowerProfile does not touch this.
     pub capture_on_keystroke: Option<bool>,
@@ -405,6 +408,9 @@ impl VisionManager {
         if let Some(v) = self.config.min_capture_interval_ms {
             capture_config.min_capture_interval_ms = v;
         }
+        if let Some(v) = self.config.afk_suppression_after_ms {
+            capture_config.afk_suppression_after_ms = v;
+        }
         if let Some(v) = self.config.capture_on_keystroke {
             capture_config.capture_on_keystroke = v;
         }
@@ -577,6 +583,7 @@ mod tests {
             visual_check_interval_ms: None,
             visual_change_threshold: None,
             min_capture_interval_ms: None,
+            afk_suppression_after_ms: None,
             capture_on_keystroke: None,
             capture_on_clipboard: None,
         };

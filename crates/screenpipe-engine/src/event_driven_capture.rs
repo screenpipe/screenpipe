@@ -191,6 +191,12 @@ pub struct EventDrivenCaptureConfig {
     pub visual_check_interval_ms: u64,
     /// Frame difference threshold (0.0–1.0) above which a VisualChange trigger fires.
     pub visual_change_threshold: f64,
+    /// Suppress Idle fallback captures when the user has been AFK for longer than
+    /// this threshold. Once elapsed, Idle triggers are silently dropped until the
+    /// next real user-activity trigger resets the AFK clock.
+    /// Set to 0 to disable suppression (original behaviour).
+    /// Default: 300_000 ms (5 minutes).
+    pub afk_suppression_after_ms: u64,
 }
 
 impl Default for EventDrivenCaptureConfig {
@@ -204,6 +210,7 @@ impl Default for EventDrivenCaptureConfig {
             capture_on_clipboard: false,
             visual_check_interval_ms: 3_000, // check every 3 seconds
             visual_change_threshold: 0.05,   // ~5% difference triggers capture
+            afk_suppression_after_ms: 300_000, // suppress idle after 5 min AFK
         }
     }
 }
@@ -220,6 +227,11 @@ pub struct EventDrivenCapture {
     last_capture: Instant,
     /// Last known idle_ms from ActivityFeed
     last_idle_ms: u64,
+    /// Instant of the last non-Idle, non-VisualChange trigger that produced a
+    /// successful capture. Used to detect extended AFK stretches and suppress
+    /// redundant Idle frames. Initialized to Instant::now() so suppression does
+    /// not kick in until afk_suppression_after_ms has elapsed from startup.
+    last_non_idle_trigger: Instant,
 }
 
 impl EventDrivenCapture {
@@ -228,6 +240,7 @@ impl EventDrivenCapture {
             config,
             last_capture: Instant::now(),
             last_idle_ms: 0,
+            last_non_idle_trigger: Instant::now(),
         }
     }
 
@@ -239,6 +252,17 @@ impl EventDrivenCapture {
     /// Record that a capture just happened.
     pub fn mark_captured(&mut self) {
         self.last_capture = Instant::now();
+    }
+
+    /// Record that a real user-activity trigger just fired a successful capture.
+    /// Resets the AFK clock so Idle suppression won't engage for another
+    /// `afk_suppression_after_ms` milliseconds.
+    ///
+    /// Call this for every trigger that is NOT `Idle` or `VisualChange`.
+    /// `VisualChange` is excluded because automated visual changes (videos,
+    /// loading spinners) are not evidence the user is present at the keyboard.
+    pub fn mark_non_idle_trigger(&mut self) {
+        self.last_non_idle_trigger = Instant::now();
     }
 
     /// Check if we need an idle capture (no capture for too long).
@@ -262,9 +286,22 @@ impl EventDrivenCapture {
         let idle_ms = feed.idle_ms();
         // Detect idle capture need
         if self.needs_idle_capture() {
+            // AFK suppression: if no real user-activity trigger has fired for
+            // longer than the configured threshold, silently eat the Idle trigger.
+            // needs_idle_capture() keeps returning true every poll tick (250ms)
+            // but we keep suppressing until mark_non_idle_trigger() is called.
+            //
+            // afk_suppression_after_ms == 0 is the escape hatch: disables
+            // suppression entirely, restoring the original always-write behaviour.
+            if self.config.afk_suppression_after_ms > 0
+                && self.last_non_idle_trigger.elapsed()
+                    >= Duration::from_millis(self.config.afk_suppression_after_ms)
+            {
+                self.last_idle_ms = idle_ms;
+                return None;
+            }
             return Some(CaptureTrigger::Idle);
         }
-
         self.last_idle_ms = idle_ms;
         None
     }
@@ -609,6 +646,7 @@ pub async fn event_driven_capture_loop(
                 );
                 state.config.min_capture_interval_ms = profile.min_capture_interval_ms;
                 state.config.idle_capture_interval_ms = profile.idle_capture_interval_ms;
+                state.config.afk_suppression_after_ms = profile.afk_suppression_after_ms;
                 // Power profile can only LOWER quality from the user's baseline,
                 // never raise it — picking "max" in settings shouldn't be silently
                 // bumped above the profile's value, but a user on saver mode also
@@ -865,6 +903,13 @@ pub async fn event_driven_capture_loop(
                 match capture_result {
                     Ok(Ok(output)) => {
                         state.mark_captured();
+                        // Reset AFK clock whenever a real user-activity trigger
+                        // produces a successful capture. VisualChange is excluded:
+                        // automated visual changes (video playback, loading spinners)
+                        // are not evidence the user is present.
+                        if !matches!(trigger, CaptureTrigger::Idle) {
+                            state.mark_non_idle_trigger();
+                        }
 
                         if consecutive_capture_errors > 0 {
                             info!(
@@ -1859,6 +1904,104 @@ mod tests {
         );
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
+        assert_eq!(config.afk_suppression_after_ms, 300_000);
+    }
+
+    #[test]
+    fn test_afk_suppression_fires_after_threshold() {
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 10, // needs idle immediately
+            afk_suppression_after_ms: 50, // suppress after 50ms AFK
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+        let feed = ActivityFeed::new();
+
+        // last_capture is old enough to need an idle capture
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or(Instant::now());
+
+        // last_non_idle_trigger was just set in ::new() — under threshold — Idle fires
+        assert_eq!(
+            state.poll_activity(&feed),
+            Some(CaptureTrigger::Idle),
+            "should fire Idle before AFK threshold"
+        );
+
+        // Push last_non_idle_trigger past the suppression threshold
+        state.last_non_idle_trigger = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or(Instant::now());
+
+        // Now over threshold — Idle must be suppressed
+        assert_eq!(
+            state.poll_activity(&feed),
+            None,
+            "should suppress Idle after AFK threshold"
+        );
+    }
+
+    #[test]
+    fn test_afk_suppression_resets_on_non_idle_trigger() {
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 10,
+            afk_suppression_after_ms: 50,
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+        let feed = ActivityFeed::new();
+
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or(Instant::now());
+
+        // Push into AFK territory — suppression active
+        state.last_non_idle_trigger = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or(Instant::now());
+        assert_eq!(
+            state.poll_activity(&feed),
+            None,
+            "should be suppressed while AFK"
+        );
+
+        // User returns: non-idle trigger fires, AFK clock resets
+        state.mark_non_idle_trigger();
+
+        // Idle should fire again immediately (AFK clock just reset)
+        assert_eq!(
+            state.poll_activity(&feed),
+            Some(CaptureTrigger::Idle),
+            "should resume Idle after mark_non_idle_trigger"
+        );
+    }
+
+    #[test]
+    fn test_afk_suppression_disabled_when_zero() {
+        let config = EventDrivenCaptureConfig {
+            idle_capture_interval_ms: 10,
+            afk_suppression_after_ms: 0, // escape hatch — suppression off
+            ..Default::default()
+        };
+        let mut state = EventDrivenCapture::new(config);
+        let feed = ActivityFeed::new();
+
+        state.last_capture = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or(Instant::now());
+
+        // Push last_non_idle_trigger arbitrarily far into the past
+        state.last_non_idle_trigger = Instant::now()
+            .checked_sub(Duration::from_secs(9_999))
+            .unwrap_or(Instant::now());
+
+        // Suppression is disabled — Idle must always fire regardless
+        assert_eq!(
+            state.poll_activity(&feed),
+            Some(CaptureTrigger::Idle),
+            "suppression disabled (=0): Idle must always fire"
+        );
     }
 
     #[test]

@@ -198,6 +198,14 @@ pub struct RecordingSettings {
     #[serde(rename = "minCaptureIntervalMs", default)]
     pub min_capture_interval_ms: Option<u64>,
 
+    /// Suppress Idle fallback captures when the user has been AFK for longer than
+    /// this threshold (milliseconds). Once elapsed, no more Idle frames are written
+    /// until the next real user-activity trigger (click, keystroke, app switch, etc.).
+    /// Set to 0 to disable suppression entirely (original behaviour).
+    /// None = follow active PowerProfile default (300_000 ms / 5 min).
+    #[serde(rename = "afkSuppressionAfterMs", default)]
+    pub afk_suppression_after_ms: Option<u64>,
+
     /// Override `EventDrivenCaptureConfig::capture_on_keystroke`.
     /// None = engine default (false). When true, non-printable key events
     /// (Arrow / Enter / Tab / Esc, modifier combos like Ctrl+S) fire a paired
@@ -497,6 +505,7 @@ impl Default for RecordingSettings {
             visual_check_interval_ms: None,
             visual_change_threshold: None,
             min_capture_interval_ms: None,
+            afk_suppression_after_ms: None,
             capture_on_keystroke: None,
             capture_on_clipboard: None,
             capture_scroll: None,

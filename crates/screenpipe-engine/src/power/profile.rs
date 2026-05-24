@@ -101,9 +101,13 @@ pub struct PowerProfile {
     /// Set at <=10% battery or when OS low-power mode is active.
     pub capture_paused: bool,
 
-    // ── Video encoding ────────────────────────────────────────────────────
-    /// Video quality preset override ("low", "balanced", "high", "max").
-    /// `None` means use the user's configured setting.
+    // ── AFK suppression ──────────────────────────────────────────────
+    /// Suppress Idle fallback captures after the user has been AFK for this
+    /// many milliseconds. 0 disables suppression. Battery profiles suppress
+    /// sooner to avoid wasting I/O on an idle machine.
+    pub afk_suppression_after_ms: u64,
+
+    // ── Video encoding ─────────────────────────────────────────────────
     pub video_quality_override: Option<String>,
 }
 
@@ -122,6 +126,7 @@ impl PowerProfile {
             audio_disabled: false,
             screenshot_disabled: false,
             capture_paused: false,
+            afk_suppression_after_ms: 300_000, // 5 min — AC power, generous threshold
             video_quality_override: None,
         }
     }
@@ -140,6 +145,7 @@ impl PowerProfile {
             audio_disabled: false,
             screenshot_disabled: false,
             capture_paused: false,
+            afk_suppression_after_ms: 180_000, // 3 min — suppress sooner on battery
             video_quality_override: Some("low".to_string()),
         }
     }
@@ -158,6 +164,7 @@ impl PowerProfile {
             audio_disabled: false,
             screenshot_disabled: false,
             capture_paused: false,
+            afk_suppression_after_ms: 60_000, // 1 min — aggressive saving
             video_quality_override: Some("low".to_string()),
         }
     }
@@ -178,6 +185,7 @@ impl PowerProfile {
             audio_disabled: true,
             screenshot_disabled: true,
             capture_paused: false,
+            afk_suppression_after_ms: 60_000, // 1 min
             video_quality_override: Some("low".to_string()),
         }
     }
@@ -199,6 +207,7 @@ impl PowerProfile {
             audio_disabled: true,
             screenshot_disabled: true,
             capture_paused: true,
+            afk_suppression_after_ms: 60_000, // academic — capture is fully paused anyway
             video_quality_override: Some("low".to_string()),
         }
     }
