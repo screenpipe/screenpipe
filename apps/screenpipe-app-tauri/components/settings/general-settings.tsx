@@ -64,6 +64,26 @@ export default function GeneralSettings() {
       updateSettings(newSettings);
     }
   };
+
+  const handleAutoStartChange = async (checked: boolean) => {
+    handleSettingsChange({ autoStartEnabled: checked });
+    try {
+      await commands.setAutostart(checked);
+      toast({
+        title: checked ? "auto-start enabled" : "auto-start disabled",
+        description: checked
+          ? "screenpipe will launch when your computer starts"
+          : "screenpipe won't launch at startup",
+      });
+    } catch (e: any) {
+      handleSettingsChange({ autoStartEnabled: !checked });
+      toast({
+        title: "failed to update auto-start",
+        description: e?.toString() || "check system permissions and try again",
+        variant: "destructive",
+      });
+    }
+  };
   const enterpriseAppUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
     settings?.enterpriseAppUpdatePolicy || DEFAULT_ENTERPRISE_APP_UPDATE_POLICY
   );
@@ -129,9 +149,7 @@ export default function GeneralSettings() {
               <Switch
                 id="auto-start-toggle"
                 checked={settings?.autoStartEnabled ?? false}
-                onCheckedChange={(checked) =>
-                  handleSettingsChange({ autoStartEnabled: checked })
-                }
+                onCheckedChange={handleAutoStartChange}
                 className="ml-4"
               />
             </div>

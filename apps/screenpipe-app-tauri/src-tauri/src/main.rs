@@ -875,6 +875,8 @@ async fn main() {
                 hardware::get_hardware_capability,
                 // Store encryption
                 store::reencrypt_store,
+                // Autostart
+                commands::set_autostart,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -1217,6 +1219,7 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            commands::set_autostart,
         ])
         .setup(move |app| {
             //deep link register_all
