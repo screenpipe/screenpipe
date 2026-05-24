@@ -15,7 +15,11 @@ import { invoke } from "@tauri-apps/api/core";
 // chunks fetched on demand.
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coldarkDark, coldarkCold } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { MemoizedReactMarkdown, viewerUrlTransform } from "@/components/markdown";
+import {
+  MemoizedReactMarkdown,
+  openScreenpipeViewerLink,
+  viewerUrlTransform,
+} from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 
@@ -441,14 +445,7 @@ export default function ViewerPage() {
                       e.preventDefault();
                       if (!href) return;
                       try {
-                        if (href.startsWith("screenpipe://view")) {
-                          const u = new URL(href);
-                          const inner = u.searchParams.get("path");
-                          if (inner) {
-                            await invoke("open_viewer_window", { path: inner });
-                            return;
-                          }
-                        }
+                        if (await openScreenpipeViewerLink(href)) return;
                         const { open } = await import("@tauri-apps/plugin-shell");
                         await open(href);
                       } catch (err) {

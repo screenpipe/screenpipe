@@ -92,10 +92,10 @@ export function FeedbackSection() {
               </div>
             </div>
             <button
-              onClick={() => open("https://screenpi.pe/ideas")}
+              onClick={() => open("https://screenpipe.com/ideas")}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
             >
-              screenpi.pe/ideas →
+              screenpipe.com/ideas →
             </button>
           </div>
         </div>
@@ -146,10 +146,10 @@ export function FeedbackSection() {
               </div>
             </div>
             <button
-              onClick={() => open("https://screenpi.pe/changelog")}
+              onClick={() => open("https://screenpipe.com/changelog")}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
             >
-              screenpi.pe/changelog →
+              screenpipe.com/changelog →
             </button>
           </div>
         </div>

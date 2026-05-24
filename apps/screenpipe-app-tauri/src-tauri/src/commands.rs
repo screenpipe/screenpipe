@@ -471,10 +471,18 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
             });
         }
     }
+    // *guard is None — server hasn't been constructed yet (early-mount race
+    // against spawn_screenpipe, or pause window). The webview's
+    // `loadLiveApiKey` runs once on mount and latches; without this fallback
+    // the privacy panel's API-key input stays empty until the user closes
+    // and reopens Settings, even though the resolver already minted a key
+    // that the spawning server will adopt verbatim.
+    let cached = crate::store::resolved_api_auth_key();
+    let auth_enabled = cached.is_some();
     serde_json::json!({
-        "key": null,
+        "key": cached,
         "port": 3030,
-        "auth_enabled": false,
+        "auth_enabled": auth_enabled,
     })
 }
 

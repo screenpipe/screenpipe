@@ -13,6 +13,10 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openSettingsWindow } from "@/lib/utils/window";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import {
+  openScreenpipeViewerLink,
+  screenpipeViewerPathFromHref,
+} from "@/components/markdown";
 
 export function DeeplinkHandler() {
   const { toast } = useToast();
@@ -193,11 +197,10 @@ export function DeeplinkHandler() {
       // Notification bodies with markdown links to local files are rewritten
       // to this scheme by the /notify route in src-tauri/src/notifications/rewrite.rs
       if (parsedUrl.host === "view" || parsedUrl.pathname === "view") {
-        const filePath = parsedUrl.searchParams.get("path");
+        const filePath = screenpipeViewerPathFromHref(url);
         if (filePath) {
           try {
-            const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("open_viewer_window", { path: filePath });
+            await openScreenpipeViewerLink(url);
           } catch (error) {
             console.error("Failed to open viewer:", error);
             toast({

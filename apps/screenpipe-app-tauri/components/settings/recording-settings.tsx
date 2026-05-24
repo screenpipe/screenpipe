@@ -1863,9 +1863,9 @@ export function RecordingSettings() {
           }),
         });
         const data = await response.json();
-        openUrl(data.url || "https://screenpi.pe/billing");
+        openUrl(data.url || "https://screenpipe.com/billing");
       } catch {
-        openUrl("https://screenpi.pe/billing");
+        openUrl("https://screenpipe.com/billing");
       }
       // Revert back to previous value in the Select component
       return;
@@ -2255,7 +2255,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                         size="sm"
                         className="h-7 px-2 text-xs"
                         data-testid="audio-engine-fallback-upgrade"
-                        onClick={() => openUrl("https://screenpi.pe/billing")}
+                        onClick={() => openUrl("https://screenpipe.com/billing")}
                       >
                         Upgrade
                       </Button>

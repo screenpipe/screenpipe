@@ -27,7 +27,11 @@ import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { MemoizedReactMarkdown, chatUrlTransform } from "@/components/markdown";
+import {
+  MemoizedReactMarkdown,
+  chatUrlTransform,
+  openScreenpipeViewerLink,
+} from "@/components/markdown";
 import { VideoComponent } from "@/components/rewind/video";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
@@ -1944,10 +1948,16 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             return <VideoComponent filePath={href} className="my-2" />;
           }
 
-          if (href?.startsWith("screenpipe://timeline") || href?.startsWith("screenpipe://frame")) {
-            const handleTimelineClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (
+            href?.startsWith("screenpipe://timeline") ||
+            href?.startsWith("screenpipe://frame") ||
+            href?.startsWith("screenpipe://view")
+          ) {
+            const handleScreenpipeLinkClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
               e.preventDefault();
               try {
+                if (await openScreenpipeViewerLink(href)) return;
+
                 if (href.startsWith("screenpipe://frame")) {
                   const frameId = href.split("frame/")[1]?.replace(/^\//, "");
                   if (frameId) {
@@ -1968,14 +1978,14 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
                   }
                 }
               } catch (error) {
-                console.error("Failed to navigate to timeline:", error);
+                console.error("Failed to open screenpipe link:", error);
               }
             };
 
             return (
               <a
                 href="#"
-                onClick={handleTimelineClick}
+                onClick={handleScreenpipeLinkClick}
                 className="underline underline-offset-2 text-blue-500 hover:text-blue-400 cursor-pointer inline"
                 {...props}
               >
@@ -7368,7 +7378,7 @@ export function StandaloneChat({
                   onClick={() => {
                     if (!isPro) {
                       setAppFilterOpen(false);
-                      openUrl("https://screenpi.pe/onboarding");
+                      openUrl("https://screenpipe.com/onboarding");
                       return;
                     }
                     updateSettings({ piPrivacyFilter: !privacyOn });

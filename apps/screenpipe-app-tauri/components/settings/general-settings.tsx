@@ -110,7 +110,7 @@ export default function GeneralSettings() {
 
     const path = isEnterprise ? "/enterprise" : "/account/versions";
     if (isEnterprise) params.set("tab", "builds");
-    const url = `https://screenpi.pe${path}?${params.toString()}`;
+    const url = `https://screenpipe.com${path}?${params.toString()}`;
 
     try {
       await openUrl(url);

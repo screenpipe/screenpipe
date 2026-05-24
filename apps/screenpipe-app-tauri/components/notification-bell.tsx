@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { notificationUrlTransform } from "@/components/markdown";
+import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { invoke } from "@tauri-apps/api/core";
@@ -35,19 +35,7 @@ async function openNotificationLink(href: string) {
   const raw = href.trim();
   if (!raw) return;
 
-  // Viewer deeplink — opens the file in the in-app viewer window directly.
-  if (raw.startsWith("screenpipe://view")) {
-    try {
-      const u = new URL(raw);
-      const filePath = u.searchParams.get("path");
-      if (filePath) {
-        await invoke("open_viewer_window", { path: filePath });
-        return;
-      }
-    } catch (err) {
-      console.error("[notification-bell] open_viewer_window failed:", err);
-    }
-  }
+  if (await openScreenpipeViewerLink(raw)) return;
 
   let localPath: string | null = null;
   if (raw.startsWith("~/")) {
