@@ -85,6 +85,19 @@ import { Button } from "@/components/ui/button";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 
+type SidebarItem =
+  | { kind: "single"; session: SessionRecord }
+  | { kind: "group"; key: string; title: string; sessions: SessionRecord[] };
+
+function sessionGroupKey(s: SessionRecord): string {
+  if (s.pipeContext?.pipeName) return `pipe:${s.pipeContext.pipeName}`;
+  return `title:${s.title.replace(/\s*#\d+$/, "").trim()}`;
+}
+
+function sessionGroupTitle(s: SessionRecord): string {
+  return s.pipeContext?.pipeName ?? s.title.replace(/\s*#\d+$/, "").trim();
+}
+
 interface ChatSidebarProps {
   className?: string;
   onViewAll?: () => void;
@@ -247,43 +260,56 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
-  const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
-
-  type SidebarItem =
-    | { kind: "single"; session: SessionRecord }
-    | { kind: "group"; key: string; title: string; sessions: SessionRecord[] };
-
   const groupedRecents = useMemo((): SidebarItem[] => {
-    const baseTitle = (t: string) => t.replace(/\s*#\d+$/, "").trim();
-    const titleCounts = new Map<string, number>();
-    for (const s of recentsLimited) {
-      const key = baseTitle(s.title);
-      titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+    const keyCounts = new Map<string, number>();
+    for (const s of recents) {
+      const key = sessionGroupKey(s);
+      keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
     }
     const seen = new Map<string, SessionRecord[]>();
     const result: SidebarItem[] = [];
-    for (const s of recentsLimited) {
-      const key = baseTitle(s.title);
-      if ((titleCounts.get(key) ?? 1) < 2) {
+    for (const s of recents) {
+      const key = sessionGroupKey(s);
+      if ((keyCounts.get(key) ?? 1) < 2) {
         result.push({ kind: "single", session: s });
       } else {
         if (!seen.has(key)) {
           const group: SessionRecord[] = [];
           seen.set(key, group);
-          result.push({ kind: "group", key, title: key, sessions: group });
+          result.push({ kind: "group", key, title: sessionGroupTitle(s), sessions: group });
         }
         seen.get(key)!.push(s);
       }
+      // cap at 15 visible items (groups count as 1)
+      if (result.length === 15) break;
     }
     return result;
-  }, [recentsLimited]);
+  }, [recents]);
 
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
+    try {
+      const expanded = new Set<string>();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:group-expanded:") && localStorage.getItem(k) === "true") {
+          expanded.add(k.slice("screenpipe:group-expanded:".length));
+        }
+      }
+      return expanded;
+    } catch {
+      return new Set();
+    }
+  });
   const toggleGroup = (key: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(key)) {
+        next.delete(key);
+        try { localStorage.removeItem(`screenpipe:group-expanded:${key}`); } catch {}
+      } else {
+        next.add(key);
+        try { localStorage.setItem(`screenpipe:group-expanded:${key}`, "true"); } catch {}
+      }
       return next;
     });
   };
@@ -567,7 +593,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recentsLimited.length === 0 ? (
+              ) : groupedRecents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
