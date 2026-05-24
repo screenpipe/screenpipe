@@ -596,7 +596,10 @@ pub async fn event_driven_capture_loop(
             tokio::time::sleep(poll_interval).await;
             continue;
         } else if was_in_pause_state {
-            info!("monitor {}: exiting pause state, capture resumes", monitor_id);
+            info!(
+                "monitor {}: exiting pause state, capture resumes",
+                monitor_id
+            );
             was_in_pause_state = false;
         }
 
