@@ -36,6 +36,19 @@ export interface ChatLoadConversationPayload {
   targetWindow?: ChatTargetWindow;
 }
 
+export function shouldHandleChatLoadConversationForWindow(
+  payload: ChatLoadConversationPayload | null | undefined,
+  windowLabel: ChatTargetWindow,
+): boolean {
+  return !payload?.targetWindow || payload.targetWindow === windowLabel;
+}
+
+export function shouldActivateHomeSectionForChatLoadConversation(
+  payload: ChatLoadConversationPayload | null | undefined,
+): boolean {
+  return shouldHandleChatLoadConversationForWindow(payload, "home");
+}
+
 const CHAT_READY_TIMEOUT_MS = 2500;
 const CHAT_READY_MAX_ATTEMPTS = 3;
 const PENDING_CHAT_CONVERSATION_KEY = "pendingChatConversationId";
@@ -77,12 +90,11 @@ function navigateHomeChatRoute(
     return;
   }
 
-  try {
-    window.history.pushState({}, "", href);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch {
-    window.location.assign(href);
-  }
+  // Preserve the long-standing full route transition for existing
+  // non-switcher Home-chat handoffs. Those callers do not pass a router
+  // callback and already rely on a real navigation to remount /home and let
+  // the embedded chat consume the pending payload.
+  window.location.assign(href);
 }
 
 function handoffWithinHomeWindow<T>(

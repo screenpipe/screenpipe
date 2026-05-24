@@ -57,6 +57,7 @@ import { commands } from "@/lib/utils/tauri";
 import {
   formatShortcutDisplay,
   type ChatLoadConversationPayload,
+  shouldActivateHomeSectionForChatLoadConversation,
 } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
@@ -313,7 +314,7 @@ function HomeContent() {
       const { listen } = await import("@tauri-apps/api/event");
       const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
         if (cancelled) return;
-        if (event.payload?.targetWindow === "chat") return;
+        if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
         setActiveSection("home");
       });
       unlistenFn = u;

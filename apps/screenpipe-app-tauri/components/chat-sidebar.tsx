@@ -60,6 +60,7 @@ import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
+  partitionSidebarVisibleSessions,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { deleteConversationFile, updateConversationFlags } from "@/lib/chat-storage";
@@ -133,20 +134,7 @@ function useVisibleChatSections(): {
   }, [runningPipes]);
 
   return useMemo(() => {
-    const pinned: SessionRecord[] = [];
-    const recents: SessionRecord[] = [];
-    const archived: SessionRecord[] = [];
-    for (const s of sessions) {
-      const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
-      if (isPipeKind && liveScheduledSids.has(s.id)) continue;
-      if (s.draft) continue;
-      if (s.hidden) {
-        archived.push(s);
-        continue;
-      }
-      (s.pinned ? pinned : recents).push(s);
-    }
-    return { pinned, recents, archived };
+    return partitionSidebarVisibleSessions(sessions, liveScheduledSids);
   }, [sessions, liveScheduledSids]);
 }
 

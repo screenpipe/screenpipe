@@ -4,11 +4,34 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useChatStore, selectRecentSwitcherSessions, type ChatStore } from "@/lib/stores/chat-store";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
+import { pipeSessionId } from "@/lib/events/types";
+import {
+  useChatStore,
+  selectRecentSwitcherSessions,
+  partitionSidebarVisibleSessions,
+} from "@/lib/stores/chat-store";
+import {
+  RECENT_CHAT_SWITCHER_COMMIT_EVENT,
+  RECENT_CHAT_SWITCHER_MOVE_EVENT,
+  type RecentChatSwitcherCommitPayload,
+  type RecentChatSwitcherMovePayload,
+} from "@/lib/recent-chat-switcher-events";
 import { RecentChatSwitcher } from "@/components/chat/recent-chat-switcher";
 
 interface RecentChatSwitcherControllerProps {
   onActivateConversation: (id: string) => void | Promise<void>;
+}
+
+function isChatSurfaceVisible(): boolean {
+  if (typeof window === "undefined") return false;
+  const url = new URL(window.location.href);
+  if (url.pathname === "/chat") return true;
+  if (url.pathname !== "/home") return false;
+  const section = url.searchParams.get("section");
+  return !section || section === "home";
 }
 
 export function RecentChatSwitcherController({
@@ -17,10 +40,21 @@ export function RecentChatSwitcherController({
   const sessionsMap = useChatStore((s) => s.sessions);
   const currentId = useChatStore((s) => s.currentId);
   const panelSessionId = useChatStore((s) => s.panelSessionId);
-  const recentSwitcherSessions = useMemo(
-    () => selectRecentSwitcherSessions({ sessions: sessionsMap } as ChatStore),
-    [sessionsMap]
-  );
+  const runningPipes = useRunningPipes();
+  const liveScheduledSids = useMemo(() => {
+    const set = new Set<string>();
+    for (const pipe of runningPipes) {
+      if (pipe.executionId !== undefined) {
+        set.add(pipeSessionId(pipe.pipeName, pipe.executionId));
+      }
+    }
+    return set;
+  }, [runningPipes]);
+  const recentSwitcherSessions = useMemo(() => {
+    const ordered = selectRecentSwitcherSessions({ sessions: sessionsMap });
+    const { pinned, recents } = partitionSidebarVisibleSessions(ordered, liveScheduledSids);
+    return [...pinned, ...recents];
+  }, [liveScheduledSids, sessionsMap]);
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(null);
   const openRef = useRef(false);
@@ -41,9 +75,12 @@ export function RecentChatSwitcherController({
   const moveSelection = useCallback((direction: 1 | -1) => {
     if (recentSwitcherSessions.length === 0) return;
     const ids = recentSwitcherSessions.map((session) => session.id);
+    const shouldResumeFromCurrentChat = openRef.current || isChatSurfaceVisible();
     const baseId = openRef.current
       ? selectedIdRef.current
-      : currentId ?? panelSessionId;
+      : shouldResumeFromCurrentChat
+        ? currentId ?? panelSessionId
+        : null;
     const currentIndex = baseId ? ids.indexOf(baseId) : -1;
     if (ids.length === 1 && currentIndex === 0) return;
     const nextIndex =
@@ -64,7 +101,7 @@ export function RecentChatSwitcherController({
       : null;
     closeSwitcher();
     if (!selected) return;
-    if (selected.id === (currentId ?? panelSessionId)) return;
+    if (isChatSurfaceVisible() && selected.id === (currentId ?? panelSessionId)) return;
     await onActivateConversation(selected.id);
   }, [closeSwitcher, currentId, onActivateConversation, panelSessionId, recentSwitcherSessions]);
 
@@ -91,13 +128,6 @@ export function RecentChatSwitcherController({
       closeSwitcher();
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      if (!event.ctrlKey || event.metaKey || event.altKey) return;
-      event.preventDefault();
-      moveSelection(event.shiftKey ? -1 : 1);
-    };
-
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.key !== "Control") return;
       if (!openRef.current) return;
@@ -109,16 +139,41 @@ export function RecentChatSwitcherController({
     };
 
     window.addEventListener("keydown", handleEscape, true);
-    window.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("keyup", handleKeyUp, true);
     window.addEventListener("blur", handleBlur);
     return () => {
       window.removeEventListener("keydown", handleEscape, true);
-      window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [closeSwitcher, commitConversationById, moveSelection]);
+  }, [closeSwitcher, commitConversationById]);
+
+  useEffect(() => {
+    const currentWindowLabel = getCurrentWindow().label;
+    const shouldHandleTarget = (targetWindow?: string) =>
+      targetWindow === currentWindowLabel;
+
+    const unlistenMove = listen<RecentChatSwitcherMovePayload>(
+      RECENT_CHAT_SWITCHER_MOVE_EVENT,
+      (event) => {
+        if (!shouldHandleTarget(event.payload?.targetWindow)) return;
+        moveSelection(event.payload.direction);
+      }
+    );
+    const unlistenCommit = listen<RecentChatSwitcherCommitPayload>(
+      RECENT_CHAT_SWITCHER_COMMIT_EVENT,
+      (event) => {
+        if (!shouldHandleTarget(event.payload?.targetWindow)) return;
+        if (!openRef.current) return;
+        void commitConversationById(selectedIdRef.current);
+      }
+    );
+
+    return () => {
+      unlistenMove.then((fn) => fn());
+      unlistenCommit.then((fn) => fn());
+    };
+  }, [commitConversationById, moveSelection]);
 
   return (
     <RecentChatSwitcher

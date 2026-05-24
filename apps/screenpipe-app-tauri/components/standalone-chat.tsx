@@ -61,6 +61,7 @@ import {
   readPendingChatConversation,
   clearPendingChatConversation,
   type ChatLoadConversationPayload,
+  shouldHandleChatLoadConversationForWindow,
 } from "@/lib/chat-utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { useAutoSuggestions, type Suggestion } from "@/lib/hooks/use-auto-suggestions";
@@ -3715,11 +3716,14 @@ export function StandaloneChat({
 
     const session = useChatStore.getState().sessions[convId];
     if (session?.messages && session.messages.length > 0) {
+      // `loadConversation` will prefer the store's live message list for this
+      // id, but the metadata here should still mirror the session as closely
+      // as possible so this fallback stays behaviorally aligned with disk loads.
       loadConversationRef.current({
         id: convId,
         title: session.title || "untitled",
         messages: [],
-        createdAt: Date.now(),
+        createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       });
       return;
@@ -3733,10 +3737,10 @@ export function StandaloneChat({
     const pendingConversation = readPendingChatConversation();
     const windowLabel = getCurrentWindow().label;
     if (!pendingConversation?.conversationId) return;
-    if (
-      pendingConversation.targetWindow &&
-      pendingConversation.targetWindow !== windowLabel
-    ) {
+    if (!shouldHandleChatLoadConversationForWindow(
+      pendingConversation,
+      windowLabel === "chat" ? "chat" : "home",
+    )) {
       return;
     }
 
@@ -3748,7 +3752,12 @@ export function StandaloneChat({
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
       const { conversationId: convId, targetWindow } = event.payload;
       const windowLabel = getCurrentWindow().label;
-      if (targetWindow && targetWindow !== windowLabel) return;
+      if (!shouldHandleChatLoadConversationForWindow(
+        { conversationId: convId, targetWindow },
+        windowLabel === "chat" ? "chat" : "home",
+      )) {
+        return;
+      }
       await openConversationLocally(convId);
     });
     return () => { unlisten.then((fn) => fn()); };

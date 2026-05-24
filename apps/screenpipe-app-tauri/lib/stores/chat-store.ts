@@ -243,6 +243,7 @@ interface ChatStoreActions {
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
+type ChatSessionsState = Pick<ChatStoreState, "sessions">;
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
@@ -620,7 +621,7 @@ export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
  *   // 2. raw: subscribe to the underlying map and memoize per-component
  *   const sessionsMap = useChatStore((s) => s.sessions);
  *   const sessions = useMemo(
- *     () => selectOrderedSessions({ sessions: sessionsMap } as ChatStore),
+ *     () => selectOrderedSessions({ sessions: sessionsMap }),
  *     [sessionsMap]
  *   );
  */
@@ -644,14 +645,14 @@ function compareForSidebar(a: SessionRecord, b: SessionRecord): number {
   return tier(a) - tier(b) || sortKey(b) - sortKey(a);
 }
 
-export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
+export function selectOrderedSessions(state: ChatSessionsState): SessionRecord[] {
   const all = Object.values(state.sessions);
   const pinned = all.filter((s) => s.pinned).sort(compareForSidebar);
   const recents = all.filter((s) => !s.pinned).sort(compareForSidebar);
   return [...pinned, ...recents];
 }
 
-export function selectRecentSwitcherSessions(state: ChatStore): SessionRecord[] {
+export function selectRecentSwitcherSessions(state: ChatSessionsState): SessionRecord[] {
   const ordered = selectOrderedSessions(state);
   const viewedThisSession = ordered
     .filter((session) => !session.hidden && !session.draft && session.lastViewedAt)
@@ -661,6 +662,32 @@ export function selectRecentSwitcherSessions(state: ChatStore): SessionRecord[] 
     (session) => !session.hidden && !session.draft && !seen.has(session.id)
   );
   return [...viewedThisSession, ...fallback];
+}
+
+export function partitionSidebarVisibleSessions(
+  sessions: SessionRecord[],
+  liveScheduledSids: ReadonlySet<string> = new Set(),
+): {
+  pinned: SessionRecord[];
+  recents: SessionRecord[];
+  archived: SessionRecord[];
+} {
+  const pinned: SessionRecord[] = [];
+  const recents: SessionRecord[] = [];
+  const archived: SessionRecord[] = [];
+
+  for (const session of sessions) {
+    const isPipeKind = session.kind === "pipe-watch" || session.kind === "pipe-run";
+    if (isPipeKind && liveScheduledSids.has(session.id)) continue;
+    if (session.draft) continue;
+    if (session.hidden) {
+      archived.push(session);
+      continue;
+    }
+    (session.pinned ? pinned : recents).push(session);
+  }
+
+  return { pinned, recents, archived };
 }
 
 /**
