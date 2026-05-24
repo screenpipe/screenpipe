@@ -29,6 +29,7 @@ export default defineConfig({
 			"src-tauri/target/**",
 			"lib/utils/redact-pii.test.ts",
 			"lib/utils/meeting-state.test.ts",
+			"lib/utils/sanitize-tool-call-xml.test.ts",
 			"lib/__tests__/team-crypto.test.ts",
 			"lib/__tests__/team-api-contract.test.ts",
 			"components/__tests__/url-detection-benchmark.test.ts",
@@ -57,6 +58,7 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./"),
+			"@ee": path.resolve(__dirname, "../../ee/desktop"),
 		},
 	},
 });

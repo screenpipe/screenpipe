@@ -1,35 +1,35 @@
 [package]
 name = "screenpipe-sdk"
-version = "0.1.0"
+version = "0.4.1"
 edition = "2021"
-description = "Screenpipe SDK — Rust core for screen recording exposed via napi-rs"
+description = "Screenpipe SDK — napi-rs bindings around the screenpipe-recorder crate"
 license = "LicenseRef-Screenpipe-Enterprise"
 publish = false
+
+# The SDK is intentionally not part of the parent screenpipe workspace
+# (see the root Cargo.toml `workspace.exclude`). Declaring our own
+# workspace here keeps cargo from walking up the directory tree, and
+# pulls `recorder-core` in as a sibling member so both share a lockfile
+# (they wrap the same monorepo crates — single lockfile = one set of
+# resolved versions, no duplication).
+[workspace]
+members = ["recorder-core", "tauri/rust"]
+# Examples (tauri-app/src-tauri etc.) are full apps with their own
+# tauri-build / signing configs; they keep their own workspace roots.
+exclude = ["examples"]
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
+# All orchestration lives here. The Tauri plugin
+# (`ee/sdk/tauri/rust`) depends on the same crate, so the recorder
+# logic isn't duplicated and no Node bridge is needed for native hosts.
+screenpipe-recorder = { path = "recorder-core" }
+
 napi = { version = "2", default-features = false, features = ["napi4", "async"] }
 napi-derive = "2"
-anyhow = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
-tracing = "0.1"
-# PNG encoding for frames before handing them to ffmpeg's image2pipe demuxer
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-
-# Depend on the local Screenpipe monorepo crates. The JS API stays narrow, but
-# `screenpipe-screen` brings more monorepo crates transitively
-# (connect/db/events/secrets), so audit build size before a public release if
-# package weight matters.
-# Mic level meter uses `cpal` directly — pulling `screenpipe-audio` would
-# drag in whisper-rs, ort, vad-rs, symphonia, audiopipe. Computing RMS on
-# a running cpal input stream is ~30 lines and doesn't reinvent anything
-# screenpipe-audio exposes as a "just a level meter" helper.
-screenpipe-screen = { path = "../../crates/screenpipe-screen" }
-screenpipe-core   = { path = "../../crates/screenpipe-core", default-features = false }
-screenpipe-a11y   = { path = "../../crates/screenpipe-a11y", default-features = false }
-cpal = { git = "https://github.com/screenpipe/cpal.git", branch = "main" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 
 [build-dependencies]
 napi-build = "2"

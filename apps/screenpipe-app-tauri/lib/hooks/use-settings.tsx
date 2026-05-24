@@ -13,6 +13,10 @@ import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
 import type { SourceCitation } from "@/lib/source-citations";
+import type {
+	EnterpriseAppUpdatePolicy,
+	EnterpriseInstallMetadata,
+} from "@ee/lib/app-update-policy";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -79,6 +83,8 @@ export interface ChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
+	intent?: "steer";
+	turnIntentId?: string;
 	timestamp: number;
 	contentBlocks?: any[];
 	sourceCitations?: SourceCitation[];
@@ -90,6 +96,8 @@ export interface ChatMessage {
 	 *  or what's sent to the model. */
 	displayContent?: string;
 	images?: any[];
+	interruptedBySteer?: boolean;
+	steeredResponse?: boolean;
 }
 
 /** What kind of session a conversation represents.
@@ -177,13 +185,11 @@ export type Settings = SettingsStore & {
 	/** Live notes for manually-started meetings. Separate from background 24/7 transcription. */
 	meetingLiveTranscriptionEnabled?: boolean;
 	/** Provider for manually-started live notes. Defaults to the selected transcription engine. */
-	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "openai-realtime" | "deepgram-live";
+	meetingLiveTranscriptionProvider?: "selected-engine" | "screenpipe-cloud" | "disabled" | "deepgram-live";
 	/** When true, the user's typed text (and edited files) captured during a meeting is auto-appended to the meeting note when the meeting stops. Default true. */
 	appendTypedTextToMeetingNote?: boolean;
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;
-	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
-	disableOcr?: boolean;
 	/** Filters pushed from team — merged with local filters for recording */
 	teamFilters?: {
 		ignoredWindows: string[];
@@ -248,6 +254,8 @@ export type Settings = SettingsStore & {
 	experimentalCoreaudioSystemAudio?: boolean;
 	/** Experimental: request Windows WASAPI microphone AEC when supported. */
 	windowsInputAecEnabled?: boolean;
+	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
+	macosInputVpioEnabled?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -278,12 +286,16 @@ export type Settings = SettingsStore & {
 		mutedPipes: string[];
 	};
 	/** Remote devices to monitor pipes on (LAN addresses) */
-	monitorDevices?: Array<{
-		address: string;
-		label?: string;
-	}>;
-	/** Enable recording schedule — when on, recording only runs during defined time ranges */
-	scheduleEnabled?: boolean;
+		monitorDevices?: Array<{
+			address: string;
+			label?: string;
+		}>;
+		/** Enterprise app-update policy fetched from the admin dashboard. */
+		enterpriseAppUpdatePolicy?: EnterpriseAppUpdatePolicy;
+		/** Local install/update-manager detection for enterprise fleet reporting. */
+		enterpriseInstallMetadata?: EnterpriseInstallMetadata;
+		/** Enable recording schedule — when on, recording only runs during defined time ranges */
+		scheduleEnabled?: boolean;
 	/** Per-day-of-week time ranges defining when recording is active */
 	scheduleRules?: Array<{
 		dayOfWeek: number;
@@ -475,6 +487,8 @@ let DEFAULT_SETTINGS: Settings = {
 				port: 11434,
 			},
 		updateChannel: "stable",
+			autoUpdate: false,
+			autoUpdatePipes: true,
 			autoStartEnabled: true,
 			platform: "unknown",
 			disabledShortcuts: [],
@@ -505,7 +519,6 @@ let DEFAULT_SETTINGS: Settings = {
 			searchShortcut: "Control+Super+K",
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
-			disableOcr: false,
 			useAllMonitors: true,
 			showShortcutOverlay: true,
 			chatHistory: {
@@ -526,6 +539,7 @@ let DEFAULT_SETTINGS: Settings = {
 			disableClipboardCapture: false,
 			experimentalCoreaudioSystemAudio: false,
 			windowsInputAecEnabled: false,
+			macosInputVpioEnabled: false,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,
@@ -547,7 +561,6 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 
 		if (p === "windows") {
-			DEFAULT_SETTINGS.disableOcr = true;
 			DEFAULT_SETTINGS.overlayMode = "window";
 		}
 

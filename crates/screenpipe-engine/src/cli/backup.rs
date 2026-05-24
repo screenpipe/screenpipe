@@ -63,9 +63,8 @@ pub async fn handle_backup_command(
                 screenpipe_db::DatabaseManager::new(&db_path.to_string_lossy(), Default::default())
                     .await?;
 
-            db.backup_to(&dest).await.map_err(|e| {
+            db.backup_to(&dest).await.inspect_err(|_e| {
                 let _ = std::fs::remove_file(&dest);
-                e
             })?;
 
             let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);

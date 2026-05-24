@@ -73,6 +73,7 @@ const READY_EVENT: &str = "owned-browser:ready";
 /// user's real browser. The sidebar answers through the
 /// `owned_browser_resolve_session_access` command.
 const SESSION_ACCESS_REQUEST_EVENT: &str = "owned-browser:session-access-request";
+#[cfg(target_os = "windows")]
 const V20_COOKIE_BLOCK_EVENT: &str = "owned-browser:v20-cookie-blocked";
 const SESSION_ACCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -129,6 +130,7 @@ struct BrowserSessionAccessRequestPayload {
     host: String,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct V20CookieBlockPayload {
@@ -372,11 +374,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let _guard = self.eval_lock.lock().await;
 
         let target_url = if let Some(target) = url {
-            Some(
-                target
-                    .parse::<url::Url>()
-                    .map_err(|e: url::ParseError| format!("invalid url: {e}"))?,
-            )
+            Some(normalize_url(&target)?)
         } else {
             None
         };
@@ -538,9 +536,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
     /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
     /// reveals/positions the webview itself.
     async fn navigate(&self, url: &str) -> Result<(), String> {
-        let parsed: url::Url = url
-            .parse()
-            .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+        let parsed: url::Url = normalize_url(url)?;
 
         // Push the user's real-browser cookies for this host into
         // WKHTTPCookieStore before issuing the navigate, so the request
@@ -778,15 +774,93 @@ pub async fn owned_browser_set_bounds(
     Ok(())
 }
 
+/// Normalise a user-supplied URL string into a full `url::Url`.
+///
+/// Accepts bare hosts (`youtube.com`), `//`-prefixed (`//youtube.com`),
+/// fully-qualified URLs (`https://youtube.com`), and hostless schemes
+/// (`about:blank`, `data:...`, `file:...`).  Anything that looks like it
+/// is missing a scheme gets `https://` prepended before parsing.
+fn normalize_url(raw: &str) -> Result<url::Url, String> {
+    // Hostless schemes that don't use `://`. Keep this conservative so that
+    // `localhost:8080` (host:port, not a scheme) still gets `https://` prepended.
+    const HOSTLESS_SCHEMES: &[&str] = &[
+        "about:",
+        "data:",
+        "file:",
+        "blob:",
+        "javascript:",
+        "mailto:",
+        "view-source:",
+        "chrome:",
+    ];
+    let has_scheme =
+        raw.contains("://") || HOSTLESS_SCHEMES.iter().any(|s| raw.starts_with(s));
+    let candidate = if has_scheme {
+        raw.to_owned()
+    } else if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else {
+        format!("https://{raw}")
+    };
+    candidate
+        .parse::<url::Url>()
+        .map_err(|e| format!("invalid url: {e}"))
+}
+
+#[cfg(test)]
+mod normalize_url_tests {
+    use super::normalize_url;
+
+    #[test]
+    fn keeps_fully_qualified() {
+        let u = normalize_url("https://youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_bare_host() {
+        let u = normalize_url("youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_protocol_relative() {
+        let u = normalize_url("//youtube.com").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("youtube.com"));
+    }
+
+    #[test]
+    fn adds_https_to_host_port() {
+        let u = normalize_url("localhost:8080").unwrap();
+        assert_eq!(u.scheme(), "https");
+        assert_eq!(u.host_str(), Some("localhost"));
+        assert_eq!(u.port(), Some(8080));
+    }
+
+    #[test]
+    fn preserves_about_blank() {
+        let u = normalize_url("about:blank").unwrap();
+        assert_eq!(u.scheme(), "about");
+        assert_eq!(u.path(), "blank");
+    }
+
+    #[test]
+    fn preserves_data_url() {
+        let u = normalize_url("data:text/plain,hello").unwrap();
+        assert_eq!(u.scheme(), "data");
+    }
+}
+
 /// Navigate the embedded webview to `url`. Used by the agent (via
 /// `POST /connections/browsers/owned-default/eval`) and by the sidebar
 /// when restoring per-chat state.
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
     let state = browser_state();
-    let parsed: url::Url = url
-        .parse()
-        .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+    let parsed: url::Url = normalize_url(&url)?;
 
     prepare_navigation(&app, &state, &parsed).await;
     inject_cookies_for_url(&app, &parsed).await;

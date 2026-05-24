@@ -174,6 +174,7 @@ fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     let data_dir = base_dir.join("data");
 
     fs::create_dir_all(&data_dir)?;
+    paths::ensure_spotlight_excluded(&base_dir);
     Ok(base_dir)
 }
 
@@ -438,7 +439,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Non-blocking update check — runs in background, prints banner if outdated
     tokio::spawn(async {
-        check_for_updates().await;
+        screenpipe_engine::cli_reminder::check_for_updates().await;
     });
 
     // Periodic terminal nudge to install the desktop app (CLI-only).
@@ -587,15 +588,23 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Replace the current conditional check with:
-    let ffmpeg_path = find_ffmpeg_path();
-    if ffmpeg_path.is_none() {
-        // Try one more time, which might trigger the installation
+    // Only require ffmpeg when audio recording is enabled. Vision-only recording
+    // should not attempt network installs (important for offline / locked-down
+    // Windows environments).
+    if !config.disable_audio {
         let ffmpeg_path = find_ffmpeg_path();
         if ffmpeg_path.is_none() {
-            eprintln!("ffmpeg not found and installation failed. please install ffmpeg manually.");
-            std::process::exit(1);
+            // Try one more time, which might trigger the installation
+            let ffmpeg_path = find_ffmpeg_path();
+            if ffmpeg_path.is_none() {
+                eprintln!(
+                    "ffmpeg not found and installation failed. please install ffmpeg manually."
+                );
+                std::process::exit(1);
+            }
         }
+    } else {
+        debug!("audio disabled; skipping ffmpeg preflight");
     }
 
     // Pre-flight permission check (macOS: trigger native prompts + poll until granted)
@@ -931,7 +940,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create VisionManager for event-driven capture on all monitors
-    let (handle, capture_trigger_tx) = if !config.disable_vision {
+    let (handle, capture_trigger_tx, linker_tx) = if !config.disable_vision {
         let vision_config =
             config.to_vision_manager_config(output_path_clone.to_string(), vision_metrics.clone());
         let vision_manager = Arc::new(
@@ -944,6 +953,10 @@ async fn main() -> anyhow::Result<()> {
         // the spawned task. This sender is passed to start_ui_recording so UI
         // events (clicks, app switches, clipboard) trigger captures.
         let trigger_tx = vision_manager.trigger_sender();
+        // Same idea for the frame-linker channel: shared between the
+        // recorder (sends EventPersisted after batch flush) and each
+        // capture loop (sends FrameCaptured after a successful capture).
+        let linker_tx = vision_manager.linker_sender();
 
         let vm_clone = vision_manager.clone();
         let audio_manager_for_drm = if !config.disable_audio {
@@ -977,11 +990,11 @@ async fn main() -> anyhow::Result<()> {
                 error!("Error shutting down VisionManager: {:?}", e);
             }
         });
-        (h, Some(trigger_tx))
+        (h, Some(trigger_tx), Some(linker_tx))
     } else {
         // Vision disabled — spawn a pending task so `handle` never completes
         // (otherwise the no-op future wins the tokio::select! race and shuts down the server)
-        (tokio::spawn(std::future::pending::<()>()), None)
+        (tokio::spawn(std::future::pending::<()>()), None, None)
     };
 
     let local_data_dir_clone_2 = local_data_dir_clone.clone();
@@ -1004,6 +1017,16 @@ async fn main() -> anyhow::Result<()> {
     }
     if config.api_auth {
         info!("API auth enabled — run `screenpipe auth token` to view your key");
+    }
+
+    // Standalone CLI users miss out on the chat/timeline UI — point them at the
+    // desktop app. SCREENPIPE_ANALYTICS_ID is only set when the Tauri app spawns
+    // the engine, so its absence is a reliable "this is a bare CLI run" signal.
+    if std::env::var("SCREENPIPE_ANALYTICS_ID").is_err() {
+        eprintln!();
+        eprintln!("  tip: get the desktop app for chat, timeline, and search UI");
+        eprintln!("       → https://screenpi.pe/onboarding");
+        eprintln!();
     }
 
     let mut server = SCServer::new(
@@ -1510,6 +1533,7 @@ async fn main() -> anyhow::Result<()> {
                 db.clone(),
                 ui_recorder_config,
                 capture_trigger_tx,
+                linker_tx,
                 config.ignored_windows.clone(),
             )
             .await
@@ -1820,54 +1844,4 @@ async fn main() -> anyhow::Result<()> {
     info!("shutdown complete");
 
     Ok(())
-}
-
-/// Non-blocking update check. Fetches the latest version from npm registry
-/// and prints a one-line banner if the current version is outdated.
-async fn check_for_updates() {
-    // Skip if user opted out
-    if env::var("SCREENPIPE_NO_UPDATE_CHECK").is_ok() {
-        return;
-    }
-
-    let current = env!("CARGO_PKG_VERSION");
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let resp = match client
-        .get("https://registry.npmjs.org/screenpipe/latest")
-        .header("Accept", "application/json")
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => r,
-        _ => return,
-    };
-
-    let json: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    let latest = match json.get("version").and_then(|v| v.as_str()) {
-        Some(v) => v,
-        None => return,
-    };
-
-    if latest != current {
-        eprintln!(
-            "\n  {} screenpipe {} available (you have {})",
-            "update:".yellow().bold(),
-            latest.green(),
-            current,
-        );
-        eprintln!("  run: {}", "npx screenpipe@latest record".cyan());
-        eprintln!();
-    }
 }

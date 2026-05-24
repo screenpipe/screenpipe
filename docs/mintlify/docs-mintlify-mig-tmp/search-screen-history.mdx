@@ -100,6 +100,28 @@ combine mentions: `@audio @last-hour` shows only voice data from the past hour. 
 - **use time context**: combine `start_time` and `end_time` for precision
 - **combine filters**: app name + time range + keywords
 
+## AI chat vs. search API — when to use each
+
+the desktop app offers two ways to find content:
+
+**search API & timeline** — best for precision location:
+- use the search bar with keywords + filters (app name, time range, browser URL)
+- scroll the timeline visually
+- perfect for "find that exact blog post I saw 30 minutes ago"
+- faster and more reliable for recent, specific content
+
+**AI chat** — best for understanding & synthesis:
+- ask natural language questions about what you've done
+- AI reads the screenshots and text to answer conceptually
+- great for "what was I working on this morning?" or "summarize today's meetings"
+- less precise for pinpointing one specific piece of content, especially if the data isn't in the AI's active context window
+
+**if AI chat can't find content you know exists:**
+1. use the search API instead — try filtering by app name and time range first
+2. add context: mention the app (Chrome, VS Code, Slack) and approximate time
+3. use the timeline to visually locate the content, then ask chat about it
+4. if still missing, check that the app or window isn't in your ignored-windows list
+
 ## accessing the API from other devices on your network
 
 by default, the screenpipe API only listens on `127.0.0.1` (localhost). to access it from other devices on your LAN, start screenpipe with the `--listen-on-lan` flag:

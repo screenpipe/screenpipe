@@ -1,7 +1,7 @@
 ---
-title: "screenpipe FAQ: billing, install, pipes, and privacy"
+title: "screenpipe FAQ: install, permissions, meetings, pipes, privacy, and pricing"
 sidebarTitle: "faq"
-description: "Answers to common screenpipe questions on billing, licenses, install and login issues, Windows pipes, audio transcription, privacy, and AI memory."
+description: "Answers to common screenpipe questions: macOS and Windows install, screen recording and microphone permissions, Zoom Teams Meet transcription, battery and CPU usage, pipes, AI API keys, Ollama and local LLMs, privacy, refunds, and enterprise deployment."
 icon: "question"
 ---
 
@@ -79,6 +79,83 @@ this FAQ is organized around the questions people ask support most often: what t
   ```
 
   start with one repeated workflow such as invoice review, CRM update, client onboarding, QA review, or weekly reporting.
+</Expandable>
+
+## basics & compatibility
+
+<Expandable title="is screenpipe open source?">
+  yes. the core engine is open source on GitHub at [github.com/screenpipe/screenpipe](https://github.com/screenpipe/screenpipe). the desktop app, cloud features, and some integrations have commercial licensing on top.
+
+  you can self-host the CLI, audit the capture and storage code, and run screenpipe fully offline. enterprise customers can request source access for compliance review.
+</Expandable>
+
+<Expandable title="does screenpipe work offline?">
+  yes. screen capture, audio capture, OCR fallback, accessibility text extraction, local transcription, search, and the local API at `localhost:3030` all work without internet.
+
+  the parts that need a network:
+
+  - cloud transcription (deepgram, screenpipe-cloud)
+  - cloud AI providers (Claude, ChatGPT, Gemini, OpenAI)
+  - cloud archive and team sync
+  - login and license verification
+  - connected-app proxies (Slack, Notion, HubSpot, etc.)
+
+  use Ollama + local whisper if you want a fully offline setup. see [Ollama](/ollama).
+</Expandable>
+
+<Expandable title="does screenpipe work on Apple Silicon M1, M2, M3, M4 and Intel Macs?">
+  yes on both. screenpipe ships a universal macOS build that runs natively on Apple Silicon (M1, M2, M3, M4, including Pro/Max/Ultra) and on Intel Macs.
+
+  Apple Silicon machines get better battery life and faster local whisper transcription. Intel Macs work but should prefer smaller whisper models or cloud transcription.
+</Expandable>
+
+<Expandable title="does screenpipe work on Windows 11 and Windows 10?">
+  yes. screenpipe supports Windows 11 (recommended) and Windows 10. on first launch, allow Windows Defender to run the installer ("More info" → "Run anyway") and grant screen capture access.
+
+  if the timeline or embedded browser is blank, install or repair the **Microsoft Edge WebView2 Runtime** and restart screenpipe. see [troubleshooting](/troubleshooting).
+</Expandable>
+
+<Expandable title="does screenpipe work on Linux?">
+  the screenpipe CLI runs on Linux (Ubuntu, Debian, Fedora, Arch). the desktop app has partial Linux support and is best on X11; Wayland support varies by compositor.
+
+  on Ubuntu: `sudo apt install tesseract-ocr libxcb1` before running the binary. server / headless installs are supported for capture and the local API.
+</Expandable>
+
+<Expandable title="does screenpipe support multiple monitors and external displays?">
+  yes. screenpipe captures every monitor your OS reports to it. you can list monitors with `curl http://localhost:3030/list-monitors` and choose which displays to include in recording settings.
+
+  if a newly plugged-in display is not captured, restart screenpipe so it re-enumerates monitors.
+</Expandable>
+
+<Expandable title="what languages does screenpipe transcribe?">
+  screenpipe transcribes most languages supported by whisper (about 100), including English, Spanish, French, German, Mandarin, Japanese, Korean, Portuguese, Russian, Arabic, and Hindi.
+
+  set your primary language in **settings → AI models → language** to skip auto-detect (faster and more accurate). for higher accuracy on accented or domain-specific speech, switch to `whisper-large-v3-turbo` or use deepgram / screenpipe-cloud transcription.
+</Expandable>
+
+<Expandable title="how do I update screenpipe?">
+  the desktop app checks for updates automatically and prompts you when one is available. you can also click **settings → updates → check for updates**.
+
+  for the CLI: `npx screenpipe@latest record` always pulls the latest published version. enterprise customers receive signed installers via their account manager.
+</Expandable>
+
+<Expandable title="how do I uninstall screenpipe and remove all local data?">
+  on macOS:
+
+  1. quit screenpipe.
+  2. drag the app to Trash.
+  3. delete `~/.screenpipe/` to remove all recordings, transcripts, and pipes.
+  4. optional: revoke screen recording, accessibility, and microphone permissions in System Settings → Privacy & Security.
+
+  on Windows: uninstall via Settings → Apps, then delete `%USERPROFILE%\.screenpipe\`.
+
+  on Linux: remove the binary and delete `~/.screenpipe/`.
+</Expandable>
+
+<Expandable title="is this the same as the old screenpipe rust audio library?">
+  no. some users find an older, discontinued open-source rust project that shared the name. this site, [screenpi.pe](https://screenpi.pe), and the [github.com/screenpipe/screenpipe](https://github.com/screenpipe/screenpipe) repo are the actively developed product: a local-first AI memory app for macOS, Windows, and Linux.
+
+  if you installed something else and it does not match the screenshots on this site, you are not running the current screenpipe.
 </Expandable>
 
 ## billing, license, and account
@@ -210,6 +287,44 @@ this FAQ is organized around the questions people ask support most often: what t
   for scheduled capture or work-hour behavior, use the app settings when available. for custom behavior, a pipe can check the current time and either run, pause itself, or ignore results outside work hours.
 </Expandable>
 
+<Expandable title='macOS says "app is damaged" or "cannot be opened because the developer cannot be verified".'>
+  this is macOS Gatekeeper on first launch, not a real corruption.
+
+  fix:
+
+  1. right-click the screenpipe app in Finder.
+  2. choose **Open** from the menu.
+  3. click **Open** again on the warning dialog.
+
+  after the first launch, you can open it normally. if Gatekeeper still blocks, run `xattr -dr com.apple.quarantine /Applications/screenpipe.app` in Terminal, then reopen.
+</Expandable>
+
+<Expandable title='Windows pipe error: "screenpipe.exe not found" or "screenpipe is not recognized".'>
+  the Windows installer registers the app as `screenpipe-app.exe`, not `screenpipe.exe`. some pipes or scripts written for macOS/Linux assume the bare `screenpipe` binary name and fail on Windows.
+
+  fix the pipe or script to call `screenpipe-app.exe` (or use the full path the installer logged). if you only need the local API, you do not need to call the binary directly — `curl http://localhost:3030/...` works once the app is running.
+</Expandable>
+
+<Expandable title="screenpipe stopped recording after a macOS update (Sequoia, Sonoma, Ventura).">
+  major macOS updates often reset the TCC (Transparency, Consent, Control) database, which silently revokes screen recording, accessibility, and microphone permissions for installed apps.
+
+  fix:
+
+  1. open **System Settings → Privacy & Security**.
+  2. open each of **Screen Recording**, **Accessibility**, and **Microphone**.
+  3. confirm screenpipe is listed and toggled **on** in each. if it is listed but unchecked, toggle off and on again.
+  4. quit and reopen screenpipe.
+  5. verify: `curl "http://localhost:3030/search?limit=1&content_type=all"` should return recent data within 1-2 minutes.
+
+  if screenpipe is not listed at all, drag the app to the panel from `/Applications`.
+</Expandable>
+
+<Expandable title="how do I start screenpipe automatically at login?">
+  the desktop app adds itself as a login item the first time you launch it. you can confirm or remove it in **System Settings → General → Login Items** on macOS, or **Task Manager → Startup apps** on Windows.
+
+  for the CLI, set up a launchd plist on macOS, a systemd user service on Linux, or a Task Scheduler job on Windows that runs `npx screenpipe@latest record` at login.
+</Expandable>
+
 ## pipes and custom automations
 
 <Expandable title="my pipe runs but does not do anything useful.">
@@ -272,6 +387,64 @@ this FAQ is organized around the questions people ask support most often: what t
   for app connections, prefer screenpipe connection proxies instead of pasting secrets into prompts.
 </Expandable>
 
+<Expandable title="do I need an OpenAI or Anthropic API key to use screenpipe?">
+  no. screenpipe ships with **screenpipe-cloud** AI credits on every paid plan, so pipes and chat work out of the box.
+
+  bring-your-own-key (BYOK) is supported if you prefer your own quota or want to use a specific model. you can configure Anthropic, OpenAI, OpenRouter, Groq, or any OpenAI-compatible endpoint in **settings → AI models**. local models via [Ollama](/ollama) need no key at all.
+</Expandable>
+
+<Expandable title="can I use Ollama or local LLMs with screenpipe?">
+  yes. screenpipe works with any OpenAI-compatible local server, including [Ollama](/ollama), llama.cpp, LM Studio, and vLLM.
+
+  configure it in **settings → AI models → custom endpoint**. point to `http://localhost:11434/v1` for Ollama. you can then run chat, pipes, and MCP queries fully offline with models like Llama, Qwen, Mistral, or DeepSeek.
+</Expandable>
+
+<Expandable title='Anthropic API key error: "credit balance is too low" or "insufficient credits".'>
+  this comes from Anthropic, not screenpipe. it means your Anthropic console balance is empty.
+
+  fix:
+
+  1. open [console.anthropic.com/billing](https://console.anthropic.com/settings/billing).
+  2. add credits or enable auto-recharge.
+  3. retry the pipe or chat.
+
+  alternative: switch the pipe to **screenpipe-cloud** in **settings → AI models** so it uses included credits instead of your Anthropic key. screenpipe-cloud credits and Anthropic credits are completely separate.
+</Expandable>
+
+<Expandable title="do my screenpipe cloud AI credits sync across multiple devices?">
+  yes. AI credits are tied to your account, not the device. signing into the same screenpipe account on a second machine gives that machine access to the same credit pool and billing plan.
+
+  if credits look out of sync, sign out and back in on the device that looks behind. credits update on the next API call, not in real time.
+</Expandable>
+
+<Expandable title="what is pi-agent and why does my pipe say it is missing or not found?">
+  `pi-agent` is the local runtime that executes pipes (the part that runs your `pipe.md` and calls AI providers, screenpipe search, and connections). the desktop app bundles it, but on the CLI or on some upgrades it can end up missing.
+
+  fix:
+
+  1. update to the latest screenpipe.
+  2. if it still fails, reinstall the app. on macOS that re-bundles pi-agent into `screenpipe.app/Contents/Resources/`.
+  3. on the CLI: `npx screenpipe@latest pipe install pi-agent`.
+
+  if a pipe errors with `Failed to extract accountId`, set `preset: screenpipe-cloud` on the pipe — pi-agent is reading the wrong auth preset for ChatGPT tokens.
+</Expandable>
+
+<Expandable title="my pipe was working but stopped firing after a screenpipe update.">
+  app updates can disconnect scheduled pipes, integration tokens, or pi-agent. check in this order:
+
+  1. **settings → pipes** → confirm the toggle is still on.
+  2. open the pipe and run it manually. if it fails, the logs show the actual error.
+  3. for Telegram, Slack, Notion, or other integrations: reconnect the account in **settings → connections** — tokens can expire silently.
+  4. confirm the local API is healthy: `curl http://localhost:3030/health`.
+  5. if the pipe relies on a custom schedule like `every 30m`, re-save the schedule so the new scheduler picks it up.
+</Expandable>
+
+<Expandable title="can I write my own pipe? what language are pipes in?">
+  yes. pipes are `pipe.md` files containing a natural-language prompt plus optional ```bash``` and ```bun``` code blocks. you do not write a separate program — the prompt drives the pipe.
+
+  see [pipes](/pipes), [pipe permissions](/pipe-permissions), and [pipe debugging](/pipe-debugging). prebuilt pipes live in the [pipe store](/pipe-store).
+</Expandable>
+
 ## audio and meetings
 
 <Expandable title="does screenpipe join meetings as a bot?">
@@ -296,6 +469,48 @@ this FAQ is organized around the questions people ask support most often: what t
   yes, but speaker naming depends on audio quality, calendar context, and cleanup. name a speaker once in the UI, merge duplicates when needed, and connect calendar for better meeting context.
 
   speaker labels are useful for meeting summaries, follow-ups, and relationship memory, but you should review important transcripts before sending them externally.
+</Expandable>
+
+<Expandable title="does screenpipe record and transcribe Zoom, Google Meet, Microsoft Teams, Slack huddles, and Discord calls?">
+  yes — all of them, without joining as a bot. screenpipe captures your microphone plus system audio locally, so any call surface that plays sound on your machine can be transcribed.
+
+  this works for Zoom, Google Meet, Microsoft Teams, Slack huddles, Discord voice/video, WebEx, GoToMeeting, FaceTime, WhatsApp calls, Telegram calls, and any browser-based call. no calendar invite is needed, no other participant sees a bot, and recordings stay local by default.
+
+  see [meeting intelligence](/meeting-intelligence) and [meeting transcription](/meeting-transcription).
+</Expandable>
+
+<Expandable title="where do I find my meeting transcripts and summaries after a call?">
+  after a call ends, transcripts are available in three places:
+
+  1. **timeline**: scrub to the call's timestamp; the transcript appears alongside the screen.
+  2. **search**: open chat or run `curl "http://localhost:3030/search?content_type=audio&limit=10"`.
+  3. **meeting summaries**: if you have a meeting-summary pipe enabled, it writes structured notes to Obsidian, Notion, Apple Notes, or a connected destination.
+
+  if you see only short phrases instead of a full transcript, increase the audio chunk duration in **settings → recording** and confirm both your microphone *and* system audio are selected.
+</Expandable>
+
+<Expandable title="can screenpipe transcribe multiple languages in one meeting?">
+  partially. whisper auto-detects the dominant language per audio chunk, so short multilingual exchanges may be tagged as one language. for accurate code-switching, set the primary language explicitly in **settings → AI models → language**, or use deepgram / screenpipe-cloud which handle mixed-language audio better than local whisper-tiny.
+</Expandable>
+
+<Expandable title="how accurate is screenpipe's meeting transcription?">
+  on clear English audio with a decent microphone, `whisper-large-v3-turbo` reaches ~95% word accuracy, and deepgram or screenpipe-cloud are comparable or slightly higher. `whisper-tiny` and `whisper-base` are faster but noticeably less accurate.
+
+  accuracy drops on heavy accents, background noise, low input gain, or compressed bluetooth-microphone audio (HFP). pick a better engine, set the language explicitly, and use the built-in MacBook microphone instead of bluetooth for the cleanest result.
+</Expandable>
+
+<Expandable title="can I export meeting notes to Notion, Obsidian, Google Docs, or Apple Notes?">
+  yes, via pipes. install or write a pipe that takes the latest meeting and writes its summary, action items, and decisions to the destination you choose.
+
+  prebuilt destinations include [Obsidian](/obsidian), Notion, Apple Notes, Google Docs, and any connected app. browse the [pipe store](/pipe-store) for ready-made meeting-export pipes.
+</Expandable>
+
+<Expandable title="can screenpipe identify the names of meeting participants?">
+  partially. screenpipe diarizes (separates) different speakers from the audio, and you can name a speaker once so they are recognized across future meetings.
+
+  if you connect a calendar, screenpipe can associate participants from invites with the speaker labels. accuracy depends on audio quality and how much sample voice it has for each person.
+
+  review labels before sharing transcripts externally.
 </Expandable>
 
 ## privacy, storage, and enterprise
@@ -341,6 +556,74 @@ this FAQ is organized around the questions people ask support most often: what t
   if you need DLP-style real-time enforcement, review your requirements carefully. if you need employee-owned AI memory, SOP capture, meeting memory, or local workflow intelligence, screenpipe is designed for that model.
 </Expandable>
 
+<Expandable title="does screenpipe upload my screen, audio, or files to the cloud?">
+  no, not by default. capture, OCR, transcription, and storage all run locally in `~/.screenpipe/`.
+
+  data only leaves your machine when you explicitly enable one of:
+
+  - a cloud AI provider (Claude, ChatGPT, Gemini, etc.) — only the text you query
+  - cloud transcription (deepgram, screenpipe-cloud) — only audio you record
+  - cloud archive or team sync — only what you choose to archive
+  - a connection proxy (Slack, Notion, etc.) — only the API payloads
+  - a support bundle you upload yourself
+
+  see [privacy data flow](/privacy-data-flow) for the exact paths and toggles.
+</Expandable>
+
+<Expandable title="does screenpipe record my passwords when I type them?">
+  passwords typed into password fields are masked by the OS at the accessibility layer, so most apps and browsers do not expose them to screen readers — or to screenpipe. OCR sees what is on screen, which is usually dots.
+
+  to be extra safe, add your password manager (1Password, Bitwarden, etc.), banking site, or any sensitive window to **settings → recording → ignored windows**. enabling **AI PII removal** also redacts credentials, API keys, and tokens before they reach AI providers.
+</Expandable>
+
+<Expandable title="does screenpipe record incognito or private browsing windows?">
+  yes — incognito only blocks the browser from saving its own history. it does not hide pixels from screen capture or text from accessibility APIs.
+
+  if you want incognito sessions excluded, add the private-window title pattern to **settings → recording → ignored windows**, or pause capture during sensitive browsing from the tray icon.
+</Expandable>
+
+<Expandable title="can my employer see my screenpipe data?">
+  on personal devices: no. screenpipe is local-first and your employer has no access unless you choose to share.
+
+  on company devices with screenpipe deployed by IT: depends on the deployment. team and enterprise plans can sync to a shared archive or surface activity to admins, but only when configured and within the bounds your IT policy allows. read [teams](/teams) and your company policy. screenpipe is designed as employee-owned AI memory, not surveillance — see [privacy data flow](/privacy-data-flow).
+</Expandable>
+
+<Expandable title="is screenpipe HIPAA, SOC2, or GDPR compliant?">
+  screenpipe's architecture is local-first by default: capture and storage stay on the user's device, which removes most of the data-residency surface area. cloud features (transcription, archive, AI providers) are optional and can be disabled for compliance-sensitive deployments.
+
+  formal certifications, BAAs, and DPAs are available for enterprise contracts — contact [louis@screenpi.pe](mailto:louis@screenpi.pe) with your compliance requirements. self-hosted, fully air-gapped deployments are supported.
+</Expandable>
+
+<Expandable title="is my microphone always on when screenpipe is running?">
+  no — only the microphones you select in **settings → recording** are open, and only while screenpipe is running. you can disable all audio devices and run screenpipe in screen-only mode.
+
+  the operating system shows the standard microphone indicator (orange dot on macOS, mic icon on Windows) whenever the input is active, so you always know.
+</Expandable>
+
+<Expandable title="does pressing the meeting button just turn on my microphone?">
+  the meeting button starts a focused recording session — it tags the audio that follows so it's grouped as a meeting in search, summaries, and the timeline. if you already have your microphone selected in **settings → recording**, capture was already happening; the button mainly adds the meeting tag and triggers the post-call summary pipe.
+
+  if you keep audio off by default, the button does turn the selected microphone on for the duration of the meeting and off when you stop it.
+</Expandable>
+
+<Expandable title="how do I delete a specific recording or time range?">
+  for a full wipe: quit screenpipe and delete `~/.screenpipe/data/` (media) and `~/.screenpipe/db.sqlite` (metadata). screenpipe will rebuild from empty on next start.
+
+  for partial cleanup, the simplest path is to delete media files from `~/.screenpipe/data/` for the dates you want gone. an in-app cleanup UI is on the roadmap — until then, file-level deletion is the supported approach.
+</Expandable>
+
+<Expandable title="how long is my data retained by default?">
+  indefinitely, locally, until you delete it. screenpipe does not auto-prune by default — your `~/.screenpipe/` directory grows until you remove files or run out of disk.
+
+  to keep storage in check: lower capture FPS, exclude apps you do not need, periodically delete old media in `~/.screenpipe/data/`, or use [cloud archive](/cloud-archive) to offload older months. enterprise deployments can set retention policies as part of their config.
+</Expandable>
+
+<Expandable title="does screenpipe phone home or send telemetry?">
+  the desktop app sends anonymous product analytics (page views, feature usage, crash reports) via PostHog by default. it does **not** send screen content, audio, transcripts, or file contents.
+
+  you can disable analytics in **settings → privacy → telemetry**. self-hosted enterprise builds ship with telemetry off.
+</Expandable>
+
 ## performance and hardware
 
 <Expandable title="what hardware does screenpipe need?">
@@ -364,6 +647,157 @@ this FAQ is organized around the questions people ask support most often: what t
   - archive or delete old media
 
   if the problem started suddenly, restart screenpipe and compare before/after. include OS, hardware, screenpipe version, selected devices, and logs when reporting performance issues.
+</Expandable>
+
+<Expandable title="does screenpipe drain my MacBook battery? how do I reduce it?">
+  capture, transcription, and OCR are CPU work, so screenpipe does use battery — more than a chat app, less than a video call when tuned correctly.
+
+  for battery-friendly settings:
+
+  1. **switch transcription to cloud**: settings → AI models → pick `deepgram` or `screenpipe-cloud` instead of local whisper. local whisper is the single biggest battery drain.
+  2. **lower capture FPS** to 0.5 or 1 in settings → recording.
+  3. **select fewer audio devices** — one microphone, not five.
+  4. **add heavy apps** (video editors, IDE builds, games) to **ignored windows**.
+  5. **close the timeline view** when you are not actively reviewing video.
+  6. **disable image PII removal** unless you need it — the local image model uses GPU/Neural Engine continuously.
+
+  on Apple Silicon MacBooks with these settings, expect 5-10% extra battery draw vs. a baseline workday. Intel Macs see more, and should strongly prefer cloud transcription.
+</Expandable>
+
+<Expandable title="why is my MacBook fan spinning when running screenpipe?">
+  almost always one of two things:
+
+  - **local whisper transcription** is keeping the CPU/Neural Engine hot. switch to cloud transcription in settings → AI models.
+  - **a pipe is in a tight loop** or the embedded chrome timeline is open. open settings → pipes and disable any pipe you do not need; close the timeline tab.
+
+  on Intel Macs, even with these tuned, fans run more than on Apple Silicon. consider cloud-only transcription on Intel.
+</Expandable>
+
+<Expandable title="why doesn't screenpipe show in the macOS Battery panel or Activity Monitor's energy column?">
+  capture and transcription run in a helper subprocess, not the main desktop app, so the top-level "screenpipe" row in the Battery panel can show low while the helper does most of the CPU work.
+
+  to see real energy use, open Activity Monitor and search for `screenpipe` — multiple rows will appear. the ones with non-trivial CPU% are the processes to tune via FPS, transcription engine, and selected audio devices.
+</Expandable>
+
+<Expandable title="is it normal for screenpipe to use 30 GB or more of disk per month?">
+  yes — that is the baseline at 1 FPS with default settings. screen frames are the largest contributor, then audio, then the SQLite metadata.
+
+  to use less disk:
+
+  - drop FPS to 0.5
+  - exclude apps you do not need recorded
+  - lower audio chunk duration or use mono
+  - set up auto-cleanup of old media in settings → storage
+  - use [cloud archive](/cloud-archive) to offload older months
+
+  enterprise deployments can configure tighter retention by policy.
+</Expandable>
+
+<Expandable title="will screenpipe slow down my computer for normal work?">
+  on Apple Silicon and recent Windows laptops with the recommended settings (1 FPS, cloud transcription, one audio device, ignored heavy apps), screenpipe runs in the background without noticeable impact on typing, video calls, or browsing.
+
+  noticeable slowdown usually means: local whisper-large is selected on an underpowered machine, every monitor is being captured at high FPS, or PII redaction is running on every frame. see [troubleshooting](/troubleshooting) for the tuning matrix.
+</Expandable>
+
+<Expandable title="does screenpipe support GPU acceleration on macOS, NVIDIA CUDA, or DirectML?">
+  on macOS, screenpipe uses Metal and the Apple Neural Engine for local whisper and image models — nothing to configure.
+
+  on Windows and Linux with NVIDIA GPUs, screenpipe has a CUDA build that offloads whisper to the GPU, which dramatically reduces CPU use during transcription. DirectML and Vulkan backends are also available on Windows. if you do not have a supported GPU, prefer cloud transcription (deepgram or screenpipe-cloud).
+</Expandable>
+
+## teams, enterprise, and deployment
+
+<Expandable title="how do I see what my team worked on this week?">
+  on the team plan, the admin dashboard shows per-member activity summaries (apps used, meetings attended, focus time) without exposing raw recordings.
+
+  for richer reporting, run a weekly digest pipe that aggregates each member's screenpipe data and posts a summary to Slack, Notion, or email. raw screen and audio data stays on the user's device unless they explicitly share. see [teams](/teams).
+</Expandable>
+
+<Expandable title="how do I add team members to screenpipe?">
+  on Team and Enterprise plans, open **settings → team → invite** in the desktop app, enter the member's email, and they receive an invite to install screenpipe with your team license already attached.
+
+  for managed fleets, use Intune, Jamf, or your MDM to deploy the installer with the license token pre-set. see [Intune deployment](/intune-deployment).
+</Expandable>
+
+<Expandable title="can I deploy screenpipe via Intune, Jamf, or another MDM?">
+  yes. screenpipe ships a silent installer for Windows (MSI) and a signed `.pkg` for macOS that work with Intune, Jamf Pro, Kandji, Mosyle, and other MDM tools.
+
+  pre-configure the license token, telemetry, cloud transcription, and recording filters via a JSON config file dropped at install time. enterprise customers get a deployment guide and a sample MDM configuration profile — see [Intune deployment](/intune-deployment) or contact [louis@screenpi.pe](mailto:louis@screenpi.pe).
+</Expandable>
+
+<Expandable title="does screenpipe support Microsoft 365 / Entra ID / SAML single sign-on (SSO)?">
+  enterprise plans support SAML and OIDC SSO through Microsoft Entra ID, Okta, Google Workspace, and other IdPs. SCIM provisioning is available on request.
+
+  contact [louis@screenpi.pe](mailto:louis@screenpi.pe) with your IdP and we will set up your tenant.
+</Expandable>
+
+<Expandable title="can I store screenpipe team data in my own Azure Blob, S3, or GCS bucket?">
+  yes. enterprise deployments can point cloud archive at your own Azure Blob Storage container, AWS S3 bucket, or Google Cloud Storage bucket so recordings never leave your cloud account.
+
+  configure the storage connection in **settings → storage → connection**, paste the container URL or bucket name and credentials, then verify with a test upload. if the connection silently fails on Windows, restart screenpipe so the new credentials are picked up — see [troubleshooting](/troubleshooting).
+</Expandable>
+
+## common errors
+
+<Expandable title='login or pipe error: "Failed to extract accountId".'>
+  this means screenpipe authenticated successfully but pi-agent (the pipe runtime) is reading the wrong auth preset for your account type.
+
+  fix:
+
+  1. open the pipe folder (or pipe settings) and find the front-matter.
+  2. set `preset: screenpipe-cloud`.
+  3. save and re-run the pipe.
+
+  if the error appears on initial login rather than in a pipe, sign out, restart the app, and sign back in with the same email used at purchase.
+</Expandable>
+
+<Expandable title='Anthropic error: "credit balance is too low" or "insufficient_credits".'>
+  this comes from the Anthropic API, not from screenpipe. your Anthropic console balance is empty.
+
+  fix: add credits at [console.anthropic.com/billing](https://console.anthropic.com/settings/billing), or switch the pipe / chat to **screenpipe-cloud** in **settings → AI models** to use included credits instead of your own Anthropic key.
+</Expandable>
+
+<Expandable title='OpenAI error: "you exceeded your current quota" or "insufficient_quota".'>
+  same shape as the Anthropic case — your OpenAI account is out of credit. add a payment method at [platform.openai.com/billing](https://platform.openai.com/account/billing), or switch the provider to **screenpipe-cloud**, Anthropic, Ollama, or another configured model.
+</Expandable>
+
+<Expandable title='macOS error: "screenpipe.app is damaged and cannot be opened".'>
+  Gatekeeper on first launch. right-click the app in Finder → **Open** → **Open** again on the warning. if it persists, run `xattr -dr com.apple.quarantine /Applications/screenpipe.app` in Terminal and reopen.
+</Expandable>
+
+<Expandable title='Windows pipe error: "screenpipe.exe not found" or "screenpipe is not recognized as an internal or external command".'>
+  the Windows binary is `screenpipe-app.exe`, not `screenpipe.exe`. update the pipe or script to use the correct name, or call the local API directly with `curl http://localhost:3030/...` instead of shelling out to the binary.
+</Expandable>
+
+<Expandable title='login error: "failed to load user" or login redirects in a loop.'>
+  usually a stale token or a blocked OAuth callback.
+
+  1. quit screenpipe.
+  2. clear the local session by deleting `~/.screenpipe/auth.json` if it exists.
+  3. reopen the app and sign in.
+  4. make sure your default browser can open the login callback (no popup blocker, no VPN that blocks `localhost` callbacks).
+  5. confirm your system clock is correct — OAuth fails if the clock is off by more than a few minutes.
+</Expandable>
+
+<Expandable title='API error: 404 on /api/search.'>
+  the local screenpipe endpoint is `/search` at the root, not `/api/search`. use:
+
+  ```bash
+  curl "http://localhost:3030/search?limit=5&content_type=all"
+  ```
+
+  see [API recipes](/api-recipes) for copy-paste examples.
+</Expandable>
+
+<Expandable title='Windows error: "ignore-settings-and-autoupdate" loop on every launch.'>
+  this means the app is failing to write its settings file (usually a permissions issue on `%USERPROFILE%\.screenpipe\`).
+
+  1. close screenpipe completely.
+  2. open `%USERPROFILE%\.screenpipe\` and confirm your user has full write access.
+  3. delete `settings.json` in that folder to reset to defaults.
+  4. relaunch screenpipe and reconfigure settings.
+
+  if the loop persists, capture logs via **settings → support → export logs** and share them with louis@screenpi.pe.
 </Expandable>
 
 ## help

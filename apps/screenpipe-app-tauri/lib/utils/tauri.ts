@@ -48,6 +48,22 @@ async checkAccessibilityPermissionCmd() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_accessibility_permission_cmd");
 },
 /**
+ * Check Input Monitoring permission (macOS only). Polling-safe — does not
+ * trigger the system prompt. Hand-written stub; specta regenerates on rebuild.
+ */
+async checkInputMonitoringPermissionCmd() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("check_input_monitoring_permission_cmd");
+},
+/**
+ * Request Input Monitoring permission (macOS only). Triggers the native
+ * consent prompt on first call and also opens System Settings → Privacy &
+ * Security → Input Monitoring as a fallback. Returns the post-request
+ * status. Hand-written stub; specta regenerates on rebuild.
+ */
+async requestInputMonitoringPermission() : Promise<OSPermissionStatus> {
+    return await TAURI_INVOKE("request_input_monitoring_permission");
+},
+/**
  * Check if Arc browser is installed (macOS only)
  */
 async checkArcInstalled() : Promise<boolean> {
@@ -254,6 +270,9 @@ async getBootPhase() : Promise<BootPhaseSnapshot> {
 },
 async isEnterpriseBuildCmd() : Promise<boolean> {
     return await TAURI_INVOKE("is_enterprise_build_cmd");
+},
+async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
+    return await TAURI_INVOKE("get_enterprise_install_metadata");
 },
 /**
  * Toggle the "Cloud audio + video + image analysis" capability
@@ -960,9 +979,9 @@ async piInstall() : Promise<Result<null, string>> {
  * The command is serialized through the queue — it will wait for any prior
  * command (new_session, abort) to fully complete before being written to stdin.
  */
-async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null) : Promise<Result<string, string>> {
+async piPrompt(sessionId: string | null, message: string, images: PiImageContent[] | null, displayPreview: string | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images }) };
+    return { status: "ok", data: await TAURI_INVOKE("pi_prompt", { sessionId, message, images, displayPreview }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1138,6 +1157,14 @@ async chatgptOauthStatus() : Promise<Result<ChatGptOAuthStatus, string>> {
 async chatgptOauthGetToken() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_get_token") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async chatgptOauthCheckToken() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_check_token") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1486,6 +1513,7 @@ export type ChatGptOAuthStatus = { logged_in: boolean }
 export type Credits = { amount: number }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: bigint }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
+export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
@@ -1494,7 +1522,7 @@ export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
 export type OAuthStatus = { connected: boolean; display_name: string | null; needs_attention?: boolean }
-export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
+export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null; 
@@ -1640,6 +1668,11 @@ experimentalCoreaudioSystemAudio?: boolean;
  * Ignored on non-Windows platforms and fail-open when unsupported by device/driver.
  */
 windowsInputAecEnabled?: boolean; 
+/**
+ * Experimental: request Apple VoiceProcessingIO (AEC) on the default macOS microphone.
+ * Ignored on non-macOS platforms. Only the system default input uses VPIO; other devices use HAL.
+ */
+macosInputVpioEnabled?: boolean; 
 /**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).

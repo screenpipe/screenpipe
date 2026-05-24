@@ -10,6 +10,10 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 
+export function isConversationHistorySyncPrompt(value?: string | null): boolean {
+  return typeof value === "string" && value.startsWith("<conversation_history>");
+}
+
 // ============================================================================
 // CHAT PREFILL - Reliable cross-window event delivery
 // ============================================================================

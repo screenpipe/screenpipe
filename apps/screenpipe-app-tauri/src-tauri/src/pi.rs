@@ -109,6 +109,37 @@ use tracing::{debug, error, info, warn};
 /// Signals that the background Pi install has finished (success or failure).
 static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 
+/// Captures the last bun-install error so `pi_start` can surface it to the UI
+/// when the install silently failed (e.g. Windows EPERM on bun's atomic rename).
+/// Without this, the user only sees the downstream "Pi exited with code 1" and
+/// the crash-loop, with the actual install stderr buried in app logs.
+static PI_INSTALL_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn set_pi_install_error(msg: String) {
+    if let Ok(mut guard) = PI_INSTALL_ERROR.lock() {
+        *guard = Some(msg);
+    }
+}
+
+fn take_pi_install_error() -> Option<String> {
+    PI_INSTALL_ERROR.lock().ok().and_then(|mut g| g.take())
+}
+
+/// Trim bun stderr to the last ~800 bytes for inclusion in a UI toast.
+/// The full output stays in the log file.
+fn truncate_stderr(stderr: &str) -> String {
+    const MAX: usize = 800;
+    let trimmed = stderr.trim();
+    if trimmed.len() <= MAX {
+        return trimmed.to_string();
+    }
+    let mut start = trimmed.len().saturating_sub(MAX);
+    while start < trimmed.len() && !trimmed.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("...{}", &trimmed[start..])
+}
+
 /// On Windows, `.cmd` files cannot be spawned directly with `Command::new()` since
 /// Rust 1.77+ (CVE-2024-24576 fix). We must use `cmd.exe /C` to run them.
 /// For `.exe` bun shims: resolve the JS entrypoint and run via `bun <cli.js>`
@@ -257,7 +288,9 @@ fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<Stri
     }
 }
 
-const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.60.0";
+const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
+const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
+const PI_NAMESPACE_DIR: &str = "@earendil-works";
 const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
 
 /// Pool of Pi sessions — each session_id gets its own PiManager/process.
@@ -472,42 +505,95 @@ fn pi_local_install_dir() -> Option<PathBuf> {
 /// Seed the pi-agent package.json with overrides and dependencies to fix resolution.
 /// `hosted-git-info` requires `lru-cache@^10`, but bun on Windows can hoist
 /// an ESM-only lru-cache@7.x that breaks CJS `require()`.
-/// `@mariozechner/pi-ai` requires `@anthropic-ai/sdk`, but bun on Windows
-/// fails to hoist it from the transitive dependency tree.
-/// Writing these before `bun add` ensures correct versions are used.
+/// `@earendil-works/pi-ai` and `@anthropic-ai/sdk` are transitive deps that
+/// bun on Windows fails to hoist into the top-level node_modules, so we
+/// pin them as direct deps. Writing these before `bun add` ensures correct
+/// versions are used.
+///
+/// Also strips legacy `@mariozechner/*` keys (the namespace was renamed
+/// upstream — see issue #3527) so installs migrating from 2.4.258 and
+/// earlier don't carry stale entries.
 fn seed_pi_package_json(install_dir: &std::path::Path) {
     let pkg_path = install_dir.join("package.json");
-    // Only seed if package.json doesn't exist yet — don't overwrite user/bun changes
+    // Force-pin the current expected versions even when package.json already
+    // exists. Earlier this only *added* missing fields, which left stale
+    // version ranges in place after a pi-coding-agent bump. The 0.60.0 → 0.73.1
+    // jump silently leaves users on the old `^0.33.1` anthropic-sdk range that
+    // bun cannot reconcile with the new pi-ai's `^0.91.1` requirement →
+    // pi process dies 2s after spawn, supervisor gives up after 18 retries,
+    // main app exits with code 255. macOS Enterprise v2.4.244 hit this on
+    // every upgrade from 243.
+    let expected_sdk = json!("^0.91.1");
+    let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
+    let expected_pi_ai_version = json!(PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""));
+    let expected_overrides = json!({
+        "hosted-git-info": {
+            "lru-cache": "^10.0.0"
+        }
+    });
+
     if pkg_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
             let mut changed = false;
+            let mut removed_legacy = 0usize;
             if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
                 if let Some(obj) = pkg.as_object_mut() {
-                    // Ensure overrides are present
-                    if !contents.contains("overrides") {
-                        obj.insert(
-                            "overrides".to_string(),
-                            json!({
-                                "hosted-git-info": {
-                                    "lru-cache": "^10.0.0"
-                                }
-                            }),
-                        );
+                    if obj.get("overrides") != Some(&expected_overrides) {
+                        obj.insert("overrides".to_string(), expected_overrides.clone());
                         changed = true;
                     }
-                    // Ensure @anthropic-ai/sdk is a direct dependency (Windows bun fix)
-                    if !contents.contains("@anthropic-ai/sdk") {
-                        let deps = obj.entry("dependencies").or_insert_with(|| json!({}));
-                        if let Some(deps_obj) = deps.as_object_mut() {
-                            deps_obj.insert("@anthropic-ai/sdk".to_string(), json!("^0.73.0"));
+                    let deps = obj.entry("dependencies").or_insert_with(|| json!({}));
+                    if let Some(deps_obj) = deps.as_object_mut() {
+                        let legacy_keys: Vec<String> = deps_obj
+                            .keys()
+                            .filter(|k| k.starts_with("@mariozechner/"))
+                            .cloned()
+                            .collect();
+                        for k in &legacy_keys {
+                            deps_obj.remove(k);
+                            changed = true;
                         }
-                        changed = true;
+                        removed_legacy = legacy_keys.len();
+                        if deps_obj.get("@anthropic-ai/sdk") != Some(&expected_sdk) {
+                            deps_obj
+                                .insert("@anthropic-ai/sdk".to_string(), expected_sdk.clone());
+                            changed = true;
+                        }
+                        if deps_obj.get("@earendil-works/pi-coding-agent")
+                            != Some(&expected_pi_version)
+                        {
+                            deps_obj.insert(
+                                "@earendil-works/pi-coding-agent".to_string(),
+                                expected_pi_version.clone(),
+                            );
+                            changed = true;
+                        }
+                        if deps_obj.get("@earendil-works/pi-ai")
+                            != Some(&expected_pi_ai_version)
+                        {
+                            deps_obj.insert(
+                                "@earendil-works/pi-ai".to_string(),
+                                expected_pi_ai_version.clone(),
+                            );
+                            changed = true;
+                        }
                     }
                 }
                 if changed {
                     if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
                         let _ = std::fs::write(&pkg_path, new_contents);
-                        info!("Patched pi-agent package.json (overrides + anthropic sdk)");
+                        // bun.lock pins the old transitive tree — must be
+                        // dropped so the next `bun install` re-resolves
+                        // against the corrected ranges.
+                        let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+                        let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+                        info!(
+                            "Patched pi-agent package.json (forced pins → pi {}, anthropic sdk {}, pi-ai {}; dropped {} legacy @mariozechner deps)",
+                            expected_pi_version,
+                            expected_sdk,
+                            expected_pi_ai_version,
+                            removed_legacy
+                        );
                     }
                 }
             }
@@ -516,7 +602,9 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     }
     let pkg_json = json!({
         "dependencies": {
-            "@anthropic-ai/sdk": "^0.73.0"
+            "@anthropic-ai/sdk": expected_sdk,
+            "@earendil-works/pi-coding-agent": expected_pi_version,
+            "@earendil-works/pi-ai": expected_pi_ai_version,
         },
         "overrides": {
             "hosted-git-info": {
@@ -528,7 +616,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
         &pkg_path,
         serde_json::to_string_pretty(&pkg_json).unwrap_or_default(),
     ) {
-        Ok(_) => info!("Seeded pi-agent package.json with lru-cache overrides"),
+        Ok(_) => info!("Seeded pi-agent package.json with direct deps + overrides"),
         Err(e) => warn!("Failed to seed pi-agent package.json: {}", e),
     }
 }
@@ -537,7 +625,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
 fn is_local_pi_version_current(install_dir: &std::path::Path) -> bool {
     let pkg_json = install_dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("package.json");
     let contents = match std::fs::read_to_string(&pkg_json) {
@@ -552,7 +640,7 @@ fn is_local_pi_version_current(install_dir: &std::path::Path) -> bool {
         Some(v) => v,
         None => return false,
     };
-    // PI_PACKAGE is "@mariozechner/pi-coding-agent@0.60.0" — extract version after last '@'
+    // PI_PACKAGE is "<scope>/pi-coding-agent@<ver>" — extract version after last '@'
     let expected = PI_PACKAGE.rsplit('@').next().unwrap_or("");
     if installed != expected {
         info!(
@@ -569,7 +657,7 @@ fn find_local_pi_entrypoint() -> Option<String> {
     let dir = pi_local_install_dir()?;
     let cli_js = dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("dist")
         .join("cli.js");
@@ -578,34 +666,6 @@ fn find_local_pi_entrypoint() -> Option<String> {
     } else {
         None
     }
-}
-
-/// Extract the plain-text content from a pi-mono `message` JSON value (the
-/// shape that ships in `message_start`/`message_end` events). pi-mono encodes
-/// user messages as either `content: "string"` or
-/// `content: [{type: "text", text: "..."}, ...]`. We concatenate all text
-/// parts in order. Used to match an incoming user message against the queued
-/// prompt rail's preview text.
-fn extract_user_message_text(msg: &serde_json::Value) -> String {
-    let content = match msg.get("content") {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    if let Some(s) = content.as_str() {
-        return s.to_string();
-    }
-    if let Some(arr) = content.as_array() {
-        let mut out = String::new();
-        for part in arr {
-            if part.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
-                    out.push_str(t);
-                }
-            }
-        }
-        return out;
-    }
-    String::new()
 }
 
 fn find_pi_executable() -> Option<String> {
@@ -722,6 +782,26 @@ fn ensure_web_search_extension(
         );
     }
 
+    Ok(())
+}
+
+/// Install the MCP bridge extension. Registers proxy tools that route
+/// `mcp_call` / `mcp_list_tools` requests through the local
+/// `/mcp-servers/*` API. Always installed — does nothing when zero
+/// servers are registered.
+fn ensure_mcp_bridge_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("mcp-bridge.ts");
+    let ext_content = include_str!("../assets/extensions/mcp-bridge.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write mcp-bridge extension: {}", e))?;
+
+    debug!("mcp-bridge extension installed at {:?}", ext_path);
     Ok(())
 }
 
@@ -1109,6 +1189,9 @@ pub async fn pi_start_inner(
     // Install web-search extension only for screenpipe-cloud presets
     ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
 
+    // MCP bridge: lets the agent reach user-registered MCP servers.
+    ensure_mcp_bridge_extension(&project_dir)?;
+
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
 
@@ -1231,7 +1314,10 @@ pub async fn pi_start_inner(
                 .ok_or_else(|| {
                     let bun_found = find_bun_executable().is_some();
                     if bun_found {
-                        format!("Pi not found after install attempt. Try restarting the app or delete ~/.screenpipe/pi-agent and restart.")
+                        let install_err = take_pi_install_error()
+                            .map(|e| format!(" Install error: {}", e))
+                            .unwrap_or_default();
+                        format!("Pi not found after install attempt.{} Try restarting the app or delete ~/.screenpipe/pi-agent and restart.", install_err)
                     } else {
                         format!("Pi not found: bun is not installed. Screenpipe needs bun to run the AI assistant. Expected bundled bun next to the app executable.")
                     }
@@ -1453,6 +1539,12 @@ pub async fn pi_start_inner(
                 }
             }
         }
+    }
+
+    // Pass the screenpipe API auth key so mcp-bridge.ts can authenticate
+    // its GET /mcp-servers calls (returns 403 without this).
+    if let Some(key) = crate::store::resolved_api_auth_key() {
+        cmd.env("SCREENPIPE_API_AUTH_KEY", key);
     }
 
     // Spawn process
@@ -1784,7 +1876,13 @@ pub async fn pi_start_inner(
                         error!("Pi process exited immediately with code {} — check 'Pi stderr:' warnings above for details (bun path: {})", code, bun_path);
                         m.child = None;
                         m.stdin = None;
-                        return Err(format!("Pi exited immediately with code {} (bun: {}). Check app logs for 'Pi stderr:' lines.", code, bun_path));
+                        let install_hint = take_pi_install_error()
+                            .map(|e| format!(" The Pi install previously failed: {} Try removing ~/.screenpipe/pi-agent and restarting.", e))
+                            .unwrap_or_default();
+                        return Err(format!(
+                            "Pi exited immediately with code {} (bun: {}).{} Check app logs for 'Pi stderr:' lines.",
+                            code, bun_path, install_hint
+                        ));
                     }
                     Ok(None) => {
                         // Still running — good
@@ -1858,6 +1956,7 @@ pub async fn pi_prompt(
     session_id: Option<String>,
     message: String,
     images: Option<Vec<PiImageContent>>,
+    display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     let queue = {
@@ -1872,12 +1971,13 @@ pub async fn pi_prompt(
             .ok_or("Pi command queue not initialized")?
     };
 
-    let cmd = build_prompt_command(message.clone(), images)?;
+    let preview = display_preview.unwrap_or_else(|| message.clone());
+    let cmd = build_prompt_command(message, images)?;
     let (queue_id, rx) = queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
-            message.clone(),
+            preview,
             false,
         )
         .await?;
@@ -2391,8 +2491,11 @@ pub fn ensure_pi_installed_background() {
                     );
                 }
                 seed_pi_package_json(&install_dir);
-                if needs_lru_fix || needs_anthropic_sdk {
-                    // Delete bun.lock so bun resolves deps with new overrides/deps
+                // Drop bun.lock whenever ANY patch fires — a stale lockfile
+                // pins the resolved tree to the prior version graph, so a
+                // version bump without lockfile invalidation leaves bun
+                // reinstalling the same broken set.
+                if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {
                     let _ = std::fs::remove_file(install_dir.join("bun.lock"));
                     let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
                 }
@@ -2422,9 +2525,24 @@ pub fn ensure_pi_installed_background() {
                                 }
                                 Ok(output) => {
                                     let stderr = String::from_utf8_lossy(&output.stderr);
-                                    warn!("Pi upgrade/fix: install failed: {}", stderr);
+                                    error!("Pi upgrade/fix: install failed: {}", stderr);
+                                    set_pi_install_error(format!(
+                                        "bun install failed (exit {}). stderr: {}",
+                                        output
+                                            .status
+                                            .code()
+                                            .map(|c| c.to_string())
+                                            .unwrap_or_else(|| "signal".to_string()),
+                                        truncate_stderr(&stderr)
+                                    ));
                                 }
-                                Err(e) => warn!("Pi upgrade/fix: bun error: {}", e),
+                                Err(e) => {
+                                    error!("Pi upgrade/fix: bun error: {}", e);
+                                    set_pi_install_error(format!(
+                                        "could not spawn bun: {}",
+                                        e
+                                    ));
+                                }
                             }
                             PI_INSTALL_DONE.store(true, Ordering::SeqCst);
                         });
@@ -2488,10 +2606,20 @@ pub fn ensure_pi_installed_background() {
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        warn!("Pi background install failed (non-fatal): {}", stderr);
+                        error!("Pi background install failed: {}", stderr);
+                        set_pi_install_error(format!(
+                            "bun install failed (exit {}). stderr: {}",
+                            output
+                                .status
+                                .code()
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "signal".to_string()),
+                            truncate_stderr(&stderr)
+                        ));
                     }
                     Err(e) => {
-                        warn!("Pi background install error (non-fatal): {}", e);
+                        error!("Pi background install error: {}", e);
+                        set_pi_install_error(format!("could not spawn bun: {}", e));
                     }
                 }
             });

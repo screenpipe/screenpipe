@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use crate::utils::audio::audio_to_mono;
@@ -129,6 +129,7 @@ impl AudioStream {
         is_running: Arc<AtomicBool>,
         #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] use_coreaudio_tap: bool,
         #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] windows_input_aec: bool,
+        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] macos_input_vpio: bool,
     ) -> Result<Self> {
         let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
         let tx_clone = tx.clone();
@@ -189,6 +190,7 @@ impl AudioStream {
                                 &is_disconnected,
                                 &stream_control_tx,
                                 windows_input_aec,
+                                macos_input_vpio,
                             )
                             .await?
                         }
@@ -207,6 +209,7 @@ impl AudioStream {
                     &is_disconnected,
                     &stream_control_tx,
                     windows_input_aec,
+                    macos_input_vpio,
                 )
                 .await?
             }
@@ -233,12 +236,56 @@ impl AudioStream {
         is_disconnected: &Arc<AtomicBool>,
         stream_control_tx: &mpsc::Sender<StreamControl>,
         windows_input_aec: bool,
+        macos_input_vpio: bool,
     ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
-        let (cpal_audio_device, config) = get_cpal_device_and_config(device).await?;
-        let audio_config = AudioStreamConfig::from(&config);
-        let channels = config.channels();
+        let (cpal_audio_device, mut config) = get_cpal_device_and_config(device).await?;
         let is_running_weak = Arc::downgrade(is_running);
         let input_aec = windows_input_aec && device.device_type == super::device::DeviceType::Input;
+        let input_vpio = macos_input_vpio
+            && device.device_type == super::device::DeviceType::Input
+            && is_default_input_device(device);
+
+        #[cfg(target_os = "macos")]
+        {
+            if macos_input_vpio && input_vpio {
+                let original_rate = config.sample_rate().0;
+                info!(
+                    device = %device,
+                    "screenpipe-audio: enabling VoiceProcessingIO (AEC) on default microphone"
+                );
+                config = cpal_audio_device.default_input_config().map_err(|e| {
+                    anyhow!(
+                        "could not get default input config for VoiceProcessingIO on {}: {}",
+                        device,
+                        e
+                    )
+                })?;
+                let vpio_rate = config.sample_rate().0;
+                if vpio_rate != original_rate {
+                    info!(
+                        device = %device,
+                        original_rate,
+                        vpio_rate,
+                        "screenpipe-audio: VPIO config rate differs from originally-picked config; \
+                         using hardware native rate"
+                    );
+                }
+                info!(
+                    device = %device,
+                    sample_rate = vpio_rate,
+                    channels = config.channels(),
+                    "screenpipe-audio: using default input config for VoiceProcessingIO"
+                );
+            } else if macos_input_vpio && device.device_type == super::device::DeviceType::Input {
+                info!(
+                    device = %device,
+                    "screenpipe-audio: macOS VPIO requested but using HAL (only system default input supports VoiceProcessingIO)"
+                );
+            }
+        }
+
+        let audio_config = AudioStreamConfig::from(&config);
+        let channels = config.channels();
 
         let thread = Self::spawn_audio_thread(
             cpal_audio_device,
@@ -250,6 +297,7 @@ impl AudioStream {
             is_disconnected.clone(),
             stream_control_tx.clone(),
             input_aec,
+            input_vpio,
         )
         .await?;
         Ok((audio_config, thread))
@@ -267,8 +315,13 @@ impl AudioStream {
         is_disconnected: Arc<AtomicBool>,
         stream_control_tx: mpsc::Sender<StreamControl>,
         windows_input_aec: bool,
+        macos_input_vpio: bool,
     ) -> Result<tokio::task::JoinHandle<()>> {
         let device_name = device.name()?;
+        #[cfg(target_os = "macos")]
+        let use_vpio = macos_input_vpio;
+        #[cfg(target_os = "windows")]
+        let use_aec = windows_input_aec;
 
         Ok(tokio::task::spawn_blocking(move || {
             // Primary attempt: the "best" config get_cpal_device_and_config
@@ -293,6 +346,7 @@ impl AudioStream {
                 tx.clone(),
                 primary_cb,
                 windows_input_aec,
+                macos_input_vpio,
             ) {
                 Ok(s) => Some(s),
                 Err(primary_err) if is_wasapi_unsupported_format(&primary_err) => {
@@ -316,6 +370,7 @@ impl AudioStream {
                                 tx,
                                 fallback_cb,
                                 windows_input_aec,
+                                macos_input_vpio,
                             ) {
                                 Ok(s) => Some(s),
                                 Err(fallback_err) => {
@@ -336,6 +391,41 @@ impl AudioStream {
                         }
                     }
                 }
+                #[cfg(target_os = "macos")]
+                Err(primary_err) if macos_input_vpio => {
+                    warn!(
+                        device = %device_name,
+                        rate = config.sample_rate().0,
+                        channels = channels,
+                        format = ?config.sample_format(),
+                        "VoiceProcessingIO stream creation failed ({}); retrying with HAL (VPIO disabled)",
+                        primary_err,
+                    );
+                    let fallback_cb = create_error_callback(
+                        device_name.clone(),
+                        is_running_weak,
+                        is_disconnected,
+                        stream_control_tx,
+                    );
+                    match build_input_stream(
+                        &device,
+                        &config,
+                        channels,
+                        tx,
+                        fallback_cb,
+                        windows_input_aec,
+                        false,
+                    ) {
+                        Ok(s) => Some(s),
+                        Err(fallback_err) => {
+                            error!(
+                                "HAL fallback also failed for {} after VPIO error: {} (VPIO error: {})",
+                                device_name, fallback_err, primary_err
+                            );
+                            None
+                        }
+                    }
+                }
                 Err(e) => {
                     error!("Failed to build input stream: {}", e);
                     None
@@ -346,6 +436,21 @@ impl AudioStream {
                 if let Err(e) = stream.play() {
                     error!("failed to play stream for {}: {}", device_name, e);
                     return;
+                }
+
+                #[cfg(target_os = "macos")]
+                if use_vpio {
+                    info!(
+                        device = %device_name,
+                        "screenpipe-audio: VoiceProcessingIO microphone capture running (AEC initialized)"
+                    );
+                }
+                #[cfg(target_os = "windows")]
+                if use_aec {
+                    info!(
+                        device = %device_name,
+                        "screenpipe-audio: WASAPI microphone capture running with AEC enabled"
+                    );
                 }
 
                 if let Ok(StreamControl::Stop { response, mode }) = stream_control_rx.recv() {
@@ -588,10 +693,11 @@ fn build_input_stream(
     tx: broadcast::Sender<Vec<f32>>,
     error_callback: impl FnMut(CpalError) + Send + 'static,
     windows_input_aec: bool,
+    macos_input_vpio: bool,
 ) -> Result<cpal::Stream> {
     let stream_config = cpal_stream_config(config, windows_input_aec);
     match config.sample_format() {
-        cpal::SampleFormat::F32 => build_cpal_input_stream::<f32, _, _>(
+        cpal::SampleFormat::F32 => build_cpal_input_stream_for_platform::<f32, _, _>(
             device,
             &stream_config,
             move |data: &[f32], _: &_| {
@@ -599,8 +705,9 @@ fn build_input_stream(
                 let _ = tx.send(mono);
             },
             error_callback,
+            macos_input_vpio,
         ),
-        cpal::SampleFormat::I16 => build_cpal_input_stream::<i16, _, _>(
+        cpal::SampleFormat::I16 => build_cpal_input_stream_for_platform::<i16, _, _>(
             device,
             &stream_config,
             move |data: &[i16], _: &_| {
@@ -609,8 +716,9 @@ fn build_input_stream(
                 let _ = tx.send(mono);
             },
             error_callback,
+            macos_input_vpio,
         ),
-        cpal::SampleFormat::I32 => build_cpal_input_stream::<i32, _, _>(
+        cpal::SampleFormat::I32 => build_cpal_input_stream_for_platform::<i32, _, _>(
             device,
             &stream_config,
             move |data: &[i32], _: &_| {
@@ -622,8 +730,9 @@ fn build_input_stream(
                 let _ = tx.send(mono);
             },
             error_callback,
+            macos_input_vpio,
         ),
-        cpal::SampleFormat::I8 => build_cpal_input_stream::<i8, _, _>(
+        cpal::SampleFormat::I8 => build_cpal_input_stream_for_platform::<i8, _, _>(
             device,
             &stream_config,
             move |data: &[i8], _: &_| {
@@ -632,11 +741,64 @@ fn build_input_stream(
                 let _ = tx.send(mono);
             },
             error_callback,
+            macos_input_vpio,
         ),
         _ => Err(anyhow!(
             "unsupported sample format: {}",
             config.sample_format()
         )),
+    }
+}
+
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn is_default_input_device(device: &AudioDevice) -> bool {
+    use super::device::{default_input_device, DeviceType};
+
+    if device.device_type != DeviceType::Input {
+        return false;
+    }
+
+    default_input_device()
+        .map(|default_device| default_device == *device)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_voice_processing_config(enabled: bool) -> Option<cpal::MacosVoiceProcessingInputConfig> {
+    if enabled {
+        Some(cpal::MacosVoiceProcessingInputConfig::screenpipe_aec())
+    } else {
+        None
+    }
+}
+
+#[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+fn build_cpal_input_stream_for_platform<T, D, E>(
+    device: &cpal::Device,
+    stream_config: &cpal::StreamConfig,
+    data_callback: D,
+    error_callback: E,
+    macos_input_vpio: bool,
+) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample,
+    D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
+    E: FnMut(CpalError) + Send + 'static,
+{
+    #[cfg(target_os = "macos")]
+    {
+        return build_cpal_input_stream(
+            device,
+            stream_config,
+            data_callback,
+            error_callback,
+            macos_voice_processing_config(macos_input_vpio),
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = macos_input_vpio;
+        build_cpal_input_stream(device, stream_config, data_callback, error_callback)
     }
 }
 
@@ -649,6 +811,7 @@ fn build_cpal_input_stream<T, D, E>(
     stream_config: &cpal::StreamConfig,
     data_callback: D,
     error_callback: E,
+    voice_processing: Option<cpal::MacosVoiceProcessingInputConfig>,
 ) -> Result<cpal::Stream>
 where
     T: cpal::SizedSample,
@@ -656,7 +819,13 @@ where
     E: FnMut(CpalError) + Send + 'static,
 {
     device
-        .build_input_stream(stream_config, data_callback, error_callback, None, None)
+        .build_input_stream(
+            stream_config,
+            data_callback,
+            error_callback,
+            None,
+            voice_processing,
+        )
         .map_err(|e| anyhow!(e))
 }
 

@@ -112,12 +112,77 @@ fn get_target_arch() -> &'static str {
 pub fn is_source_build(_app: &tauri::AppHandle) -> bool {
     // The official-build feature is only enabled during CI releases
     // Source builds will not have this feature enabled
-    !cfg!(feature = "official-build")
+    !cfg!(feature = "official-build") && !cfg!(feature = "enterprise-build")
 }
 
 /// Enterprise build: updates are managed by IT (Intune/RoboPack), not in-app.
 pub fn is_enterprise_build(_app: &tauri::AppHandle) -> bool {
     cfg!(feature = "enterprise-build")
+}
+
+fn enterprise_app_update_policy(app: &tauri::AppHandle) -> Option<serde_json::Value> {
+    SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.extra.get("enterpriseAppUpdatePolicy").cloned())
+}
+
+fn enterprise_update_mode(app: &tauri::AppHandle) -> Option<String> {
+    enterprise_app_update_policy(app)
+        .and_then(|policy| {
+            policy
+                .get("mode")
+                .and_then(|mode| mode.as_str())
+                .map(str::to_string)
+        })
+        .map(|mode| mode.to_lowercase())
+}
+
+fn enterprise_updates_managed_locally(app: &tauri::AppHandle) -> bool {
+    let metadata = crate::enterprise_install_metadata::get_enterprise_install_metadata();
+    match enterprise_update_mode(app).as_deref() {
+        Some("screenpipe") => false,
+        Some("auto_detect") => metadata.managed,
+        Some("mdm") | Some("manual") => true,
+        // Missing/unknown policy → behave like a new org with the consumer
+        // banner flow. Existing orgs are explicitly pinned to "manual" via
+        // the website migration so they hit the arm above, not this one.
+        _ => false,
+    }
+}
+
+/// Snapshot of a pending update, exposed to the frontend via
+/// `get_pending_update`. The banner queries this on mount so it can hydrate
+/// state even when the `update-available` event fires before React mounts.
+#[derive(Clone, serde::Serialize)]
+pub struct PendingUpdateSnapshot {
+    pub version: String,
+    pub body: String,
+    /// True once the bundle is downloaded and the app is ready to restart.
+    pub downloaded: bool,
+    /// True when download failed with 401/403 — user must sign in.
+    pub auth_required: bool,
+}
+
+fn auto_update_enabled_from_settings(settings: Result<Option<SettingsStore>, String>) -> bool {
+    settings
+        .ok()
+        .flatten()
+        .map(|settings| settings.auto_update)
+        .unwrap_or(false)
+}
+
+fn load_auto_update_enabled(app: &tauri::AppHandle) -> bool {
+    let settings = SettingsStore::get(app);
+    match &settings {
+        Ok(Some(settings)) => debug!("auto-update setting: {}", settings.auto_update),
+        Ok(None) => warn!("settings missing during update check; auto-update disabled"),
+        Err(err) => warn!(
+            "failed to read settings during update check; auto-update disabled: {}",
+            err
+        ),
+    }
+    auto_update_enabled_from_settings(settings)
 }
 
 pub struct UpdatesManager {
@@ -127,6 +192,11 @@ pub struct UpdatesManager {
     /// None for enterprise builds (no in-app update UI).
     update_menu_item: Option<MenuItem<Wry>>,
     update_installed: Arc<Mutex<bool>>,
+    /// Latest pending update info, mirrored to the frontend on demand. None
+    /// until an update is detected; populated before download, then flipped
+    /// to downloaded=true once the bundle lands. Survives webview-mount
+    /// races that would otherwise lose the `update-available` event.
+    pending_update: Arc<Mutex<Option<PendingUpdateSnapshot>>>,
     /// Prevents concurrent check_for_updates calls (boot check + periodic race)
     is_checking: AtomicBool,
 }
@@ -152,6 +222,7 @@ impl UpdatesManager {
             interval: Duration::from_secs(interval_minutes * 60),
             update_available: Arc::new(Mutex::new(false)),
             update_installed: Arc::new(Mutex::new(false)),
+            pending_update: Arc::new(Mutex::new(None)),
             app: app.clone(),
             update_menu_item,
             is_checking: AtomicBool::new(false),
@@ -179,9 +250,13 @@ impl UpdatesManager {
         }
         let _guard = CheckGuard(&self.is_checking);
 
-        // Enterprise: updates managed by IT (Intune/RoboPack), no in-app check
-        if is_enterprise_build(&self.app) {
-            info!("enterprise build, updates managed by IT");
+        // Enterprise: default to IT-managed updates unless the dashboard policy
+        // explicitly allows the Screenpipe updater for this install context.
+        if is_enterprise_build(&self.app) && enterprise_updates_managed_locally(&self.app) {
+            info!(
+                "enterprise build, updates managed outside app (mode={:?})",
+                enterprise_update_mode(&self.app)
+            );
             return Result::Ok(false);
         }
 
@@ -219,7 +294,11 @@ impl UpdatesManager {
         );
         // Build updater with auth header so paid users can download from R2
         let mut builder = self.app.updater_builder();
-        if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
+        if is_enterprise_build(&self.app) {
+            if let Some(license_key) = crate::commands::get_enterprise_license_key() {
+                builder = builder.header("X-License-Key", license_key)?;
+            }
+        } else if let Ok(Some(settings)) = SettingsStore::get(&self.app) {
             if let Some(ref token) = settings.user.token {
                 builder = builder.header("Authorization", format!("Bearer {}", token))?;
             }
@@ -250,12 +329,14 @@ impl UpdatesManager {
         }
         if let Ok(Some(update)) = check_result {
             *self.update_available.lock().await = true;
+            *self.pending_update.lock().await = Some(PendingUpdateSnapshot {
+                version: update.version.clone(),
+                body: update.body.clone().unwrap_or_default(),
+                downloaded: false,
+                auth_required: false,
+            });
 
-            let auto_update = SettingsStore::get(&self.app)
-                .ok()
-                .flatten()
-                .map(|s| s.auto_update)
-                .unwrap_or(true);
+            let auto_update = load_auto_update_enabled(&self.app);
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(true)?;
@@ -292,51 +373,57 @@ impl UpdatesManager {
                 });
             }
 
-            let should_download_now = if show_dialog {
-                let (tx, rx) = oneshot::channel();
-                let update_dialog = self
-                    .app
-                    .dialog()
-                    .message("update available")
-                    .title("screenpipe update")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "update now".to_string(),
-                        "later".to_string(),
-                    ));
+            // Windows quirk: the Tauri updater's download_and_install launches
+            // the NSIS/MSI installer and calls std::process::exit(0) at the end
+            // (see tauri-plugin-updater install_inner on Windows). Unlike macOS
+            // where it just stages files in place, calling it on Windows IS the
+            // install — there's no way to "silently pre-download" without
+            // triggering the restart. When auto_update is off we must defer to
+            // the user's banner click; the frontend handler in
+            // update-banner.tsx re-checks and runs downloadAndInstall itself.
+            #[cfg(target_os = "windows")]
+            if !auto_update {
+                info!(
+                    "auto-update disabled on windows; deferring installer to user banner click (v{})",
+                    update.version
+                );
 
-                update_dialog.show(move |answer| {
-                    let _ = tx.send(answer);
+                *self.update_installed.lock().await = true;
+                if let Some(snap) = self.pending_update.lock().await.as_mut() {
+                    snap.downloaded = true;
+                }
+                if let Some(ref item) = self.update_menu_item {
+                    item.set_enabled(true)?;
+                    item.set_text("Restart to update")?;
+                }
+
+                save_pre_update_version(&self.app, update.body.clone());
+
+                let update_info = serde_json::json!({
+                    "version": update.version,
+                    "body": update.body.clone().unwrap_or_default()
                 });
+                if let Err(e) = self.app.emit("update-available", update_info) {
+                    error!("Failed to emit update-available event: {}", e);
+                }
 
-                rx.await?
-            } else {
-                auto_update
-            };
-
-            if !should_download_now {
                 let app_notif = self.app.clone();
                 let version_str = update.version.clone();
-                // std::thread::spawn (not spawn_blocking) to escape tokio runtime context entirely.
-                // notify_rust on Linux internally calls block_on for D-Bus, which panics
-                // if any tokio runtime exists on the current thread — even blocking threads.
                 std::thread::spawn(move || {
-                    if let Err(e) = app_notif
+                    let _ = app_notif
                         .notification()
                         .builder()
-                        .title("screenpipe update available")
-                        .body(format!(
-                            "v{} is ready — update when you choose",
-                            version_str
-                        ))
-                        .show()
-                    {
-                        error!("failed to send update notification: {}", e);
-                    }
+                        .title("screenpipe update ready")
+                        .body(format!("v{} ready — restart to update", version_str))
+                        .show();
                 });
+
                 return Result::Ok(true);
             }
 
-            // Emit "update-downloading" only when we are actually downloading.
+            // Always download in the background. auto_update only controls
+            // whether we restart automatically after — the banner is the user's
+            // "restart now" trigger when auto_update is off.
             let download_info = serde_json::json!({
                 "version": update.version,
                 "body": update.body.clone().unwrap_or_default(),
@@ -359,41 +446,88 @@ impl UpdatesManager {
                 }
             }
 
-            let app_handle = self.app.clone();
-            let update_version = update.version.clone();
-            let menu_item = self.update_menu_item.clone();
-            let mut downloaded: u64 = 0;
-            let mut last_pct: u8 = 0;
-            let download_result = update
-                .download_and_install(
-                    move |chunk_len, content_len| {
-                        downloaded += chunk_len as u64;
-                        let pct = content_len
-                            .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
-                            .unwrap_or(0);
-                        // Only emit every 5% to avoid flooding
-                        if pct >= last_pct + 5 || pct == 100 {
-                            last_pct = pct;
-                            let progress = serde_json::json!({
-                                "version": update_version,
-                                "downloaded": downloaded,
-                                "total": content_len,
-                                "percent": pct,
-                            });
-                            let _ = app_handle.emit("update-download-progress", progress);
-                            info!("update download: {}%", pct);
+            // Retry transient download failures with exponential backoff.
+            // Auth errors (401/403) short-circuit out of the loop — see error arm.
+            let retry_delays = [
+                Duration::from_secs(30),
+                Duration::from_secs(120),
+                Duration::from_secs(300),
+            ];
+            let download_result = {
+                let mut attempt: usize = 0;
+                loop {
+                    let app_handle = self.app.clone();
+                    let update_version = update.version.clone();
+                    let menu_item = self.update_menu_item.clone();
+                    let mut downloaded: u64 = 0;
+                    let mut last_pct: u8 = 0;
+                    let result = update
+                        .download_and_install(
+                            move |chunk_len, content_len| {
+                                downloaded += chunk_len as u64;
+                                let pct = content_len
+                                    .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
+                                    .unwrap_or(0);
+                                // Only emit every 5% to avoid flooding
+                                if pct >= last_pct + 5 || pct == 100 {
+                                    last_pct = pct;
+                                    let progress = serde_json::json!({
+                                        "version": update_version,
+                                        "downloaded": downloaded,
+                                        "total": content_len,
+                                        "percent": pct,
+                                    });
+                                    let _ = app_handle.emit("update-download-progress", progress);
+                                    info!("update download: {}%", pct);
+                                }
+                                if let Some(ref m) = menu_item {
+                                    let _ = m.set_text(&format!("Downloading update... {}%", pct));
+                                }
+                            },
+                            || {},
+                        )
+                        .await;
+
+                    match &result {
+                        Ok(_) => break result,
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            // Auth errors won't recover from a retry — bail out and let
+                            // the error arm below emit the sign-in banner.
+                            let is_auth = err_str.contains("401")
+                                || err_str.contains("403")
+                                || err_str.contains("Unauthorized")
+                                || err_str.contains("Forbidden");
+                            let next_delay = retry_delays.get(attempt).copied();
+                            if is_auth || next_delay.is_none() {
+                                break result;
+                            }
+                            let delay = next_delay.unwrap();
+                            warn!(
+                                "update download attempt {} failed: {} — retrying in {}s",
+                                attempt + 1,
+                                err_str,
+                                delay.as_secs()
+                            );
+                            if let Some(ref item) = self.update_menu_item {
+                                let _ = item.set_text(&format!(
+                                    "Update download failed — retrying in {}s",
+                                    delay.as_secs()
+                                ));
+                            }
+                            tokio::time::sleep(delay).await;
+                            attempt += 1;
                         }
-                        if let Some(ref m) = menu_item {
-                            let _ = m.set_text(&format!("Downloading update... {}%", pct));
-                        }
-                    },
-                    || {},
-                )
-                .await;
+                    }
+                }
+            };
 
             match download_result {
                 Ok(_) => {
                     *self.update_installed.lock().await = true;
+                    if let Some(snap) = self.pending_update.lock().await.as_mut() {
+                        snap.downloaded = true;
+                    }
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
                         item.set_text("Restart to update")?;
@@ -407,6 +541,9 @@ impl UpdatesManager {
                         || err_str.contains("Forbidden")
                     {
                         warn!("update download requires authentication: {}", err_str);
+                        if let Some(snap) = self.pending_update.lock().await.as_mut() {
+                            snap.auth_required = true;
+                        }
                         let _ = self.app.emit(
                             "update-auth-required",
                             serde_json::json!({
@@ -430,9 +567,44 @@ impl UpdatesManager {
                         }
                         return Ok(false);
                     }
+                    // Generic failure (network/disk/server). Clear latched state
+                    // so the periodic loop and tray can retry without an app
+                    // restart, and tell the user what happened.
+                    warn!("update download failed after retries: {}", err_str);
+                    *self.update_available.lock().await = false;
+                    *self.pending_update.lock().await = None;
+                    if let Some(ref item) = self.update_menu_item {
+                        item.set_enabled(true)?;
+                        item.set_text("Update failed — click to retry")?;
+                    }
+                    let _ = self.app.emit(
+                        "update-failed",
+                        serde_json::json!({
+                            "version": update.version,
+                            "reason": err_str,
+                        }),
+                    );
+                    let app_notif = self.app.clone();
+                    let version_str = update.version.clone();
+                    std::thread::spawn(move || {
+                        let _ = app_notif
+                            .notification()
+                            .builder()
+                            .title("screenpipe update failed")
+                            .body(format!(
+                                "v{} couldn't download — open screenpipe to retry",
+                                version_str
+                            ))
+                            .show();
+                    });
                     return Err(e.into());
                 }
             }
+
+            // Stash the current version so the "what's new" notification can fire
+            // after restart — needs to happen here because banner-driven restarts
+            // bypass the auto_update path below.
+            save_pre_update_version(&self.app, update.body.clone());
 
             // Emit event to frontend for in-app banner (visible if window is open)
             let update_info = serde_json::json!({
@@ -445,10 +617,9 @@ impl UpdatesManager {
 
             let app_notif = self.app.clone();
             let version_str = update.version.clone();
-            let restarting_automatically = auto_update && !show_dialog;
             std::thread::spawn(move || {
                 let notification = app_notif.notification().builder();
-                let result = if restarting_automatically {
+                let result = if auto_update {
                     notification
                         .title("screenpipe updating")
                         .body(format!("v{} downloaded — restarting now", version_str))
@@ -464,19 +635,7 @@ impl UpdatesManager {
                 }
             });
 
-            if show_dialog {
-                save_pre_update_version(&self.app, update.body.clone());
-
-                #[cfg(not(target_os = "windows"))]
-                {
-                    if let Err(err) =
-                        stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()).await
-                    {
-                        error!("Failed to stop recording: {}", err);
-                    }
-                }
-                self.update_screenpipe();
-            } else if auto_update && *self.update_installed.lock().await {
+            if auto_update && *self.update_installed.lock().await {
                 info!(
                     "auto-update enabled, restarting to apply update v{}",
                     update.version
@@ -488,7 +647,6 @@ impl UpdatesManager {
                         "delay_secs": 30,
                     }),
                 );
-                save_pre_update_version(&self.app, update.body.clone());
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 if let Err(err) =
                     stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()).await
@@ -526,8 +684,10 @@ impl UpdatesManager {
         *self.update_installed.lock().await
     }
 
-    pub fn update_screenpipe(&self) -> Option<Error> {
-        self.app.restart();
+    /// Read the current pending update snapshot, for the frontend banner to
+    /// hydrate when its listener mounts late and misses the event.
+    pub async fn pending_update_snapshot(&self) -> Option<PendingUpdateSnapshot> {
+        self.pending_update.lock().await.clone()
     }
 
     /// Show dialog explaining auto-updates are not available for source builds
@@ -682,6 +842,32 @@ fn check_whats_new(app: &tauri::AppHandle) {
     });
 }
 
+/// Hydrate the frontend banner state on mount. The `update-available` event
+/// is broadcast once when the download completes — if the React app isn't
+/// mounted yet (boot race) or the listener lives on a route the user hasn't
+/// visited yet, that event is lost. The banner calls this command on mount
+/// to pick up state it may have missed.
+#[tauri::command]
+pub async fn get_pending_update(
+    state: tauri::State<'_, Arc<UpdatesManager>>,
+) -> Result<Option<PendingUpdateSnapshot>, ()> {
+    Ok(state.pending_update_snapshot().await)
+}
+
+/// User-initiated update check from Settings → General. Returns:
+/// - `Ok(true)`  when an update was found (banner will appear after download).
+/// - `Ok(false)` when already up to date or the build can't auto-update.
+/// - `Err(String)` when the check itself failed (network, server, etc.).
+#[tauri::command]
+pub async fn trigger_update_check(
+    state: tauri::State<'_, Arc<UpdatesManager>>,
+) -> Result<bool, String> {
+    state
+        .check_for_updates(false)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 pub fn start_update_check(
     app: &tauri::AppHandle,
     interval_minutes: u64,
@@ -721,4 +907,37 @@ pub fn start_update_check(
     });
 
     Ok(updates_manager)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_update_setting_respects_false() {
+        let mut settings = SettingsStore::default();
+        settings.auto_update = false;
+
+        assert!(!auto_update_enabled_from_settings(Ok(Some(settings))));
+    }
+
+    #[test]
+    fn auto_update_setting_respects_true() {
+        let mut settings = SettingsStore::default();
+        settings.auto_update = true;
+
+        assert!(auto_update_enabled_from_settings(Ok(Some(settings))));
+    }
+
+    #[test]
+    fn auto_update_setting_fails_closed_when_missing() {
+        assert!(!auto_update_enabled_from_settings(Ok(None)));
+    }
+
+    #[test]
+    fn auto_update_setting_fails_closed_when_unreadable() {
+        assert!(!auto_update_enabled_from_settings(Err(
+            "store unavailable".to_string()
+        )));
+    }
 }

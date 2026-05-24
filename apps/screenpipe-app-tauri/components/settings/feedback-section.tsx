@@ -30,7 +30,7 @@ export function FeedbackSection() {
               <p className="text-xs text-muted-foreground">logs are included automatically</p>
             </div>
           </div>
-          <ShareLogsButton showShareLink={true} />
+          <ShareLogsButton />
         </div>
 
         <div className="px-3 py-2.5 bg-card border border-border">

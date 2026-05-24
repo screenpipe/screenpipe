@@ -104,6 +104,24 @@ export default function EngineStartup({
   const [isTakingLonger, setIsTakingLonger] = useState(false);
   const [isSendingLogs, setIsSendingLogs] = useState(false);
   const [logsSent, setLogsSent] = useState(false);
+  // When spawn_screenpipe rejects (e.g. TCC permission denied) we used to
+  // swallow the error and let the 15s "stuck" timer fire with empty boot phase.
+  // PostHog showed 90% of stuck users had serverStarted=false / boot_phase=?,
+  // which is exactly this case. Now we surface the real reason immediately.
+  const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [spawnErrorKind, setSpawnErrorKind] = useState<
+    "permission" | "other" | null
+  >(null);
+  const [isResettingPerm, setIsResettingPerm] = useState(false);
+  // Bundle id of the running app — surfaces in the stuck UI so users who
+  // switched between prod / beta / dev / enterprise builds understand why
+  // an earlier grant doesn't carry over (each bundle id has its own TCC row).
+  const [bundleId, setBundleId] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<string>("get_app_identifier")
+      .then(setBundleId)
+      .catch(() => setBundleId(null));
+  }, []);
   const { settings, updateSettings } = useSettings();
 
   // Live feed state
@@ -167,7 +185,28 @@ export default function EngineStartup({
 
         await invoke("spawn_screenpipe");
       } catch (err) {
-        console.error("failed to start screenpipe:", err);
+        const message =
+          typeof err === "string"
+            ? err
+            : err instanceof Error
+              ? err.message
+              : String(err ?? "unknown error");
+        console.error("failed to start screenpipe:", message);
+
+        const kind: "permission" | "other" = /permission/i.test(message)
+          ? "permission"
+          : "other";
+        posthog.capture("onboarding_engine_spawn_failed", {
+          time_spent_ms: Date.now() - mountTimeRef.current,
+          error_message: message,
+          error_kind: kind,
+        });
+
+        setSpawnError(message);
+        setSpawnErrorKind(kind);
+        // Flip straight to "stuck" so the user sees the real reason now,
+        // instead of waiting out the 15s generic-stuck timer.
+        setState("stuck");
       }
     };
     start();
@@ -784,6 +823,24 @@ if the input is sparse, just describe what little you have warmly. don't apologi
     }
   };
 
+  // tccutil reset for the current bundle id, then re-trigger the prompt.
+  // This is the right escape hatch when TCC is in the "denied" terminal
+  // state — System Settings alone often won't show the app and a re-prompt
+  // from the engine never fires again without a reset.
+  const resetScreenRecordingPermission = async () => {
+    setIsResettingPerm(true);
+    posthog.capture("onboarding_engine_permission_reset_clicked", {
+      bundle_id: bundleId,
+    });
+    try {
+      await commands.resetAndRequestPermission("screenRecording");
+    } catch (err) {
+      console.error("permission reset failed:", err);
+    } finally {
+      setIsResettingPerm(false);
+    }
+  };
+
   const progressSteps = [
     { label: "engine", done: serverStarted, active: !serverStarted },
     {
@@ -1028,11 +1085,82 @@ if the input is sparse, just describe what little you have warmly. don't apologi
         <AnimatePresence>
           {state === "stuck" && (
             <motion.div
-              className="flex flex-col items-center space-y-3 mt-5"
+              className="flex flex-col items-center space-y-3 mt-5 max-w-[460px]"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
+              {/* When we know exactly why startup failed (e.g. TCC permission
+                  denied) show the real reason instead of a generic
+                  "send-logs" prompt. */}
+              {spawnErrorKind === "permission" ? (
+                <>
+                  <p className="font-mono text-sm text-foreground text-center">
+                    screen recording permission is required.
+                  </p>
+                  <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed">
+                    macOS tracks this permission per app signature. if you
+                    switched between prod / beta / dev builds, your previous
+                    grant doesn&apos;t carry over — each bundle id has its own
+                    record.
+                  </p>
+                  {bundleId && (
+                    <p className="font-mono text-[10px] text-muted-foreground/60 text-center">
+                      currently running as:{" "}
+                      <span className="text-foreground/80">{bundleId}</span>
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 flex-wrap justify-center">
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        commands.openPermissionSettings("screenRecording")
+                      }
+                      className="font-mono text-xs h-8 px-3"
+                    >
+                      open system settings →
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={resetScreenRecordingPermission}
+                      disabled={isResettingPerm}
+                      className="font-mono text-xs h-8 px-3"
+                    >
+                      {isResettingPerm ? (
+                        <Loader className="w-3 h-3 animate-spin" />
+                      ) : (
+                        "reset & re-request"
+                      )}
+                    </Button>
+                  </div>
+                  <button
+                    onClick={() =>
+                      openUrl("https://docs.screenpi.pe/permissions")
+                    }
+                    className="font-mono text-[10px] text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
+                  >
+                    troubleshooting guide ↗
+                  </button>
+                </>
+              ) : (
+                spawnError && (
+                  <>
+                    <p className="font-mono text-sm text-foreground text-center">
+                      engine failed to start.
+                    </p>
+                    <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed break-words">
+                      {spawnError}
+                    </p>
+                    {bundleId && (
+                      <p className="font-mono text-[10px] text-muted-foreground/60 text-center">
+                        running as:{" "}
+                        <span className="text-foreground/80">{bundleId}</span>
+                      </p>
+                    )}
+                  </>
+                )
+              )}
               <button
                 onClick={handleSkip}
                 className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"

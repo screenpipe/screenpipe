@@ -633,10 +633,6 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "lockVaultShortcut", default)]
     pub lock_vault_shortcut: String,
-    /// When true, screen capture continues but OCR text extraction is skipped.
-    /// Reduces CPU usage significantly while still recording video.
-    #[serde(rename = "disableOcr", default)]
-    pub disable_ocr: bool,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
@@ -647,7 +643,7 @@ pub struct SettingsStore {
     pub device_id: String,
     /// Auto-install updates and restart when a new version is available.
     /// When disabled, users must click "update now" in the tray menu.
-    #[serde(rename = "autoUpdate", default = "default_true")]
+    #[serde(rename = "autoUpdate", default = "default_false")]
     pub auto_update: bool,
     /// Auto-update store-installed pipes that haven't been locally modified.
     #[serde(rename = "autoUpdatePipes", default = "default_true")]
@@ -701,6 +697,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_overlay_size() -> String {
@@ -1022,11 +1022,10 @@ Rules:
             lock_vault_shortcut: "Ctrl+Shift+L".to_string(),
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
-            disable_ocr: false,
             show_shortcut_overlay: true,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
-            auto_update: true,
+            auto_update: false,
             auto_update_pipes: true,
             enhanced_ai: false,
             #[cfg(target_os = "macos")]
@@ -1523,6 +1522,32 @@ mod tests {
     use serde_json::json;
 
     const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
+
+    #[test]
+    fn auto_update_defaults_to_disabled() {
+        assert!(!SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn missing_auto_update_deserializes_disabled() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+
+        assert!(!settings.auto_update);
+    }
+
+    #[test]
+    fn explicit_auto_update_true_is_respected() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "autoUpdate": true
+        }))
+        .unwrap();
+
+        assert!(settings.auto_update);
+    }
 
     #[test]
     fn screenpipe_cloud_falls_back_when_not_logged_in() {

@@ -67,6 +67,8 @@ pub struct AudioManagerOptions {
     pub experimental_coreaudio_system_audio: bool,
     /// Experimental: request Windows WASAPI microphone AEC when the endpoint supports it.
     pub windows_input_aec_enabled: bool,
+    /// Use Apple VoiceProcessingIO on the default macOS microphone when supported.
+    pub macos_input_vpio_enabled: bool,
     /// Controls when local Whisper transcription runs.
     /// `Realtime` = immediate (default), `Batch` = accumulate longer chunks for quality.
     pub transcription_mode: TranscriptionMode,
@@ -113,6 +115,7 @@ impl Default for AudioManagerOptions {
             use_system_default_audio: true,
             experimental_coreaudio_system_audio: false,
             windows_input_aec_enabled: false,
+            macos_input_vpio_enabled: false,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
             meeting_streaming: MeetingStreamingConfig::default(),
@@ -215,6 +218,11 @@ impl AudioManagerBuilder {
 
     pub fn windows_input_aec_enabled(mut self, enabled: bool) -> Self {
         self.options.windows_input_aec_enabled = enabled;
+        self
+    }
+
+    pub fn macos_input_vpio_enabled(mut self, enabled: bool) -> Self {
+        self.options.macos_input_vpio_enabled = enabled;
         self
     }
 

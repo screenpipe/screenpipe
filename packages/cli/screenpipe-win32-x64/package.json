@@ -4,9 +4,6 @@
   "description": "screenpipe CLI binary for Windows x64",
   "os": ["win32"],
   "cpu": ["x64"],
-  "bin": {
-    "screenpipe": "bin/screenpipe.exe"
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/screenpipe/screenpipe"

@@ -1,5 +1,6 @@
 use image::DynamicImage;
 use once_cell::sync::Lazy;
+use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -220,16 +221,16 @@ pub struct CapturedWindow {
 }
 
 pub struct WindowFilters {
-    ignore_set: HashSet<String>,
-    include_set: HashSet<String>,
+    ignore_patterns: Vec<WindowPattern>,
+    include_patterns: Vec<WindowPattern>,
     ignored_urls: HashSet<String>,
 }
 
 impl WindowFilters {
     pub fn new(ignore_list: &[String], include_list: &[String], ignored_urls: &[String]) -> Self {
         Self {
-            ignore_set: ignore_list.iter().map(|s| s.to_lowercase()).collect(),
-            include_set: include_list.iter().map(|s| s.to_lowercase()).collect(),
+            ignore_patterns: WindowPattern::parse_list(ignore_list),
+            include_patterns: WindowPattern::parse_list(include_list),
             ignored_urls: ignored_urls.iter().map(|s| s.to_lowercase()).collect(),
         }
     }
@@ -237,7 +238,9 @@ impl WindowFilters {
     /// Apps that are always excluded — system lock screen processes.
     const BUILTIN_IGNORED: &'static [&'static str] = &["loginwindow", "logonui"];
 
-    // O(n) - we could figure out a better way to do this
+    /// O(n) over ignore + include patterns. Patterns support an optional
+    /// `AppName::WindowTitle` scope (parsed in `screenpipe-core::window_pattern`);
+    /// legacy unscoped strings keep the historical "app OR title contains" behavior.
     pub fn is_valid(&self, app_name: &str, title: &str) -> bool {
         let app_name_lower = app_name.to_lowercase();
         let title_lower = title.to_lowercase();
@@ -248,12 +251,7 @@ impl WindowFilters {
         }
 
         // Check ignore list first — always reject ignored windows
-        if !self.ignore_set.is_empty()
-            && self
-                .ignore_set
-                .iter()
-                .any(|ignore| app_name_lower.contains(ignore) || title_lower.contains(ignore))
-        {
+        if window_pattern::matches_any(&self.ignore_patterns, &app_name_lower, &title_lower) {
             return false;
         }
 
@@ -263,16 +261,8 @@ impl WindowFilters {
             return false;
         }
 
-        // If include list is set, only allow windows that match it
-        if !self.include_set.is_empty() {
-            return self
-                .include_set
-                .iter()
-                .any(|include| app_name_lower.contains(include) || title_lower.contains(include));
-        }
-
-        // No include list and not ignored — allow
-        true
+        // Include list: empty = pass; non-empty applies scoped/legacy semantics.
+        window_pattern::passes_includes(&self.include_patterns, &app_name_lower, &title_lower)
     }
 
     /// Check if a URL should be filtered out for privacy
@@ -969,7 +959,7 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
 /// Returns an empty vec if no windows match the filters or on error.
 #[cfg(target_os = "macos")]
 pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.ignore_set.is_empty() && window_filters.include_set.is_empty() {
+    if window_filters.ignore_patterns.is_empty() && window_filters.include_patterns.is_empty() {
         return Vec::new();
     }
 
@@ -1484,6 +1474,64 @@ mod tests {
         assert!(!filters.is_valid("Wispr Flow", "Status"));
         // Arc is only in include — passes
         assert!(filters.is_valid("Arc", "GitHub"));
+    }
+
+    #[test]
+    fn test_is_valid_scoped_ignore_per_window() {
+        // `Slack::#hr` should block ONLY the #hr window inside Slack; other
+        // Slack channels and other apps must still be captured. This is the
+        // core scoped-pattern contract — guards against the helper getting
+        // re-wired incorrectly through WindowFilters in the future.
+        let filters = WindowFilters::new(&["Slack::#hr".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Slack", "#hr - mycompany"));
+        assert!(filters.is_valid("Slack", "#engineering"));
+        assert!(filters.is_valid("Chrome", "docs"));
+        assert!(filters.is_valid("WezTerm", "#hr (just a tab name)"));
+    }
+
+    #[test]
+    fn test_is_valid_scoped_ignore_app_only_form() {
+        // `Slack::` is equivalent to legacy `Slack` — blocks the whole app.
+        let filters = WindowFilters::new(&["Slack::".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Slack", "anything"));
+        assert!(!filters.is_valid("Slack", ""));
+        assert!(filters.is_valid("Chrome", "slack chat"));
+    }
+
+    #[test]
+    fn test_is_valid_global_title_via_empty_app_form() {
+        // `::Confidential` matches any app whose title contains "Confidential".
+        let filters = WindowFilters::new(&["::confidential".to_string()], &[], &[]);
+        assert!(!filters.is_valid("Notion", "Confidential Memo"));
+        assert!(!filters.is_valid("Word", "Q4 Confidential.docx"));
+        assert!(filters.is_valid("Chrome", "Google Docs"));
+    }
+
+    #[test]
+    fn test_is_valid_scoped_include_per_app_whitelist() {
+        // `Greenhouse::Candidates` allows ONLY that window in Greenhouse;
+        // other apps stay unaffected (no global include to gate them).
+        // Regression target: naïve include semantics would block Slack/Chrome.
+        let filters = WindowFilters::new(&[], &["Greenhouse::Candidates".to_string()], &[]);
+        assert!(filters.is_valid("Greenhouse", "Candidates"));
+        assert!(!filters.is_valid("Greenhouse", "Compensation"));
+        assert!(filters.is_valid("Chrome", "google docs"));
+        assert!(filters.is_valid("Slack", "#general"));
+    }
+
+    #[test]
+    fn test_is_valid_mixed_legacy_and_scoped_includes() {
+        // Legacy `Slack` + scoped `Slack::#engineering`: scoped wins for Slack,
+        // legacy global gates everything else.
+        let filters = WindowFilters::new(
+            &[],
+            &["Slack".to_string(), "Slack::#engineering".to_string()],
+            &[],
+        );
+        assert!(filters.is_valid("Slack", "#engineering"));
+        assert!(!filters.is_valid("Slack", "#hr"));
+        // Non-Slack apps fall back to the legacy `Slack` global — they don't match.
+        assert!(!filters.is_valid("Chrome", "google docs"));
     }
 
     // Note: The overlay_pids CGWindowLayer detection in capture_all_visible_windows

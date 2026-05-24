@@ -1,6 +1,6 @@
 {
   "name": "screenpipe-mcp",
-  "version": "0.18.2",
+  "version": "0.18.5",
   "description": "MCP server for screenpipe - search your screen recordings and audio transcriptions",
   "main": "dist/index.js",
   "bin": {
@@ -31,7 +31,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "screenpipe": "latest",
     "ws": "^8.19.0"
   },
   "devDependencies": {

@@ -309,6 +309,11 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub windows_input_aec_enabled: bool,
 
+    /// [experimental, macOS] Request VoiceProcessingIO AEC on the default microphone.
+    /// Ignored on non-macOS platforms and non-default input devices.
+    #[arg(long, default_value_t = false)]
+    pub macos_input_vpio_enabled: bool,
+
     /// Data directory. Default to $HOME/.screenpipe
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<String>,
@@ -374,11 +379,17 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
 
-    /// Windows to ignore (by title, uses contains matching)
+    /// Windows to ignore (case-insensitive contains). Use `App::Title` to
+    /// scope to one window of one app (e.g. `Slack::#hr`). `::title` matches
+    /// any app whose focused window title contains `title`. `App::` blocks
+    /// the entire app (equivalent to bare `App`).
     #[arg(long)]
     pub ignored_windows: Vec<String>,
 
-    /// Windows to include (by title, uses contains matching)
+    /// Windows to include (case-insensitive contains). Scoped entries
+    /// (`App::Title`) create a per-app whitelist; other apps remain
+    /// unaffected. Unscoped entries keep the legacy "must match app or
+    /// title" global-include semantics.
     #[arg(long)]
     pub included_windows: Vec<String>,
 
@@ -427,6 +438,54 @@ pub struct RecordArgs {
     /// Debounce floor between any two captures.
     #[arg(long)]
     pub min_capture_interval_ms: Option<u64>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_keystroke`.
+    /// When true, non-printable key events (Arrow/Enter/Tab/Esc, modifier
+    /// combos like Ctrl+S) fire a paired capture so `ui_events.frame_id`
+    /// is populated for the originating row. Off by default — fast typing
+    /// can flood the pipeline even with the min-capture-interval debounce.
+    #[arg(long)]
+    pub capture_on_keystroke: Option<bool>,
+
+    /// Mitsukeru fork: override `EventDrivenCaptureConfig::capture_on_clipboard`.
+    /// When true, clipboard changes fire a paired capture so the clipboard
+    /// row's `frame_id` is linked. Off by default — adds 50-150ms of
+    /// blocking work per Ctrl+C/X/V (more with OCR fallback) which can
+    /// cause visible HID input lag on some USB devices.
+    #[arg(long)]
+    pub capture_on_clipboard: Option<bool>,
+
+    /// Override `UiRecorderConfig::capture_scroll` — record scroll wheel
+    /// events into `ui_events`. Off by default because wheel ticks fire
+    /// at ~60Hz and inflate the table fast. When on, the recorder's
+    /// `ScrollBurstTracker` coalesces a wheel flick into one
+    /// `ScrollStop` trigger at burst-end so only the last row in a burst
+    /// gets `frame_id` linked.
+    #[arg(long)]
+    pub capture_scroll: Option<bool>,
+
+    /// Prioritize mouse/keyboard input latency over a11y event metadata completeness.
+    /// When enabled, three opt-in optimizations are activated together:
+    ///   1. mouse/keyboard hook locks switch to try_lock (contended → app_name/window=None)
+    ///   2. a11y extraction threads self-deprioritize via SetThreadPriority
+    ///   3. UIA tree captures are skipped within N ms after the most recent input
+    ///
+    /// Fine-tune via --extraction-thread-priority and --pause-extraction-on-input-ms.
+    #[arg(long, default_value_t = false)]
+    pub prioritize_input_latency: bool,
+
+    /// OS thread priority for a11y extraction threads when --prioritize-input-latency is set.
+    /// Lower values yield CPU more aggressively to user input threads. Ignored otherwise.
+    /// Values: "normal" / "below_normal" / "lowest" / "idle".
+    #[arg(long, default_value = "below_normal")]
+    pub extraction_thread_priority: String,
+
+    /// Skip UIA tree captures within this many ms after the most recent mouse/keyboard input.
+    /// 0 disables. Ignored when --prioritize-input-latency is off.
+    /// Captures immediately after input are likely to be stale (next input is imminent),
+    /// so skipping costs little data and frees CPU for input responsiveness.
+    #[arg(long, default_value_t = 150)]
+    pub pause_extraction_on_input_ms: u64,
 
     /// Enable cloud sync
     #[arg(long, default_value_t = false)]
@@ -518,6 +577,7 @@ pub struct RecordArgSources {
     pub use_system_default_audio: bool,
     pub experimental_coreaudio_system_audio: bool,
     pub windows_input_aec_enabled: bool,
+    pub macos_input_vpio_enabled: bool,
     pub audio_transcription_engine: bool,
     pub monitor_id: bool,
     pub use_all_monitors: bool,
@@ -561,6 +621,7 @@ impl RecordArgSources {
                 "experimental_coreaudio_system_audio",
             ),
             windows_input_aec_enabled: from_command_line(record, "windows_input_aec_enabled"),
+            macos_input_vpio_enabled: from_command_line(record, "macos_input_vpio_enabled"),
             audio_transcription_engine: from_command_line(record, "audio_transcription_engine"),
             monitor_id: from_command_line(record, "monitor_id"),
             use_all_monitors: from_command_line(record, "use_all_monitors"),
@@ -596,6 +657,7 @@ impl RecordArgSources {
             || self.use_system_default_audio
             || self.experimental_coreaudio_system_audio
             || self.windows_input_aec_enabled
+            || self.macos_input_vpio_enabled
             || self.audio_transcription_engine
             || self.monitor_id
             || self.use_all_monitors
@@ -640,6 +702,11 @@ impl RecordArgs {
 
     /// Create UI recorder configuration from record arguments
     pub fn to_ui_recorder_config(&self) -> crate::ui_recorder::UiRecorderConfig {
+        // Mirror `--capture-on-keystroke` / `--capture-on-clipboard` into
+        // the recorder so it doesn't mint corr_ids for triggers the
+        // capture loop will drop. None = engine default (false), same as
+        // in `RecordingConfig::to_ui_recorder_config`.
+        let defaults = crate::ui_recorder::UiRecorderConfig::default();
         crate::ui_recorder::UiRecorderConfig {
             enabled: true,
             enable_tree_walker: true,
@@ -651,7 +718,14 @@ impl RecordArgs {
             // `true` for both, so opting out has to be explicit.
             capture_clipboard: !self.disable_clipboard_capture,
             capture_clipboard_content: !self.disable_clipboard_capture,
-            ..Default::default()
+            capture_on_keystroke: self
+                .capture_on_keystroke
+                .unwrap_or(defaults.capture_on_keystroke),
+            capture_on_clipboard: self
+                .capture_on_clipboard
+                .unwrap_or(defaults.capture_on_clipboard),
+            capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
+            ..defaults
         }
     }
 
@@ -679,6 +753,7 @@ impl RecordArgs {
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
             windows_input_aec_enabled: self.windows_input_aec_enabled,
+            macos_input_vpio_enabled: self.macos_input_vpio_enabled,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             // Explicit `--monitor-id` implies opting out of `--use-all-monitors`.
             // `use_all_monitors` has `default_value_t = true`, so without this
@@ -701,6 +776,12 @@ impl RecordArgs {
             visual_check_interval_ms: self.visual_check_interval_ms,
             visual_change_threshold: self.visual_change_threshold,
             min_capture_interval_ms: self.min_capture_interval_ms,
+            capture_on_keystroke: self.capture_on_keystroke,
+            capture_on_clipboard: self.capture_on_clipboard,
+            capture_scroll: self.capture_scroll,
+            prioritize_input_latency: self.prioritize_input_latency,
+            extraction_thread_priority: self.extraction_thread_priority.clone(),
+            pause_extraction_on_input_ms: self.pause_extraction_on_input_ms,
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
@@ -871,6 +952,9 @@ impl RecordArgs {
         }
         if sources.windows_input_aec_enabled {
             settings.windows_input_aec_enabled = self.windows_input_aec_enabled;
+        }
+        if sources.macos_input_vpio_enabled {
+            settings.macos_input_vpio_enabled = self.macos_input_vpio_enabled;
         }
         if sources.audio_transcription_engine {
             settings.audio_transcription_engine =
@@ -1587,10 +1671,12 @@ mod tests {
             Cli::try_parse_from(["screenpipe", "record", "--port", "4040", "--disable-audio"])
                 .unwrap();
         let sources = record_sources(["screenpipe", "record", "--port", "4040", "--disable-audio"]);
-        let mut settings = screenpipe_config::RecordingSettings::default();
-        settings.port = 3030;
-        settings.disable_audio = false;
-        settings.use_pii_removal = false;
+        let mut settings = screenpipe_config::RecordingSettings {
+            port: 3030,
+            disable_audio: false,
+            use_pii_removal: false,
+            ..Default::default()
+        };
 
         match cli.command {
             Command::Record(args) => {

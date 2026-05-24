@@ -1,0 +1,57 @@
+name: Test CLI npm e2e
+
+on:
+  pull_request:
+    paths:
+      - "packages/cli/**"
+      - ".github/workflows/test-cli-npm-e2e.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/cli/**"
+      - ".github/workflows/test-cli-npm-e2e.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm-e2e:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          cache: true
+          target: aarch64-apple-darwin
+          rustflags: ""
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install native build dependencies
+        run: |
+          brew unlink pkg-config@0.29.2 || true
+          brew install ffmpeg pkg-config
+          brew link --overwrite pkg-config
+
+      - name: Build screenpipe CLI binary
+        run: cd packages/cli && bun run build
+
+      - name: Run npm e2e tests
+        run: cd packages/cli && bun run test
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-e2e-logs
+          path: packages/cli/npm-e2e/.work/logs
+          if-no-files-found: ignore

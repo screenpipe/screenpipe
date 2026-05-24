@@ -103,6 +103,13 @@ export function MeetingNotesSection({
     void fetchPage(0, false);
   }, [fetchPage]);
 
+  // Track an in-flight open-meeting-note request so the "selection
+  // vanished" effect below doesn't reset selectedId during the brief
+  // window where the row hasn't been inserted into `meetings` yet.
+  // The Rust side retries the emit 4× to survive cold window startup,
+  // so this also dedupes the burst — same meeting within 5s is a no-op.
+  const pendingOpenRef = useRef<{ id: number; at: number } | null>(null);
+
   useEffect(() => {
     const unlisten = listen<{ meetingId: number; transcript?: boolean }>(
       "open-meeting-note",
@@ -110,11 +117,23 @@ export function MeetingNotesSection({
         const id = Number(event.payload.meetingId);
         if (!Number.isFinite(id)) return;
 
-        if (event.payload.transcript !== false) {
-          setOpenTranscriptRequest({ id, token: Date.now() });
+        const now = Date.now();
+        if (
+          pendingOpenRef.current?.id === id &&
+          now - pendingOpenRef.current.at < 5000
+        ) {
+          return;
         }
+        pendingOpenRef.current = { id, at: now };
 
-        setSelectedId(id);
+        // Fetch and insert into `meetings` BEFORE selecting. The
+        // "selection vanished" effect below resets selectedId to null
+        // whenever the id isn't in the list — if we set selectedId first
+        // and await the fetch after, that effect fires in the gap and
+        // drops the selection, leaving the user on the list view instead
+        // of the note. Notification-triggered opens (a freshly-started
+        // meeting) hit this every time because the new row isn't in the
+        // initial page yet.
         try {
           const res = await localFetch(`/meetings/${id}`);
           if (res.ok) {
@@ -126,15 +145,20 @@ export function MeetingNotesSection({
                 : [meeting, ...prev];
             });
           } else {
-            void fetchPage(0, false);
+            await fetchPage(0, false);
           }
         } catch (err) {
           console.warn(
             "meeting notes: failed to open deep-linked meeting",
             err,
           );
-          void fetchPage(0, false);
+          await fetchPage(0, false);
         }
+
+        if (event.payload.transcript !== false) {
+          setOpenTranscriptRequest({ id, token: Date.now() });
+        }
+        setSelectedId(id);
       },
     );
     return () => {
@@ -256,10 +280,19 @@ export function MeetingNotesSection({
     };
   }, []);
 
-  // If selection vanishes (deleted elsewhere), drop selection
+  // If selection vanishes (deleted elsewhere), drop selection.
+  // Skip while a notification-triggered open for this id is in flight —
+  // the row hasn't been inserted yet, and resetting here strands the
+  // user on the list view instead of the note they asked to open.
   useEffect(() => {
     if (selectedId === null) return;
-    if (meetings.some((m) => m.id === selectedId)) return;
+    if (meetings.some((m) => m.id === selectedId)) {
+      if (pendingOpenRef.current?.id === selectedId) {
+        pendingOpenRef.current = null;
+      }
+      return;
+    }
+    if (pendingOpenRef.current?.id === selectedId) return;
     setSelectedId(null);
   }, [meetings, selectedId]);
 

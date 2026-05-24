@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Plain JSON-Schema literal — registerTool only stores it for the LLM,
 // no runtime validation, so we don't need @sinclair/typebox here. The

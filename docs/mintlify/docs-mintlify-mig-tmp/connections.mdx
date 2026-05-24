@@ -178,6 +178,37 @@ without connections, screenpipe captures what's visible on your screen. with con
 
 this makes pipes significantly more accurate and useful.
 
+## troubleshooting
+
+### Google OAuth: "app isn't verified" or "unsafe"
+
+when connecting Gmail, Google Calendar, or Google Docs, you may see a warning that says the app is "unverified" or "unsafe." this is normal — screenpipe is a local app and Google requires additional verification steps for third-party apps.
+
+**how to proceed:**
+1. on the Google warning screen, click **Advanced** (bottom-left corner)
+2. click **Go to Screenpipe (unsafe)** to continue with the connection
+3. screenpipe will not be marked unsafe once you verify the connection — this is a standard OAuth security flow
+
+if the page closes or doesn't load, check that:
+- you have internet connectivity
+- no browser extensions are blocking the OAuth redirect
+- your firewall isn't blocking `localhost:3030` (the local callback endpoint)
+
+### connection fails silently
+
+if a connection appears to connect but then disappears:
+- check that Pro is active (OAuth requires a Pro subscription)
+- verify the app credentials are correct by disconnecting and reconnecting
+- check app permissions in the original service (e.g., Notion workspace settings, Slack workspace admin console) — you may need to re-approve access
+
+### "not connected" error in pipes
+
+if a pipe reports that a connection isn't available:
+- confirm the connection is active in **settings → connections** (green dot or "connected" status)
+- for multi-account setups, verify the pipe is using the correct instance name (e.g., `notion:work` vs `notion:personal`)
+- try reconnecting: disconnect and reconnect the app
+- check the [pipe debugging guide](/pipe-debugging) for troubleshooting pipe-specific issues
+
 ## privacy & security
 
 - OAuth connections use standard OAuth flows — screenpipe stores tokens locally in your secure store when available

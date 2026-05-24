@@ -50,12 +50,16 @@ export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  intent?: "steer";
+  turnIntentId?: string;
   displayContent?: string;
   images?: string[];
   timestamp: number;
   contentBlocks?: ContentBlock[];
   model?: string;
   provider?: string;
+  interruptedBySteer?: boolean;
+  steeredResponse?: boolean;
 }
 
 // --- Hook options ---
@@ -344,13 +348,27 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const historyEnabled = settings?.chatHistory?.historyEnabled ?? true;
     if (!historyEnabled) return;
 
-    const convId = conversationId || crypto.randomUUID();
-    const firstUserMsg = msgs.find(m => m.role === "user");
-    const title = firstUserMsg?.content.slice(0, 50) || "New Chat";
+    // Prefer the live Pi session id so fast chat switches do not persist
+    // follow-up saves into a stale conversation id.
+    const convId = piSessionIdRef.current || conversationId || crypto.randomUUID();
 
-    // Try to load existing conversation to preserve createdAt
+    // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
+
+    // Derive a title from the first user message, but skip messages that are
+    // the chat panel's own injected `<conversation_history>...` sync prompt
+    // (Pi can echo that back as a message_start (user) event, leaking it into
+    // the messages array — see the prompt construction at the piPrompt call).
+    const firstUserMsg = msgs.find(
+      (m) => m.role === "user" && !m.content.startsWith("<conversation_history>")
+    );
+    const derivedTitle = firstUserMsg?.content.slice(0, 50) || "New Chat";
+    // Preserve any previously-persisted title (user renames, pipe-run titles
+    // like `pipe-opportunity-scout-gpt55 #8209`). Only fall through to the
+    // derived title when the file has no title yet. Mirrors the router's
+    // background-save logic in pi-event-router.ts.
+    const title = existing?.title || derivedTitle;
 
     const conversation: ChatConversation = {
       id: convId,
@@ -392,16 +410,25 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           id: m.id,
           role: m.role,
           content,
+          ...(m.intent ? { intent: m.intent } : {}),
+          ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
           ...(m.displayContent ? { displayContent: m.displayContent } : {}),
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
+          ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+          ...(m.steeredResponse ? { steeredResponse: true } : {}),
         };
       }),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
+      // Preserve pipe-run identity across follow-up saves. Without this, the
+      // first user-typed follow-up to a pipe-run silently demoted it to a
+      // plain chat (kind/pipeContext dropped on disk).
+      ...(existing?.kind ? { kind: existing.kind } : {}),
+      ...(existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
       // Preserve sort key across reloads. Source of truth: the in-memory
       // chat-store, which is bumped exactly once per user-send.
       ...(await (async () => {
@@ -497,7 +524,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
     }
 
-    if (!conversationId) {
+    if (!conversationId || conversationId !== convId) {
       setConversationId(convId);
     }
   };
@@ -773,6 +800,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         id: m.id,
         role: m.role,
         content: m.content,
+        ...((m as any).intent ? { intent: (m as any).intent } : {}),
+        ...((m as any).turnIntentId ? { turnIntentId: (m as any).turnIntentId } : {}),
         timestamp: m.timestamp,
         ...(m.displayContent ? { displayContent: m.displayContent } : {}),
         ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
@@ -783,6 +812,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             : {}),
         ...((m as any).model ? { model: (m as any).model } : {}),
         ...((m as any).provider ? { provider: (m as any).provider } : {}),
+        ...((m as any).interruptedBySteer ? { interruptedBySteer: true } : {}),
+        ...((m as any).steeredResponse ? { steeredResponse: true } : {}),
       }));
       // Make sure a record exists, then seed messages and mark hydrated.
       if (!store.sessions[conv.id]) {
@@ -876,11 +907,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           id: m.id,
           role: m.role,
           content,
+          ...(m.intent ? { intent: m.intent } : {}),
+          ...(m.turnIntentId ? { turnIntentId: m.turnIntentId } : {}),
           timestamp: m.timestamp,
           ...(blocks?.length ? { contentBlocks: blocks } : {}),
           ...(m.images?.length ? { images: m.images } : {}),
           ...(m.model ? { model: m.model } : {}),
           ...(m.provider ? { provider: m.provider } : {}),
+          ...(m.interruptedBySteer ? { interruptedBySteer: true } : {}),
+          ...(m.steeredResponse ? { steeredResponse: true } : {}),
         };
       }),
       createdAt: Date.now(),

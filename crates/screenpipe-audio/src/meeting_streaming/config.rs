@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 const SCREENPIPE_CLOUD_REALTIME_URL: &str = "wss://api.screenpi.pe/v1/realtime";
-const OPENAI_REALTIME_URL: &str = "wss://api.openai.com/v1/realtime";
 const DEEPGRAM_LIVE_URL: &str = "wss://api.deepgram.com/v1/listen";
 const SCREENPIPE_CLOUD_REALTIME_PATH: &str = "/v1/realtime";
 const DEEPGRAM_LIVE_PATH: &str = "/v1/listen";
@@ -24,7 +23,6 @@ pub enum MeetingStreamingProvider {
     Disabled,
     SelectedEngine,
     ScreenpipeCloud,
-    OpenAiRealtime,
     DeepgramLive,
 }
 
@@ -34,7 +32,6 @@ impl MeetingStreamingProvider {
             Self::Disabled => "disabled",
             Self::SelectedEngine => "selected-engine",
             Self::ScreenpipeCloud => "screenpipe-cloud",
-            Self::OpenAiRealtime => "openai-realtime",
             Self::DeepgramLive => "deepgram-live",
         }
     }
@@ -56,7 +53,6 @@ pub struct MeetingStreamingConfig {
     pub auth_token: Option<String>,
     pub api_key: Option<String>,
     pub endpoint: String,
-    pub session_model: String,
     pub model: Option<String>,
     pub language: Option<String>,
     pub local_speaker_name: Option<String>,
@@ -72,11 +68,6 @@ impl Default for MeetingStreamingConfig {
             .unwrap_or(MeetingStreamingProvider::SelectedEngine);
         let api_key = provider_api_key(&provider);
         let endpoint = match provider {
-            MeetingStreamingProvider::OpenAiRealtime => endpoint_from_env(
-                &["SCREENPIPE_MEETING_OPENAI_REALTIME_URL"],
-                OPENAI_REALTIME_URL,
-                SCREENPIPE_CLOUD_REALTIME_PATH,
-            ),
             MeetingStreamingProvider::DeepgramLive => endpoint_from_env(
                 &["SCREENPIPE_MEETING_DEEPGRAM_LIVE_URL"],
                 DEEPGRAM_LIVE_URL,
@@ -89,7 +80,6 @@ impl Default for MeetingStreamingConfig {
             ),
         };
         let default_model = match provider {
-            MeetingStreamingProvider::OpenAiRealtime => "gpt-4o-transcribe",
             MeetingStreamingProvider::SelectedEngine => "selected transcription engine",
             MeetingStreamingProvider::Disabled
             | MeetingStreamingProvider::ScreenpipeCloud
@@ -104,8 +94,6 @@ impl Default for MeetingStreamingConfig {
                 .filter(|s| !s.trim().is_empty()),
             api_key,
             endpoint,
-            session_model: env_non_empty("SCREENPIPE_MEETING_OPENAI_SESSION_MODEL")
-                .unwrap_or_else(|| "gpt-realtime-2".to_string()),
             model: Some(
                 env_non_empty("SCREENPIPE_MEETING_TRANSCRIPTION_MODEL")
                     .unwrap_or_else(|| default_model.to_string()),
@@ -139,7 +127,6 @@ impl FromStr for MeetingStreamingProvider {
             "screenpipe-cloud" | "screenpipe_cloud" | "screenpipe" | "cloud" => {
                 Ok(Self::ScreenpipeCloud)
             }
-            "openai" | "openai_realtime" | "openai-realtime" => Ok(Self::OpenAiRealtime),
             "deepgram" | "deepgram_live" | "deepgram-live" => Ok(Self::DeepgramLive),
             "auto" => Err(()),
             _ => Err(()),
@@ -180,18 +167,6 @@ impl MeetingStreamingConfig {
                         .unwrap_or_else(|| "nova-3".to_string()),
                 );
             }
-            MeetingStreamingProvider::OpenAiRealtime => {
-                self.api_key = provider_api_key(&self.provider);
-                self.endpoint = endpoint_from_env(
-                    &["SCREENPIPE_MEETING_OPENAI_REALTIME_URL"],
-                    OPENAI_REALTIME_URL,
-                    SCREENPIPE_CLOUD_REALTIME_PATH,
-                );
-                self.model = Some(
-                    env_non_empty("SCREENPIPE_MEETING_TRANSCRIPTION_MODEL")
-                        .unwrap_or_else(|| "gpt-4o-transcribe".to_string()),
-                );
-            }
             MeetingStreamingProvider::Disabled => {}
         }
         self
@@ -222,17 +197,6 @@ impl MeetingStreamingConfig {
             config.api_key = None;
             config.endpoint = String::new();
             config.model = Some("selected transcription engine".to_string());
-        } else if config.provider == MeetingStreamingProvider::OpenAiRealtime {
-            config.api_key = provider_api_key(&config.provider);
-            config.endpoint = endpoint_from_env(
-                &["SCREENPIPE_MEETING_OPENAI_REALTIME_URL"],
-                OPENAI_REALTIME_URL,
-                SCREENPIPE_CLOUD_REALTIME_PATH,
-            );
-            config.model = Some(
-                env_non_empty("SCREENPIPE_MEETING_TRANSCRIPTION_MODEL")
-                    .unwrap_or_else(|| "gpt-4o-transcribe".to_string()),
-            );
         } else if config.provider == MeetingStreamingProvider::DeepgramLive {
             config.api_key =
                 provider_api_key_override.or_else(|| provider_api_key(&config.provider));
@@ -268,10 +232,6 @@ impl MeetingStreamingConfig {
                 .auth_token
                 .as_deref()
                 .is_some_and(|token| !token.trim().is_empty()),
-            MeetingStreamingProvider::OpenAiRealtime => self
-                .api_key
-                .as_deref()
-                .is_some_and(|key| !key.trim().is_empty()),
             MeetingStreamingProvider::DeepgramLive => self
                 .api_key
                 .as_deref()
@@ -282,9 +242,6 @@ impl MeetingStreamingConfig {
 
 fn provider_api_key(provider: &MeetingStreamingProvider) -> Option<String> {
     let keys: &[&str] = match provider {
-        MeetingStreamingProvider::OpenAiRealtime => {
-            &["SCREENPIPE_MEETING_OPENAI_API_KEY", "OPENAI_API_KEY"]
-        }
         MeetingStreamingProvider::DeepgramLive => {
             &["SCREENPIPE_MEETING_DEEPGRAM_API_KEY", "DEEPGRAM_API_KEY"]
         }

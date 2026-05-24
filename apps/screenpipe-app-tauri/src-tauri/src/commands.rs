@@ -435,6 +435,18 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
 }
 
+/// Return the macOS bundle identifier of the running app
+/// (e.g. `screenpi.pe`, `screenpi.pe.beta`, `screenpi.pe.dev`,
+/// `screenpi.pe.enterprise`). The onboarding stuck-screen surfaces this so
+/// users who switched build channels (prod ↔ beta ↔ dev) can see they're
+/// looking at a *different* TCC record from the one they may have already
+/// granted under a sibling bundle id.
+#[tauri::command]
+#[specta::specta]
+pub fn get_app_identifier(app_handle: tauri::AppHandle) -> String {
+    app_handle.config().identifier.clone()
+}
+
 /// Get the local API auth key and port for the frontend to use.
 /// Returns the local API config (key, port, auth flag).
 ///

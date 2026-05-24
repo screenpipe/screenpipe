@@ -96,9 +96,7 @@ async fn run_stream(
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .context("direct Deepgram live meeting transcription requires a Deepgram API key")?,
-        MeetingStreamingProvider::Disabled
-        | MeetingStreamingProvider::SelectedEngine
-        | MeetingStreamingProvider::OpenAiRealtime => {
+        MeetingStreamingProvider::Disabled | MeetingStreamingProvider::SelectedEngine => {
             anyhow::bail!(
                 "provider {} is not Deepgram-live compatible",
                 config.provider.as_str()
@@ -216,6 +214,7 @@ fn configure_live_query(url: &mut Url, config: &MeetingStreamingConfig) {
     query.append_pair("endpointing", "800");
     query.append_pair("utterance_end_ms", "1500");
     query.append_pair("vad_events", "true");
+    query.append_pair("diarize", "true");
     if let Some(language) = config.language.as_deref().filter(|s| !s.trim().is_empty()) {
         query.append_pair("language", language);
     }
@@ -225,9 +224,9 @@ fn auth_header(provider: &MeetingStreamingProvider, credential: &str) -> String 
     match provider {
         MeetingStreamingProvider::ScreenpipeCloud => format!("Bearer {credential}"),
         MeetingStreamingProvider::DeepgramLive => format!("Token {credential}"),
-        MeetingStreamingProvider::Disabled
-        | MeetingStreamingProvider::SelectedEngine
-        | MeetingStreamingProvider::OpenAiRealtime => String::new(),
+        MeetingStreamingProvider::Disabled | MeetingStreamingProvider::SelectedEngine => {
+            String::new()
+        }
     }
 }
 
@@ -329,6 +328,7 @@ fn handle_results_event(
     let captured_at = latest_audio_time(latest_audio_ms);
 
     if is_final {
+        let speaker_name = resolve_speaker_name(value, device_type, config);
         let event = MeetingTranscriptFinal {
             meeting_id,
             provider: config.provider.as_str().to_string(),
@@ -336,7 +336,7 @@ fn handle_results_event(
             item_id,
             device_name: device_name.to_string(),
             device_type: device_type.to_string(),
-            speaker_name: None,
+            speaker_name,
             transcript: transcript.to_string(),
             captured_at,
         };
@@ -355,6 +355,36 @@ fn handle_results_event(
         };
         let _ = screenpipe_events::send_event("meeting_transcript_delta", event);
     }
+}
+
+/// Pick a speaker label from a Deepgram `Results` payload with `diarize=true`.
+/// Counts speaker indices across the words array and returns the dominant one.
+/// `device_type == "input"` + `speaker 0` is treated as the local user when
+/// `local_speaker_name` is set, since deepgram numbers speakers in order of
+/// first utterance and the local user typically speaks first into their own
+/// mic. All other indices fall back to a generic `speaker N` (1-indexed).
+fn resolve_speaker_name(
+    value: &Value,
+    device_type: &str,
+    config: &MeetingStreamingConfig,
+) -> Option<String> {
+    let words = value
+        .pointer("/channel/alternatives/0/words")
+        .and_then(Value::as_array)?;
+    let mut counts: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    for word in words {
+        if let Some(speaker) = word.get("speaker").and_then(Value::as_i64) {
+            *counts.entry(speaker).or_insert(0) += 1;
+        }
+    }
+    let (dominant, _) = counts.into_iter().max_by_key(|&(_, n)| n)?;
+
+    if dominant == 0 && device_type == "input" {
+        if let Some(name) = config.local_speaker_name.clone() {
+            return Some(name);
+        }
+    }
+    Some(format!("speaker {}", dominant + 1))
 }
 
 fn latest_audio_time(latest_audio_ms: &AtomicU64) -> DateTime<Utc> {

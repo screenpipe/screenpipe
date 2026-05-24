@@ -14,6 +14,18 @@ import { AuthGuard } from "@/lib/auth-guard";
 import { forwardRef } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { invoke } from "@tauri-apps/api/core";
+import { useUpdateListener } from "@/components/update-banner";
+
+/// Global mount point for the updater event listener. Lives here (not in
+/// per-page hooks) so the listener is registered for the lifetime of the
+/// app — the `update-available` event fires once when the bundle download
+/// completes, and if the listener wasn't mounted at that moment the banner
+/// would never appear. The hook also hydrates from `get_pending_update` on
+/// mount so a late-mounting webview still picks up an event it missed.
+function UpdateListenerMount() {
+  useUpdateListener();
+  return null;
+}
 
 export const Providers = forwardRef<
   HTMLDivElement,
@@ -102,6 +114,7 @@ export const Providers = forwardRef<
           <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
             <ChangelogDialogProvider>
               <PermissionMonitorProvider>
+                <UpdateListenerMount />
                 <PostHogProvider client={posthog}>{children}</PostHogProvider>
               </PermissionMonitorProvider>
             </ChangelogDialogProvider>

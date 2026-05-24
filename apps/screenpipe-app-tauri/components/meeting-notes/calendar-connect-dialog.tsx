@@ -9,6 +9,7 @@ import {
   Check,
   Link2,
   Loader2,
+  Lock,
   Monitor,
   Plus,
 } from "lucide-react";
@@ -22,7 +23,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { commands, type IcsCalendarEntry } from "@/lib/utils/tauri";
-import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
+import { getStore, saveAndEncrypt, useSettings } from "@/lib/hooks/use-settings";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 
 export type CalendarProviderId = "native" | "google" | "ics";
@@ -297,6 +299,8 @@ function GoogleCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+  const { settings } = useSettings();
+  const isPro = !!settings.user?.cloud_subscribed;
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
 
@@ -308,6 +312,13 @@ function GoogleCalendarConnect({
       if (result.status === "ok" && result.data.connected) {
         await onConnected();
         onClose();
+      } else if (result.status === "error") {
+        const msg = String(result.error ?? "");
+        setStatusText(
+          msg.toLowerCase().includes("pro subscription")
+            ? "OAuth integrations require Pro. Upgrade to connect."
+            : msg || "Google Calendar was not connected.",
+        );
       } else {
         setStatusText("Google Calendar was not connected.");
       }
@@ -324,18 +335,32 @@ function GoogleCalendarConnect({
         Connect your Google Calendar directly. ScreenPipe uses read-only access
         for meeting detection and note metadata.
       </p>
-      <Button onClick={connect} disabled={busy} className="w-full rounded-none">
-        {busy ? (
-          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <CalendarProviderIcon
-            provider="google"
-            isMac={false}
-            className="mr-2 h-3.5 w-3.5"
-          />
-        )}
-        connect google calendar
-      </Button>
+      {!isPro ? (
+        <div className="flex flex-col gap-1.5">
+          <Button disabled className="w-full gap-2 rounded-none opacity-60">
+            <Lock className="h-3.5 w-3.5" />pro required
+          </Button>
+          <button
+            onClick={() => openUrl("https://screenpi.pe/onboarding")}
+            className="text-xs text-muted-foreground hover:text-foreground underline self-start"
+          >
+            upgrade to pro to connect
+          </button>
+        </div>
+      ) : (
+        <Button onClick={connect} disabled={busy} className="w-full rounded-none">
+          {busy ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <CalendarProviderIcon
+              provider="google"
+              isMac={false}
+              className="mr-2 h-3.5 w-3.5"
+            />
+          )}
+          connect google calendar
+        </Button>
+      )}
       {statusText && (
         <p className="text-xs text-muted-foreground">{statusText}</p>
       )}

@@ -10,3 +10,5 @@
 
 #[cfg(feature = "cloud-sync")]
 pub mod sync;
+
+pub mod external_sync;

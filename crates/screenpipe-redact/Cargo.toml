@@ -51,8 +51,9 @@ image = "0.25"
 [features]
 default = []
 
-# Enable the ONNX-based image redactor (rfdetr). CPU-only baseline.
-onnx-cpu = ["dep:ort", "dep:ndarray", "ort/download-binaries"]
+# Enable the ONNX-based image redactor (rfdetr) AND the v45 phase 3
+# text redactor (xlm-roberta-base BIO token classifier). CPU baseline.
+onnx-cpu = ["dep:ort", "dep:ndarray", "dep:tokenizers", "dep:serde_json", "ort/download-binaries"]
 # Mac: CoreML execution provider (uses Metal + ANE where available).
 onnx-coreml = ["onnx-cpu", "ort/coreml"]
 # Windows: DirectML EP (any DX12-capable GPU, no CUDA toolkit).
@@ -78,6 +79,22 @@ optional = true
 
 [dependencies.ndarray]
 version = "0.16"
+optional = true
+
+# HuggingFace fast tokenizers, used by the ONNX text adapter to load
+# the v45 phase 3 tokenizer.json. ~200 KB compiled, no extra runtime
+# deps beyond what onnxruntime already pulls in. Pinned major version.
+[dependencies.tokenizers]
+version = "0.21"
+default-features = false
+features = ["onig"]
+optional = true
+
+# Used by the ONNX text adapter to parse `config.json` (the id2label
+# mapping for the 27 BIO tags). Workspace already pulls serde_json
+# transitively; declare explicitly so the dep graph is honest.
+[dependencies.serde_json]
+version = "1"
 optional = true
 
 # OPF text redactor (pure-Rust candle port; same model as the v3

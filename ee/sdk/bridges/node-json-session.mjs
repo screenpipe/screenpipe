@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const sdkRoot = resolve(process.env.SCREENPIPE_SDK_ROOT || join(here, ".."));
 const requireFromSdk = createRequire(pathToFileURL(join(sdkRoot, "package.json")));
-const { createScreenpipeSession } = requireFromSdk("./session");
+const { createScreenpipeSession, SCREENPIPE_EVENTS } = requireFromSdk("./session");
 
 const outputDir = process.env.SCREENPIPE_OUTPUT_DIR || undefined;
 const permissionTimeoutMs = Number(process.env.SCREENPIPE_PERMISSION_TIMEOUT_MS || 0) || undefined;
@@ -59,11 +59,42 @@ async function dispatch(method, params) {
       return encodeSnapshot(await session.snapshot());
     case "reveal":
       return await session.reveal(revealTarget(params));
+    case "events":
+      // Returns the canonical event taxonomy so clients on the other
+      // side of the JSON-line bridge (Tauri Rust, Swift) can allow-list
+      // without redeclaring the names.
+      return SCREENPIPE_EVENTS.slice();
     case "dispose":
       await session.dispose();
       return true;
     default:
       throw new Error(`unknown screenpipe bridge method: ${method}`);
+  }
+}
+
+// Forward every session event as a JSON-line notification frame. The
+// frame has no `id` field — that's how the consumer (Tauri Rust /
+// Swift transport / any other JSON-line reader) tells a notification
+// apart from an RPC response. `data` is the same payload Node consumers
+// see; serialization must be JSON-safe (no Buffers — the SDK never puts
+// raw bytes in event payloads, only base64-encoded blobs).
+//
+// Skip silently when the session doesn't expose `.on` (smaller mocks
+// in tests, or older session shapes). The bridge stays useful for RPC
+// even without events.
+if (typeof session.on === "function" && Array.isArray(SCREENPIPE_EVENTS)) {
+  for (const eventName of SCREENPIPE_EVENTS) {
+    session.on(eventName, (data) => {
+      try {
+        write({ event: eventName, data: data ?? null });
+      } catch (error) {
+        // A single non-serializable event must never bring down the
+        // bridge — log to stderr (parents capture it) and drop the frame.
+        process.stderr.write(
+          `screenpipe-bridge: failed to serialize event ${eventName}: ${error?.message || error}\n`,
+        );
+      }
+    });
   }
 }
 

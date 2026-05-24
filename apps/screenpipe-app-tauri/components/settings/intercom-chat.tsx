@@ -42,6 +42,17 @@ function stripHtml(html: string): string {
   return div.textContent || div.innerText || "";
 }
 
+// WebKit returns `TypeError: Load failed` when the chat backend is unreachable,
+// which surfaces as the opaque "Load failed (screenpi.pe)" line. Swap any
+// connection-style failure for an actionable message; pass others through.
+function describeChatError(e: unknown): string {
+  const msg = (e instanceof Error ? e.message : String(e)) || "";
+  if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
+    return "chat is temporarily unreachable — please try again in a moment, or email louis@screenpi.pe";
+  }
+  return msg || "failed to send message";
+}
+
 export function IntercomChat() {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -149,7 +160,7 @@ export function IntercomChat() {
         ]);
       }
     } catch (err: any) {
-      setError(err.message || "failed to send message");
+      setError(describeChatError(err));
       setInput(body);
     } finally {
       setSending(false);

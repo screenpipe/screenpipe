@@ -78,6 +78,53 @@ function sortAudioChunks(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
   });
 }
 
+interface SpeakerTurn {
+  speakerName: string;
+  /** Timestamp of the first chunk in this turn — used for display. */
+  timestamp: string;
+  /** Timestamp of the most recent chunk merged in — used to gate further
+   *  merging. Comparing against the first chunk would let arbitrarily long
+   *  turns swallow new turns as long as adjacent chunks stay close. */
+  lastTimestamp: string;
+  text: string;
+}
+
+/**
+ * Collapse a sorted chunk stream into speaker turns. The live engine writes
+ * one row per ~2-3 s VAD chunk; without grouping, a 30-minute meeting becomes
+ * 500+ single-word lines that drown the summarize prompt. Two consecutive
+ * chunks fold into the same turn when they share a speaker label and the gap
+ * between them is under 10 s. The 10 s window is long enough to bridge a
+ * thinking pause, short enough to start a new turn after a real exchange.
+ */
+function groupConsecutiveSpeakerTurns(
+  chunks: MeetingAudioChunk[],
+): SpeakerTurn[] {
+  const MAX_GAP_MS = 10_000;
+  const turns: SpeakerTurn[] = [];
+  for (const c of chunks) {
+    const speakerName = c.speakerName ?? "";
+    const text = c.transcription.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const last = turns[turns.length - 1];
+    const gap = last
+      ? timestampMs(c.timestamp) - timestampMs(last.lastTimestamp)
+      : Infinity;
+    if (last && last.speakerName === speakerName && gap < MAX_GAP_MS) {
+      last.text = `${last.text} ${text}`;
+      last.lastTimestamp = c.timestamp;
+    } else {
+      turns.push({
+        speakerName,
+        timestamp: c.timestamp,
+        lastTimestamp: c.timestamp,
+        text,
+      });
+    }
+  }
+  return turns;
+}
+
 export interface SpeakerSummary {
   name: string;
   segment_count: number;
@@ -133,7 +180,7 @@ export async function fetchActivitySummary(
   const { start, end } = rangeFor(meeting);
   try {
     const res = await localFetch(
-      `/activity-summary?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+      `/activity-summary?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&include_memories=false&include_snippets=false&include_recording=false&include_guidance=false`,
     );
     if (!res.ok) return null;
     return (await res.json()) as ActivitySummary;
@@ -545,15 +592,14 @@ function renderTranscript(
   activity: ActivitySummary | null,
 ): string {
   if (full && full.length > 0) {
-    return sortAudioChunks(full)
-      .map((c) => {
-        const ts = formatTimeShort(c.timestamp);
+    return groupConsecutiveSpeakerTurns(sortAudioChunks(full))
+      .map((g) => {
+        const ts = formatTimeShort(g.timestamp);
         const sp =
-          c.speakerName && c.speakerName !== "unknown"
-            ? `[${c.speakerName}] `
+          g.speakerName && g.speakerName !== "unknown"
+            ? `[${g.speakerName}] `
             : "";
-        const txt = c.transcription.replace(/\s+/g, " ").trim();
-        return `- ${ts} ${sp}${txt}`;
+        return `- ${ts} ${sp}${g.text}`;
       })
       .join("\n");
   }
@@ -723,9 +769,12 @@ function mergeMeetingAudioChunks(
   const out: MeetingAudioChunk[] = [];
 
   for (const chunk of merged) {
+    // /search returns DeviceType as "Input"/"Output" (PascalCase enum), while
+    // /meetings/:id/transcript returns the raw DB column "input"/"output".
+    // Lowercase both so the same chunk pulled from both endpoints collapses.
     const key = [
       Math.round(timestampMs(chunk.timestamp) / 1000),
-      chunk.deviceType,
+      chunk.deviceType.toLowerCase(),
       chunk.speakerName,
       chunk.transcription.replace(/\s+/g, " ").trim().toLowerCase(),
     ].join("|");

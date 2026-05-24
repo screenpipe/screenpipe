@@ -37,6 +37,9 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		// audio_chunks has no timestamp column itself; the recording time
 		// lives on audio_transcriptions, which is what the timeline UI also
 		// uses to render the audio track.
+		// LIMIT is required by the /raw_sql validator; bound it to the max so
+		// future heavy users with many recording days don't get clipped.
+		// One row per local-calendar day, so 10000 = ~27 years of headroom.
 		const query = `
 			SELECT DISTINCT DATE(timestamp, 'localtime') AS day FROM (
 				SELECT timestamp FROM frames WHERE timestamp IS NOT NULL
@@ -44,6 +47,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 				SELECT timestamp FROM audio_transcriptions WHERE timestamp IS NOT NULL
 			)
 			ORDER BY day
+			LIMIT 10000
 		`;
 		const response = await localFetch("/raw_sql", {
 			method: "POST",

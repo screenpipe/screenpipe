@@ -37,7 +37,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     // Public client ID from the Zoom Marketplace app (User-managed OAuth,
     // private distribution). Safe to ship in the binary — the secret half
     // stays on the website (OAUTH_ZOOM_CLIENT_SECRET in Vercel env).
-    client_id: "Nx8XJ_6Qai8ttYUEMHDPg",
+    client_id: "EqdPSw5wS76kO3HyRzDb7Q",
     extra_auth_params: &[],
     // Zoom requires HTTPS redirect URIs for OAuth apps; the local
     // callback won't pass app-review. Relay through the website like
@@ -70,6 +70,16 @@ impl Integration for Zoom {
 
     fn oauth_config(&self) -> Option<&'static OAuthConfig> {
         Some(&OAUTH)
+    }
+
+    fn refresh_policy(&self) -> super::RefreshPolicy {
+        // Zoom invalidates refresh tokens after 15h of inactivity (per Zoom
+        // OAuth docs, "refresh token TTL"). Force a proactive refresh well
+        // inside that window so an idle overnight laptop doesn't return to
+        // a permanently `invalid_grant` connection.
+        super::RefreshPolicy {
+            keep_alive: Some(std::time::Duration::from_secs(12 * 60 * 60)),
+        }
     }
 
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {

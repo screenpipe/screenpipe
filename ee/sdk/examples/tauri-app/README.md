@@ -13,5 +13,8 @@ npm install
 npm run dev
 ```
 
-The Rust plugin starts the shared `bridges/node-json-session.mjs` process and
-points it at this repo as `SCREENPIPE_SDK_ROOT`.
+The Rust plugin is **native** — `ee/sdk/tauri/rust` depends on
+`screenpipe-recorder` directly and drives the recorder in-process inside
+the Tauri tokio runtime. No Node binary, no bridge script, no child
+process at runtime. The frontend uses `@screenpipe/sdk/tauri` and talks
+to the plugin over standard Tauri IPC.

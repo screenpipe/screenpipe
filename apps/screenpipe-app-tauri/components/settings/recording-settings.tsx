@@ -2922,7 +2922,35 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* CoreAudio System Audio (macOS 14.4+ only; default on) */}
+        {/* macOS microphone AEC (VoiceProcessingIO on default input) */}
+        {!settings.disableAudio && isMacOS && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    Microphone echo cancellation
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Use Apple VoiceProcessingIO on the default microphone
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="macosInputVpioEnabled"
+                checked={Boolean(settings.macosInputVpioEnabled ?? false)}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ macosInputVpioEnabled: checked }, true)
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* CoreAudio System Audio (macOS 14.4+ only) */}
         {!settings.disableAudio && coreaudioTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

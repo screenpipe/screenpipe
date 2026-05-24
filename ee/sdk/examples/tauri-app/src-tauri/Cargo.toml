@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# Independent of the SDK workspace at `ee/sdk/Cargo.toml`. The example
+# is a Tauri host app and shouldn't share lockfiles with the napi addon
+# next door — they pull different feature sets of overlapping crates.
+[workspace]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

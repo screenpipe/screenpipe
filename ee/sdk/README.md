@@ -48,7 +48,14 @@ if (!permissions.screen) {
   throw new Error("Screen Recording permission is required");
 }
 
-const recorder = new Recorder({ output: "/tmp/session.mp4" });
+const recorder = new Recorder({
+  output: "/tmp/session.mp4",
+  // Optional privacy filters — recording pauses (hard cut in the MP4)
+  // while a matching window/URL is focused.
+  // Plain strings match anywhere; `App::Title` scopes to one window of one app.
+  ignoredWindows: ["1password", "private", "Slack::#hr"],
+  ignoredUrls: ["wellsfargo.com", "chase"],
+});
 await recorder.start();
 
 // ... user does stuff ...
@@ -64,6 +71,29 @@ await recorder.stop();
 - `options.monitorId` (number, optional): display id; defaults to the primary display.
 - `options.microphone` (boolean, optional): accepted for forward compatibility.
 - `options.systemAudio` (boolean, optional): accepted for forward compatibility.
+- `options.ignoredWindows` (string[], optional): substring patterns matched
+  case-insensitively against the focused app name and window title. While a
+  matching window is in focus, the recorder skips writing frames — the MP4
+  contains a hard cut over the filtered period. Mirrors the engine's
+  `--ignored-windows` CLI flag.
+
+  Each pattern may use an optional `App::Title` scope: `"Slack::#hr"` skips
+  only the #hr window inside Slack and leaves other Slack channels recording.
+  `"::Confidential"` matches any app whose title contains "Confidential".
+  Plain `"Slack"` keeps the legacy "app OR title contains" behavior.
+- `options.includedWindows` (string[], optional): substring whitelist. If
+  non-empty, frames are written ONLY while a matching window is focused.
+  Scoped entries (`"Greenhouse::Candidates"`) create a per-app whitelist —
+  other apps stay unaffected. Unscoped entries keep the legacy "must match
+  app or title" global semantics. Mirrors `--included-windows`.
+- `options.ignoredUrls` (string[], optional): URL patterns to skip
+  (case-insensitive, domain-aware match — `chase` matches `chase.com` and
+  `online.chase.com` but not `purchase.com`). When the focused browser is on
+  a matching URL, the recorder skips writing frames. Mirrors `--ignored-urls`.
+
+Filtering uses the macOS Accessibility API; without that permission the
+filter fails open (records everything). Without any filter list set, the
+recorder stays on the zero-overhead fast path — no a11y polling is done.
 
 ### Methods
 
@@ -75,7 +105,28 @@ await recorder.stop();
 | `framesWritten()` | Return frames written since `start()`. |
 | `audioLevel()` | Return a smoothed microphone RMS level in `[0, 1]` for preflight UI. |
 | `focusedApp()` | Return best-effort focused-window metadata; requires Accessibility permission on macOS. |
+| `filterStatus()` | Return `{ paused, reason }` for the window/URL filter. Poll, or subscribe via the session wrapper's `paused`/`resumed` events. |
+| `setFilters(patch)` | Replace the active filter lists at runtime — `{ ignoredWindows?, includedWindows?, ignoredUrls? }`. Takes effect within ≤ 1 s. |
 | `requestPermissions()` | Trigger or check supported OS permissions. |
+
+### Filter events (session wrapper)
+
+`createScreenpipeSession` emits `paused` and `resumed` events whenever the
+filter verdict flips. Payload: `{ paused: boolean, reason: string | null }`
+where `reason` is one of `"ignored_window"`, `"included_window_mismatch"`,
+`"ignored_url"`, `"incognito"`, `"excluded_app"`.
+
+```ts
+session.on("paused", ({ reason }) => {
+  showBanner(`recording paused — ${reason}`);
+});
+session.on("resumed", () => {
+  hideBanner();
+});
+
+// Runtime toggle (e.g. user flips "Pause on banking" in your settings UI):
+await session.setFilters({ ignoredUrls: ["chase", "wellsfargo.com"] });
+```
 
 Audio is not muxed into the MP4 in v0.1.0.
 

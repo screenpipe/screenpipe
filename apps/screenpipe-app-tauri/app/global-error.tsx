@@ -4,6 +4,9 @@
 
 "use client";
 
+import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+
 export default function GlobalError({
   error,
   reset,
@@ -11,6 +14,32 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    // Bypass the buffered console interceptor in app/providers.tsx and write
+    // straight to the Rust log via write_browser_logs. The 2s buffer flush
+    // does not reliably fire when an error boundary tears down its parent
+    // tree (e.g. the enterprise-build React #185 boot crash), so the stack
+    // was never landing in ~/.screenpipe/screenpipe-app.<date>.log.
+    const serialized = {
+      name: error?.name,
+      message: error?.message,
+      digest: error?.digest,
+      stack: error?.stack,
+    };
+    try {
+      // eslint-disable-next-line no-console
+      console.error("global-error boundary caught:", serialized);
+    } catch {}
+    invoke("write_browser_logs", {
+      entries: [
+        {
+          level: "error",
+          message: `global-error boundary: ${JSON.stringify(serialized)}`,
+        },
+      ],
+    }).catch(() => {});
+  }, [error]);
+
   return (
     <html lang="en">
       <body style={{ margin: 0, backgroundColor: "#0a0a0a", color: "#fff", fontFamily: "system-ui, sans-serif" }}>

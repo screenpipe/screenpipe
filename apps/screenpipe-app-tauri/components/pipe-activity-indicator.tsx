@@ -4,8 +4,9 @@
 "use client";
 
 import React from "react";
-import { AlertCircle, Check, Clock3 } from "lucide-react";
+import { AlertCircle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LiveSignal } from "@/components/live-signal";
 
 export type PipeActivityKind = "running" | "upcoming" | "idle" | "ok" | "error";
 
@@ -90,21 +91,14 @@ export function PipeActivityIndicator({
 
 function PipeActivityIcon({ kind }: { kind: PipeActivityKind }) {
   if (kind === "running") {
-    return (
-      <span
-        className="relative h-3.5 w-3.5 shrink-0 rounded-full border border-muted-foreground/35 border-t-foreground/80 animate-spin"
-        aria-hidden
-      />
-    );
+    return <LiveSignal ariaLabel="running" />;
   }
 
+  // "upcoming" intentionally renders no icon — the "in 4h" label already
+  // conveys the countdown semantic, and the previous clock glyph read as
+  // visual noise against the rest of the sharp-block aesthetic.
   if (kind === "upcoming") {
-    return (
-      <Clock3
-        className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
-        aria-hidden
-      />
-    );
+    return null;
   }
 
   if (kind === "error") {
@@ -127,8 +121,10 @@ function PipeActivityIcon({ kind }: { kind: PipeActivityKind }) {
 
   return (
     <span
-      className="h-2 w-2 shrink-0 rounded-full border border-muted-foreground/40"
+      className="font-mono text-[10px] leading-none text-muted-foreground/60 inline-flex items-center justify-center w-2.5 h-2.5 shrink-0"
       aria-hidden
-    />
+    >
+      ·
+    </span>
   );
 }

@@ -4,7 +4,7 @@
 
 //! Pi coding-agent executor.
 //!
-//! Implements [`AgentExecutor`] for the pi CLI (`@mariozechner/pi-coding-agent`).
+//! Implements [`AgentExecutor`] for the pi CLI (`@earendil-works/pi-coding-agent`).
 //! Pi is installed via bun and executed as a subprocess in "print" mode (`pi -p`).
 
 use super::{AgentExecutor, AgentOutput, ExecutionHandle};
@@ -13,7 +13,9 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 
-const PI_PACKAGE: &str = "@mariozechner/pi-coding-agent@0.60.0";
+const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
+const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
+const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
 
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
@@ -72,25 +74,11 @@ async fn fetch_models_from_gateway(
                 .unwrap_or("standard");
             let reasoning = intelligence == "highest" || intelligence == "high";
 
-            // Determine input modalities from best_for/tags
-            let best_for = m.get("best_for").and_then(|v| v.as_array());
-            let has_vision = best_for
-                .map(|arr| {
-                    arr.iter()
-                        .any(|v| v.as_str().is_some_and(|s| s.contains("vision")))
-                })
-                .unwrap_or(false);
-            let input = if has_vision {
-                json!(["text", "image"])
-            } else {
-                json!(["text"])
-            };
-
             json!({
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                "input": input,
+                "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": 32000,
@@ -195,7 +183,10 @@ impl PiExecutor {
     /// We re-check on every pi-agent boot, so role downgrades + license
     /// expirations wipe the skill automatically.
     pub fn ensure_screenpipe_team_skill(project_dir: &Path) -> Result<()> {
-        let skill_dir = project_dir.join(".pi").join("skills").join("screenpipe-team");
+        let skill_dir = project_dir
+            .join(".pi")
+            .join("skills")
+            .join("screenpipe-team");
         let skill_path = skill_dir.join("SKILL.md");
 
         let should_install = Self::is_enterprise_admin();
@@ -244,7 +235,10 @@ impl PiExecutor {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let is_admin = parsed.get("is_admin").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_admin = parsed
+            .get("is_admin")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         // license_active defaults to true if the field is absent so older
         // enterprise.json files don't lose skill access on upgrade. The
         // website-side claim flow writes `license_active: false` when a
@@ -436,6 +430,21 @@ impl PiExecutor {
         let ext_path = ext_dir.join("context-pruning.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("context-pruning extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
+    /// Install the MCP bridge extension. Registers two proxy tools
+    /// (`mcp_list_tools`, `mcp_call`) that the model uses to talk to
+    /// user-registered MCP servers via the local `/mcp-servers/*` API.
+    /// Always installed — does nothing harmful when zero servers are
+    /// registered (the tools return a helpful "none registered" message).
+    pub fn ensure_mcp_bridge_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/mcp-bridge.ts");
+        let ext_path = ext_dir.join("mcp-bridge.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        debug!("mcp-bridge extension installed at {:?}", ext_path);
         Ok(())
     }
 
@@ -1091,6 +1100,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
+        Self::ensure_mcp_bridge_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1182,6 +1192,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
         Self::ensure_context_pruning_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
+        Self::ensure_mcp_bridge_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1278,7 +1289,7 @@ impl AgentExecutor for PiExecutor {
 
         let mut cmd = std::process::Command::new(&bun);
         cmd.current_dir(&install_dir)
-            .args(["add", PI_PACKAGE, "@anthropic-ai/sdk"]);
+            .args(["add", PI_PACKAGE, PI_AI_PACKAGE, "@anthropic-ai/sdk"]);
 
         #[cfg(windows)]
         {
@@ -1360,7 +1371,7 @@ fn is_local_pi_version_current() -> bool {
     };
     let pkg_json = dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("package.json");
     let contents = match std::fs::read_to_string(&pkg_json) {
@@ -1375,7 +1386,7 @@ fn is_local_pi_version_current() -> bool {
         Some(v) => v,
         None => return false,
     };
-    // PI_PACKAGE is "@mariozechner/pi-coding-agent@0.60.0" — extract version after last '@'
+    // PI_PACKAGE is "<scope>/pi-coding-agent@<ver>" — extract version after last '@'
     let expected = PI_PACKAGE.rsplit('@').next().unwrap_or("");
     if installed != expected {
         info!(
@@ -1387,28 +1398,47 @@ fn is_local_pi_version_current() -> bool {
     true
 }
 
-/// Seed the pi-agent package.json with overrides to fix dependency resolution.
+/// Seed the pi-agent package.json with overrides + strip legacy deps.
 /// `hosted-git-info` requires `lru-cache@^10`, but bun on Windows can hoist
-/// an ESM-only lru-cache@7.x that breaks CJS `require()`.
+/// an ESM-only lru-cache@7.x that breaks CJS `require()`. Also drops any
+/// stale `@mariozechner/*` keys carried over from before the upstream
+/// namespace rename (issue #3527).
 fn seed_pi_package_json(install_dir: &Path) {
     let pkg_path = install_dir.join("package.json");
+    let expected_overrides = json!({
+        "hosted-git-info": {
+            "lru-cache": "^10.0.0"
+        }
+    });
     if pkg_path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&pkg_path) {
-            if !contents.contains("overrides") {
-                if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
-                    if let Some(obj) = pkg.as_object_mut() {
-                        obj.insert(
-                            "overrides".to_string(),
-                            json!({
-                                "hosted-git-info": {
-                                    "lru-cache": "^10.0.0"
-                                }
-                            }),
-                        );
+            if let Ok(mut pkg) = serde_json::from_str::<serde_json::Value>(&contents) {
+                let mut changed = false;
+                if let Some(obj) = pkg.as_object_mut() {
+                    if obj.get("overrides") != Some(&expected_overrides) {
+                        obj.insert("overrides".to_string(), expected_overrides.clone());
+                        changed = true;
                     }
+                    if let Some(deps_obj) =
+                        obj.get_mut("dependencies").and_then(|d| d.as_object_mut())
+                    {
+                        let legacy: Vec<String> = deps_obj
+                            .keys()
+                            .filter(|k| k.starts_with("@mariozechner/"))
+                            .cloned()
+                            .collect();
+                        for k in &legacy {
+                            deps_obj.remove(k);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
                     if let Ok(new_contents) = serde_json::to_string_pretty(&pkg) {
                         let _ = std::fs::write(&pkg_path, new_contents);
-                        info!("Added lru-cache overrides to existing pi-agent package.json");
+                        let _ = std::fs::remove_file(install_dir.join("bun.lock"));
+                        let _ = std::fs::remove_file(install_dir.join("bun.lockb"));
+                        info!("Patched pi-agent package.json (overrides + legacy dep cleanup)");
                     }
                 }
             }
@@ -1436,7 +1466,7 @@ fn find_local_pi_entrypoint() -> Option<String> {
     let dir = pi_local_install_dir()?;
     let cli_js = dir
         .join("node_modules")
-        .join("@mariozechner")
+        .join(PI_NAMESPACE_DIR)
         .join("pi-coding-agent")
         .join("dist")
         .join("cli.js");

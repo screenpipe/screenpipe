@@ -56,18 +56,15 @@ struct RetentionRuntime {
 /// What old data gets cleaned up. `Media` (default) keeps DB rows (search,
 /// timeline, transcripts) and only reclaims mp4/wav/jpeg files; `All` is the
 /// legacy behavior that wipes everything past the cutoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, OaSchema, ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, OaSchema, ValueEnum, Default,
+)]
 #[serde(rename_all = "lowercase")]
 #[clap(rename_all = "lowercase")]
 pub enum RetentionMode {
+    #[default]
     Media,
     All,
-}
-
-impl Default for RetentionMode {
-    fn default() -> Self {
-        Self::Media
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

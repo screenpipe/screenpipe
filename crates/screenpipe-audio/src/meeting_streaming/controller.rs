@@ -20,10 +20,10 @@ use super::{
     deepgram_live,
     events::{
         MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
-        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted, MeetingStreamingStatusChanged,
-        MeetingTranscriptDelta, MeetingTranscriptFinal,
+        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
+        MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
-    openai_realtime, selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
+    selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
 
 const LIVE_FINAL_PERSIST_ATTEMPTS: usize = 18;
@@ -32,6 +32,12 @@ const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(5);
 const LIVE_INACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LIVE_NO_AUDIO_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LIVE_MAX_SESSION_DURATION: Duration = Duration::from_secs(2 * 60 * 60);
+/// Half of a typical 30s chunk. Chunks whose timestamp falls within this
+/// window of any live transcript are considered "live-covered" and get
+/// marked `transcribed` so the background reconciler skips them. Gaps wider
+/// than this (live provider drop, network blip) stay `pending` so background
+/// can still backfill them.
+const LIVE_COVERAGE_WINDOW_SECS: f64 = 15.0;
 /// After this long without audio frames or transcripts, fire a "live note
 /// looks broken" notification (once per session, per condition) so the user
 /// doesn't sit through a silent meeting wondering why nothing is appearing.
@@ -47,6 +53,12 @@ struct ActiveMeetingStream {
     audio_frames_seen: u64,
     audio_samples_seen: u64,
     last_audio_activity_at: Instant,
+    // Latched true the first time a frame's RMS clears the voice-activity
+    // threshold. Used to suppress the "transcript not flowing" notification
+    // when the room is just silent (e.g. user alone waiting for others to
+    // join) — no transcript is expected from silence, so warning the user is
+    // a false positive.
+    voiced_audio_seen: bool,
     live_transcript_seen: bool,
     last_live_transcript_at: Option<Instant>,
     notified_audio_stall: bool,
@@ -157,9 +169,13 @@ pub fn start_meeting_streaming_loop(
                         Some(session) if session.meeting_id == meeting_id => {
                             let provider = session.provider.clone();
                             let live = session.live_transcription_enabled;
+                            let live_covered = session.live_transcript_seen;
                             emit_session_ended(session);
                             audio_tap.set_active(false);
                             audio_tap.set_background_suppressed(false);
+                            if live_covered {
+                                mark_live_covered_chunks(&db, meeting_id).await;
+                            }
                             emit_status(false, None, &provider, live, None);
                         }
                         Some(session) => {
@@ -207,6 +223,7 @@ pub fn start_meeting_streaming_loop(
                                 session.audio_samples_seen += frame.samples.len() as u64;
                                 if frame_has_audio_activity(&frame) {
                                     session.last_audio_activity_at = Instant::now();
+                                    session.voiced_audio_seen = true;
                                 }
                                 if session.live_transcription_enabled {
                                     route_frame_to_provider(
@@ -240,6 +257,7 @@ pub fn start_meeting_streaming_loop(
                         };
                         let provider = session.provider.clone();
                         let meeting_id = session.meeting_id;
+                        let live_covered = session.live_transcript_seen;
                         warn!(
                             "meeting streaming: requesting meeting auto-end ({}, meeting_id={})",
                             reason.log_message(),
@@ -255,6 +273,9 @@ pub fn start_meeting_streaming_loop(
                         emit_session_ended(session);
                         audio_tap.set_active(false);
                         audio_tap.set_background_suppressed(false);
+                        if live_covered {
+                            mark_live_covered_chunks(&db, meeting_id).await;
+                        }
                         emit_status(
                             false,
                             Some(meeting_id),
@@ -298,6 +319,7 @@ async fn start_streaming_session(
         audio_frames_seen: 0,
         audio_samples_seen: 0,
         last_audio_activity_at: Instant::now(),
+        voiced_audio_seen: false,
         live_transcript_seen: false,
         last_live_transcript_at: None,
         notified_audio_stall: false,
@@ -337,6 +359,37 @@ async fn start_streaming_session(
         readiness_error,
     );
     let _ = screenpipe_events::send_event("meeting_streaming_session_started", started);
+}
+
+/// Flip `audio_chunks` for chunks the live provider already transcribed to
+/// `transcription_status='transcribed'` so the post-meeting reconciler skips
+/// them. Without this, every live-transcribed meeting also gets fully
+/// re-transcribed by the background engine, doubling battery/CPU/storage and
+/// producing the duplicate rows the read endpoint surfaces.
+async fn mark_live_covered_chunks(db: &Arc<DatabaseManager>, meeting_id: i64) {
+    match db
+        .mark_chunks_covered_by_live(meeting_id, LIVE_COVERAGE_WINDOW_SECS)
+        .await
+    {
+        Ok(0) => {
+            debug!(
+                "meeting streaming: no pending chunks to mark for meeting {}",
+                meeting_id
+            );
+        }
+        Ok(n) => {
+            info!(
+                "meeting streaming: marked {} chunks as transcribed via live coverage (meeting_id={})",
+                n, meeting_id
+            );
+        }
+        Err(err) => {
+            warn!(
+                "meeting streaming: failed to mark live-covered chunks (meeting_id={}): {}",
+                meeting_id, err
+            );
+        }
+    }
 }
 
 async fn persist_live_final_with_retry(db: Arc<DatabaseManager>, event: MeetingTranscriptFinal) {
@@ -468,16 +521,6 @@ fn route_frame_to_provider(
             }
             MeetingStreamingProvider::ScreenpipeCloud | MeetingStreamingProvider::DeepgramLive => {
                 deepgram_live::spawn_deepgram_live_stream(
-                    config.clone(),
-                    session.meeting_id,
-                    frame.device_name.clone(),
-                    frame.device_type.clone(),
-                    rx,
-                );
-                session.device_senders.insert(key.clone(), tx);
-            }
-            MeetingStreamingProvider::OpenAiRealtime => {
-                openai_realtime::spawn_openai_realtime_stream(
                     config.clone(),
                     session.meeting_id,
                     frame.device_name.clone(),
@@ -618,6 +661,7 @@ fn check_and_emit_stall_notifications(session: &mut ActiveMeetingStream, now: In
         );
     } else if !session.notified_transcript_stall
         && session.audio_frames_seen > 0
+        && session.voiced_audio_seen
         && !session.live_transcript_seen
     {
         session.notified_transcript_stall = true;
@@ -740,11 +784,6 @@ async fn readiness_error(
         MeetingStreamingProvider::ScreenpipeCloud => Some(
             "Log in to ScreenPipe Cloud to enable live meeting transcription".to_string(),
         ),
-        MeetingStreamingProvider::OpenAiRealtime if config.live_transcription_ready() => None,
-        MeetingStreamingProvider::OpenAiRealtime => Some(
-            "Direct OpenAI realtime transcription needs a developer API key; ScreenPipe Cloud does not"
-                .to_string(),
-        ),
         MeetingStreamingProvider::DeepgramLive if config.live_transcription_ready() => None,
         MeetingStreamingProvider::DeepgramLive => Some(
             "Direct Deepgram live transcription needs a Deepgram API key; ScreenPipe Cloud does not"
@@ -787,6 +826,7 @@ mod tests {
             audio_frames_seen: 0,
             audio_samples_seen: 0,
             last_audio_activity_at: now,
+            voiced_audio_seen: false,
             live_transcript_seen: false,
             last_live_transcript_at: None,
             notified_audio_stall: false,
@@ -825,6 +865,7 @@ mod tests {
         // is the field itself, not a flag we manage from outside).
         let mut session = test_session(now, true);
         session.audio_frames_seen = 42;
+        session.voiced_audio_seen = true;
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD);
         assert!(!session.notified_audio_stall);
         assert!(session.notified_transcript_stall);
@@ -832,6 +873,16 @@ mod tests {
         // Re-running after firing is a no-op (latched).
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 5);
         assert!(session.notified_transcript_stall);
+
+        // Frames flowing but only silence (no voiced audio) — do NOT fire
+        // transcript stall. User is alone in the room waiting for others;
+        // there is nothing to transcribe, so warning them is a false positive.
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 200;
+        // voiced_audio_seen stays false
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 3);
+        assert!(!session.notified_audio_stall);
+        assert!(!session.notified_transcript_stall);
 
         // Pure background sessions (no live transcription) never fire — their
         // audio tap is intentionally inactive so audio_frames_seen=0 is

@@ -136,7 +136,7 @@ fn presets_array_mut(store: &mut Value) -> Result<&mut Vec<Value>> {
     Ok(presets_val.as_array_mut().unwrap())
 }
 
-fn presets_array<'a>(store: &'a Value) -> &'a [Value] {
+fn presets_array(store: &Value) -> &[Value] {
     store
         .pointer("/settings/aiPresets")
         .and_then(|v| v.as_array())

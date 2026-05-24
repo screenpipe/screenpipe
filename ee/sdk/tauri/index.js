@@ -12,11 +12,23 @@ const DEFAULT_TAURI_COMMANDS = Object.freeze({
   snapshot: "plugin:screenpipe|screenpipe_snapshot",
   reveal: "plugin:screenpipe|screenpipe_reveal",
   dispose: "plugin:screenpipe|screenpipe_dispose",
+  events: "plugin:screenpipe|screenpipe_events",
 });
+
+/**
+ * Tauri event name the Rust plugin emits every screenpipe session event
+ * on. Keep in sync with `SCREENPIPE_EVENT_CHANNEL` in `lib.rs`.
+ */
+const SCREENPIPE_EVENT_CHANNEL = "screenpipe://event";
 
 async function defaultInvoke(command, payload) {
   const api = await import("@tauri-apps/api/core");
   return await api.invoke(command, payload);
+}
+
+async function defaultListen(channel, callback) {
+  const api = await import("@tauri-apps/api/event");
+  return await api.listen(channel, callback);
 }
 
 function mergeCommands(commands) {
@@ -45,7 +57,9 @@ function normalizeSnapshot(snapshot) {
 
 function createScreenpipeTauriClient(options = {}) {
   const invoke = options.invoke || defaultInvoke;
+  const listen = options.listen || defaultListen;
   const commands = mergeCommands(options.commands);
+  const eventChannel = options.eventChannel || SCREENPIPE_EVENT_CHANNEL;
 
   return {
     commands,
@@ -77,10 +91,38 @@ function createScreenpipeTauriClient(options = {}) {
     async dispose() {
       return await invoke(commands.dispose);
     },
+
+    /**
+     * List of event names the plugin can emit. Forwarded straight from
+     * the Node bridge so a renderer can render UI for events without
+     * hard-coding the taxonomy.
+     */
+    async eventNames() {
+      return await invoke(commands.events);
+    },
+
+    /**
+     * Subscribe to every screenpipe session event. Returns an unsubscribe
+     * function. `callback` receives `{ event, data }` payloads where
+     * `event` is the session event name and `data` is its payload.
+     *
+     * Filter at the call site by passing `{ filter: ["app_switched", ...] }`.
+     */
+    async onEvent(callback, opts = {}) {
+      const filter = Array.isArray(opts.filter) ? new Set(opts.filter) : null;
+      const unlisten = await listen(eventChannel, (event) => {
+        const payload = event?.payload;
+        if (!payload || typeof payload !== "object") return;
+        if (filter && !filter.has(payload.event)) return;
+        callback(payload);
+      });
+      return typeof unlisten === "function" ? unlisten : async () => {};
+    },
   };
 }
 
 module.exports = {
   DEFAULT_TAURI_COMMANDS,
+  SCREENPIPE_EVENT_CHANNEL,
   createScreenpipeTauriClient,
 };

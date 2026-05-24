@@ -1528,8 +1528,6 @@ function providerLabel(
       return transcriptionEngineLabel(selectedEngine);
     case "deepgram-live":
       return "deepgram live";
-    case "openai-realtime":
-      return "openai realtime";
     case "screenpipe-cloud":
     default:
       return "screenpipe cloud";

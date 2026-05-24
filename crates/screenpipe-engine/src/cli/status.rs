@@ -10,7 +10,11 @@ pub async fn handle_status_command(
     port: u16,
 ) -> anyhow::Result<()> {
     let base_dir = get_base_dir(data_dir)?;
-    let db_path = base_dir.join("data").join("db.sqlite");
+    // db.sqlite lives at the top of the screenpipe dir; the `data/` subdir
+    // holds the recording media (chunked mp4s), which is what `dir_size`
+    // reports below. Previously this joined "data" too, which always read
+    // from an empty file and made `status` print 0 frames.
+    let db_path = base_dir.join("db.sqlite");
 
     // Check if server is running
     let running = TcpStream::connect(format!("127.0.0.1:{}", port))

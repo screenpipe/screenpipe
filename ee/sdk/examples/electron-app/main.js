@@ -73,6 +73,18 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // Electron 20+ defaults renderers to sandboxed when nodeIntegration is
+      // false. The sandbox blocks `require()` of arbitrary npm modules from
+      // the preload script — which means `require("@screenpipe/sdk/electron/preload")`
+      // throws silently and `window.api` is never exposed (you'd see
+      // "Cannot read properties of undefined (reading 'permissions')" in
+      // the renderer when buttons are clicked).
+      //
+      // For an example app the trade-off is fine: we want a minimal preload
+      // that imports the SDK's helper. Production apps that need the
+      // sandbox should instead bundle their preload (esbuild/webpack) so
+      // the SDK code is inlined and no external require is needed.
+      sandbox: false,
     },
   });
   win.loadFile("index.html");
@@ -113,6 +125,19 @@ app.whenReady().then(async () => {
     return;
   }
 
+  // dataDir opts in to the new paired-capture pipeline: event-driven
+  // captures (click / typing_pause / app_switch / clipboard / visual_change
+  // / idle) write a frame row + JPEG snapshot per trigger into a SQLite
+  // alongside the MP4. Same schema the screenpipe CLI writes, so an
+  // SDK-recorded session is queryable by the existing `screenpipe-js`
+  // HTTP client or any tool that reads the CLI's DB.
+  //
+  // Multi-monitor is the default — no `monitorId` / `mp4Monitors` /
+  // `pairedMonitors` set, so every attached display gets both an MP4
+  // (auto-suffixed `-monitor-{id}`) and its own per-monitor row stream.
+  const dataDir = path.join(app.getPath("userData"), "screenpipe-data");
+  fs.mkdirSync(dataDir, { recursive: true });
+
   screenpipe = registerScreenpipeIpc({
     ipcMain,
     app,
@@ -120,8 +145,13 @@ app.whenReady().then(async () => {
     sessionOptions: {
       outputDir: () => app.getPath("videos"),
       filenamePrefix: "screenpipe-electron",
+      recorderOptions: {
+        dataDir,
+      },
     },
   });
+
+  console.log(`[screenpipe-electron] paired-capture DB at ${dataDir}/db.sqlite`);
 
   createWindow();
 

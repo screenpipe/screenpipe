@@ -16,16 +16,44 @@ import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { commands } from "@/lib/utils/tauri";
 import { UpdateBanner } from "@/components/update-banner";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import {
+  DEFAULT_ENTERPRISE_APP_UPDATE_POLICY,
+  describeEnterpriseUpdateMode,
+  normalizeEnterpriseAppUpdatePolicy,
+} from "@ee/lib/app-update-policy";
 
 export default function GeneralSettings() {
   const isEnterprise = useIsEnterpriseBuild();
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
+
+  const handleCheckForUpdates = async () => {
+    setIsCheckingForUpdate(true);
+    try {
+      const updateFound = await invoke<boolean>("trigger_update_check");
+      toast({
+        title: updateFound ? "update found" : "you're up to date",
+        description: updateFound
+          ? "downloading in the background — banner will appear when ready"
+          : `running latest version${currentVersion ? ` (v${currentVersion})` : ""}`,
+      });
+    } catch (e: any) {
+      toast({
+        title: "update check failed",
+        description: e?.toString() || "please try again later",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCheckingForUpdate(false);
+    }
+  };
 
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch(() => {});
@@ -36,6 +64,10 @@ export default function GeneralSettings() {
       updateSettings(newSettings);
     }
   };
+  const enterpriseAppUpdatePolicy = normalizeEnterpriseAppUpdatePolicy(
+    settings?.enterpriseAppUpdatePolicy || DEFAULT_ENTERPRISE_APP_UPDATE_POLICY
+  );
+  const enterpriseInstallMetadata = settings?.enterpriseInstallMetadata;
 
   const getDesktopPlatform = async () => {
     try {
@@ -115,12 +147,67 @@ export default function GeneralSettings() {
                   <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
-                    <p className="text-xs text-muted-foreground">Install updates automatically</p>
+                    <p className="text-xs text-muted-foreground">Restart automatically when an update is downloaded. Off: a "restart to update" banner appears instead.</p>
                   </div>
                 </div>
                 <Switch
                   id="auto-update-toggle"
-                  checked={settings?.autoUpdate ?? true}
+                  checked={settings?.autoUpdate ?? false}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ autoUpdate: checked })
+                  }
+                  className="ml-4"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {!isEnterprise && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">Check for updates</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {currentVersion ? `Running v${currentVersion}` : "Look for a new version now"}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCheckForUpdates}
+                  disabled={isCheckingForUpdate}
+                  className="ml-4 h-8"
+                >
+                  {isCheckingForUpdate ? "checking..." : "check now"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {isEnterprise && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center space-x-2.5">
+                  <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">App updates</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {describeEnterpriseUpdateMode(enterpriseAppUpdatePolicy)}
+                      {enterpriseInstallMetadata?.managed ? " · managed device detected" : ""}
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  id="enterprise-auto-update-toggle"
+                  checked={settings?.autoUpdate ?? enterpriseAppUpdatePolicy.default_auto_update}
+                  disabled={!enterpriseAppUpdatePolicy.allow_employee_override}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ autoUpdate: checked })
                   }
