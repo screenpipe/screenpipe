@@ -326,7 +326,8 @@ export function getEffectiveFilters(settings: Settings) {
 }
 
 export const DEFAULT_PROMPT = `Rules:
-- Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images
+- Media: use standard markdown with angle-bracket local paths, like ![description](</path/to/file.mp4>) for videos and ![description](</path/to/image.jpg>) for images
+- Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses
 - Diagrams: use \`\`\`mermaid blocks for visual summaries (flowchart, gantt, mindmap, graph)
 - Activity summaries: gantt charts with apps/duration
 - Workflows: flowcharts showing steps taken

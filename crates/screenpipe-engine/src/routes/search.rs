@@ -88,7 +88,7 @@ pub(crate) struct SearchQuery {
     window_name: Option<String>,
     #[serde(default)]
     frame_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     include_frames: bool,
     #[serde(default)]
     min_length: Option<usize>,
@@ -99,7 +99,7 @@ pub(crate) struct SearchQuery {
         default = "default_speaker_ids"
     )]
     speaker_ids: Option<Vec<i64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool_option")]
     focused: Option<bool>,
     /// Restrict accessibility hits to elements visually present on the
     /// captured frame. The AX tree captures off-screen text (terminal
@@ -107,7 +107,7 @@ pub(crate) struct SearchQuery {
     /// `on_screen=true` filters those out so search hits match what the
     /// user could actually see. Only meaningful for content_type=accessibility
     /// (or all). See issue #2436. Default: omitted = match everything.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool_option")]
     on_screen: Option<bool>,
     #[serde(default)]
     browser_url: Option<String>,
@@ -115,7 +115,7 @@ pub(crate) struct SearchQuery {
     #[serde(default)]
     speaker_name: Option<String>,
     /// Include cloud-synced data in search results (requires cloud sync to be enabled)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     include_cloud: bool,
     /// Truncate each result's text/transcription to this many characters using middle-truncation.
     /// When set, long content is replaced with first half + "...(truncated N chars)..." + last half.
@@ -131,7 +131,7 @@ pub(crate) struct SearchQuery {
     /// ui `text`, input `text_content`, memory `content`) before returning.
     /// Routed through the attested Tinfoil enclave; adds latency so leave it
     /// off unless the caller will forward these results to an LLM.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     filter_pii: bool,
 }
 
@@ -151,6 +151,44 @@ where
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
     s.parse().map_err(serde::de::Error::custom)
+}
+
+/// Accept `true|false|1|0|yes|no|on|off` (case-insensitive) and empty as false.
+/// `serde_urlencoded`'s default bool parser only accepts literal `true`/`false`,
+/// so clients sending `?flag=1` or `?flag=` get a cryptic 400. Be forgiving.
+fn deserialize_flexible_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    parse_flexible_bool(&s).map_err(serde::de::Error::custom)
+}
+
+/// Same but for `Option<bool>` — empty string deserializes to `None` so a
+/// dangling `?focused=` doesn't flip filtering on.
+fn deserialize_flexible_bool_option<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+    match s {
+        None => Ok(None),
+        Some(s) if s.is_empty() => Ok(None),
+        Some(s) => parse_flexible_bool(&s)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
+fn parse_flexible_bool(s: &str) -> Result<bool, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" | "" => Ok(false),
+        other => Err(format!(
+            "expected one of true/false/1/0/yes/no/on/off, got `{}`",
+            other
+        )),
+    }
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Clone)]
@@ -780,6 +818,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flexible_bool_accepts_common_truthy_falsy_values() {
+        for s in ["true", "TRUE", "True", "1", "yes", "YES", "on", "  true  "] {
+            assert_eq!(parse_flexible_bool(s), Ok(true), "expected true for `{s}`");
+        }
+        for s in ["false", "FALSE", "0", "no", "off", ""] {
+            assert_eq!(
+                parse_flexible_bool(s),
+                Ok(false),
+                "expected false for `{s}`"
+            );
+        }
+        assert!(parse_flexible_bool("maybe").is_err());
+        assert!(parse_flexible_bool("2").is_err());
+    }
 
     #[test]
     fn test_search_cache_key_deterministic() {

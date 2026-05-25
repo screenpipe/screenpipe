@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { SpeakerBadge } from "@/components/speaker-badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Check, Ghost, Loader2, Plus, Volume2 } from "lucide-react";
-import { VideoComponent } from "@/components/rewind/video";
+import { MediaComponent } from "@/components/rewind/media";
 import { ToastAction } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
@@ -329,7 +329,7 @@ export function SpeakerAssignPopover({
 
 						{showAudioPreview && (
 							<div className="mt-2">
-								<VideoComponent filePath={audioFilePath} />
+								<MediaComponent filePath={audioFilePath} />
 							</div>
 						)}
 					</div>

@@ -109,6 +109,27 @@ curl http://localhost:3030/health
 curl "http://localhost:3030/search"
 ```
 
+## check and update your version
+
+to ensure you're running the latest version:
+
+```bash
+# check your current version
+screenpipe --version
+```
+
+to update to the latest version:
+
+```bash
+# update via npm
+npx screenpipe@latest --version
+
+# or update the global installation
+npm install -g screenpipe@latest
+```
+
+the latest version is always available at npm. if you're on an older version, you'll see a warning when you run `npx screenpipe record`.
+
 ### API authentication (required)
 
 the search endpoint requires an API key. get your key by running:

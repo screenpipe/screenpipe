@@ -224,20 +224,30 @@ impl PowerProfile {
                     return Self::performance();
                 }
 
-                // OS low-power mode → full pause (battery or AC)
-                if state.os_low_power {
-                    return Self::full_pause();
-                }
-
-                // Battery: tiered based on charge level
-                match state.battery_pct {
+                // Battery tier from actual charge level — this is the only
+                // path that should ever produce FullPause. macOS "Low Power
+                // Mode: Only on Battery" auto-enables on unplug, so treating
+                // `os_low_power` alone as FullPause silently killed capture
+                // every time the user unplugged at full battery.
+                let battery_profile = match state.battery_pct {
                     Some(pct) if pct <= 10 => Self::full_pause(),
                     Some(pct) if pct <= 20 => Self::audio_paused(),
                     Some(pct) if pct <= 40 => Self::saver(),
                     Some(_) => Self::balanced(),
                     // No battery info but not on AC → balanced to be safe
                     None => Self::balanced(),
+                };
+
+                // OS low-power mode is a throttling hint, not a stop signal:
+                // ensure at least Saver, but never escalate past whatever
+                // the actual battery level already demands.
+                if state.os_low_power
+                    && battery_profile.name.tier_rank() < ProfileName::Saver.tier_rank()
+                {
+                    return Self::saver();
                 }
+
+                battery_profile
             }
         }
     }
@@ -318,16 +328,46 @@ mod tests {
     }
 
     #[test]
-    fn test_os_low_power_triggers_full_pause() {
+    fn test_os_low_power_high_battery_drops_to_saver_not_pause() {
+        // Regression: macOS "Low Power Mode: Only on Battery" auto-enables
+        // on every unplug. Treating LPM as FullPause silently killed capture
+        // at 100% battery. LPM is a throttling hint, not a stop signal.
         let state = PowerState {
             on_ac: false,
-            battery_pct: Some(80), // high battery but OS low power on
+            battery_pct: Some(80),
             thermal_state: ThermalState::Nominal,
             os_low_power: true,
         };
         let profile = PowerProfile::for_state(&state, PowerMode::Auto);
-        assert_eq!(profile.name, ProfileName::FullPause);
-        assert!(profile.capture_paused);
+        assert_eq!(profile.name, ProfileName::Saver);
+        assert!(!profile.capture_paused);
+    }
+
+    #[test]
+    fn test_os_low_power_does_not_override_more_aggressive_battery_tier() {
+        // LPM only enforces "at least Saver". If battery is already in the
+        // AudioPaused or FullPause range, the battery rule wins.
+        let state_audio = PowerState {
+            on_ac: false,
+            battery_pct: Some(15),
+            thermal_state: ThermalState::Nominal,
+            os_low_power: true,
+        };
+        assert_eq!(
+            PowerProfile::for_state(&state_audio, PowerMode::Auto).name,
+            ProfileName::AudioPaused
+        );
+
+        let state_full = PowerState {
+            on_ac: false,
+            battery_pct: Some(5),
+            thermal_state: ThermalState::Nominal,
+            os_low_power: true,
+        };
+        assert_eq!(
+            PowerProfile::for_state(&state_full, PowerMode::Auto).name,
+            ProfileName::FullPause
+        );
     }
 
     #[test]
@@ -381,10 +421,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ac_with_os_low_power_gets_full_pause() {
-        // Regression: AC + Low Power Mode must NOT return Performance.
-        // Users enabling Low Power Mode while plugged in (thermal / fan noise)
-        // expect the system to respect that preference.
+    fn test_ac_with_os_low_power_drops_to_saver() {
+        // AC + Low Power Mode must NOT return Performance. Users enabling
+        // LPM while plugged in (thermal / fan noise) want throttling. But
+        // it must also NOT stop capture entirely — Saver is the answer.
         let state = PowerState {
             on_ac: true,
             battery_pct: Some(80),
@@ -392,8 +432,8 @@ mod tests {
             os_low_power: true,
         };
         let profile = PowerProfile::for_state(&state, PowerMode::Auto);
-        assert_eq!(profile.name, ProfileName::FullPause);
-        assert!(profile.capture_paused);
+        assert_eq!(profile.name, ProfileName::Saver);
+        assert!(!profile.capture_paused);
     }
 
     #[test]

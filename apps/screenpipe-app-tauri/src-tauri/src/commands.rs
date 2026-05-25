@@ -1377,7 +1377,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url("https://screenpi.pe/login", None::<&str>)
+            .open_url("https://screenpipe.com/login", None::<&str>)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1398,7 +1398,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
-        const LOGIN_URL: &str = "https://screenpi.pe/login";
+        const LOGIN_URL: &str = "https://screenpipe.com/login";
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,

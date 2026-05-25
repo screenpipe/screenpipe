@@ -4,11 +4,67 @@
 import { memo, useCallback, useEffect, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getMediaFile } from '@/lib/actions/video-actions'
+import { isAudioMediaPath, normalizeMediaFilePath } from "@/lib/utils/media-file-path";
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 500; // ms
+const MAX_MEDIA_CACHE_ENTRIES = 12;
 
-export const VideoComponent = memo(function VideoComponent({
+type CachedMedia = {
+  src: string;
+  mimeType: string;
+  isAudio: boolean;
+};
+
+const mediaCache = new Map<string, CachedMedia>();
+const activeMediaSrcRefs = new Map<string, number>();
+
+function getCachedMedia(filePath: string): CachedMedia | null {
+  const cached = mediaCache.get(filePath);
+  if (!cached) return null;
+  mediaCache.delete(filePath);
+  mediaCache.set(filePath, cached);
+  return cached;
+}
+
+function setCachedMedia(filePath: string, media: CachedMedia) {
+  mediaCache.set(filePath, media);
+  while (mediaCache.size > MAX_MEDIA_CACHE_ENTRIES) {
+    const oldest = mediaCache.keys().next().value;
+    if (!oldest) break;
+    const evicted = mediaCache.get(oldest);
+    mediaCache.delete(oldest);
+    if (evicted && !activeMediaSrcRefs.has(evicted.src)) {
+      URL.revokeObjectURL(evicted.src);
+    }
+  }
+}
+
+function isCachedMediaSrc(src: string) {
+  for (const cached of mediaCache.values()) {
+    if (cached.src === src) return true;
+  }
+  return false;
+}
+
+function retainMediaSrc(src: string) {
+  activeMediaSrcRefs.set(src, (activeMediaSrcRefs.get(src) ?? 0) + 1);
+}
+
+function releaseMediaSrc(src: string) {
+  const count = activeMediaSrcRefs.get(src) ?? 0;
+  if (count > 1) {
+    activeMediaSrcRefs.set(src, count - 1);
+    return;
+  }
+
+  activeMediaSrcRefs.delete(src);
+  if (!isCachedMediaSrc(src)) {
+    URL.revokeObjectURL(src);
+  }
+}
+
+export const MediaComponent = memo(function MediaComponent({
   filePath,
   customDescription,
   className,
@@ -19,32 +75,24 @@ export const VideoComponent = memo(function VideoComponent({
   className?: string;
   startTimeSecs?: number;
 }) {
-  const [mediaSrc, setMediaSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isAudio, setIsAudio] = useState(false);
+  const initialPath = normalizeMediaFilePath(filePath);
+  const initialCachedMedia = getCachedMedia(initialPath);
+  const [isAudio, setIsAudio] = useState(() => initialCachedMedia?.isAudio ?? isAudioMediaPath(initialPath));
+  const [mimeType, setMimeType] = useState<string | null>(() => initialCachedMedia?.mimeType ?? null);
+  const [mediaSrc, setMediaSrc] = useState<string | null>(() => initialCachedMedia?.src ?? null);
   const [retryCount, setRetryCount] = useState(0);
-  const mediaSrcRef = useRef<string | null>(null);
   const mediaElementRef = useRef<HTMLAudioElement | HTMLVideoElement | null>(null);
 
   const sanitizeFilePath = useCallback((path: string): string => {
-    let cleaned = path.replace(/^["']|["']$/g, "").trim();
-
-    // Extract .mp4 path if surrounded by extra text
-    const unixMatch = cleaned.match(/(?:\/[^\n`"':]+)+\.mp4/i);
-    const winMatch = cleaned.match(/[A-Z]:\\[^\n`"':]+\.mp4/i);
-    if (unixMatch) cleaned = unixMatch[0].trim();
-    else if (winMatch) cleaned = winMatch[0].trim();
-
-    const isWindows = navigator.userAgent.includes("Windows");
-    if (isWindows) {
-      return cleaned;
-    }
-    return cleaned.replace(/\//g, "/");
+    return normalizeMediaFilePath(path);
   }, []);
 
+  const displayPath = initialPath;
+
   const renderFileLink = () => (
-    <div className="mt-2 text-center text-xs text-muted-foreground truncate px-2" title={filePath}>
-      {customDescription || filePath}
+    <div className="mt-2 text-center text-xs text-muted-foreground truncate px-2" title={displayPath}>
+      {customDescription || displayPath}
     </div>
   );
 
@@ -59,14 +107,14 @@ export const VideoComponent = memo(function VideoComponent({
           throw new Error("Invalid file path");
         }
 
-        const isAudioFile = sanitizedPath.toLowerCase().includes("input") ||
-          sanitizedPath.toLowerCase().includes("output");
+        const isAudioFile = isAudioMediaPath(sanitizedPath);
 
         if (!isCancelled) {
           setIsAudio(isAudioFile);
         }
 
         const { data, mimeType } = await getMediaFile(sanitizedPath);
+        const mediaMimeType = isAudioFile && mimeType === "video/mp4" ? "audio/mp4" : mimeType;
 
         if (isCancelled) return;
 
@@ -75,15 +123,16 @@ export const VideoComponent = memo(function VideoComponent({
         for (let i = 0; i < binaryData.length; i++) {
           bytes[i] = binaryData.charCodeAt(i);
         }
-        const blob = new Blob([bytes], { type: mimeType });
+        const blob = new Blob([bytes], { type: mediaMimeType });
         const blobUrl = URL.createObjectURL(blob);
 
-        // Clean up previous blob URL before setting new one
-        if (mediaSrcRef.current) {
-          URL.revokeObjectURL(mediaSrcRef.current);
-        }
-        mediaSrcRef.current = blobUrl;
+        setCachedMedia(sanitizedPath, {
+          src: blobUrl,
+          mimeType: mediaMimeType,
+          isAudio: isAudioFile,
+        });
         setMediaSrc(blobUrl);
+        setMimeType(mediaMimeType);
         setError(null);
         setRetryCount(0);
       } catch (error) {
@@ -109,9 +158,26 @@ export const VideoComponent = memo(function VideoComponent({
     }
 
     // Reset state when filePath changes
+    const initialSanitizedPath = sanitizeFilePath(filePath);
+    const cachedMedia = getCachedMedia(initialSanitizedPath);
     setError(null);
-    setMediaSrc(null);
     setRetryCount(0);
+
+    if (cachedMedia) {
+      setMediaSrc(cachedMedia.src);
+      setMimeType(cachedMedia.mimeType);
+      setIsAudio(cachedMedia.isAudio);
+      return () => {
+        isCancelled = true;
+        if (retryTimeout) {
+          clearTimeout(retryTimeout);
+        }
+      };
+    }
+
+    setMediaSrc(null);
+    setMimeType(null);
+    setIsAudio(isAudioMediaPath(initialSanitizedPath));
 
     loadMedia();
 
@@ -120,13 +186,14 @@ export const VideoComponent = memo(function VideoComponent({
       if (retryTimeout) {
         clearTimeout(retryTimeout);
       }
-      // Clean up blob URL using ref (avoids stale closure)
-      if (mediaSrcRef.current) {
-        URL.revokeObjectURL(mediaSrcRef.current);
-        mediaSrcRef.current = null;
-      }
     };
   }, [filePath, sanitizeFilePath]);
+
+  useEffect(() => {
+    if (!mediaSrc) return;
+    retainMediaSrc(mediaSrc);
+    return () => releaseMediaSrc(mediaSrc);
+  }, [mediaSrc]);
 
   // Seek to startTimeSecs when media is ready
   useEffect(() => {
@@ -159,7 +226,9 @@ export const VideoComponent = memo(function VideoComponent({
     return (
       <div
         className={cn(
-          "w-full h-48 bg-muted animate-pulse rounded-md flex items-center justify-center",
+          isAudio
+            ? "w-full h-[84px] bg-muted animate-pulse rounded-md flex items-center justify-center"
+            : "w-full h-48 bg-muted animate-pulse rounded-md flex items-center justify-center",
           className
         )}
       >
@@ -171,9 +240,9 @@ export const VideoComponent = memo(function VideoComponent({
   return (
     <div className={cn("w-full max-w-2xl text-center isolate", className)}>
       {isAudio ? (
-        <div className="relative z-10 bg-muted p-4 rounded-md">
+        <div className="relative z-10 bg-muted p-4 rounded-md min-h-[84px] flex items-center">
           <audio ref={(el) => { mediaElementRef.current = el; }} controls className="w-full pointer-events-auto">
-            <source src={mediaSrc} type="audio/mpeg" />
+            <source src={mediaSrc} type={mimeType || "audio/mpeg"} />
             Your browser does not support the audio element.
           </audio>
         </div>

@@ -30,4 +30,12 @@ pub struct PowerProfileChangedEvent {
     /// power saving). Subscribers can filter on this to only notify
     /// users when capture is being throttled, not when it's recovering.
     pub is_downgrade: bool,
+    /// Dominant cause of the transition so notification text can be honest.
+    /// Values: `"thermal_critical"`, `"thermal_serious"`, `"os_low_power"`,
+    /// `"battery_critical"` (<=10%), `"battery_low"` (<=20%),
+    /// `"battery_medium"` (<=40%), `"battery"` (>40% on battery),
+    /// `"ac_power"` (resume on plug-in). `None` only when payload is from
+    /// an older engine that pre-dates the field.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
