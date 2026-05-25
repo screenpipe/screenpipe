@@ -210,7 +210,7 @@ export function AccountSection() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openUrl("https://screenpi.pe/account")}
+                onClick={() => openUrl("https://screenpipe.com/account")}
               >
                 <UserCog className="w-4 h-4 mr-1.5" />
                 manage
@@ -256,7 +256,7 @@ export function AccountSection() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openUrl("https://screenpi.pe/billing")}
+                onClick={() => openUrl("https://screenpipe.com/billing")}
               >
                 <CreditCard className="w-3.5 h-3.5 mr-1.5" />
                 Billing <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />

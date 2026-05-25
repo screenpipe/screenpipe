@@ -186,8 +186,9 @@ export function TeamSection() {
       let claimToken: string | null = null;
       let base64Key: string | null = null;
 
-      // Handle web URL format: https://screenpi.pe/join/TOKEN#key=BASE64
-      const webMatch = input.match(/screenpi\.pe\/join\/([^#?]+)/);
+      // Handle web URL format: https://screenpipe.com/join/TOKEN#key=BASE64
+      // (also accept legacy https://screenpi.pe/join/... links)
+      const webMatch = input.match(/(?:screenpipe\.com|screenpi\.pe)\/join\/([^#?]+)/);
       if (webMatch) {
         inviteToken = webMatch[1];
         const hash = input.split("#")[1] || "";
@@ -505,7 +506,7 @@ export function TeamSection() {
           {showJoinInput ? (
             <div className="flex gap-2">
               <Input
-                placeholder="paste invite link (https://screenpi.pe/join/... or screenpipe://...)"
+                placeholder="paste invite link (https://screenpipe.com/join/... or screenpipe://...)"
                 value={inviteInput}
                 onChange={(e) => setInviteInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleJoinFromLink()}

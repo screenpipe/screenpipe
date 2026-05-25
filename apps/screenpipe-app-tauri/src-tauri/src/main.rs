@@ -292,11 +292,17 @@ async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, St
             .await
         {
             Ok(response) => {
-                if response.status().is_success() {
+                let status = response.status();
+                if status.is_success() {
                     debug!("Successfully uploaded file on attempt {}", attempt);
                     return Ok(true);
                 }
-                last_error = format!("Upload failed with status: {}", response.status());
+                // Surface the response body — S3/Supabase wraps the reason for
+                // 400/403 (signed URL expired, content-type mismatch, etc.) in
+                // an XML payload that we'd otherwise discard.
+                let body = response.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(500).collect();
+                last_error = format!("Upload failed with status: {} body: {}", status, snippet);
                 error!("{} (attempt {}/{})", last_error, attempt, max_retries);
             }
             Err(e) => {
@@ -746,6 +752,7 @@ async fn main() {
                 commands::get_enterprise_team_api_token,
                 commands::get_cloud_token,
                 enterprise_policy::set_enterprise_policy,
+                enterprise_policy::set_sync_streams,
                 commands::get_disk_usage,
                 commands::list_cache_files,
                 commands::delete_cache_files,
@@ -869,6 +876,8 @@ async fn main() {
                 hardware::get_hardware_capability,
                 // Store encryption
                 store::reencrypt_store,
+                // Autostart
+                commands::set_autostart,
             ])
             .typ::<SettingsStore>()
             .typ::<OnboardingStore>()
@@ -1024,6 +1033,7 @@ async fn main() {
             commands::set_cloud_media_analysis_skill,
             commands::get_enterprise_license_key,
             enterprise_policy::set_enterprise_policy,
+            enterprise_policy::set_sync_streams,
             commands::save_enterprise_license_key,
             commands::save_enterprise_team_config,
             commands::get_enterprise_team_api_token,
@@ -1211,6 +1221,7 @@ async fn main() {
             remote_sync_commands::remote_sync_scheduler_status,
             commands::set_native_theme,
             store::reencrypt_store,
+            commands::set_autostart,
         ])
         .setup(move |app| {
             //deep link register_all

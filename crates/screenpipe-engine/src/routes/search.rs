@@ -165,7 +165,7 @@ pub struct SearchResponse {
 /// Middle-truncate a string to at most `max_chars` characters.
 /// Keeps the first half and last half, inserting a marker in between.
 /// Safe on UTF-8 char boundaries.
-fn truncate_middle(text: &str, max_chars: usize) -> String {
+pub fn truncate_middle(text: &str, max_chars: usize) -> String {
     let char_count = text.chars().count();
     if char_count <= max_chars {
         return text.to_string();
@@ -176,6 +176,118 @@ fn truncate_middle(text: &str, max_chars: usize) -> String {
     let start: String = text.chars().take(keep_start).collect();
     let end: String = text.chars().skip(char_count - keep_end).collect();
     format!("{}...(truncated {} chars)...{}", start, removed, end)
+}
+
+/// Case-insensitive check for whether an app row should be filtered out
+/// because it belongs to screenpipe itself.
+pub fn is_screenpipe_app(app_name: &str) -> bool {
+    app_name.to_lowercase().contains("screenpipe")
+}
+
+/// Convert a `SearchResult` row into the public `ContentItem` shape used by
+/// the HTTP `/search` response, applying optional middle-truncation to the
+/// text-bearing fields.
+///
+/// Shared with the `screenpipe search` CLI so terminal output matches the
+/// API exactly — `jq` filters written against one work against the other.
+pub fn search_result_to_content_item(
+    result: &SearchResult,
+    max_content_length: Option<usize>,
+) -> ContentItem {
+    let truncate = |text: String| -> String {
+        match max_content_length {
+            Some(max) => truncate_middle(&text, max),
+            None => text,
+        }
+    };
+    match result {
+        SearchResult::OCR(ocr) => ContentItem::OCR(OCRContent {
+            frame_id: ocr.frame_id,
+            text: truncate(ocr.ocr_text.clone()),
+            timestamp: ocr.timestamp,
+            file_path: ocr.file_path.clone(),
+            offset_index: ocr.offset_index,
+            app_name: ocr.app_name.clone(),
+            window_name: ocr.window_name.clone(),
+            tags: ocr.tags.clone(),
+            frame: None,
+            frame_name: Some(ocr.frame_name.clone()),
+            browser_url: ocr.browser_url.clone(),
+            focused: ocr.focused,
+            device_name: ocr.device_name.clone(),
+            text_source: ocr.text_source.clone(),
+        }),
+        SearchResult::Audio(audio) => {
+            let transcription = truncate(audio.transcription.clone());
+            ContentItem::Audio(AudioContent {
+                chunk_id: audio.audio_chunk_id,
+                transcription: transcription.clone(),
+                text: transcription,
+                timestamp: audio.timestamp,
+                file_path: audio.file_path.clone(),
+                offset_index: audio.offset_index,
+                tags: audio.tags.clone(),
+                device_name: audio.device_name.clone(),
+                device_type: audio.device_type.clone().into(),
+                speaker: audio.speaker.clone(),
+                speaker_label: audio.speaker_label.clone(),
+                speaker_source: audio.speaker_source.clone(),
+                speaker_confidence: audio.speaker_confidence,
+                speaker_provisional: audio.speaker_provisional,
+                start_time: audio.start_time,
+                end_time: audio.end_time,
+                source: audio.source.clone(),
+                meeting_id: audio.meeting_id,
+                provider: audio.provider.clone(),
+                model: audio.model.clone(),
+            })
+        }
+        SearchResult::UI(ui) => ContentItem::UI(UiContent {
+            id: ui.id,
+            text: truncate(ui.text.clone()),
+            timestamp: ui.timestamp,
+            app_name: ui.app_name.clone(),
+            window_name: ui.window_name.clone(),
+            initial_traversal_at: ui.initial_traversal_at,
+            file_path: ui.file_path.clone(),
+            offset_index: ui.offset_index,
+            frame_name: ui.frame_name.clone(),
+            browser_url: ui.browser_url.clone(),
+        }),
+        SearchResult::Input(input) => ContentItem::Input(InputContent {
+            id: input.id,
+            timestamp: input.timestamp,
+            event_type: input.event_type.to_string(),
+            app_name: input.app_name.clone(),
+            window_title: input.window_title.clone(),
+            browser_url: input.browser_url.clone(),
+            text_content: input.text_content.clone().map(truncate),
+            x: input.x,
+            y: input.y,
+            key_code: input.key_code,
+            modifiers: input.modifiers,
+            element_role: input.element.as_ref().and_then(|e| e.role.clone()),
+            element_name: input.element.as_ref().and_then(|e| e.name.clone()),
+            frame_id: input.frame_id,
+        }),
+        SearchResult::Memory(m) => ContentItem::Memory(MemoryContent {
+            id: m.id,
+            content: truncate(m.content.clone()),
+            source: m.source.clone(),
+            source_context: m
+                .source_context
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok()),
+            tags: m
+                .tags
+                .as_ref()
+                .and_then(|t| serde_json::from_str(t).ok())
+                .unwrap_or_default(),
+            importance: m.importance,
+            created_at: m.created_at.clone(),
+            updated_at: m.updated_at.clone(),
+        }),
+    }
 }
 
 /// Compute a cache key for a search query by hashing its parameters
@@ -313,10 +425,6 @@ pub(crate) async fn search(
         )
     })?;
 
-    // Helper to check if app name contains "screenpipe" (case insensitive)
-    let is_screenpipe_app =
-        |app_name: &str| -> bool { app_name.to_lowercase().contains("screenpipe") };
-
     let mut content_items: Vec<ContentItem> = results
         .iter()
         // Filter out screenpipe results at display time
@@ -330,102 +438,7 @@ pub(crate) async fn search(
                 .is_none_or(|app| !is_screenpipe_app(app)),
             SearchResult::Memory(_) => true,
         })
-        .map(|result| {
-            let truncate = |text: String| -> String {
-                match query.max_content_length {
-                    Some(max) => truncate_middle(&text, max),
-                    None => text,
-                }
-            };
-            match result {
-                SearchResult::OCR(ocr) => ContentItem::OCR(OCRContent {
-                    frame_id: ocr.frame_id,
-                    text: truncate(ocr.ocr_text.clone()),
-                    timestamp: ocr.timestamp,
-                    file_path: ocr.file_path.clone(),
-                    offset_index: ocr.offset_index,
-                    app_name: ocr.app_name.clone(),
-                    window_name: ocr.window_name.clone(),
-                    tags: ocr.tags.clone(),
-                    frame: None,
-                    frame_name: Some(ocr.frame_name.clone()),
-                    browser_url: ocr.browser_url.clone(),
-                    focused: ocr.focused,
-                    device_name: ocr.device_name.clone(),
-                    text_source: ocr.text_source.clone(),
-                }),
-                SearchResult::Audio(audio) => {
-                    let transcription = truncate(audio.transcription.clone());
-                    ContentItem::Audio(AudioContent {
-                        chunk_id: audio.audio_chunk_id,
-                        transcription: transcription.clone(),
-                        text: transcription,
-                        timestamp: audio.timestamp,
-                        file_path: audio.file_path.clone(),
-                        offset_index: audio.offset_index,
-                        tags: audio.tags.clone(),
-                        device_name: audio.device_name.clone(),
-                        device_type: audio.device_type.clone().into(),
-                        speaker: audio.speaker.clone(),
-                        speaker_label: audio.speaker_label.clone(),
-                        speaker_source: audio.speaker_source.clone(),
-                        speaker_confidence: audio.speaker_confidence,
-                        speaker_provisional: audio.speaker_provisional,
-                        start_time: audio.start_time,
-                        end_time: audio.end_time,
-                        source: audio.source.clone(),
-                        meeting_id: audio.meeting_id,
-                        provider: audio.provider.clone(),
-                        model: audio.model.clone(),
-                    })
-                }
-                SearchResult::UI(ui) => ContentItem::UI(UiContent {
-                    id: ui.id,
-                    text: truncate(ui.text.clone()),
-                    timestamp: ui.timestamp,
-                    app_name: ui.app_name.clone(),
-                    window_name: ui.window_name.clone(),
-                    initial_traversal_at: ui.initial_traversal_at,
-                    file_path: ui.file_path.clone(),
-                    offset_index: ui.offset_index,
-                    frame_name: ui.frame_name.clone(),
-                    browser_url: ui.browser_url.clone(),
-                }),
-                SearchResult::Input(input) => ContentItem::Input(InputContent {
-                    id: input.id,
-                    timestamp: input.timestamp,
-                    event_type: input.event_type.to_string(),
-                    app_name: input.app_name.clone(),
-                    window_title: input.window_title.clone(),
-                    browser_url: input.browser_url.clone(),
-                    text_content: input.text_content.clone().map(truncate),
-                    x: input.x,
-                    y: input.y,
-                    key_code: input.key_code,
-                    modifiers: input.modifiers,
-                    element_role: input.element.as_ref().and_then(|e| e.role.clone()),
-                    element_name: input.element.as_ref().and_then(|e| e.name.clone()),
-                    frame_id: input.frame_id,
-                }),
-                SearchResult::Memory(m) => ContentItem::Memory(MemoryContent {
-                    id: m.id,
-                    content: truncate(m.content.clone()),
-                    source: m.source.clone(),
-                    source_context: m
-                        .source_context
-                        .as_ref()
-                        .and_then(|s| serde_json::from_str(s).ok()),
-                    tags: m
-                        .tags
-                        .as_ref()
-                        .and_then(|t| serde_json::from_str(t).ok())
-                        .unwrap_or_default(),
-                    importance: m.importance,
-                    created_at: m.created_at.clone(),
-                    updated_at: m.updated_at.clone(),
-                }),
-            }
-        })
+        .map(|result| search_result_to_content_item(result, query.max_content_length))
         .collect();
 
     // Deduplicate OCR + UI results for the same frame/timestamp.

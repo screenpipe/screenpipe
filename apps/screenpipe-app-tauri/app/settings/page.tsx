@@ -68,7 +68,7 @@ function ReferralSection() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [sending, setSending] = useState(false);
   const referralCode = settings.user?.id ? `REF-${settings.user.id.slice(0, 8).toUpperCase()}` : "";
-  const referralLink = referralCode ? `https://screenpi.pe/?ref=${referralCode}` : "";
+  const referralLink = referralCode ? `https://screenpipe.com/?ref=${referralCode}` : "";
 
   const handleCopy = async () => {
     if (!referralLink) return;

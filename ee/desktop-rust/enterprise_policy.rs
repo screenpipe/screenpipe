@@ -16,6 +16,34 @@ static HIDDEN_SECTIONS: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new
 static DEPLOYMENT_APP_UI_HIDDEN: Lazy<bool> =
     Lazy::new(|| env_hides_app_ui() || enterprise_json_hides_app_ui());
 
+/// Per-stream sync policy. Defaults to all-true so an unconfigured device
+/// behaves exactly like before this feature shipped. The frontend pulls the
+/// admin's choices from `GET /api/enterprise/policy` (`syncStreams` field) on
+/// the 5-min poll and pushes them in via `set_sync_streams`. The sync state
+/// machine in `enterprise_sync::run_one_sync` reads this on every tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncStreams {
+    pub frames: bool,
+    pub audio: bool,
+    pub ui_events: bool,
+    pub memories: bool,
+    pub snapshots: bool,
+}
+
+impl Default for SyncStreams {
+    fn default() -> Self {
+        Self {
+            frames: true,
+            audio: true,
+            ui_events: true,
+            memories: true,
+            snapshots: true,
+        }
+    }
+}
+
+static SYNC_STREAMS: Lazy<RwLock<SyncStreams>> = Lazy::new(|| RwLock::new(SyncStreams::default()));
+
 const APP_UI_HIDDEN_SECTIONS: &[&str] = &[
     "app_ui",
     "desktop_app",
@@ -128,6 +156,51 @@ pub fn set_enterprise_policy(hidden_sections: Vec<String>) {
     }
 }
 
+/// Called by the frontend after fetching the `syncStreams` block from
+/// `/api/enterprise/policy`. Flat booleans rather than a struct so the
+/// specta-generated TS binding stays trivial.
+#[tauri::command]
+#[specta::specta]
+pub fn set_sync_streams(
+    frames: bool,
+    audio: bool,
+    ui_events: bool,
+    memories: bool,
+    snapshots: bool,
+) {
+    let next = SyncStreams {
+        frames,
+        audio,
+        ui_events,
+        memories,
+        snapshots,
+    };
+    if let Ok(mut guard) = SYNC_STREAMS.write() {
+        if *guard != next {
+            tracing::info!(
+                "enterprise: sync streams updated frames={} audio={} ui={} memories={} snapshots={}",
+                frames,
+                audio,
+                ui_events,
+                memories,
+                snapshots,
+            );
+        }
+        *guard = next;
+    }
+}
+
+/// Snapshot of the current per-stream sync policy. Read by the sync state
+/// machine on every tick. Returns the defaults (all-true) if the lock is
+/// poisoned — fail-open here mirrors the centralized-data master-switch
+/// behavior: the ingest endpoint will still enforce policy server-side.
+pub fn current_sync_streams() -> SyncStreams {
+    SYNC_STREAMS
+        .read()
+        .map(|guard| *guard)
+        .unwrap_or_default()
+}
+
 /// Check if a section is hidden by enterprise policy.
 /// Used by the tray menu builder.
 pub fn is_tray_item_hidden(section_id: &str) -> bool {
@@ -175,5 +248,32 @@ mod tests {
         set_enterprise_policy(vec!["app_ui".to_string()]);
         assert!(is_app_ui_hidden());
         set_enterprise_policy(vec![]);
+    }
+
+    #[test]
+    fn sync_streams_default_is_all_true() {
+        // Brand-new process should see all streams enabled — preserves the
+        // behavior of every existing enterprise deployment before this
+        // feature ships.
+        let s = SyncStreams::default();
+        assert!(s.frames);
+        assert!(s.audio);
+        assert!(s.ui_events);
+        assert!(s.memories);
+        assert!(s.snapshots);
+    }
+
+    #[test]
+    fn set_sync_streams_round_trips() {
+        // Touches the global static; reset to defaults after to avoid
+        // poisoning sibling tests that read current_sync_streams.
+        set_sync_streams(false, true, false, true, false);
+        let s = current_sync_streams();
+        assert!(!s.frames);
+        assert!(s.audio);
+        assert!(!s.ui_events);
+        assert!(s.memories);
+        assert!(!s.snapshots);
+        set_sync_streams(true, true, true, true, true);
     }
 }

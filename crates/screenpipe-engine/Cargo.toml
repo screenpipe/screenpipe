@@ -165,6 +165,20 @@ parakeet-mlx = ["screenpipe-audio/parakeet-mlx"]
 # Mac release builds opt in to pick up the ~6× speedup over the ONNX
 # CoreML EP path.
 rfdetr-mlx = ["screenpipe-redact/mlx-mac"]
+
+# v45 phase 3 text-PII redactor via ONNX Runtime. CPU baseline for
+# Linux + the foundation for the GPU EPs below. ~280 MB INT8 model
+# downloaded on first run.
+redact-onnx-cpu = ["screenpipe-redact/onnx-cpu"]
+# Mac: CoreML EP on top of CPU baseline. Apple Silicon picks up Metal
+# + Neural Engine. Stock-OS dependency — no separate install.
+redact-onnx-coreml = ["screenpipe-redact/onnx-coreml"]
+# Windows: DirectML EP on top of CPU baseline. Any DX12-capable GPU
+# (NVIDIA, AMD, Intel iGPU). Stock-OS dependency — DirectML.dll ships
+# in Windows 10+ since 2019. Distinct from the existing `directml`
+# feature, which forwards to screenpipe-audio's whisper.cpp.
+redact-onnx-directml = ["screenpipe-redact/onnx-directml"]
+
 jemalloc = ["tikv-jemallocator"]
 
 [[bin]]

@@ -63,7 +63,7 @@ const EVENT_LABELS: &[&str] = &[
 /// self-hosted vLLM. Going through the gateway means infra moves only need a
 /// `wrangler secret put EVENT_CLASSIFIER_URL` — no client release.
 /// Override with the `SCREENPIPE_EVENT_CLASSIFIER_URL` env var for self-host.
-pub const DEFAULT_CLASSIFIER_URL: &str = "https://api.screenpi.pe";
+pub const DEFAULT_CLASSIFIER_URL: &str = "https://api.screenpipe.com";
 
 /// Start the workflow classifier polling loop.
 pub async fn start_workflow_classifier(

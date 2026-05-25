@@ -626,47 +626,75 @@ pub async fn run_one_sync(
         cursor.last_memory_ts = Some(cutoff.to_rfc3339());
     }
 
-    let frames = local
-        .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
-        .await?;
-    let audio = local
-        .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
-        .await?;
+    // Per-stream sync policy is fetched fresh on every tick — the admin can
+    // flip toggles in the dashboard and the device picks them up on the next
+    // 5-min policy poll. A disabled stream means we don't even hit the local
+    // API for its rows; the cursor for that kind stays put, so re-enabling
+    // resumes from where the toggle-off happened (capped by SAFE_BACKFILL
+    // anyway).
+    let streams = crate::enterprise_policy::current_sync_streams();
+
+    let frames = if streams.frames {
+        local
+            .fetch_frames_since(cursor.last_frame_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let audio = if streams.audio {
+        local
+            .fetch_audio_since(cursor.last_audio_ts.as_deref(), PAGE_LIMIT)
+            .await?
+    } else {
+        Vec::new()
+    };
     // UI events are best-effort — a backend that doesn't expose them yet
     // (or blocks the search query) shouldn't kill the whole sync batch.
     // The frame + audio paths are the load-bearing ones.
-    let ui = match local
-        .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            warn!("enterprise sync: ui fetch failed (skipping): {}", e);
-            Vec::new()
+    let ui = if streams.ui_events {
+        match local
+            .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: ui fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     // One snapshot per tick. Best-effort — failure to encode/fetch
     // shouldn't block the rest of the batch.
-    let snapshots: Vec<SnapshotRow> = match local.fetch_latest_snapshot().await {
-        Ok(Some(s)) => vec![s],
-        Ok(None) => Vec::new(),
-        Err(e) => {
-            warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
-            Vec::new()
+    let snapshots: Vec<SnapshotRow> = if streams.snapshots {
+        match local.fetch_latest_snapshot().await {
+            Ok(Some(s)) => vec![s],
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                warn!("enterprise sync: snapshot fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     // Memories are best-effort too — a client that predates the trait
     // method, or a server without the /memories route, must not kill
     // the frame+audio path. The default trait impl returns empty.
-    let memories = match local
-        .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            warn!("enterprise sync: memory fetch failed (skipping): {}", e);
-            Vec::new()
+    let memories = if streams.memories {
+        match local
+            .fetch_memories_since(cursor.last_memory_ts.as_deref(), PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!("enterprise sync: memory fetch failed (skipping): {}", e);
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     if frames.is_empty()

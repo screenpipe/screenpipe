@@ -502,7 +502,12 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                     "butter.us",
                     "livestorm.co",
                     "ping.gg",
-                    "cal.com",
+                    // Cal.com is primarily a scheduling product — its booking
+                    // dashboard (app.cal.com/event-types) and booking pages
+                    // (cal.com/{user}/{event}) aren't calls. Only Cal Video
+                    // (app.cal.com/video/{uid}) is a live meeting URL. Matching
+                    // bare "cal.com" caused false positives on the dashboard.
+                    "cal.com/video",
                     "daily.co",
                     "app.daily.co",
                     "pop.com",
@@ -3314,6 +3319,66 @@ mod tests {
             assert!(
                 mute_matches.is_empty(),
                 "profile should not match standalone 'Mute' button"
+            );
+        }
+    }
+
+    /// Returns the generic-fallback profile (the one with broad URL patterns
+    /// like `daily.co`, `cal.com/video`, `pop.com`). Picks it by detecting the
+    /// distinctive `meet.jit.si` URL pattern.
+    fn generic_profile() -> MeetingDetectionProfile {
+        load_detection_profiles()
+            .into_iter()
+            .find(|p| {
+                p.app_identifiers
+                    .browser_url_patterns
+                    .contains(&"meet.jit.si")
+            })
+            .expect("generic fallback profile present")
+    }
+
+    /// Mirrors the lowercase substring match used by `has_browser_meeting_url`
+    /// and `db_find_browser_meetings`.
+    fn url_matches_any_pattern(url: &str, patterns: &[&str]) -> bool {
+        let url_lower = url.to_lowercase();
+        patterns
+            .iter()
+            .any(|p| url_lower.contains(&p.to_lowercase()))
+    }
+
+    #[test]
+    fn test_generic_profile_rejects_cal_dashboard_url() {
+        // Regression: bare `cal.com` URL pattern matched the cal.com booking
+        // dashboard, which then put Arc into the "candidate browser" set and
+        // let an unrelated tab's "Leave at the door" button fire a phantom
+        // meeting. Dashboard URLs are not calls.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/event-types",
+            "https://app.cal.com/bookings/upcoming",
+            "https://cal.com/louis/30min",
+            "https://cal.com/pricing",
+        ] {
+            assert!(
+                !url_matches_any_pattern(url, patterns),
+                "cal.com dashboard URL {url:?} should NOT match a meeting profile"
+            );
+        }
+    }
+
+    #[test]
+    fn test_generic_profile_matches_cal_video_url() {
+        // The actual Cal Video URL (live meeting) must still match.
+        let profile = generic_profile();
+        let patterns = profile.app_identifiers.browser_url_patterns;
+        for url in [
+            "https://app.cal.com/video/abc123",
+            "https://app.cal.com/video/8f3e-meeting-uid",
+        ] {
+            assert!(
+                url_matches_any_pattern(url, patterns),
+                "Cal Video URL {url:?} should match the generic profile"
             );
         }
     }

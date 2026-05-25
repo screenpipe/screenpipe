@@ -471,10 +471,18 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
             });
         }
     }
+    // *guard is None — server hasn't been constructed yet (early-mount race
+    // against spawn_screenpipe, or pause window). The webview's
+    // `loadLiveApiKey` runs once on mount and latches; without this fallback
+    // the privacy panel's API-key input stays empty until the user closes
+    // and reopens Settings, even though the resolver already minted a key
+    // that the spawning server will adopt verbatim.
+    let cached = crate::store::resolved_api_auth_key();
+    let auth_enabled = cached.is_some();
     serde_json::json!({
-        "key": null,
+        "key": cached,
         "port": 3030,
-        "auth_enabled": false,
+        "auth_enabled": auth_enabled,
     })
 }
 
@@ -3211,4 +3219,22 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+    let manager = app_handle.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    info!(
+        "autostart {}: is_enabled={}",
+        if enabled { "enabled" } else { "disabled" },
+        manager.is_enabled().unwrap_or(false)
+    );
+    Ok(())
 }

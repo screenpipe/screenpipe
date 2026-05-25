@@ -7,7 +7,7 @@ use std::{env, str::FromStr};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-const SCREENPIPE_CLOUD_REALTIME_URL: &str = "wss://api.screenpi.pe/v1/realtime";
+const SCREENPIPE_CLOUD_REALTIME_URL: &str = "wss://api.screenpipe.com/v1/realtime";
 const DEEPGRAM_LIVE_URL: &str = "wss://api.deepgram.com/v1/listen";
 const SCREENPIPE_CLOUD_REALTIME_PATH: &str = "/v1/realtime";
 const DEEPGRAM_LIVE_PATH: &str = "/v1/listen";

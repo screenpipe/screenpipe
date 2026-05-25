@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
 const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
 const PI_NAMESPACE_DIR: &str = "@earendil-works";
-pub const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
+pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Fetch the model catalog from the Cloudflare Worker gateway and convert
 /// it into the format Pi's `models.json` expects.
@@ -102,7 +102,7 @@ fn fallback_cloud_models() -> serde_json::Value {
 pub struct PiExecutor {
     /// Screenpipe cloud token (for LLM calls via screenpipe proxy).
     pub user_token: Option<String>,
-    /// Screenpipe API base URL (default: `https://api.screenpi.pe/v1`).
+    /// Screenpipe API base URL (default: `https://api.screenpipe.com/v1`).
     pub api_url: String,
     /// Bearer token for the *local* screenpipe-server API (localhost:3030).
     /// Exposed to the Pi subprocess as `SCREENPIPE_API_AUTH_KEY` so bash tool
@@ -131,7 +131,7 @@ impl PiExecutor {
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
     /// confidential-enclave block. Default (no marker) = enabled, so
     /// fresh installs ship the capability documented and Pi knows to
-    /// call `api.screenpi.pe` with `model: "gemma4-e4b"` for audio /
+    /// call `api.screenpipe.com` with `model: "gemma4-e4b"` for audio /
     /// video / image analysis.
     ///
     /// Gating happens at install time (here) rather than by mutating

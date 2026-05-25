@@ -457,6 +457,15 @@ pub async fn event_driven_capture_loop(
     // at 2fps on macOS, WGC on Windows) — measurable share of a core per
     // idle display on multi-monitor setups.
     let mut was_cold = false;
+    // Tracks whether we already released the SCStream/WGC handle on entry
+    // to a pause state (screen locked, OS low-power / battery-critical via
+    // power profile, DRM-protected window focused, or outside the user's
+    // capture schedule). Without this transition guard, we'd either re-call
+    // release every loop iteration (cheap but noisy) or never release at all
+    // and let WindowServer / replayd keep producing frames into a sleeping
+    // reader for the entire pause window — defeating the whole point of
+    // pausing for battery / lock-screen / DRM reasons.
+    let mut was_in_pause_state = false;
 
     loop {
         if stop_signal.load(Ordering::Relaxed) {
@@ -553,19 +562,45 @@ pub async fn event_driven_capture_loop(
             }
         }
 
-        // Skip capture while the screen is locked / screensaver active
-        if crate::sleep_monitor::screen_is_locked() {
+        // Unified pause-state gate: when the screen is locked, the power
+        // profile says FullPause, DRM is on screen, or we're outside the
+        // user's capture schedule, we both skip downstream work AND release
+        // the OS-level capture handle. Otherwise WindowServer / replayd keep
+        // composing + delivering frames at the stream's frame interval into a
+        // sleeping reader for the entire pause window — the exact cost the
+        // user expected `capture_paused` to eliminate.
+        let in_pause_state = crate::sleep_monitor::screen_is_locked()
+            || power_profile_rx
+                .as_ref()
+                .map(|rx| rx.borrow().capture_paused)
+                .unwrap_or(false)
+            || crate::drm_detector::drm_content_paused()
+            || crate::schedule_monitor::schedule_paused();
+
+        if in_pause_state {
+            if !was_in_pause_state {
+                info!(
+                    "monitor {}: entering pause state (locked={}, power_paused={}, drm={}, schedule={}); releasing capture stream",
+                    monitor_id,
+                    crate::sleep_monitor::screen_is_locked(),
+                    power_profile_rx
+                        .as_ref()
+                        .map(|rx| rx.borrow().capture_paused)
+                        .unwrap_or(false),
+                    crate::drm_detector::drm_content_paused(),
+                    crate::schedule_monitor::schedule_paused(),
+                );
+                monitor.release_capture_stream();
+                was_in_pause_state = true;
+            }
             tokio::time::sleep(poll_interval).await;
             continue;
-        }
-
-        // Skip all capture when battery is critically low (FullPause profile).
-        // The server stays up so search/timeline queries still work on existing data.
-        if let Some(ref rx) = power_profile_rx {
-            if rx.borrow().capture_paused {
-                tokio::time::sleep(poll_interval).await;
-                continue;
-            }
+        } else if was_in_pause_state {
+            info!(
+                "monitor {}: exiting pause state, capture resumes",
+                monitor_id
+            );
+            was_in_pause_state = false;
         }
 
         // After unlock or wake, invalidate persistent SCStream handles so
@@ -593,11 +628,9 @@ pub async fn event_driven_capture_loop(
             }
         }
 
-        // Skip capture while DRM streaming content is focused or outside schedule
-        if crate::drm_detector::drm_content_paused() || crate::schedule_monitor::schedule_paused() {
-            tokio::time::sleep(poll_interval).await;
-            continue;
-        }
+        // (screen-locked / power-paused / DRM / schedule pause are all
+        // handled by the unified pause-state gate above, which also releases
+        // the OS-level capture handle.)
 
         // Apply power profile changes (non-blocking check)
         if let Some(ref mut rx) = power_profile_rx {

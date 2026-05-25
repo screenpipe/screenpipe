@@ -361,11 +361,22 @@ impl VisionManager {
             .as_ref()
             .map(|rx| rx.borrow().jpeg_quality.min(baseline_q))
             .unwrap_or(baseline_q);
+        let max_snapshot_width = video_quality_to_max_snapshot_width(&self.config.video_quality);
         let snapshot_writer = Arc::new(SnapshotWriter::new(
             format!("{}/data", output_path),
             initial_jpeg_quality,
-            video_quality_to_max_snapshot_width(&self.config.video_quality),
+            max_snapshot_width,
         ));
+
+        // Cap the macOS SCK capture stream to the same width as the snapshot
+        // writer. The GPU downscales before replayd delivers the framebuffer,
+        // saving WindowServer composite + readback cost without affecting
+        // anything that wasn't going to be downsized in user space anyway.
+        // Text extraction is primarily a11y-tree-driven (unchanged) and OCR
+        // runs only as a fallback; both see the same image they'd see after
+        // the snapshot-writer downscale.
+        #[cfg(target_os = "macos")]
+        screenpipe_screen::monitor::set_sck_capture_max_width(max_snapshot_width);
 
         // Create activity feed for this monitor
         let activity_feed = ActivityFeed::new();

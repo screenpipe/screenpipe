@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { invoke } from "@tauri-apps/api/core";
@@ -33,6 +34,8 @@ const API_BASE = "http://localhost:11435";
 async function openNotificationLink(href: string) {
   const raw = href.trim();
   if (!raw) return;
+
+  if (await openScreenpipeViewerLink(raw)) return;
 
   let localPath: string | null = null;
   if (raw.startsWith("~/")) {
@@ -219,6 +222,7 @@ export function NotificationBell() {
                           <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
+                              urlTransform={notificationUrlTransform}
                               components={{
                                 a: ({ href, children }) => (
                                   <a
@@ -268,6 +272,7 @@ export function NotificationBell() {
                         <div className="text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
+                            urlTransform={notificationUrlTransform}
                             components={{
                               a: ({ href, children }) => (
                                 <a

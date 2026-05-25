@@ -8,6 +8,7 @@ import {
   isAuthorized,
   isLoopbackRequest,
   parseArgs,
+  runFromArgv,
 } from "./http-server";
 
 describe("parseArgs", () => {
@@ -57,6 +58,46 @@ describe("parseArgs", () => {
   it("ignores unknown flags rather than crashing", () => {
     // Lenient parser — random extra args don't break startup.
     expect(() => parseArgs(["--unknown-flag"])).not.toThrow();
+  });
+
+  it("ignores --http (passed through by the cli.ts dispatcher)", () => {
+    // cli.ts forwards every argv flag to runFromArgv, including the
+    // sentinel `--http` it used to make the routing decision. The HTTP
+    // parser must tolerate it instead of complaining.
+    const c = parseArgs(["--http", "--port", "3035"]);
+    expect(c.mcpPort).toBe(3035);
+  });
+});
+
+describe("runFromArgv", () => {
+  // Smoke-test the dispatch surface used by cli.ts. We don't actually
+  // bind a port here — just confirm the export exists and that invalid
+  // input causes the documented process.exit(2), which is what the
+  // dispatcher relies on for fail-fast UX.
+  it("is exported as a function", () => {
+    expect(typeof runFromArgv).toBe("function");
+  });
+
+  it("exits with code 2 on invalid args (CliError path)", () => {
+    const origExit = process.exit;
+    const origErr = console.error;
+    let exitCode: number | undefined;
+    let errMsg = "";
+    process.exit = ((code?: number) => {
+      exitCode = code;
+      throw new Error("__exit__");
+    }) as typeof process.exit;
+    console.error = (msg: string) => {
+      errMsg = msg;
+    };
+    try {
+      expect(() => runFromArgv(["--listen-on-lan"])).toThrow("__exit__");
+      expect(exitCode).toBe(2);
+      expect(errMsg).toMatch(/--api-key/);
+    } finally {
+      process.exit = origExit;
+      console.error = origErr;
+    }
   });
 });
 

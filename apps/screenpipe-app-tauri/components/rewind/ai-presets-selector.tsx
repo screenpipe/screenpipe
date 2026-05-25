@@ -205,7 +205,7 @@ export function AIProviderConfig({
     const fetchPiModels = async () => {
       try {
         const token = settings?.user?.token || "";
-        const resp = await fetch("https://api.screenpi.pe/v1/models", {
+        const resp = await fetch("https://api.screenpipe.com/v1/models", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (resp.ok) {

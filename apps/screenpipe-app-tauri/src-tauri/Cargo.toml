@@ -2,7 +2,7 @@
 
 [package]
 name = "screenpipe-app"
-version = "2.4.267"
+version = "2.4.273"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -272,6 +272,16 @@ parakeet-mlx = ["screenpipe-engine/parakeet-mlx"]
 # ONNX CoreML EP). Forwards to screenpipe-engine which forwards to
 # screenpipe-redact/mlx-mac.
 rfdetr-mlx = ["screenpipe-engine/rfdetr-mlx"]
+
+# v45 phase 3 text-PII redactor via ONNX Runtime — cross-platform with
+# zero end-user dependencies. CPU is the Linux baseline; CoreML on Mac
+# uses Metal + Neural Engine; DirectML on Windows uses any DX12 GPU.
+# The 3 features are not mutually exclusive at compile time — each CI
+# build enables exactly one per platform.
+redact-onnx-cpu = ["screenpipe-engine/redact-onnx-cpu"]
+redact-onnx-coreml = ["screenpipe-engine/redact-onnx-coreml"]
+redact-onnx-directml = ["screenpipe-engine/redact-onnx-directml"]
+
 jemalloc = ["tikv-jemallocator"]
 
 

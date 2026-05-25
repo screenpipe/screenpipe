@@ -54,6 +54,17 @@ interface GitHubAsset { name: string; browser_download_url: string; }
 interface GitHubRelease { tag_name: string; assets: GitHubAsset[]; }
 interface McpVersionInfo { available: string | null; installed: string | null; }
 
+function formatRelativeTime(ts: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (secs < 5) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 async function getLatestMcpRelease(): Promise<{ url: string; version: string }> {
   const maxPages = 5;
   for (let page = 1; page <= maxPages; page++) {
@@ -858,11 +869,13 @@ function MemorySyncSubsection({
   defaultPath: string;
   targetFilename: string;
 }) {
+  const { toast } = useToast();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [homePath, setHomePath] = useState(defaultPath);
   const [status, setStatus] = useState<"idle" | "connecting" | "syncing">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [lastResultAt, setLastResultAt] = useState<number | null>(null);
 
   useEffect(() => {
     localFetch(`/connections/${integrationId}`)
@@ -926,6 +939,7 @@ function MemorySyncSubsection({
       if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
       setConnected(false);
       setLastResult(null);
+      setLastResultAt(null);
       notifyConnectionsUpdated();
     } catch (e: any) {
       setError(e?.message || "disconnect failed");
@@ -943,50 +957,68 @@ function MemorySyncSubsection({
       // The endpoint returns a list of per-destination outcomes — pick
       // the one for this integration and render it. The other tile's
       // panel will refresh independently when the user opens it.
+      // Rust serializes the SyncOutcome enum with `rename_all = "snake_case"`,
+      // so the variant keys are lowercase (`wrote` / `unchanged` / `skipped`).
       const me = (data?.results || []).find((r: any) => r.destination_id === integrationId);
       if (me?.outcome?.ok) {
         const result = me.outcome.result;
-        if (result?.Wrote) {
-          setLastResult(`wrote ${result.Wrote.entries} entr${result.Wrote.entries === 1 ? "y" : "ies"} to ${result.Wrote.path}`);
-        } else if (result?.Unchanged) {
-          setLastResult(`up to date (${result.Unchanged.entries} entries)`);
-        } else if (result?.Skipped) {
-          setLastResult(`skipped: ${result.Skipped.reason}`);
+        let resultText: string;
+        if (result?.wrote) {
+          const n = result.wrote.entries;
+          resultText = `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
+        } else if (result?.unchanged) {
+          const n = result.unchanged.entries;
+          resultText = `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
+        } else if (result?.skipped) {
+          resultText = `skipped · ${result.skipped.reason}`;
         } else {
-          setLastResult("synced");
+          resultText = "synced";
         }
+        setLastResult(resultText);
+        setLastResultAt(Date.now());
+        toast({ title: "memory sync", description: resultText });
       } else if (me) {
         throw new Error(me?.outcome?.error || "sync failed");
       }
     } catch (e: any) {
-      setError(e?.message || "sync failed");
+      const msg = e?.message || "sync failed";
+      setError(msg);
+      toast({ title: "memory sync failed", description: msg, variant: "destructive" });
     } finally {
       setStatus("idle");
     }
-  }, [integrationId]);
+  }, [integrationId, toast]);
 
   if (connected === null) {
     return null; // initial fetch in flight — avoid flicker
   }
+
+  const assistantName = integrationId === "codex" ? "codex" : "claude code";
 
   return (
     <div className="border-t border-border pt-3 mt-3 space-y-2">
       <div className="space-y-0.5">
         <p className="text-xs font-medium text-foreground">memory sync (beta)</p>
         <p className="text-xs text-muted-foreground">
-          Continuously mirror screenpipe memories into {targetFilename} so the assistant
-          carries durable context across every new session. Writes a screenpipe-owned
-          marker block — content outside the block is left alone.
+          writes your screenpipe memories into {targetFilename} so {assistantName} sees them
+          in every new session. updates automatically every 5 minutes.
         </p>
       </div>
 
       {connected ? (
         <>
-          <div className="p-2 bg-muted border border-border rounded-lg space-y-0.5">
-            <p className="text-xs text-muted-foreground">syncing to</p>
-            <p className="text-xs text-foreground font-mono break-all">{persistedPath}/{targetFilename}</p>
+          <div className="p-2 bg-muted border border-border rounded-lg space-y-1">
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">file</p>
+              <p className="text-xs text-foreground font-mono break-all">{persistedPath}/{targetFilename}</p>
+            </div>
+            {lastResult && (
+              <div className="pt-1 border-t border-border space-y-0.5">
+                <p className="text-xs text-muted-foreground">last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
+                <p className="text-xs text-foreground break-all">{lastResult}</p>
+              </div>
+            )}
           </div>
-          {lastResult && <p className="text-xs text-muted-foreground">{lastResult}</p>}
           <div className="flex flex-wrap gap-2">
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
@@ -1671,7 +1703,7 @@ function OAuthPanel({
               <Lock className="h-3 w-3" />pro required
             </Button>
             <button
-              onClick={() => openUrl("https://screenpi.pe/onboarding")}
+              onClick={() => openUrl("https://screenpipe.com/onboarding")}
               className="text-[10px] text-muted-foreground hover:text-foreground underline"
             >
               upgrade to pro to connect

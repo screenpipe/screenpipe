@@ -9,7 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { localFetch } from "@/lib/api";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { exists, readTextFile } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -122,7 +122,13 @@ export default function ShortcutReminderPage() {
   const loadShortcutsFromFile = useCallback(async () => {
     try {
       const home = await homeDir();
-      const raw = await readTextFile(`${home}/.screenpipe/store.bin`);
+      const path = `${home}/.screenpipe/store.bin`;
+      // Missing file is a valid first-run state (defaults will be applied by caller).
+      // Silently skipping avoids a webview→Rust error roundtrip per call, which
+      // compounded into thousands of log lines when the store-change listener fires.
+      if (!(await exists(path))) return;
+      const raw = await readTextFile(path);
+      if (!raw) return;
       const data = JSON.parse(raw);
       const settings = data?.settings;
       if (settings?.showScreenpipeShortcut) {
@@ -139,7 +145,10 @@ export default function ShortcutReminderPage() {
         setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
       }
     } catch (e) {
-      console.error("Failed to read shortcuts from store file:", e);
+      // Error objects don't survive JSON.stringify — extract the human-readable parts
+      // so the report isn't just "{}".
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      console.error("Failed to read shortcuts from store file:", msg);
     }
   }, []);
 
@@ -155,17 +164,25 @@ export default function ShortcutReminderPage() {
       setSearchShortcut(prev => prev ?? (isMac ? "⌘⌃K" : "Alt+K"));
     });
 
-    // Also listen for store changes via plugin (for live updates when user changes shortcuts)
+    // Also listen for store changes via plugin (for live updates when user changes shortcuts).
+    // Coalesce bursts of settings writes (every keystroke in some flows) into a single read.
     let unlistenStore: (() => void) | null = null;
-    getStore().then(store => {
-      store.onKeyChange("settings", () => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
         loadShortcutsFromFile();
-      }).then(unlisten => {
+      }, 250);
+    };
+    getStore().then(store => {
+      store.onKeyChange("settings", scheduleReload).then(unlisten => {
         unlistenStore = unlisten;
       });
     }).catch(() => {});
 
     return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
       unlistenStore?.();
     };
   }, [isLoading, isMac, loadShortcutsFromFile]);
