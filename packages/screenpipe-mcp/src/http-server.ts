@@ -337,13 +337,15 @@ export function buildHttpServer(config: CliConfig) {
         const server = createMcpServer(fetchAPI);
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            sessions.set(newSessionId, { server, transport });
+          },
+          onsessionclosed: (closedSessionId) => {
+            sessions.delete(closedSessionId);
+          },
         });
 
         await server.connect(transport);
-
-        if (transport.sessionId) {
-          sessions.set(transport.sessionId, { server, transport });
-        }
         session = { server, transport };
       }
 
