@@ -27,7 +27,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
 };
 
 /// Excluded apps — password managers and security tools (matches macOS list).
@@ -194,15 +194,32 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             return Ok(TreeWalkResult::NotFound);
         }
 
+        // Skip transient shell-internal windows (MSCTFIME UI, Shell_TrayWnd, CiceroUIWndFrame).
+        // On Windows 11 24H2+ a TSF/IME regression causes these explorer.exe-owned windows to
+        // steal foreground focus for ~10-50ms on every mouse click, producing spurious frames.
+        let window_class = unsafe {
+            let mut buf = [0u16; 64];
+            let len = GetClassNameW(hwnd, &mut buf);
+            if len > 0 { String::from_utf16_lossy(&buf[..len as usize]) } else { String::new() }
+        };
+        if crate::platform::windows::TRANSIENT_SHELL_WINDOW_CLASSES
+            .iter()
+            .any(|c| window_class.as_str() == *c)
+        {
+            debug!(class = %window_class, "a11y: skipped transient shell window class");
+            return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
+        }
+
         // Get process info
         let mut pid: u32 = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        let app_name = crate::platform::windows::get_process_name(pid)
-            .unwrap_or_else(|| "Unknown".to_string());
+        // Resolve logical app name — handles WebView2 and shell-hosted Edge.
+        let app_name = crate::platform::windows::get_effective_app_name(hwnd, pid);
 
         // Skip excluded apps
         let app_lower = app_name.to_lowercase();
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
+            debug!(app = %app_name, pid, "a11y: skipped — hardcoded excluded app");
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
@@ -213,9 +230,17 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             String::from_utf16_lossy(&buf[..len as usize])
         };
 
+        debug!(
+            app = %app_name,
+            pid,
+            title = %window_name,
+            "a11y: walk_focused_window — evaluating window"
+        );
+
         // Skip incognito / private browsing windows (localized title check)
         if self.config.ignore_incognito_windows && crate::incognito::is_title_private(&window_name)
         {
+            debug!(app = %app_name, title = %window_name, "a11y: skipped — incognito/private window");
             return Ok(TreeWalkResult::Skipped(SkipReason::Incognito));
         }
 
@@ -225,14 +250,28 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         let ignored_patterns = WindowPattern::parse_list(&self.config.ignored_windows);
         let included_patterns = WindowPattern::parse_list(&self.config.included_windows);
         if window_pattern::matches_any(&ignored_patterns, &app_lower, &window_lower) {
+            debug!(
+                app = %app_name,
+                title = %window_name,
+                ignored_patterns = ?self.config.ignored_windows,
+                "a11y: skipped — matched user ignored pattern"
+            );
             return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
         }
 
         // Scoped includes act as per-app whitelists; other apps fall back to
         // global semantics — see `window_pattern::passes_includes`.
         if !window_pattern::passes_includes(&included_patterns, &app_lower, &window_lower) {
+            debug!(
+                app = %app_name,
+                title = %window_name,
+                included_patterns = ?self.config.included_windows,
+                "a11y: skipped — not in include list"
+            );
             return Ok(TreeWalkResult::Skipped(SkipReason::NotInIncludeList));
         }
+
+        debug!(app = %app_name, pid, title = %window_name, "a11y: capturing window tree");
 
         // Use adaptive budget overrides when set
         let effective_timeout = self.config.effective_walk_timeout();
