@@ -11,6 +11,8 @@ use super::{AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
@@ -101,7 +103,15 @@ fn fallback_cloud_models() -> serde_json::Value {
 /// Pi agent executor.
 pub struct PiExecutor {
     /// Screenpipe cloud token (for LLM calls via screenpipe proxy).
-    pub user_token: Option<String>,
+    ///
+    /// Wrapped in `Arc<RwLock<…>>` so the desktop app can refresh it at
+    /// runtime via the `set_cloud_token` Tauri command — without this the
+    /// token captured at engine boot would be permanent for the lifetime of
+    /// the process. Users who sign in AFTER the engine started would stay on
+    /// the gateway's anonymous tier (allowed_models = haiku/gemini only)
+    /// until they fully quit and restart, because logout/login from the
+    /// webview doesn't restart the screenpipe sidecar.
+    pub user_token: Arc<RwLock<Option<String>>>,
     /// Screenpipe API base URL (default: `https://api.screenpipe.com/v1`).
     pub api_url: String,
     /// Bearer token for the *local* screenpipe-server API (localhost:3030).
@@ -115,10 +125,57 @@ pub struct PiExecutor {
 impl PiExecutor {
     pub fn new(user_token: Option<String>) -> Self {
         Self {
+            user_token: Arc::new(RwLock::new(user_token)),
+            api_url: SCREENPIPE_API_URL.to_string(),
+            api_auth_key: None,
+        }
+    }
+
+    /// Construct a PiExecutor that shares its cloud-token storage with an
+    /// external `Arc<RwLock>` — typically the same Arc held by the server's
+    /// `AppState.cloud_token`. A single update via `set_user_token` (or a
+    /// write through the shared Arc) is then visible to both the cloud
+    /// proxy and pi-agent on the next pipe run.
+    pub fn with_shared_user_token(user_token: Arc<RwLock<Option<String>>>) -> Self {
+        Self {
             user_token,
             api_url: SCREENPIPE_API_URL.to_string(),
             api_auth_key: None,
         }
+    }
+
+    /// Read the current cloud token. Returns an owned `Option<String>` so
+    /// callers don't have to hold the lock across awaits.
+    ///
+    /// Uses `try_read` to keep the read path sync — under normal operation
+    /// writes are extremely rare (auth state changes) so contention is
+    /// effectively zero. On the off chance of a concurrent writer we return
+    /// `None`, which downgrades the next pipe run to the env-var fallback
+    /// rather than blocking.
+    pub fn current_user_token(&self) -> Option<String> {
+        self.user_token
+            .try_read()
+            .ok()
+            .and_then(|g| g.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Push a new cloud token. Called by the desktop app on login/logout so
+    /// the next pipe run picks up the fresh token instead of using whatever
+    /// was present at engine boot.
+    pub fn set_user_token(&self, token: Option<String>) {
+        if let Ok(mut g) = self.user_token.try_write() {
+            *g = token.filter(|s| !s.is_empty());
+        } else {
+            warn!("pi: set_user_token contended; cloud token update dropped");
+        }
+    }
+
+    /// Expose the underlying `Arc` so it can be shared with other components
+    /// (the cloud_proxy.rs reader, Tauri-managed state) — write through any
+    /// of them is observed by all.
+    pub fn user_token_arc(&self) -> Arc<RwLock<Option<String>>> {
+        self.user_token.clone()
     }
 
     /// Attach the local server's api_auth_key so Pi's bash tool can include
@@ -794,7 +851,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -819,7 +877,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -920,7 +978,8 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        if let Some(ref token) = self.user_token {
+        let cloud_token = self.current_user_token();
+        if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
 
@@ -943,7 +1002,7 @@ impl PiExecutor {
                         cmd.env("GOOGLE_API_KEY", key);
                     }
                     // Ensure screenpipe API key is set as env var fallback
-                    "screenpipe" if self.user_token.is_none() => {
+                    "screenpipe" if cloud_token.is_none() => {
                         cmd.env("SCREENPIPE_API_KEY", key);
                     }
                     _ => {}
@@ -1091,8 +1150,9 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(model),
@@ -1147,8 +1207,13 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read the cloud token — it may have been refreshed via
+            // `set_user_token` since the run started (e.g. user signed in
+            // mid-pipe). Picking up the fresh value avoids re-running with
+            // the same stale token that triggered the not-found.
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
@@ -1189,8 +1254,9 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
-            self.user_token.as_deref(),
+            cloud_token.as_deref(),
             &self.api_url,
             provider,
             Some(&resolved_model),
@@ -1237,8 +1303,10 @@ impl AgentExecutor for PiExecutor {
                 "pi model not found, re-merging managed providers (stderr: {})",
                 output.stderr.trim()
             );
+            // Re-read cloud token (see comment in `run` above).
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
-                self.user_token.as_deref(),
+                cloud_token.as_deref(),
                 &self.api_url,
                 provider,
                 Some(&resolved_model),
@@ -1323,8 +1391,8 @@ impl AgentExecutor for PiExecutor {
         "pi"
     }
 
-    fn user_token(&self) -> Option<&str> {
-        self.user_token.as_deref()
+    fn user_token(&self) -> Option<String> {
+        self.current_user_token()
     }
 }
 

@@ -937,6 +937,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			() => settingsRef.current.user?.token ?? undefined,
 			async () => {
 				await updateSettings({ user: null as any });
+				// Mirror the sign-out into the sidecar so the pi-agent and
+				// cloud_proxy.rs stop sending the now-revoked token on the
+				// next pipe run.
+				invoke("set_cloud_token", { token: null }).catch((e) => {
+					console.warn("failed to clear cloud token in sidecar:", e);
+				});
 			}
 		);
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1152,6 +1158,17 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			}
 
 			await updateSettings({ user: userData });
+
+			// Push the fresh token into the running sidecar so the
+			// `Server.cloud_token` (used by /v1/chat/completions proxy) and
+			// the `PiExecutor.user_token` (used by pi-agent's models.json
+			// apiKey) both pick up the new value on the next pipe run.
+			// Without this, sign-in only updates the webview's settings —
+			// the engine keeps whatever token it captured at boot (often
+			// `null`), and every Sonnet/Opus pipe 403s on tier=anonymous.
+			invoke("set_cloud_token", { token }).catch((e) => {
+				console.warn("failed to push cloud token to sidecar:", e);
+			});
 		} catch (err) {
 			console.error("failed to load user:", err instanceof Error ? err.message : err);
 			throw err;

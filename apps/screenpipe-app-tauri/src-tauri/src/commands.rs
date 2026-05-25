@@ -764,6 +764,35 @@ pub fn get_cloud_token() -> Option<String> {
         .map(String::from)
 }
 
+/// Push a fresh cloud-auth token into the running sidecar.
+///
+/// The frontend invokes this on every sign-in (after `loadUser` writes
+/// `settings.user`) and on sign-out (passing `None`). Without it, the
+/// `Server.cloud_token` and `PiExecutor.user_token` captured at engine
+/// boot would be permanent for the lifetime of the sidecar process —
+/// users who signed in AFTER the engine started would stay on the
+/// gateway's anonymous tier (allowed_models = haiku/gemini only) on
+/// every pipe run, surfacing as `403 "model_not_allowed"` for any
+/// Sonnet/Opus preset even with an active Pro subscription. Logout +
+/// log-in from the webview alone does NOT restart the sidecar, which
+/// is why the previous user-facing workaround was "fully quit the
+/// app from the tray."
+///
+/// Both the local `/v1/chat/completions` proxy and the pi-agent's
+/// `models.json` apiKey share the same `Arc<RwLock<Option<String>>>`,
+/// so one write here updates both readers on the next pipe run.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_cloud_token(
+    token: Option<String>,
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    let normalized = token.filter(|t| !t.is_empty());
+    let mut guard = state.cloud_token.write().await;
+    *guard = normalized;
+    Ok(())
+}
+
 /// Persist the user's enterprise admin status + team API token so the
 /// pi-agent's `screenpipe-team` skill knows whether to install itself.
 ///

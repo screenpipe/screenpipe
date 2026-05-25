@@ -149,6 +149,15 @@ pub struct RecordingState {
     pub last_spawn_epoch: Arc<AtomicU64>,
     /// Recently active meeting to revive when capture is immediately restarted.
     pub(crate) interrupted_meeting: Arc<Mutex<Option<InterruptedMeeting>>>,
+    /// App-scoped cloud-auth token (Clerk JWT). Outlives the Server (which
+    /// is recreated on every recording restart) so that writes from the
+    /// `set_cloud_token` Tauri command — pushed by the frontend on every
+    /// sign-in / sign-out — survive capture toggles. The Server's own
+    /// `cloud_token` field is replaced with this same Arc at start, and
+    /// `PiExecutor` is constructed with `with_shared_user_token(this)`, so
+    /// one update propagates to all three readers (cloud_proxy.rs, the
+    /// pi-agent's models.json apiKey, and any future Tauri-side consumer).
+    pub cloud_token: Arc<tokio::sync::RwLock<Option<String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -790,6 +799,7 @@ pub async fn spawn_screenpipe(
 
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
+    let cloud_token_arc = state.cloud_token.clone();
 
     // Pipe output callback. Stage 5: legacy `pipe_event` topic dropped.
     // Every pipe stdout line is emitted on the unified `agent_event`
@@ -841,17 +851,21 @@ pub async fn spawn_screenpipe(
 
             server_runtime.block_on(async move {
                 // Phase 1: Start server
-                let server =
-                    match ServerCore::start(&recording_config, on_pipe_output, Some(owned_browser))
-                        .await
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            error!("Failed to start server core: {}", e);
-                            let _ = result_tx.send(Err(e));
-                            return;
-                        }
-                    };
+                let server = match ServerCore::start(
+                    &recording_config,
+                    on_pipe_output,
+                    Some(owned_browser),
+                    cloud_token_arc.clone(),
+                )
+                .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Failed to start server core: {}", e);
+                        let _ = result_tx.send(Err(e));
+                        return;
+                    }
+                };
 
                 // Phase 2: Start capture
                 let capture = match CaptureSession::start(&server, &recording_config, true).await {

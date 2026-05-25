@@ -63,6 +63,13 @@ impl ServerCore {
         owned_browser: Option<
             std::sync::Arc<screenpipe_connect::connections::browser::OwnedBrowser>,
         >,
+        // App-scoped cloud-token handle. Outlives Server (which is recreated
+        // on every recording restart) so a token pushed via `set_cloud_token`
+        // survives capture toggles and is automatically picked up by the next
+        // Server + PiExecutor pair. Pre-existing per-Server cloud_token is
+        // replaced with this Arc so all three observers (cloud_proxy.rs,
+        // PiExecutor, the Tauri command writer) share one storage cell.
+        cloud_token_handle: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
@@ -313,9 +320,23 @@ impl ServerCore {
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
         // can't see this token; the local proxy signs the upstream request.
+        //
+        // We replace the Server's per-instance cloud_token cell with the
+        // app-scoped Arc so writes from `set_cloud_token` (Tauri command,
+        // pushed on every sign-in/out from the webview) are visible to both
+        // cloud_proxy.rs AND the PiExecutor that shares this same Arc.
+        // Without this, a token captured at engine boot was permanent until
+        // restart — paying users who signed in after the sidecar started got
+        // anonymous-tier 403s on every Sonnet/Opus pipe.
+        server.cloud_token = cloud_token_handle.clone();
+        // Seed the shared cell from persisted settings, but ONLY when empty
+        // — if `set_cloud_token` has already pushed a fresher value (e.g. the
+        // user signed in between sidecar boots), don't clobber it with the
+        // stale `config.user_id` snapshot.
         if let Some(ref t) = config.user_id {
             if !t.is_empty() {
-                if let Ok(mut g) = server.cloud_token.try_write() {
+                let mut g = cloud_token_handle.write().await;
+                if g.is_none() {
                     *g = Some(t.clone());
                 }
             }
@@ -406,10 +427,17 @@ impl ServerCore {
         let pipes_dir = config.data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
-        let user_token = config.user_id.clone();
+        // Share the cloud-token Arc between Server (for cloud_proxy.rs) and
+        // PiExecutor (for pi-agent provider auth). With one shared Arc the
+        // `set_cloud_token` Tauri command updates both readers in one shot,
+        // so a fresh sign-in or sign-out takes effect on the very next pipe
+        // run without restarting the engine.
+        let cloud_token_handle = server.cloud_token.clone();
         let pi_executor = Arc::new(
-            screenpipe_core::agents::pi::PiExecutor::new(user_token)
-                .with_api_auth_key(config.api_auth_key.clone()),
+            screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
+                cloud_token_handle.clone(),
+            )
+            .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<
             String,

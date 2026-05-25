@@ -751,6 +751,7 @@ async fn main() {
                 commands::save_enterprise_team_config,
                 commands::get_enterprise_team_api_token,
                 commands::get_cloud_token,
+                commands::set_cloud_token,
                 enterprise_policy::set_enterprise_policy,
                 enterprise_policy::set_sync_streams,
                 commands::get_disk_usage,
@@ -924,6 +925,7 @@ async fn main() {
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
+        cloud_token: Arc::new(tokio::sync::RwLock::new(None)),
     };
     let pi_state = pi::PiState(Arc::new(tokio::sync::Mutex::new(pi::PiPool::new())));
     let suggestions_state = suggestions::SuggestionsState::new();
@@ -1038,6 +1040,7 @@ async fn main() {
             commands::save_enterprise_team_config,
             commands::get_enterprise_team_api_token,
             commands::get_cloud_token,
+            commands::set_cloud_token,
             spawn_screenpipe,
             stop_screenpipe,
             recording::start_capture,
@@ -1694,6 +1697,7 @@ async fn main() {
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
+                let cloud_token_arc = recording_state.cloud_token.clone();
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
@@ -1828,6 +1832,7 @@ async fn main() {
                                 &config,
                                 on_pipe_output,
                                 Some(owned_browser),
+                                cloud_token_arc.clone(),
                             )
                             .await
                             {
