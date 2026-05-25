@@ -1,13 +1,20 @@
+# CPU-only inference stack for the v45_phase3 text + rfdetr_v9 image
+# models. Optimum + onnxruntime keeps the runtime lean — no CUDA, no
+# training graph. transformers is still needed for tokenizer + pipeline
+# scaffolding (xlm-roberta-base needs the fast-tokenizer word-id
+# alignment for the NER aggregation strategy); torch is the transitive
+# dep of that pipeline, pinned to the CPU wheel (~200 MB vs ~3 GB CUDA).
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
 pydantic==2.9.2
-# CPU-only torch wheels — picked up from the CPU index in the Dockerfile
-# (--extra-index-url). Pinning the minor version prevents unexpected
-# perf/ABI changes from sneaking into the image on rebuilds.
+
 torch==2.5.1
-# openai/privacy-filter ships a custom `OpenAIPrivacyFilterForTokenClassification`
-# arch + `TokenizersBackend` tokenizer class; both require transformers >= 5.x.
-transformers==5.6.0
-tokenizers==0.22.1
-accelerate==1.1.1
+transformers==4.46.3
+tokenizers==0.20.3
+optimum[onnxruntime]==1.23.3
+onnxruntime==1.20.0
+
+# rfdetr image preprocessing.
+Pillow==11.0.0
+numpy==2.1.3
 safetensors==0.4.5

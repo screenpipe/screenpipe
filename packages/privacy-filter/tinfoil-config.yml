@@ -1,17 +1,16 @@
 # screenpipe — Tinfoil confidential-compute deployment for the privacy-filter
-# service. Update the image digest below after pushing to ghcr.io (CI can do
+# service. Update the image digest below after pushing to ghcr.io (CI does
 # this automatically; for a manual release see README.md).
 #
-# Deploy via the Tinfoil dashboard (https://dash.tinfoil.sh): create an org,
-# connect GitHub, point it at this repo, push a git tag. Tinfoil auto-pulls
-# the image at the pinned digest, runs remote attestation, and exposes the
-# service at https://<name>.<org>.containers.tinfoil.dev.
+# Deploy via the Tinfoil dashboard (https://dash.tinfoil.sh): the dashboard
+# auto-pulls the image at the pinned digest, runs remote attestation, and
+# exposes the service at https://<name>.<org>.containers.tinfoil.dev.
 
 cvm-version: 0.7.5
 
-# No GPU: the model's MoE has only 50M active params per token and banded
-# attention keeps it O(N). 8 vCPU / 16 GB gives us headroom for ~20 req/sec
-# of short-text filtering — scale up only if p95 latency rises.
+# CPU-only. v45_phase3 (text) is 9 ms p50 on CPU; rfdetr_v9 (image) is
+# ~140 ms p50 on CPU. 8 vCPU / 16 GB gives us headroom for both models
+# resident (~1.5 GB combined) plus ~10 req/sec of mixed traffic.
 cpus: 8
 memory: 16384
 
@@ -20,7 +19,7 @@ containers:
     # Pinned via .github/workflows/privacy-filter-release.yml on tag push.
     # Bump by tagging a new `privacy-filter-v<semver>` and copying the
     # digest from the CI run's "Print digest" step.
-    image: "ghcr.io/screenpipe/privacy-filter:0.1.0@sha256:62e54ee2ca596ff647b882e553cf2397c28f70b0de9f3ec36e97b2fc8809ea62"
+    image: "ghcr.io/screenpipe/privacy-filter:0.2.0@sha256:REPLACE_AFTER_BUILD"
     env:
       - PORT: "8080"
     restart: "always"
@@ -29,12 +28,13 @@ containers:
       interval: "15s"
       timeout: "5s"
       retries: 6
-      start_period: "120s"
+      start_period: "90s"
 
 shim:
   upstream-port: 8080
-  # Only /health and /filter are reachable from outside the enclave. Any
-  # other path is rejected with 404 — no debug/introspection leaks.
+  # Only the public endpoints are reachable from outside the enclave.
+  # Any other path is rejected with 404 — no debug/introspection leaks.
   paths:
     - /health
     - /filter
+    - /image/detect
