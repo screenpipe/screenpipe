@@ -65,6 +65,7 @@ pub mod toggl;
 pub mod trello;
 pub mod vercel;
 pub mod whatsapp;
+pub mod workflowy;
 pub mod zapier;
 pub mod zendesk;
 pub mod zoom;
@@ -300,6 +301,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zoom::Zoom),
         Box::new(claude_code::ClaudeCode),
         Box::new(codex::Codex),
+        Box::new(workflowy::Workflowy),
     ]
 }
 
