@@ -151,7 +151,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
 
         // Call screenpipe cloud API
         const response = await fetch(
-          "https://api.screenpi.pe/v1/chat/completions",
+          "https://api.screenpipe.com/v1/chat/completions",
           {
             method: "POST",
             headers: {

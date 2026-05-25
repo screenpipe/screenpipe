@@ -897,6 +897,7 @@ const AISection = ({
   const isApiKeyRequired =
     settingsPreset?.provider !== "openai-chatgpt" &&
     settingsPreset?.provider !== "anthropic" &&
+    settingsPreset?.url !== "https://api.screenpipe.com/v1" &&
     settingsPreset?.url !== "https://api.screenpi.pe/v1" &&
     settingsPreset?.url !== "http://localhost:11434/v1" &&
     settingsPreset?.url !== "embedded";
@@ -1062,7 +1063,7 @@ const AISection = ({
           // Fetch models from gateway so new models appear automatically
           try {
             const token = settings.user?.token || "";
-            const piResp = await fetch("https://api.screenpi.pe/v1/models", {
+            const piResp = await fetch("https://api.screenpipe.com/v1/models", {
               headers: token ? { Authorization: `Bearer ${token}` } : {},
             });
             if (piResp.ok) {

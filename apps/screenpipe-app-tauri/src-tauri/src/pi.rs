@@ -291,7 +291,7 @@ fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<Stri
 const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
 const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
 const PI_NAMESPACE_DIR: &str = "@earendil-works";
-const SCREENPIPE_API_URL: &str = "https://api.screenpi.pe/v1";
+const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Pool of Pi sessions — each session_id gets its own PiManager/process.
 pub struct PiPool {
@@ -1121,7 +1121,7 @@ const PI_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2
 
 /// Resolve a model name for the screenpipe provider.
 ///
-/// The gateway (api.screenpi.pe) is the source of truth for model validation
+/// The gateway (api.screenpipe.com) is the source of truth for model validation
 /// and supports many more models than the local hardcoded list (OpenRouter,
 /// Gemini, Anthropic, etc.). We only do lightweight normalization here
 /// (strip date suffixes) and pass through to the gateway which will reject
@@ -3153,7 +3153,7 @@ mod tests {
         assert_eq!(providers.len(), 1);
 
         let sp = &providers["screenpipe"];
-        assert_eq!(sp["baseUrl"], "https://api.screenpi.pe/v1");
+        assert_eq!(sp["baseUrl"], "https://api.screenpipe.com/v1");
         assert_eq!(sp["api"], "openai-completions");
         assert_eq!(sp["apiKey"], "SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);

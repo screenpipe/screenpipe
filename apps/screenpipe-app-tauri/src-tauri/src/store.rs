@@ -771,7 +771,7 @@ impl Default for AIPreset {
             id: String::new(),
             prompt: String::new(),
             provider: AIProviderType::ScreenpipeCloud,
-            url: "https://api.screenpi.pe/v1".to_string(),
+            url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
             api_key: None,
@@ -956,7 +956,7 @@ Rules:
 - Always answer my question/intent, do not make up things
 "#.to_string(),
             provider: AIProviderType::ScreenpipeCloud,
-            url: "https://api.screenpi.pe/v1".to_string(),
+            url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
             api_key: None,

@@ -483,7 +483,7 @@ export default function EngineStartup({
       const userToken = settings.user?.token;
 
       if (preset?.provider === "screenpipe-cloud" && userToken) {
-        endpoint = "https://api.screenpi.pe/v1/chat/completions";
+        endpoint = "https://api.screenpipe.com/v1/chat/completions";
         model = preset.model || model;
         auth = { Authorization: `Bearer ${userToken}` };
       } else if (
@@ -496,7 +496,7 @@ export default function EngineStartup({
         auth = { Authorization: `Bearer ${preset.apiKey}` };
       } else if (userToken) {
         // Fall back to cloud even if preset is non-cloud but token exists.
-        endpoint = "https://api.screenpi.pe/v1/chat/completions";
+        endpoint = "https://api.screenpipe.com/v1/chat/completions";
         auth = { Authorization: `Bearer ${userToken}` };
       } else {
         // No way to call any model. Bail and reset the gate so a later poll

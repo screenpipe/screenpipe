@@ -54,7 +54,7 @@ pub struct CachedSuggestions {
 
 // ─── Enhanced AI config ─────────────────────────────────────────────────────
 
-/// When enabled, uses screenpipe cloud (api.screenpi.pe) instead of Apple
+/// When enabled, uses screenpipe cloud (api.screenpipe.com) instead of Apple
 /// Intelligence for generating suggestions. Produces much better results
 /// but sends recent activity context to the cloud.
 #[derive(Debug, Clone)]
@@ -1433,7 +1433,7 @@ struct AiResult {
 }
 
 /// Screenpipe cloud API endpoint for enhanced AI suggestions.
-const SCREENPIPE_CLOUD_API: &str = "https://api.screenpi.pe/v1";
+const SCREENPIPE_CLOUD_API: &str = "https://api.screenpipe.com/v1";
 
 async fn generate_ai_suggestions(
     api: &LocalApiContext,
