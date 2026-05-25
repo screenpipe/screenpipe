@@ -46,6 +46,7 @@ export function RecentChatSwitcher({
   onSelect,
   onHoverSelect,
 }: RecentChatSwitcherProps) {
+  const hasSessions = sessions.length > 0;
   const now = useMinuteTick(open);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,13 +72,29 @@ export function RecentChatSwitcher({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.985, y: 8 }}
             transition={{ duration: 0.14, ease: "easeOut" }}
-            className="pointer-events-auto w-[min(30rem,calc(100vw-2rem))] max-h-[min(24rem,68vh)] overflow-hidden rounded-[22px] border border-border/60 bg-background/95 shadow-[0_18px_50px_rgba(0,0,0,0.22)] backdrop-blur-xl"
+            className={cn(
+              "pointer-events-auto overflow-hidden rounded-[22px] border border-border/60 bg-background/95 shadow-[0_18px_50px_rgba(0,0,0,0.22)] backdrop-blur-xl",
+              hasSessions
+                ? "w-[min(30rem,calc(100vw-2rem))] max-h-[min(24rem,68vh)]"
+                : "w-[min(22rem,calc(100vw-2rem))]"
+            )}
           >
-            <div className="px-4 pb-1.5 pt-3 text-[12px] font-normal text-muted-foreground/70">
-              Recently viewed
-            </div>
-            <div ref={listRef} className="max-h-[min(20rem,58vh)] overflow-y-auto px-2 pb-2">
-              {sessions.length > 0 ? (
+            {hasSessions ? (
+              <div className="px-4 pb-1.5 pt-3 text-[12px] font-normal text-muted-foreground/70">
+                Recently viewed
+              </div>
+            ) : (
+              <div className="px-4 pb-1.5 pt-3 text-[12px] font-normal text-muted-foreground/70">
+                No recently viewed chats
+              </div>
+            )}
+            <div
+              ref={listRef}
+              className={cn(
+                hasSessions ? "max-h-[min(20rem,58vh)] overflow-y-auto p-2 scrollbar-minimal" : ""
+              )}
+            >
+              {hasSessions ? (
                 sessions.map((session) => {
                   const isSelected = session.id === selectedId;
                   const activityAt =
@@ -106,11 +123,7 @@ export function RecentChatSwitcher({
                     </button>
                   );
                 })
-              ) : (
-                <div className="flex items-center justify-center rounded-2xl px-4 py-10 text-center text-[13px] font-normal text-muted-foreground/70">
-                  No recently viewed chats
-                </div>
-              )}
+              ) : null}
             </div>
           </motion.div>
         </motion.div>
