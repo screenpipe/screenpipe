@@ -65,7 +65,7 @@ export function RecentChatSwitcher({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
-          className="fixed inset-0 z-[120] flex items-center justify-center pointer-events-none"
+          className="fixed inset-0 z-[120] flex items-start justify-center pt-[12vh] pointer-events-none"
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.985, y: 8 }}
