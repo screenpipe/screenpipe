@@ -49,7 +49,12 @@ export function RecentChatSwitcherController({
   }, [setSelectedId]);
 
   const moveSelection = useCallback((direction: 1 | -1) => {
-    if (recentSwitcherSessions.length === 0) return;
+    if (recentSwitcherSessions.length === 0) {
+      openRef.current = true;
+      setOpen(true);
+      setSelectedId(null);
+      return;
+    }
     const ids = recentSwitcherSessions.map((session) => session.id);
     const baseId = openRef.current
       ? selectedIdRef.current
@@ -81,7 +86,7 @@ export function RecentChatSwitcherController({
   useEffect(() => {
     if (!open) return;
     if (recentSwitcherSessions.length === 0) {
-      closeSwitcher();
+      setSelectedId(null);
       return;
     }
     if (

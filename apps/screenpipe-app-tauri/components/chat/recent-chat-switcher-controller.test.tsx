@@ -169,4 +169,14 @@ describe("RecentChatSwitcherController", () => {
 
     expect(onActivateConversation).toHaveBeenCalledWith("chat-b");
   });
+
+  it("opens an empty state when no sessions are available", () => {
+    const onActivateConversation = vi.fn(async () => {});
+
+    render(<RecentChatSwitcherController onActivateConversation={onActivateConversation} />);
+
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    expect(screen.getByText("Recently viewed")).toBeInTheDocument();
+    expect(screen.getByText("No recently viewed chats")).toBeInTheDocument();
+  });
 });

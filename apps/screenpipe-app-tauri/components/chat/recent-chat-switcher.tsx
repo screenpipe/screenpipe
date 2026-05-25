@@ -58,7 +58,7 @@ export function RecentChatSwitcher({
 
   return (
     <AnimatePresence>
-      {open && sessions.length > 0 ? (
+      {open ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -77,33 +77,40 @@ export function RecentChatSwitcher({
               Recently viewed
             </div>
             <div ref={listRef} className="max-h-[min(20rem,58vh)] overflow-y-auto px-2 pb-2">
-              {sessions.map((session) => {
-                const isSelected = session.id === selectedId;
-                const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
-                const age = formatCompactAge(activityAt, now);
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    data-switcher-id={session.id}
-                    className={cn(
-                      "flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition-colors",
-                      isSelected ? "bg-muted/55 text-foreground" : "text-foreground/80"
-                    )}
-                    onMouseEnter={() => onHoverSelect(session.id)}
-                    onFocus={() => onHoverSelect(session.id)}
-                    onClick={() => onSelect(session)}
-                  >
-                    <span className="min-w-0 truncate text-[14px] font-normal leading-5">
-                      {(isConversationHistorySyncPrompt(session.title) ? undefined : session.title) ||
-                        "untitled"}
-                    </span>
-                    <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/65">
-                      {age ?? ""}
-                    </span>
-                  </button>
-                );
-              })}
+              {sessions.length > 0 ? (
+                sessions.map((session) => {
+                  const isSelected = session.id === selectedId;
+                  const activityAt =
+                    session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
+                  const age = formatCompactAge(activityAt, now);
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      data-switcher-id={session.id}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition-colors",
+                        isSelected ? "bg-muted/55 text-foreground" : "text-foreground/80"
+                      )}
+                      onMouseEnter={() => onHoverSelect(session.id)}
+                      onFocus={() => onHoverSelect(session.id)}
+                      onClick={() => onSelect(session)}
+                    >
+                      <span className="min-w-0 truncate text-[14px] font-normal leading-5">
+                        {(isConversationHistorySyncPrompt(session.title) ? undefined : session.title) ||
+                          "untitled"}
+                      </span>
+                      <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/65">
+                        {age ?? ""}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="flex items-center justify-center rounded-2xl px-4 py-10 text-center text-[13px] font-normal text-muted-foreground/70">
+                  No recently viewed chats
+                </div>
+              )}
             </div>
           </motion.div>
         </motion.div>
