@@ -1362,12 +1362,15 @@ impl PipeManager {
         self.api_port
     }
 
-    /// Set the local API auth key. Injected into pipe subprocesses as
-    /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
-    ///
-    /// Sets it as a process-level env var so child processes inherit it
-    /// automatically via cmd.spawn(). Called once during initialization
-    /// before any async tasks are spawned.
+    /// Set the local API auth key. Stored on the manager so it can be
+    /// plumbed into `render_pipe_system_prompt` (so the prompt's
+    /// "auth required" note matches reality), and also mirrored into
+    /// the process env so in-process consumers (the privacy-filter
+    /// tinfoil adapters, which read env on construction) pick it up
+    /// without a second wiring path. The pipe-subprocess env is set
+    /// directly on each child cmd in `agents/pi.rs` — it does NOT
+    /// rely on inheriting this process-level set_var.
+    /// Called once during initialization before any async tasks spawn.
     pub fn set_local_api_key(&mut self, key: Option<String>) {
         self.local_api_key = key.clone();
         if let Some(ref k) = key {

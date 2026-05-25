@@ -16,8 +16,9 @@
 //!
 //! 1. The explicit `api_key` on [`TinfoilConfig`] when constructed.
 //! 2. The `SCREENPIPE_PRIVACY_FILTER_API_KEY` env var.
-//! 3. The `SCREENPIPE_API_AUTH_KEY` env var (matches the convention
-//!    the rest of the codebase uses for screenpipe-cloud auth).
+//! 3. The `SCREENPIPE_LOCAL_API_KEY` env var (the local-API bearer the
+//!    rest of the codebase uses), with `SCREENPIPE_API_AUTH_KEY` honored
+//!    as a deprecated alias.
 //!
 //! If none is set, requests still go out un-authenticated — the
 //! adapter logs a warning at construction time so misconfiguration is
@@ -110,7 +111,8 @@ pub struct TinfoilConfig {
     /// `SCREENPIPE_PRIVACY_FILTER_REPO`, then [`DEFAULT_REPO`].
     pub repo: Option<String>,
     /// Bearer token for the enclave. Falls back through
-    /// `SCREENPIPE_PRIVACY_FILTER_API_KEY` and `SCREENPIPE_API_AUTH_KEY`.
+    /// `SCREENPIPE_PRIVACY_FILTER_API_KEY`, `SCREENPIPE_LOCAL_API_KEY`,
+    /// and `SCREENPIPE_API_AUTH_KEY` (deprecated alias).
     pub api_key: Option<String>,
     /// Per-request HTTP timeout. Default: 60s.
     pub timeout: Option<Duration>,
@@ -175,6 +177,7 @@ impl TinfoilRedactor {
         let api_key = cfg.api_key.or_else(|| {
             std::env::var("SCREENPIPE_PRIVACY_FILTER_API_KEY")
                 .ok()
+                .or_else(|| std::env::var("SCREENPIPE_LOCAL_API_KEY").ok())
                 .or_else(|| std::env::var("SCREENPIPE_API_AUTH_KEY").ok())
         });
 
@@ -455,6 +458,7 @@ mod tests {
     async fn no_api_key_means_no_auth() {
         // Make sure no env var is leaking in.
         std::env::remove_var("SCREENPIPE_PRIVACY_FILTER_API_KEY");
+        std::env::remove_var("SCREENPIPE_LOCAL_API_KEY");
         std::env::remove_var("SCREENPIPE_API_AUTH_KEY");
         let r = TinfoilRedactor::new(TinfoilConfig {
             enclave: Some("example.invalid".into()),

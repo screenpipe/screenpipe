@@ -105,8 +105,10 @@ pub struct PiExecutor {
     /// Screenpipe API base URL (default: `https://api.screenpipe.com/v1`).
     pub api_url: String,
     /// Bearer token for the *local* screenpipe-server API (localhost:3030).
-    /// Exposed to the Pi subprocess as `SCREENPIPE_API_AUTH_KEY` so bash tool
-    /// calls against the local server can authenticate. None = auth disabled.
+    /// Exposed to the Pi subprocess as `SCREENPIPE_LOCAL_API_KEY` so bash/TS
+    /// pipe code can authenticate against the local server. `SCREENPIPE_API_AUTH_KEY`
+    /// is also exported as a deprecated alias (one release) for old pipe.md
+    /// files on disk. None = auth disabled.
     pub api_auth_key: Option<String>,
 }
 
@@ -825,14 +827,14 @@ impl PiExecutor {
             }
         }
 
-        // Export under both names: bash/curl callers use the shim's fallback
-        // (`${SCREENPIPE_LOCAL_API_KEY:-${SCREENPIPE_API_AUTH_KEY:-}}`), but
-        // TypeScript/bun pipe code reads `process.env.SCREENPIPE_LOCAL_API_KEY`
-        // directly and would 403 against the local proxy without it. Setting
-        // both here avoids depending on a process-level inherited env.
+        // Canonical name: SCREENPIPE_LOCAL_API_KEY. The AUTH_KEY alias is
+        // kept ONE release as a deprecated fallback for user-installed
+        // pipe.md files that hardcoded the old name (e.g. an older
+        // meeting-summary install on disk that install_builtin_pipes won't
+        // overwrite). TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY.
         if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key);
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -949,12 +951,10 @@ impl PiExecutor {
             }
         }
 
-        // See spawn_pi above — set both env-var names so non-shell pipe code
-        // (TypeScript/bun reading `process.env.SCREENPIPE_LOCAL_API_KEY`)
-        // doesn't 403 against the local proxy.
+        // See spawn_pi above — TODO(remove next release): drop the deprecated alias.
         if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key);
             cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash

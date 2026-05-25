@@ -1541,10 +1541,14 @@ pub async fn pi_start_inner(
         }
     }
 
-    // Pass the screenpipe API auth key so mcp-bridge.ts can authenticate
-    // its GET /mcp-servers calls (returns 403 without this).
+    // Backstop: if local_api_context_from_app couldn't resolve a key earlier
+    // (line ~1477) but the disk-backed store has one, set it here so
+    // mcp-bridge.ts can authenticate its GET /mcp-servers calls. Sets the
+    // canonical name + the deprecated alias for old pipe.md files on disk.
+    // TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY alias.
     if let Some(key) = crate::store::resolved_api_auth_key() {
-        cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+        cmd.env("SCREENPIPE_LOCAL_API_KEY", &key);
+        cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
     }
 
     // Spawn process
