@@ -175,6 +175,14 @@ Instead of recording every second, screenpipe listens for meaningful events — 
 ### Audio transcription
 Captures system audio (what you hear) and microphone input (what you say). Real-time speech-to-text using OpenAI Whisper running locally on your device. Speaker identification and diarization. Works with any audio source — Zoom, Google Meet, Teams, or any other application.
 
+On macOS 14.4+, you can exclude specific apps from system-audio capture by listing their bundle IDs in `~/.screenpipe/audio-exclusions.json`:
+
+```json
+{ "excluded_bundle_ids": ["com.stremio.stremio", "com.spotify.client"] }
+```
+
+The exclusion list hot-reloads — edits to the file and excluded apps launching/quitting are picked up on the engine's existing 500 ms tap-rebuild loop without restarting screenpipe. Override the file path with `SCREENPIPE_AUDIO_EXCLUSIONS_PATH` for testing. Note: this requires the "System Audio Recording Only" TCC permission in System Settings → Privacy & Security → Screen & System Audio Recording.
+
 ### AI-powered search
 Natural language search across accessibility-first screen text, OCR fallback text, and audio transcriptions. Filter by application name, window title, browser URL, date range. Semantic search using embeddings. Returns screenshots and audio clips alongside text results.
 
