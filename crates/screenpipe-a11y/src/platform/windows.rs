@@ -1548,10 +1548,10 @@ pub(crate) fn get_process_name(pid: u32) -> Option<String> {
 /// They must be skipped rather than attributed to the app, otherwise audio recorded
 /// while watching a video in Edge gets timestamp-matched to these fake explorer frames.
 pub(crate) const TRANSIENT_SHELL_WINDOW_CLASSES: &[&str] = &[
-    "MSCTFIME UI",                     // TSF/IME focus-steal on every click (Win11 24H2+ regression)
-    "CiceroUIWndFrame",                // Text Services Framework, same regression
-    "Shell_TrayWnd",                   // Taskbar — transiently owns foreground during button clicks
-    "tooltips_class32",                // Explorer tooltip windows that can briefly grab focus
+    "MSCTFIME UI",      // TSF/IME focus-steal on every click (Win11 24H2+ regression)
+    "CiceroUIWndFrame", // Text Services Framework, same regression
+    "Shell_TrayWnd",    // Taskbar — transiently owns foreground during button clicks
+    "tooltips_class32", // Explorer tooltip windows that can briefly grab focus
     "TopLevelWindowForOverflowXamlIsland", // System tray overflow popup (^ arrow) — noise, 12 tray icon nodes
 ];
 
@@ -1619,14 +1619,18 @@ pub(crate) fn get_effective_app_name(hwnd: HWND, pid: u32) -> String {
 
     // Map WebView2 sub-process to Edge so msedge.exe exclusions cover it.
     if name.to_lowercase() == "msedgewebview2.exe" {
-        debug!(pid, "a11y: msedgewebview2.exe -> msedge.exe (WebView2 normalisation)");
+        debug!(
+            pid,
+            "a11y: msedgewebview2.exe -> msedge.exe (WebView2 normalisation)"
+        );
         return "msedge.exe".to_string();
     }
 
     // For shell host processes check window class for Chromium content.
     let lower = name.to_lowercase();
     if SHELL_HOST_PROCESSES.iter().any(|h| lower.as_str() == *h) {
-        let is_chromium = window_class == "Chrome_WidgetWin_1" || window_class == "Chrome_WidgetWin_0";
+        let is_chromium =
+            window_class == "Chrome_WidgetWin_1" || window_class == "Chrome_WidgetWin_0";
         debug!(
             pid,
             raw_process = %name,

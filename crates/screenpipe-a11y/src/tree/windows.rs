@@ -200,7 +200,11 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         let window_class = unsafe {
             let mut buf = [0u16; 64];
             let len = GetClassNameW(hwnd, &mut buf);
-            if len > 0 { String::from_utf16_lossy(&buf[..len as usize]) } else { String::new() }
+            if len > 0 {
+                String::from_utf16_lossy(&buf[..len as usize])
+            } else {
+                String::new()
+            }
         };
         if crate::platform::windows::TRANSIENT_SHELL_WINDOW_CLASSES
             .iter()
