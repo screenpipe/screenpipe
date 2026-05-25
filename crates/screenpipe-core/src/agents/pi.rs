@@ -825,8 +825,14 @@ impl PiExecutor {
             }
         }
 
+        // Export under both names: bash/curl callers use the shim's fallback
+        // (`${SCREENPIPE_LOCAL_API_KEY:-${SCREENPIPE_API_AUTH_KEY:-}}`), but
+        // TypeScript/bun pipe code reads `process.env.SCREENPIPE_LOCAL_API_KEY`
+        // directly and would 403 against the local proxy without it. Setting
+        // both here avoids depending on a process-level inherited env.
         if let Some(ref key) = self.api_auth_key {
             cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
@@ -943,8 +949,12 @@ impl PiExecutor {
             }
         }
 
+        // See spawn_pi above — set both env-var names so non-shell pipe code
+        // (TypeScript/bun reading `process.env.SCREENPIPE_LOCAL_API_KEY`)
+        // doesn't 403 against the local proxy.
         if let Some(ref key) = self.api_auth_key {
             cmd.env("SCREENPIPE_API_AUTH_KEY", key);
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
         }
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
