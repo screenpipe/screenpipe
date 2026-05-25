@@ -903,10 +903,8 @@ pub async fn event_driven_capture_loop(
                 match capture_result {
                     Ok(Ok(output)) => {
                         state.mark_captured();
-                        // Reset AFK clock whenever a real user-activity trigger
-                        // produces a successful capture. VisualChange is excluded:
-                        // automated visual changes (video playback, loading spinners)
-                        // are not evidence the user is present.
+                        // Reset AFK clock for all non-Idle triggers — this includes
+                        // VisualChange (a screen change is meaningful activity)
                         if !matches!(trigger, CaptureTrigger::Idle) {
                             state.mark_non_idle_trigger();
                         }
