@@ -1362,12 +1362,15 @@ impl PipeManager {
         self.api_port
     }
 
-    /// Set the local API auth key. Injected into pipe subprocesses as
-    /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
-    ///
-    /// Sets it as a process-level env var so child processes inherit it
-    /// automatically via cmd.spawn(). Called once during initialization
-    /// before any async tasks are spawned.
+    /// Set the local API auth key. Stored on the manager so it can be
+    /// plumbed into `render_pipe_system_prompt` (so the prompt's
+    /// "auth required" note matches reality), and also mirrored into
+    /// the process env so in-process consumers (the privacy-filter
+    /// tinfoil adapters, which read env on construction) pick it up
+    /// without a second wiring path. The pipe-subprocess env is set
+    /// directly on each child cmd in `agents/pi.rs` — it does NOT
+    /// rely on inheriting this process-level set_var.
+    /// Called once during initialization before any async tasks spawn.
     pub fn set_local_api_key(&mut self, key: Option<String>) {
         self.local_api_key = key.clone();
         if let Some(ref k) = key {
@@ -1929,6 +1932,7 @@ impl PipeManager {
             self.api_port,
             preset_prompt.as_deref(),
             self.connections_context.as_deref(),
+            self.local_api_key.as_deref(),
         );
         let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
         let pipe_name = name.to_string();
@@ -2418,6 +2422,7 @@ impl PipeManager {
                 self.api_port,
                 preset_prompt.as_deref(),
                 self.connections_context.as_deref(),
+                self.local_api_key.as_deref(),
             );
             let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
 
@@ -3167,7 +3172,7 @@ impl PipeManager {
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
         let connections_context = self.connections_context.clone();
-        let _local_api_key = self.local_api_key.clone();
+        let local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
             info!("pipe scheduler started (generation {})", generation);
@@ -3534,6 +3539,7 @@ impl PipeManager {
                         api_port,
                         preset_prompt.as_deref(),
                         connections_context.as_deref(),
+                        local_api_key.as_deref(),
                     );
                     let prompt = render_prompt_with_port(
                         config,
@@ -4146,6 +4152,7 @@ fn render_pipe_system_prompt(
     api_port: u16,
     system_prompt: Option<&str>,
     connections_context: Option<&str>,
+    local_api_key: Option<&str>,
 ) -> String {
     let os = std::env::consts::OS;
     let mut sys = String::new();
@@ -4156,7 +4163,10 @@ fn render_pipe_system_prompt(
         sys.push_str("\n\n");
     }
 
-    let api_auth_note = if std::env::var("SCREENPIPE_LOCAL_API_KEY").is_ok() {
+    // Pass the key explicitly instead of reading the parent's process env —
+    // the parent env is only populated via the `set_local_api_key` side-effect
+    // and may be empty when api_auth_key was resolved late or never set.
+    let api_auth_note = if local_api_key.is_some() {
         "\nAPI Authentication: REQUIRED. Add `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"` to ALL curl requests to the Screenpipe API. The env var is already set in your environment.\n"
     } else {
         ""
@@ -5272,7 +5282,7 @@ mod tests {
         assert!(prompt.contains("Time range:"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
-        let sys = render_pipe_system_prompt("body text", 3031, None, None);
+        let sys = render_pipe_system_prompt("body text", 3031, None, None, None);
         assert!(sys.contains("http://localhost:3031"));
         assert!(!sys.contains("http://localhost:3030"));
         assert!(sys.contains("body text"));
@@ -5299,7 +5309,7 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("hello", 3030, None, None);
+        let sys = render_pipe_system_prompt("hello", 3030, None, None, None);
         assert!(sys.contains("http://localhost:3030"));
     }
 
@@ -5324,8 +5334,13 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys =
-            render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"), None);
+        let sys = render_pipe_system_prompt(
+            "body text",
+            3030,
+            Some("You are a helpful assistant"),
+            None,
+            None,
+        );
         assert!(sys.starts_with("You are a helpful assistant\n\n"));
         assert!(sys.contains("body text"));
         assert!(sys.contains("http://localhost:3030"));
@@ -5352,16 +5367,38 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("body text", 3030, None, None);
+        let sys = render_pipe_system_prompt("body text", 3030, None, None, None);
         assert!(!sys.contains("System prompt:"));
         assert!(sys.contains("body text"));
     }
 
     #[test]
     fn test_system_prompt_contains_anti_recursion_warning() {
-        let sys = render_pipe_system_prompt("task body", 3030, None, None);
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
         assert!(sys.contains("NEVER run `screenpipe pipe run`"));
         assert!(sys.contains("You ARE this pipe"));
+    }
+
+    #[test]
+    fn test_system_prompt_emits_auth_note_when_local_api_key_present() {
+        // Pass the key explicitly — the renderer must not depend on parent
+        // process env (which is empty in tests and was the root cause of the
+        // 403 reported by the security-requests-grc pipe in prod).
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, Some("sp-test-key"));
+        assert!(
+            sys.contains("API Authentication: REQUIRED"),
+            "auth note must be emitted when local_api_key is Some"
+        );
+        assert!(sys.contains("SCREENPIPE_LOCAL_API_KEY"));
+    }
+
+    #[test]
+    fn test_system_prompt_omits_auth_note_when_no_key() {
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
+        assert!(
+            !sys.contains("API Authentication: REQUIRED"),
+            "auth note must not be emitted when local_api_key is None"
+        );
     }
 
     // -- PipeExecution / SchedulerState serde roundtrip ----------------------

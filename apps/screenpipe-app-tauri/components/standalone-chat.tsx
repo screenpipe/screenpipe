@@ -645,7 +645,7 @@ Never POST, PUT, or PATCH to a connection proxy unless the user explicitly asks 
 
 # Local server auth
 
-The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_API_AUTH_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
+The local screenpipe server (localhost:3030) requires a bearer token, exposed as env var SCREENPIPE_LOCAL_API_KEY. Every curl to localhost:3030 must include \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`. Don't ask the user for a key — you already have it. On 401, retry without the header (auth is disabled on that install).
 
 # Search rules (DB has 600k+ rows)
 
@@ -703,7 +703,7 @@ function buildConnectionsContext(
   const entries = withDesc
     .map((c) => `## ${c.name} (${c.id})\n${c.description}`)
     .join("\n\n");
-  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"\`.\n\n${entries}`;
+  return `\n\n# Connected integrations\n\nThe user has connected the following external services. Use the endpoints listed under each to fetch live data when relevant. All endpoints are on http://localhost:3030 and require \`-H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY"\`.\n\n${entries}`;
 }
 
 interface SearchResult {
@@ -1234,11 +1234,12 @@ function friendlyToolLabel(toolCall: ToolCall): string {
       if (result) return result.label;
       // Fallback for non-API curls / arbitrary shell — strip the auth-header
       // boilerplate so the truncation surfaces the meaningful tail, not the
-      // 80-char "-H Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" header.
+      // 80-char "-H Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" header.
+      // Matches both the canonical and deprecated alias name.
       const stripped = cmd
         .replace(/^\s*curl\s+/, "curl ")
         .replace(/\s-s\s+/g, " ")
-        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_API_AUTH_KEY['"]\s*/g, " ")
+        .replace(/\s-H\s+['"]Authorization:\s*Bearer\s+\$?SCREENPIPE_(LOCAL_API|API_AUTH)_KEY['"]\s*/g, " ")
         .replace(/\s-H\s+['"]Content-Type:\s*application\/json['"]\s*/g, " ")
         .replace(/\s+/g, " ")
         .trim();
