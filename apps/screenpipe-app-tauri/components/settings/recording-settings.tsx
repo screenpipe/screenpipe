@@ -1698,6 +1698,84 @@ export function RecordingSettings() {
       .catch(() => setCoreaudioTapAvailable(false));
   }, []);
 
+  // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
+  // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
+  // read/write it through Tauri commands. Hot-reload happens engine-side
+  // on the existing 500ms tap-rebuild loop, so a write here propagates in
+  // ~1 tick subject to the 60s REBUILD_COOLDOWN.
+  const [audioExclusions, setAudioExclusions] = useState<string[]>([]);
+  const [runningApps, setRunningApps] = useState<{ bundleId: string; name: string }[]>([]);
+  const [exclusionPickerOpen, setExclusionPickerOpen] = useState(false);
+
+  const reloadAudioExclusions = useCallback(async () => {
+    try {
+      const ids = await invoke<string[]>("read_audio_exclusions");
+      setAudioExclusions(ids);
+    } catch (e) {
+      console.error("read_audio_exclusions failed", e);
+      toast({
+        title: "Couldn't load audio exclusions",
+        description: String(e),
+        variant: "destructive",
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!coreaudioTapAvailable) return;
+    reloadAudioExclusions();
+  }, [coreaudioTapAvailable, reloadAudioExclusions]);
+
+  const openExclusionPicker = useCallback(async () => {
+    setExclusionPickerOpen(true);
+    try {
+      const apps = await invoke<{ bundleId: string; name: string }[]>("list_running_apps");
+      setRunningApps(apps);
+    } catch (e) {
+      console.error("list_running_apps failed", e);
+    }
+  }, []);
+
+  const writeAudioExclusions = useCallback(
+    async (next: string[]) => {
+      const prev = audioExclusions;
+      setAudioExclusions(next);
+      try {
+        await invoke("write_audio_exclusions", { bundleIds: next });
+      } catch (e) {
+        console.error("write_audio_exclusions failed", e);
+        setAudioExclusions(prev);
+        toast({
+          title: "Couldn't save audio exclusion",
+          description: String(e),
+          variant: "destructive",
+        });
+      }
+    },
+    [audioExclusions, toast]
+  );
+
+  const addAudioExclusion = useCallback(
+    (bundleId: string) => {
+      if (!bundleId || audioExclusions.includes(bundleId)) return;
+      writeAudioExclusions([...audioExclusions, bundleId]);
+      setExclusionPickerOpen(false);
+    },
+    [audioExclusions, writeAudioExclusions]
+  );
+
+  const removeAudioExclusion = useCallback(
+    (bundleId: string) => {
+      writeAudioExclusions(audioExclusions.filter((b) => b !== bundleId));
+    },
+    [audioExclusions, writeAudioExclusions]
+  );
+
+  const nameForBundle = useCallback(
+    (bundleId: string) => runningApps.find((a) => a.bundleId === bundleId)?.name ?? bundleId,
+    [runningApps]
+  );
+
   const { toast } = useToast();
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
@@ -3242,6 +3320,81 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 onCheckedChange={(checked) => handleSettingsChange({ disableMeetingDetector: !checked }, true)}
               />
             </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
+            meaningful when the tap is the active backend. */}
+        {!settings.disableAudio && coreaudioTapAvailable && settings.experimentalCoreaudioSystemAudio && (
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5 space-y-2">
+            <div className="flex items-start space-x-2.5">
+              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-foreground">
+                  Exclude apps from system audio
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Audio from these apps will be filtered out of system-audio
+                  capture. Changes apply within ~1 minute without restarting recording.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5 pl-6">
+              {audioExclusions.map((bid) => (
+                <Badge
+                  key={bid}
+                  variant="secondary"
+                  className="gap-1 pr-1 cursor-pointer hover:bg-destructive/20"
+                  onClick={() => removeAudioExclusion(bid)}
+                  title={`Click to remove (${bid})`}
+                >
+                  <span className="text-xs">{nameForBundle(bid)}</span>
+                  <XCircle className="h-3 w-3" />
+                </Badge>
+              ))}
+              <Popover open={exclusionPickerOpen} onOpenChange={(o) => o ? openExclusionPicker() : setExclusionPickerOpen(false)}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs"
+                  >
+                    + add app
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[260px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search running apps..." className="h-9" />
+                    <CommandList>
+                      <CommandEmpty>No running apps found.</CommandEmpty>
+                      <CommandGroup>
+                        {runningApps
+                          .filter((a) => !audioExclusions.includes(a.bundleId))
+                          .map((a) => (
+                            <CommandItem
+                              key={a.bundleId}
+                              value={`${a.name} ${a.bundleId}`}
+                              onSelect={() => addAudioExclusion(a.bundleId)}
+                            >
+                              <div className="flex flex-col">
+                                <span className="text-sm">{a.name}</span>
+                                <span className="text-[10px] text-muted-foreground">{a.bundleId}</span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+            {audioExclusions.length === 0 && (
+              <p className="text-xs text-muted-foreground pl-6 italic">
+                No apps excluded. All system audio is captured.
+              </p>
+            )}
           </CardContent>
         </Card>
         )}

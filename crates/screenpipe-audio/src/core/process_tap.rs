@@ -210,6 +210,28 @@ mod exclusions {
         }
     }
 
+    /// Enumerate currently running apps as `(bundle_id, localized_name)` for
+    /// the "Exclude apps from system audio" picker UI. Sorted by display name
+    /// (case-insensitive) and deduped by bundle ID so a single tuple is
+    /// returned per app even if multiple processes of the same bundle are
+    /// running. Apps without a bundle ID (background daemons, etc.) are
+    /// omitted — they can't be targeted by the exclusion list anyway.
+    pub fn running_apps_for_picker() -> Vec<(String, String)> {
+        let apps = ns::Workspace::shared().running_apps();
+        let mut out: Vec<(String, String)> = Vec::with_capacity(apps.len());
+        for app in apps.iter() {
+            let Some(bundle_id) = app.bundle_id() else { continue; };
+            let name = app
+                .localized_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| bundle_id.to_string());
+            out.push((bundle_id.to_string(), name));
+        }
+        out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -287,6 +309,14 @@ mod exclusions {
         }
     }
 }
+
+/// Public re-exports for the exclusion-list UI.
+///
+/// The engine consumes the exclusion list internally via the private
+/// `exclusions` module; the Tauri shell only needs to enumerate running
+/// apps for the picker. Exposed as a thin pass-through so the Tauri layer
+/// does not need its own `cidre` / `NSWorkspace` dependency.
+pub use exclusions::running_apps_for_picker;
 
 // ---------------------------------------------------------------------------
 // IO proc callback

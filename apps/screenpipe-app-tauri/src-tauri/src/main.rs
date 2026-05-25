@@ -40,6 +40,7 @@ mod analytics;
 mod icons;
 use crate::analytics::start_analytics;
 mod agent_event_emitter;
+mod audio_exclusions;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -729,6 +730,10 @@ async fn main() {
                 permissions::request_browsers_automation_permission,
                 permissions::get_browsers_automation_status,
                 permissions::request_single_browser_automation,
+                // Commands from audio_exclusions.rs
+                audio_exclusions::read_audio_exclusions,
+                audio_exclusions::write_audio_exclusions,
+                audio_exclusions::list_running_apps,
                 // Commands from main.rs
                 get_env,
                 get_e2e_seed_flags,
@@ -1070,6 +1075,9 @@ async fn main() {
             permissions::check_coreaudio_process_tap_available,
             permissions::check_arc_automation_permission,
             permissions::request_arc_automation_permission,
+            audio_exclusions::read_audio_exclusions,
+            audio_exclusions::write_audio_exclusions,
+            audio_exclusions::list_running_apps,
             set_tray_unhealth_icon,
             set_tray_health_icon,
             write_browser_log,
