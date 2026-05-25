@@ -2193,4 +2193,63 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].get("id").unwrap().as_str().unwrap(), "qwen3:8b");
     }
+
+    /// Regression: the engine used to capture the cloud user token once at
+    /// boot via `PiExecutor::new(user_token)` and never refresh it. Users
+    /// who signed in AFTER the sidecar started stayed on tier=anonymous
+    /// until they fully quit + relaunched. The fix is `set_user_token` +
+    /// `with_shared_user_token` — verify both work end-to-end.
+    #[test]
+    fn set_user_token_updates_subsequent_reads() {
+        let exec = PiExecutor::new(None);
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(Some("token-v1".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v1".to_string()));
+
+        exec.set_user_token(Some("token-v2".to_string()));
+        assert_eq!(exec.current_user_token(), Some("token-v2".to_string()));
+
+        // Empty strings normalize to None so downstream `is_some()` checks
+        // can't be tricked into sending an empty Bearer token.
+        exec.set_user_token(Some("".to_string()));
+        assert_eq!(exec.current_user_token(), None);
+
+        exec.set_user_token(None);
+        assert_eq!(exec.current_user_token(), None);
+    }
+
+    /// Confirms the design promise: a single shared `Arc<RwLock>` written
+    /// from one place is observed by every PiExecutor that was constructed
+    /// with `with_shared_user_token` against that same Arc. This is what
+    /// lets the Tauri `set_cloud_token` command update the running
+    /// pi-agent's apiKey AND the cloud_proxy.rs forwarder in one write.
+    #[test]
+    fn shared_arc_propagates_token_writes_across_executors() {
+        let shared = Arc::new(RwLock::new(None::<String>));
+        let exec_a = PiExecutor::with_shared_user_token(shared.clone());
+        let exec_b = PiExecutor::with_shared_user_token(shared.clone());
+
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
+
+        // Write via executor A — both see it.
+        exec_a.set_user_token(Some("fresh-jwt".to_string()));
+        assert_eq!(exec_a.current_user_token(), Some("fresh-jwt".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("fresh-jwt".to_string()));
+
+        // Write directly through the Arc (simulates the Tauri command
+        // path which holds only the Arc, not the executor) — both see it.
+        {
+            let mut g = shared.try_write().expect("uncontended");
+            *g = Some("from-tauri".to_string());
+        }
+        assert_eq!(exec_a.current_user_token(), Some("from-tauri".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("from-tauri".to_string()));
+
+        // Sign-out path.
+        exec_b.set_user_token(None);
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
+    }
 }
