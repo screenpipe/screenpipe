@@ -348,9 +348,25 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const historyEnabled = settings?.chatHistory?.historyEnabled ?? true;
     if (!historyEnabled) return;
 
-    // Prefer the live Pi session id so fast chat switches do not persist
-    // follow-up saves into a stale conversation id.
-    const convId = piSessionIdRef.current || conversationId || crypto.randomUUID();
+    // Bind the save to `conversationId` (React state), NOT
+    // `piSessionIdRef.current` (a ref). The ref is updated eagerly inside
+    // loadConversation — `piSessionIdRef.current = conv.id` runs before
+    // `setMessages` / `setConversationId` commit — which means during a
+    // mid-stream chat switch there's a render window where:
+    //   piSessionIdRef.current = NEW chat id
+    //   conversationId         = OLD chat id (not yet committed)
+    //   messages               = OLD chat's messages (not yet committed)
+    // Trusting the ref here lets the auto-save edge (isLoading: true→false
+    // flipped by loadConversation) write the OLD chat's messages under the
+    // NEW chat's id — corrupting the chat the user just opened. Using
+    // `conversationId` keeps the convId in lockstep with the `messages`
+    // argument because both are React state captured by the same render.
+    //
+    // Fall back to the ref only when `conversationId` is briefly null
+    // during startNewConversation (setConversationId(null) → … →
+    // setConversationId(newSid)); without the fallback the save would mint
+    // a fresh uuid and duplicate the conversation.
+    const convId = conversationId || piSessionIdRef.current || crypto.randomUUID();
 
     // Try to load existing conversation to preserve createdAt + title + kind.
     const { loadConversationFile } = await import("@/lib/chat-storage");
