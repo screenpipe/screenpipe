@@ -60,7 +60,6 @@ export function RecentChatSwitcherController({
       ? selectedIdRef.current
       : currentId ?? panelSessionId;
     const currentIndex = baseId ? ids.indexOf(baseId) : -1;
-    if (ids.length === 1 && currentIndex === 0) return;
     const nextIndex =
       currentIndex >= 0
         ? (currentIndex + direction + ids.length) % ids.length

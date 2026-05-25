@@ -659,14 +659,9 @@ export function selectRecentSwitcherSessions(state: ChatSessionsState): SessionR
     !session.draft &&
     session.kind !== "pipe-watch" &&
     session.kind !== "pipe-run";
-  const viewedThisSession = ordered
+  return ordered
     .filter((session) => isEligibleSwitcherSession(session) && session.lastViewedAt)
     .sort((a, b) => (b.lastViewedAt ?? 0) - (a.lastViewedAt ?? 0));
-  const seen = new Set(viewedThisSession.map((session) => session.id));
-  const fallback = ordered.filter(
-    (session) => isEligibleSwitcherSession(session) && !seen.has(session.id)
-  );
-  return [...viewedThisSession, ...fallback];
 }
 
 /**

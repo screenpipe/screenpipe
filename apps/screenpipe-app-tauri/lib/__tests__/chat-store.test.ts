@@ -272,7 +272,7 @@ describe("chat-store: setCurrent clears unread atomically", () => {
 describe("chat-store: recent switcher ordering", () => {
   beforeEach(reset);
 
-  it("prefers chats viewed this session before falling back to sidebar order", () => {
+  it("returns only chats viewed this session ordered by most recent view", () => {
     useChatStore.getState().actions.upsert(baseRecord({ id: "older-viewed", createdAt: 100 }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "sidebar-top", createdAt: 300 }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "newer-viewed", createdAt: 200 }));
@@ -284,14 +284,23 @@ describe("chat-store: recent switcher ordering", () => {
     expect(ordered.map((s) => s.id)).toEqual([
       "newer-viewed",
       "older-viewed",
-      "sidebar-top",
     ]);
+  });
+
+  it("returns an empty list when no chats have been viewed this session", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "a", createdAt: 300 }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "b", createdAt: 200 }));
+
+    const ordered = selectRecentSwitcherSessions(useChatStore.getState());
+    expect(ordered.map((s) => s.id)).toEqual([]);
   });
 
   it("excludes hidden and draft chats from the switcher", () => {
     useChatStore.getState().actions.upsert(baseRecord({ id: "visible", createdAt: 300 }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "hidden", createdAt: 200, hidden: true }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "draft", createdAt: 100, draft: true }));
+
+    useChatStore.getState().actions.setCurrent("visible");
 
     const ordered = selectRecentSwitcherSessions(useChatStore.getState());
     expect(ordered.map((s) => s.id)).toEqual(["visible"]);
@@ -305,6 +314,8 @@ describe("chat-store: recent switcher ordering", () => {
     useChatStore.getState().actions.upsert(
       baseRecord({ id: "pipe-watch", kind: "pipe-watch", createdAt: 100, lastViewedAt: 400 })
     );
+
+    useChatStore.getState().actions.setCurrent("visible");
 
     const ordered = selectRecentSwitcherSessions(useChatStore.getState());
     expect(ordered.map((s) => s.id)).toEqual(["visible"]);

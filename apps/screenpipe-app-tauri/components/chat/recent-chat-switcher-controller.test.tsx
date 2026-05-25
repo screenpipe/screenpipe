@@ -176,7 +176,24 @@ describe("RecentChatSwitcherController", () => {
     render(<RecentChatSwitcherController onActivateConversation={onActivateConversation} />);
 
     fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
-    expect(screen.getByText("Recently viewed")).toBeInTheDocument();
+    expect(screen.queryByText("Recently viewed")).not.toBeInTheDocument();
     expect(screen.getByText("No recently viewed chats")).toBeInTheDocument();
+  });
+
+  it("opens even when only one session exists (and does not re-activate current on release)", async () => {
+    seed({ id: "chat-a", lastViewedAt: 200, createdAt: 200, updatedAt: 200 });
+    useChatStore.setState({ currentId: "chat-a" });
+    const onActivateConversation = vi.fn(async () => {});
+
+    render(<RecentChatSwitcherController onActivateConversation={onActivateConversation} />);
+
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    expect(screen.getByText("Recently viewed")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.keyUp(window, { key: "Control" });
+    });
+
+    expect(onActivateConversation).not.toHaveBeenCalled();
   });
 });
