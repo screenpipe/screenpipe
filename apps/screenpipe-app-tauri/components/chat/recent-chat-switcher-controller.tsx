@@ -131,11 +131,13 @@ export function RecentChatSwitcherController({
   }, [closeSwitcher, commitConversationById, moveSelection]);
 
   useEffect(() => {
+    const currentWindow = getCurrentWindow();
     const targetWindow: ChatTargetWindow =
-      getCurrentWindow().label === "chat" ? "chat" : "home";
+      currentWindow.label === "chat" ? "chat" : "home";
     const unlisten = listen<RecentChatSearchHandoffPayload>(
       RECENT_CHAT_SEARCH_HANDOFF_EVENT,
-      (event) => {
+      async (event) => {
+        if (targetWindow === "chat" && !(await currentWindow.isVisible())) return;
         if (event.payload?.targetWindow !== targetWindow) return;
         moveSelection(event.payload.direction);
       },
