@@ -8,7 +8,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 import { Toaster } from "@/components/ui/toaster";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
@@ -43,15 +43,9 @@ const createDebouncer = (wait: number) => {
   };
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+function RecentChatSwitcherMount() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const isOverlay = pathname === "/shortcut-reminder";
-  const isSearch = pathname === "/search";
   const isRecentChatSwitcherEnabled = isChatFocusedRecentSwitcherRoute(
     pathname,
     searchParams.get("section"),
@@ -67,6 +61,26 @@ export default function RootLayout({
     }
     markSearchOpenedFromChatSurface(pathname === "/chat" ? "chat" : "home");
   }, [isRecentChatSwitcherEnabled, pathname]);
+
+  if (!isRecentChatSwitcherEnabled) return null;
+
+  return (
+    <RecentChatSwitcherController
+      onActivateConversation={(id) => {
+        void openChatConversationInCurrentChatSurface(id);
+      }}
+    />
+  );
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const isOverlay = pathname === "/shortcut-reminder";
+  const isSearch = pathname === "/search";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -339,13 +353,9 @@ export default function RootLayout({
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
-          {isRecentChatSwitcherEnabled && (
-            <RecentChatSwitcherController
-              onActivateConversation={(id) => {
-                void openChatConversationInCurrentChatSurface(id);
-              }}
-            />
-          )}
+          <Suspense fallback={null}>
+            <RecentChatSwitcherMount />
+          </Suspense>
           {/* TODO: vault lock UI disabled — CLI-only for now */}
           {/* {!isOverlay && <VaultLockDialog />} */}
           {children}
