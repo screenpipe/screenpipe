@@ -11,23 +11,35 @@ export async function downloadFile(url, destination, { retries = 5, timeoutMs = 
 
 	for (let attempt = 1; attempt <= retries; attempt++) {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		let timer;
 
 		try {
 			console.log(`downloading ${url} -> ${destination} (${attempt}/${retries})`);
-			const response = await fetch(url, {
-				redirect: 'follow',
-				signal: controller.signal,
-				headers: {
-					'user-agent': 'screenpipe-build',
-				},
+			const timeoutPromise = new Promise((_, reject) => {
+				timer = setTimeout(() => {
+					controller.abort();
+					reject(new Error(`download timed out after ${timeoutMs}ms`));
+				}, timeoutMs);
 			});
 
-			if (!response.ok) {
-				throw new Error(`download failed with HTTP ${response.status} ${response.statusText}`);
-			}
+			await Promise.race([
+				(async () => {
+					const response = await fetch(url, {
+						redirect: 'follow',
+						signal: controller.signal,
+						headers: {
+							'user-agent': 'screenpipe-build',
+						},
+					});
 
-			await Bun.write(destination, response);
+					if (!response.ok) {
+						throw new Error(`download failed with HTTP ${response.status} ${response.statusText}`);
+					}
+
+					await Bun.write(destination, response);
+				})(),
+				timeoutPromise,
+			]);
 			return;
 		} catch (error) {
 			lastError = error;
@@ -36,7 +48,7 @@ export async function downloadFile(url, destination, { retries = 5, timeoutMs = 
 				await new Promise((resolve) => setTimeout(resolve, Math.min(30000, 2000 * attempt)));
 			}
 		} finally {
-			clearTimeout(timeout);
+			clearTimeout(timer);
 		}
 	}
 
