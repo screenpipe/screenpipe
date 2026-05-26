@@ -238,7 +238,7 @@ async function copyBunBinary() {
 			const tmpZip = path.join(cwd, `bun-darwin-${label}.zip`);
 			const tmpDir = path.join(cwd, `bun-darwin-${label}-tmp`);
 			try {
-				await downloadFile(url, tmpZip, { retries: 10 });
+				await downloadFile(url, tmpZip, { retries: 10, timeoutMs: 120000 });
 				await $`unzip -o ${tmpZip} -d ${tmpDir}`;
 				// The zip contains a folder like bun-darwin-aarch64/bun or bun-darwin-x64/bun
 				const entries = await fs.readdir(tmpDir);
