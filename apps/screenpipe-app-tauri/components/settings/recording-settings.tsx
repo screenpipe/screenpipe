@@ -1736,6 +1736,8 @@ export function RecordingSettings() {
     }
   }, []);
 
+  const { toast } = useToast();
+
   const writeAudioExclusions = useCallback(
     async (next: string[]) => {
       const prev = audioExclusions;
@@ -1776,7 +1778,6 @@ export function RecordingSettings() {
     [runningApps]
   );
 
-  const { toast } = useToast();
   const [isUpdating, setIsUpdating] = useState(false);
   const { health } = useHealthCheck();
   const isDisabled = health?.status_code === 500;
