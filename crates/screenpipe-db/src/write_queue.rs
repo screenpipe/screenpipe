@@ -846,13 +846,21 @@ async fn execute_single_write(
                 )"#,
             )
             .bind(timestamp)
-            .bind(snapshot_path.as_str())
+            .bind(if snapshot_path.is_empty() {
+                None
+            } else {
+                Some(snapshot_path.as_str())
+            })
             .bind(browser_url.as_deref())
             .bind(app_name.as_deref())
             .bind(window_name.as_deref())
             .bind(focused)
             .bind(device_name.as_str())
-            .bind(snapshot_path.as_str())
+            .bind(if snapshot_path.is_empty() {
+                None
+            } else {
+                Some(snapshot_path.as_str())
+            })
             .bind(capture_trigger.as_deref())
             .bind(accessibility_text.as_deref())
             .bind(text_source.as_deref())

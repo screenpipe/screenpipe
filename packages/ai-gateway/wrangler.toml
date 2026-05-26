@@ -8,7 +8,8 @@ upload_source_maps = true
 
 # Custom domain
 routes = [
-  { pattern = "api.screenpi.pe/*", zone_name = "screenpi.pe" }
+  { pattern = "api.screenpi.pe/*", zone_name = "screenpi.pe" },
+  { pattern = "api.screenpipe.com", zone_name = "screenpipe.com", custom_domain = true }
 ]
 
 # tail_consumers = [{service = "ai-gateway-tail"}]

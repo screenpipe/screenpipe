@@ -38,7 +38,10 @@ static DEF: IntegrationDef = IntegrationDef {
         Endpoints (all require a connected Gmail account): \
         GET /connections/gmail/messages?q=<search>&maxResults=<n>&pageToken=<token> — list/search messages. \
         GET /connections/gmail/messages/{id} — read a full message (headers + body). \
-        POST /connections/gmail/send {\"to\":\"addr\",\"subject\":\"…\",\"body\":\"…\"} — send an email.",
+        POST /connections/gmail/send {\"to\":\"addr\",\"subject\":\"…\",\"body\":\"…\"} — send an email. \
+        Multi-account: when more than one Gmail account is connected you must pick which one. \
+        Pass `instance=<email>` as a query param on GET endpoints, or include `\"instance\": \"<email>\"` \
+        in the JSON body on POST /send. List connected accounts at GET /connections/gmail/instances.",
     fields: &[],
 };
 

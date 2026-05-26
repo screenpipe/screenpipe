@@ -332,7 +332,7 @@ describe("extractUrlsFromText", () => {
 		const urls = extractUrlsFromText(
 			"https://github.com/screenpipe/screenpipeDemo: https://screenpi.pe/demo"
 		);
-		// The first URL will grab "https://github.com/mediar-ai/screenpipeDemo:" 
+		// The first URL will grab "https://github.com/screenpipe/screenpipeDemo:"
 		// but trailing punctuation strip removes the colon
 		// The second URL is clean
 		expect(urls.length).toBe(2);

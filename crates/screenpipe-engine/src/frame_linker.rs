@@ -77,6 +77,31 @@ pub struct LinkUpdate {
     pub frame_id: i64,
 }
 
+/// Why a triggering event will never get a frame. Reported by the
+/// capture loop at the moment it decides to drop a trigger, so the
+/// linker can release the pending entry immediately instead of waiting
+/// 60s for TTL and emitting a misleading "frame never arrived" WARN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DropReason {
+    /// The focused window was DRM-protected at trigger time.
+    Drm,
+    /// The capture loop was in a pause state (locked screen, power
+    /// saver, schedule pause). Triggers received while paused are
+    /// drained and reported with this reason.
+    Paused,
+    /// `broadcast::Receiver::recv` returned `Lagged(n)` — the ring
+    /// buffer overflowed and N messages were dropped before reaching
+    /// us. We don't know which correlation_ids; this reason is reported
+    /// with an empty list, purely for metrics visibility.
+    Lagged,
+    /// `do_capture` returned an error (SCK failure, monitor disconnect,
+    /// etc.). Triggers that drained alongside the failing capture have
+    /// no frame to point at.
+    CaptureError,
+    /// Any other deterministic skip not yet enumerated.
+    Other,
+}
+
 /// Configuration. Both knobs derive from existing recorder/capture
 /// timeouts; pick values that comfortably exceed the worst-case round
 /// trip from "trigger sent" → "frame captured + row flushed."

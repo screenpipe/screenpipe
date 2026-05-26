@@ -166,31 +166,31 @@ jobs:
         include:
           # GitHub-hosted macOS 26 runner for Apple Silicon + Apple Intelligence
           - platform: ${{ needs.check_commit.outputs.macos_arm_runner || 'macos-latest' }}
-            args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx"
+            args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml"
             target: aarch64-apple-darwin
-            tauri-args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx,official-build"
+            tauri-args: "--target aarch64-apple-darwin --features metal,parakeet-mlx,rfdetr-mlx,redact-onnx-coreml,official-build"
             os_type: "macos"
           - platform: "macos-26"
-            args: "--target x86_64-apple-darwin --features metal"
+            args: "--target x86_64-apple-darwin --features metal,redact-onnx-coreml"
             target: x86_64-apple-darwin
-            tauri-args: "--target x86_64-apple-darwin --features metal,official-build"
+            tauri-args: "--target x86_64-apple-darwin --features metal,redact-onnx-coreml,official-build"
             os_type: "macos"
           - platform: ${{ needs.check_commit.outputs.windows_runner || 'windows-2022' }}
             args: "--target x86_64-pc-windows-msvc"
             pre-build-args: ""
-            tauri-args: "--target x86_64-pc-windows-msvc --features official-build,directml"
+            tauri-args: "--target x86_64-pc-windows-msvc --features official-build,directml,redact-onnx-directml"
             target: x86_64-pc-windows-msvc
             os_type: "windows"
           - platform: windows-11-arm
             args: "--target aarch64-pc-windows-msvc"
             pre-build-args: ""
-            tauri-args: "--target aarch64-pc-windows-msvc --features official-build,directml"
+            tauri-args: "--target aarch64-pc-windows-msvc --features official-build,directml,redact-onnx-directml"
             target: aarch64-pc-windows-msvc
             os_type: "windows"
           - platform: "ubuntu-24.04"
-            args: "--target x86_64-unknown-linux-gnu"
+            args: "--target x86_64-unknown-linux-gnu --features redact-onnx-cpu"
             target: x86_64-unknown-linux-gnu
-            tauri-args: "--target x86_64-unknown-linux-gnu --features official-build"
+            tauri-args: "--target x86_64-unknown-linux-gnu --features official-build,redact-onnx-cpu"
             os_type: "linux"
 
     runs-on: ${{ matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}

@@ -577,9 +577,23 @@ pub async fn start_ui_recording(
                         matches!(db_event.event_type, screenpipe_db::UiEventType::Scroll);
                     let trigger_kind =
                         capture_trigger_kind(&db_event, &ignored_patterns, trigger_gates);
+                    // A correlation id is only useful if there's somewhere
+                    // for both halves to land: a live capture-loop receiver
+                    // to produce the frame AND a linker to pair them. If
+                    // either side is missing (no monitors / linker stopped),
+                    // minting an id just parks an entry in the linker for
+                    // 60s before TTL-evicting it. Check `receiver_count`
+                    // explicitly so the recorder doesn't bother — there's
+                    // an inherent send/recv race but it shrinks the window
+                    // from "always" to "near miss."
+                    let has_trigger_receivers = capture_trigger_tx
+                        .as_ref()
+                        .map(|tx| tx.receiver_count() > 0)
+                        .unwrap_or(false);
                     let want_corr_id = (trigger_kind.is_some() || is_scroll)
-                        && (capture_trigger_tx.is_some() || linker_tx.is_some());
-                    let correlation_id = if want_corr_id {
+                        && has_trigger_receivers
+                        && linker_tx.is_some();
+                    let mut correlation_id = if want_corr_id {
                         Some(next_correlation_id())
                     } else {
                         None
@@ -593,8 +607,16 @@ pub async fn start_ui_recording(
                         (&capture_trigger_tx, trigger_kind, correlation_id)
                     {
                         use crate::event_driven_capture::CaptureTriggerMsg;
-                        let _ =
-                            trigger_tx.send(CaptureTriggerMsg::with_correlation(trigger, corr_id));
+                        // If `send` returns Err the broadcast lost its
+                        // receivers between the count check above and now —
+                        // blank the corr_id so the batch flush doesn't
+                        // notify the linker about a doomed event.
+                        if trigger_tx
+                            .send(CaptureTriggerMsg::with_correlation(trigger, corr_id))
+                            .is_err()
+                        {
+                            correlation_id = None;
+                        }
                     }
 
                     if record_input_events {
@@ -686,14 +708,26 @@ pub async fn start_ui_recording(
 
             // Did a scroll burst just settle? Emit ScrollStop with the
             // tail corr id so the linker can populate frame_id on the
-            // last Scroll row in the burst.
+            // last Scroll row in the burst. If the broadcast has no
+            // receivers the trigger evaporates, so notify the linker to
+            // drop that corr_id immediately rather than waiting on TTL.
             if let Some(corr_id) = scroll_burst.poll_burst_end() {
                 if let Some(ref trigger_tx) = capture_trigger_tx {
                     use crate::event_driven_capture::{CaptureTrigger, CaptureTriggerMsg};
-                    let _ = trigger_tx.send(CaptureTriggerMsg::with_correlation(
-                        CaptureTrigger::ScrollStop,
-                        corr_id,
-                    ));
+                    let send_failed = trigger_tx
+                        .send(CaptureTriggerMsg::with_correlation(
+                            CaptureTrigger::ScrollStop,
+                            corr_id,
+                        ))
+                        .is_err();
+                    if send_failed {
+                        if let Some(ref linker) = linker_tx {
+                            let _ = linker.try_send(LinkerMessage::TriggerDropped {
+                                correlation_ids: vec![corr_id],
+                                reason: crate::frame_linker::DropReason::Other,
+                            });
+                        }
+                    }
                 }
             }
         }

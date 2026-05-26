@@ -1426,145 +1426,9 @@ export function PipesSection() {
 
   return (
     <div className="space-y-4" data-testid="section-pipes">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {/* Device selector dropdown — always visible */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs">
-                  <Monitor className="h-3 w-3" />
-                  {selectedDevice
-                    ? devices.find((d) => d.address === selectedDevice)?.label || selectedDevice
-                    : "this device"}
-                  <ChevronDown className="h-3 w-3 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={() => { setSelectedDevice(null); setLoading(true); }}
-                  className={cn("gap-2", !selectedDevice && "font-medium")}
-                >
-                  <Monitor className="h-3.5 w-3.5" />
-                  <span className="flex-1">this device</span>
-                  <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />
-                  {!selectedDevice && <Check className="h-3.5 w-3.5 ml-1" />}
-                </DropdownMenuItem>
-                {devices.map((d) => (
-                  <DropdownMenuItem
-                    key={d.address}
-                    onClick={() => { setSelectedDevice(d.address); if (d.status !== "offline") setLoading(true); }}
-                    className={cn("gap-2", selectedDevice === d.address && "font-medium")}
-                  >
-                    <Monitor className="h-3.5 w-3.5" />
-                    <span className="flex-1">{d.label}</span>
-                    <span className={cn(
-                      "h-2 w-2 rounded-full shrink-0",
-                      d.status === "online" ? "bg-green-500" : d.status === "loading" ? "bg-yellow-500 animate-pulse" : "bg-muted-foreground/40"
-                    )} />
-                    {selectedDevice === d.address && <Check className="h-3.5 w-3.5 ml-1" />}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    if (discovering) return;
-                    setDiscoverResult(null);
-                    if (discoverResultTimer.current) clearTimeout(discoverResultTimer.current);
-                    discoverDevices().then((count) => {
-                      setDiscoverResult(count);
-                      discoverResultTimer.current = setTimeout(() => setDiscoverResult(null), 4_000);
-                    });
-                  }}
-                  disabled={discovering}
-                >
-                  <ScanSearch className={cn("h-3.5 w-3.5 mr-2", discovering && "animate-spin")} />
-                  {discovering
-                    ? "scanning..."
-                    : discoverResult === null
-                    ? "discover devices"
-                    : discoverResult === 0
-                    ? "no new devices found"
-                    : `found ${discoverResult} device${discoverResult > 1 ? "s" : ""}`}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="outline" size="icon" className={`h-7 w-7 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
-              if (refreshing) return;
-              setRefreshing(true);
-              await Promise.all([
-                fetchPipes(),
-                new Promise((r) => setTimeout(r, 2000)),
-              ]);
-              setRefreshing(false);
-            }}>
-              {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {pipeTypeFilter === "scheduled"
-            ? "scheduled agents that run on your screen data"
-            : pipeTypeFilter === "triggered"
-            ? "pipes triggered by events like meetings or other pipes"
-            : "pipes you trigger manually"}
-          {" · "}
-          <a
-            href="https://docs.screenpi.pe/pipes"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            docs
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </p>
-      </div>
-
-      {/* Scheduled / Triggered / Manual sub-tabs */}
-      <div className="flex items-center gap-4 border-b border-border">
-        {(["scheduled", "triggered", "manual"] as const).map((tab) => {
-          const count = tabCounts[tab];
-          return (
-            <button
-              key={tab}
-              onClick={() => setPipeTypeFilter(tab)}
-              className={cn(
-                "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px capitalize",
-                pipeTypeFilter === tab
-                  ? "border-foreground text-foreground font-medium"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {tab} ({count})
-            </button>
-          );
-        })}
-        {/* Favorites filter — pushed right; composes with the type tabs. */}
-        <button
-          onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-          className={cn(
-            "pb-2 text-sm transition-colors duration-150 border-b-2 -mb-px inline-flex items-center gap-1 ml-auto",
-            pipeFavorites.showOnly
-              ? "border-foreground text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-          title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
-        >
-          <Star
-            className={cn(
-              "h-3.5 w-3.5",
-              pipeFavorites.showOnly && "fill-foreground"
-            )}
-          />
-          favorites ({pipeFavorites.favorites.size})
-        </button>
-      </div>
-
-      {/* Search + filter chips */}
-      <div className="space-y-2">
-        <div className="relative">
+      {/* Single toolbar: search + type filter + favorites + refresh */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder="search pipes..."
@@ -1575,13 +1439,59 @@ export function PipesSection() {
             autoCorrect="off"
           />
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
+              {pipeTypeFilter} ({tabCounts[pipeTypeFilter]})
+              <ChevronDown className="h-3 w-3 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {(["scheduled", "triggered", "manual"] as const).map((tab) => (
+              <DropdownMenuItem
+                key={tab}
+                onClick={() => setPipeTypeFilter(tab)}
+                className={cn("capitalize gap-2", pipeTypeFilter === tab && "font-medium")}
+              >
+                <span className="flex-1">{tab}</span>
+                <span className="text-muted-foreground text-xs">{tabCounts[tab]}</span>
+                {pipeTypeFilter === tab && <Check className="h-3.5 w-3.5 ml-1" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
+          title={pipeFavorites.showOnly ? "show all pipes" : "show only starred pipes"}
+        >
+          <Star
+            className={cn(
+              "h-3.5 w-3.5",
+              pipeFavorites.showOnly && "fill-foreground"
+            )}
+          />
+        </Button>
+        <Button variant="outline" size="icon" className={`h-8 w-8 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
+          if (refreshing) return;
+          setRefreshing(true);
+          await Promise.all([
+            fetchPipes(),
+            new Promise((r) => setTimeout(r, 2000)),
+          ]);
+          setRefreshing(false);
+        }}>
+          {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        </Button>
       </div>
 
-      {/* All | Personal | Shared with team tabs */}
-      {team.team && (
+      {/* Team filter — only when there are actually team-shared pipes */}
+      {team.team && sharedPipeNames.size > 0 && (
         <div className="flex items-center gap-4 border-b border-border">
           {(["all", "personal", "team"] as const).map((tab) => {
-            const label = tab === "all" ? "All" : tab === "personal" ? "Personal" : "Shared with team";
+            const label = tab === "all" ? "all" : tab === "personal" ? "personal" : "shared with team";
             const count = tab === "all" ? pipes.length : tab === "team"
               ? pipes.filter((p) => sharedPipeNames.has(p.config.name)).length
               : pipes.filter((p) => !sharedPipeNames.has(p.config.name)).length;

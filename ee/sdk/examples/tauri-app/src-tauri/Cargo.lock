@@ -288,7 +288,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -2066,7 +2066,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -5963,7 +5963,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.3",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6840,7 +6840,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6851,7 +6851,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6884,7 +6884,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6922,7 +6922,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6947,7 +6947,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6983,7 +6983,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.343"
+version = "0.3.344"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7042,6 +7042,7 @@ dependencies = [
  "screenpipe-recorder",
  "serde",
  "tauri",
+ "tauri-plugin",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -8254,6 +8255,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin"
+version = "2.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e126abc9e84e35cdfd01596140a73a1850cdb0df0a23acf0185776c30b469a6e"
+dependencies = [
+ "anyhow",
+ "glob",
+ "plist",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tauri-utils",
+ "walkdir",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8306,9 +8323,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-utils"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d57200389a2f82b4b0a40ae29ca19b6978116e8f4d4e974c3234ce40c0ffbdec"
+checksum = "092379df9a707631978e6c56b1bc2401d387f01e2d4a3c123360d167bbb9aa95"
 dependencies = [
  "anyhow",
  "brotli",

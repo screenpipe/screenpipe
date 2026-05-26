@@ -63,6 +63,13 @@ impl ServerCore {
         owned_browser: Option<
             std::sync::Arc<screenpipe_connect::connections::browser::OwnedBrowser>,
         >,
+        // App-scoped cloud-token handle. Outlives Server (which is recreated
+        // on every recording restart) so a token pushed via `set_cloud_token`
+        // survives capture toggles and is automatically picked up by the next
+        // Server + PiExecutor pair. Pre-existing per-Server cloud_token is
+        // replaced with this Arc so all three observers (cloud_proxy.rs,
+        // PiExecutor, the Tauri command writer) share one storage cell.
+        cloud_token_handle: std::sync::Arc<arc_swap::ArcSwap<Option<String>>>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
@@ -313,10 +320,24 @@ impl ServerCore {
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
         // can't see this token; the local proxy signs the upstream request.
+        //
+        // We replace the Server's per-instance cloud_token cell with the
+        // app-scoped Arc so writes from `set_cloud_token` (Tauri command,
+        // pushed on every sign-in/out from the webview) are visible to both
+        // cloud_proxy.rs AND the PiExecutor that shares this same Arc.
+        // Without this, a token captured at engine boot was permanent until
+        // restart — paying users who signed in after the sidecar started got
+        // anonymous-tier 403s on every Sonnet/Opus pipe.
+        server.cloud_token = cloud_token_handle.clone();
+        // Seed the shared cell from persisted settings, but ONLY when empty
+        // — if `set_cloud_token` has already pushed a fresher value (e.g. the
+        // user signed in between sidecar boots), don't clobber it with the
+        // stale `config.user_id` snapshot.
         if let Some(ref t) = config.user_id {
             if !t.is_empty() {
-                if let Ok(mut g) = server.cloud_token.try_write() {
-                    *g = Some(t.clone());
+                let existing = cloud_token_handle.load();
+                if existing.is_none() {
+                    cloud_token_handle.store(std::sync::Arc::new(Some(t.clone())));
                 }
             }
         }
@@ -406,10 +427,17 @@ impl ServerCore {
         let pipes_dir = config.data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
-        let user_token = config.user_id.clone();
+        // Share the cloud-token Arc between Server (for cloud_proxy.rs) and
+        // PiExecutor (for pi-agent provider auth). With one shared Arc the
+        // `set_cloud_token` Tauri command updates both readers in one shot,
+        // so a fresh sign-in or sign-out takes effect on the very next pipe
+        // run without restarting the engine.
+        let cloud_token_handle = server.cloud_token.clone();
         let pi_executor = Arc::new(
-            screenpipe_core::agents::pi::PiExecutor::new(user_token)
-                .with_api_auth_key(config.api_auth_key.clone()),
+            screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
+                cloud_token_handle.clone(),
+            )
+            .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<
             String,
@@ -523,6 +551,7 @@ impl ServerCore {
         let redact_shutdown = Arc::new(Notify::new());
 
         if config.async_pii_redaction {
+            use screenpipe_redact::adapters::onnx::{OnnxConfig, OnnxRedactor};
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
             use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
@@ -568,27 +597,51 @@ impl ServerCore {
                 let pool = db.pool.clone();
                 let shutdown = redact_shutdown.clone();
                 tokio::spawn(async move {
+                    // Prefer v45 phase 3 ONNX (~278 MB INT8, HIPAA 90.2%,
+                    // sub-10 ms p50, gets CoreML on macOS / DirectML on
+                    // Windows / CPU on Linux via the redact-onnx-* CI
+                    // feature). Fall back to the legacy OPF v6 candle
+                    // adapter (~2.8 GB) if the ONNX feature isn't
+                    // compiled in or the HF download fails.
                     info!(
-                        "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
-                         ~/.screenpipe/models/opf-v6/)"
+                        "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
+                         cached at ~/.screenpipe/models/v45_phase3_onnx/)"
                     );
-                    let pipeline = match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                    let onnx_result =
+                        OnnxRedactor::load_or_download(OnnxConfig::default()).await;
+                    let pipeline = match onnx_result {
                         Ok(adapter) => {
                             info!(
                                 "starting async text-PII reconciliation worker (backend=local, \
-                                 opf-rs)"
+                                 v45_phase3_onnx)"
                             );
                             let ai: Arc<dyn Redactor> = Arc::new(adapter);
                             Pipeline::regex_then_ai(ai, PipelineConfig::default())
                         }
-                        Err(e) => {
+                        Err(onnx_err) => {
                             warn!(
-                                "couldn't load local OPF redactor ({e}); running text-PII \
-                                 worker in regex-only mode. Switch backend to 'tinfoil' in \
-                                 Settings → Privacy → AI PII removal to use the cloud enclave \
-                                 instead."
+                                "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling \
+                                 back to OPF v6 candle"
                             );
-                            Pipeline::regex_only()
+                            match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                                Ok(adapter) => {
+                                    info!(
+                                        "starting async text-PII reconciliation worker \
+                                         (backend=local, opf-rs fallback)"
+                                    );
+                                    let ai: Arc<dyn Redactor> = Arc::new(adapter);
+                                    Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "couldn't load OPF redactor either ({e}); running \
+                                         text-PII worker in regex-only mode. Switch backend \
+                                         to 'tinfoil' in Settings → Privacy → AI PII removal \
+                                         to use the cloud enclave instead."
+                                    );
+                                    Pipeline::regex_only()
+                                }
+                            }
                         }
                     };
                     let pipeline_arc = Arc::new(pipeline) as Arc<dyn Redactor>;

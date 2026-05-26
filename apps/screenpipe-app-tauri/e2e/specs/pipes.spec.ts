@@ -234,12 +234,30 @@ describe('Pipes: discover → install → play', function () {
       );
     }
 
+    // Pick a no-connection pipe that ISN'T already installed. Step 1's
+    // fetch interceptor only catches `window.fetch` and the install path
+    // uses `localFetch` (a wrapped client) — so Step 1 often DOES install
+    // its target pipe (commonly digital-clone). Plus the onboarding
+    // bundle in v2.4.276+ pre-installs digital-clone/personal-crm for
+    // some users. Asking the local /pipes endpoint for the current
+    // installed set is the authoritative way to avoid those.
     const slug: string | null = await browser.executeAsync((done: (v: string | null) => void) => {
-      fetch('http://localhost:3030/pipes/store?sort=popular')
-        .then((r) => r.json())
-        .then((json) => {
-          const list: any[] = Array.isArray(json) ? json : (json.data || json.pipes || []);
+      void Promise.all([
+        fetch('http://localhost:3030/pipes/store?sort=popular').then((r) => r.json()),
+        fetch('http://localhost:3030/pipes/list').then((r) => r.ok ? r.json() : []).catch(() => []),
+      ])
+        .then(([storeJson, installedJson]) => {
+          const list: any[] = Array.isArray(storeJson) ? storeJson : (storeJson.data || storeJson.pipes || []);
+          const installedList: any[] = Array.isArray(installedJson)
+            ? installedJson
+            : (installedJson.data || installedJson.pipes || []);
+          const installed = new Set<string>(
+            installedList
+              .map((p: any) => p?.name || p?.id || p?.slug)
+              .filter(Boolean) as string[]
+          );
           const pipe = list.find((p: any) => {
+            if (installed.has(p.slug) || installed.has(p.name)) return false;
             const perms = p.permissions as any;
             if (!perms) return true;
             if (perms.allow_connections === true) return false;
@@ -252,7 +270,7 @@ describe('Pipes: discover → install → play', function () {
     });
 
     // Hard fail — no fallback to a random pipe
-    if (!slug) throw new Error('No no-connection pipe found in store; cannot proceed');
+    if (!slug) throw new Error('No no-connection, not-already-installed pipe found in store; cannot proceed');
     console.log(`[pipes-spec] installing: "${slug}"`);
     installedPipeName = slug;
 
@@ -264,21 +282,35 @@ describe('Pipes: discover → install → play', function () {
     const installBtn = await card.$('[data-testid="pipe-install-btn"]');
     await installBtn.waitForExist({ timeout: 5_000 });
 
-    const btnText = await installBtn.getText();
-    if (btnText.trim() !== 'GET') {
-      throw new Error(`Expected GET button but found "${btnText}" for pipe "${slug}" — already installed?`);
+    // Defensive: if our filter raced with an install from Step 1/2, treat
+    // the pipe as installed and skip the click+wait path — the rest of
+    // the suite still has a populated installedPipeName to work with.
+    const btnText = (await installBtn.getText()).trim();
+    if (btnText !== 'GET') {
+      console.log(`[pipes-spec] "${slug}" already installed (button=${btnText}); skipping install click`);
+    } else {
+      await installBtn.click();
+
+      // After GET click the app auto-switches to My Pipes (onInstalled
+      // callback). Wait for an unambiguous marker: the My Pipes section
+      // root or its sub-tab strip. Body-text matching on "scheduled" /
+      // "manual pipe" was fragile to the v2.4.280 toolbar refactor.
+      await browser.waitUntil(
+        async () => {
+          const section = await $('[data-testid="section-pipes"]');
+          if (!(await section.isExisting())) return false;
+          const text = (await browser.execute(() => {
+            const root = document.querySelector('[data-testid="section-pipes"]');
+            return root ? (root as HTMLElement).innerText : '';
+          })) as string;
+          // The PipesSection toolbar shows "scheduled agents that run on
+          // your screen data" (subtitle copy in pipes-section.tsx:1507)
+          // when the Scheduled sub-tab is active (default after install).
+          return text.toLowerCase().includes('scheduled');
+        },
+        { timeout: 30_000, timeoutMsg: 'App did not switch to My Pipes section after installation' }
+      );
     }
-
-    await installBtn.click();
-
-    // After GET click the app auto-switches to My Pipes (onInstalled callback)
-    await browser.waitUntil(
-      async () => {
-        const text = (await browser.execute(() => document.body.innerText || '')) as string;
-        return text.includes('scheduled') || text.includes('manual pipe');
-      },
-      { timeout: 30_000, timeoutMsg: 'App did not switch to My Pipes tab after installation' }
-    );
 
     const filepath = await saveScreenshot('pipes-my-pipes-after-install');
     expect(existsSync(filepath)).toBe(true);
@@ -287,29 +319,49 @@ describe('Pipes: discover → install → play', function () {
   // ─── Step 4: confirm pipe row is visible in My Pipes ─────────────────────
 
   it('shows the installed pipe in My Pipes list', async () => {
-    const found = await browser.execute((name: string) => {
-      return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-        .some((b) => b.textContent?.trim() === name);
-    }, installedPipeName);
+    const isOnPage = async (): Promise<boolean> => {
+      return (await browser.execute((name: string) => {
+        return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+          .some((b) => b.textContent?.trim() === name);
+      }, installedPipeName)) as boolean;
+    };
 
-    if (!found) {
-      // Try manual sub-tab
-      const manualTab = await $('[data-testid="tab-my-pipes"] ~ * button*=manual, button*=manual');
-      if (await manualTab.isExisting()) {
-        await manualTab.click();
-        await browser.pause(500);
+    if (!(await isOnPage())) {
+      // Default sub-tab is "scheduled"; the installed pipe may be classified
+      // as manual or triggered. Click the Manual sub-tab if the row isn't
+      // visible. The sub-tabs (pipes-section.tsx:1525-1543) don't carry a
+      // testid, so we walk visible buttons inside the pipes section and
+      // match the literal "manual" label. Done in one execute() to avoid
+      // wdio's text-match selector syntax (`button*=manual`), which is not
+      // valid CSS and chokes when concatenated into a comma-list.
+      const subTabs: ('manual' | 'triggered')[] = ['manual', 'triggered'];
+      for (const label of subTabs) {
+        const clicked = (await browser.execute((labelArg: string) => {
+          const root = document.querySelector('[data-testid="section-pipes"]');
+          if (!root) return false;
+          const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
+          const tab = buttons.find((b) => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            // sub-tabs render as "manual (3)" / "triggered (0)" etc.
+            return txt === labelArg || txt.startsWith(`${labelArg} (`);
+          });
+          if (tab) {
+            tab.click();
+            return true;
+          }
+          return false;
+        }, label)) as boolean;
+        if (clicked) {
+          await browser.pause(500);
+          if (await isOnPage()) break;
+        }
       }
     }
 
-    await browser.waitUntil(
-      async () => {
-        return await browser.execute((name: string) => {
-          return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-            .some((b) => b.textContent?.trim() === name);
-        }, installedPipeName) as boolean;
-      },
-      { timeout: 8_000, timeoutMsg: `Pipe "${installedPipeName}" not found in My Pipes list` }
-    );
+    await browser.waitUntil(isOnPage, {
+      timeout: 8_000,
+      timeoutMsg: `Pipe "${installedPipeName}" not found in My Pipes list (checked scheduled, manual, triggered sub-tabs)`,
+    });
 
     const filepath = await saveScreenshot('pipes-listed');
     expect(existsSync(filepath)).toBe(true);
@@ -318,12 +370,27 @@ describe('Pipes: discover → install → play', function () {
   // ─── Step 5: hover the row to reveal play button, click it ───────────────
 
   it('plays the installed pipe', async () => {
+    // Walk visible buttons inside the pipes section and find the row by
+    // text content, then scroll it into view. wdio's `$('button=NAME')`
+    // text-match selector is recognised by its own parser but the
+    // generated DOM call uses CSS — when slugs contain characters that
+    // make the synthesized expression ambiguous (or when several
+    // sub-tabs are mounted at once), the lookup intermittently fails.
+    // In-page iteration is unambiguous.
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute((name: string) => {
+          const btn = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+            (b) => b.textContent?.trim() === name
+          );
+          if (!btn) return false;
+          btn.scrollIntoView({ block: 'center', inline: 'center' });
+          return true;
+        }, installedPipeName)) as boolean,
+      { timeout: 8_000, timeoutMsg: `Pipe name button "${installedPipeName}" not found` }
+    );
+    await browser.pause(400);
     const pipeNameBtn = await $(`button=${installedPipeName}`);
-    await pipeNameBtn.waitForExist({ timeout: 8_000 });
-
-    await pipeNameBtn.scrollIntoView({ block: 'center', inline: 'center' });
-    await browser.pause(200);
-
     // Hover to trigger group-hover CSS → opacity-0 → opacity-100 on play button
     await pipeNameBtn.moveTo();
     await browser.pause(400);

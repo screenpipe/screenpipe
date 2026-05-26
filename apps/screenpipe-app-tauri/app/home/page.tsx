@@ -54,7 +54,11 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
-import { formatShortcutDisplay } from "@/lib/chat-utils";
+import {
+  formatShortcutDisplay,
+  type ChatLoadConversationPayload,
+  shouldActivateHomeSectionForChatLoadConversation,
+} from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -308,8 +312,9 @@ function HomeContent() {
     let cancelled = false;
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
-      const u = await listen("chat-load-conversation", () => {
+      const u = await listen<ChatLoadConversationPayload>("chat-load-conversation", (event) => {
         if (cancelled) return;
+        if (!shouldActivateHomeSectionForChatLoadConversation(event.payload)) return;
         setActiveSection("home");
       });
       unlistenFn = u;
@@ -398,6 +403,23 @@ function HomeContent() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [toggleSidebar]);
+
+  // Cmd+N / Ctrl+N to start a new chat (matches the "New chat" sidebar button)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setActiveSection("home");
+        startNewChat();
+        // Focus the chat input. When standalone-chat is already mounted (home→home)
+        // it catches this; when mounting fresh from another section, its on-mount
+        // auto-focus handles it instead.
+        void emit("chat-focus-input", {});
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setActiveSection, startNewChat]);
   const overlayData = useOverlayData({
     includeDeviceLevels: false,
     includeOcrPulse: false,

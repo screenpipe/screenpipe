@@ -11,7 +11,18 @@ icon: "terminal"
 
 ## setup
 
-the easiest way is the built-in `/mcp add` slash command inside Copilot CLI:
+before setting up, make sure screenpipe is running on your machine:
+
+```bash
+npx screenpipe@latest record
+```
+
+check that it's running:
+```bash
+curl http://localhost:3030/health
+```
+
+the easiest way to connect is the built-in `/mcp add` slash command inside Copilot CLI:
 
 ```
 /mcp add
@@ -44,9 +55,11 @@ or edit `~/.copilot/mcp-config.json` directly:
 
 restart Copilot CLI after editing the config.
 
-## stdio vs http
+## stdio vs http — which should I use?
 
-use **stdio** (`type: "local"`). screenpipe runs on the same machine as Copilot CLI, so there's no network hop to add. the HTTP transport is only useful when the MCP client lives on a different machine — see [openclaw](/openclaw) for that pattern.
+**use stdio** (`type: "local"` in config). this is the standard for local MCP servers on the same machine. screenpipe runs locally on your machine, so stdio communication has no network overhead and is the intended pattern.
+
+HTTP transport is only for remote scenarios where your MCP client (Claude, Cursor, etc.) runs on a different machine than screenpipe — see [openclaw](/openclaw) for that pattern. **for Copilot CLI on the same machine, always choose stdio.**
 
 ## verify connection
 

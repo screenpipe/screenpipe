@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-screenpipe-stop"
+description = "Enables the screenpipe_stop command without any pre-configured scope."
+commands.allow = ["screenpipe_stop"]
+
+[[permission]]
+identifier = "deny-screenpipe-stop"
+description = "Denies the screenpipe_stop command without any pre-configured scope."
+commands.deny = ["screenpipe_stop"]

@@ -205,39 +205,31 @@ async function copyBunBinary() {
 		bunDest1 = path.join(cwd, 'bun-aarch64-apple-darwin');
 		bunDest2 = path.join(cwd, 'bun-x86_64-apple-darwin');
 
-		const releaseTarget = process.env.SCREENPIPE_RELEASE_TARGET;
-		if (releaseTarget) {
-			const bunDest = path.join(cwd, `bun-${releaseTarget}`);
-			if (await fs.exists(bunDest)) {
-				console.log(`bun binary already exists for ${releaseTarget}.`);
-				return;
-			}
-
-			const systemBun = await findOnPath('bun');
-			if (!systemBun) {
-				throw new Error(`expected bun on PATH for ${releaseTarget}, but command lookup failed`);
-			}
-
-			console.log(`using system bun binary for ${releaseTarget} tauri sidecar: ${systemBun}`);
-			await copyFile(systemBun, bunDest);
-			return;
-		}
-
-		if (await fs.exists(bunDest1) && await fs.exists(bunDest2)) {
-			console.log('bun binaries already exist for both macOS architectures.');
-			return;
-		}
-
-		// Download arch-specific bun binaries so both Intel and Apple Silicon Macs
-		// get a native binary (previously the build-machine's bun was copied to both
-		// paths, causing "Bad CPU type in executable" on the other architecture).
+		// Always download arch-specific bun binaries for macOS targets. We
+		// can't trust the host's bun (the x86_64 build runs on an arm64
+		// macos-26 runner, so copying systemBun bundled an arm64 binary into
+		// the Intel app — surfaced as Pi-install "Bad CPU type in executable
+		// (os error 86)" on Intel Macs).
 		const bunVersion = '1.3.10';
+		const releaseTarget = process.env.SCREENPIPE_RELEASE_TARGET;
+
 		const archMap = [
-			{ url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-aarch64.zip`, dest: bunDest1, label: 'aarch64' },
-			{ url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-x64.zip`, dest: bunDest2, label: 'x64' },
+			{ target: 'aarch64-apple-darwin', url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-aarch64.zip`, dest: bunDest1, label: 'aarch64' },
+			{ target: 'x86_64-apple-darwin',  url: `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-darwin-x64.zip`,     dest: bunDest2, label: 'x64' },
 		];
 
-		for (const { url, dest, label } of archMap) {
+		// In CI we set SCREENPIPE_RELEASE_TARGET per-matrix-entry and only need
+		// that one sidecar. Locally (no env), download both so either-arch dev
+		// builds work without re-running this script.
+		const wanted = releaseTarget
+			? archMap.filter((e) => e.target === releaseTarget)
+			: archMap;
+
+		if (wanted.length === 0) {
+			throw new Error(`unknown SCREENPIPE_RELEASE_TARGET for macOS: ${releaseTarget}`);
+		}
+
+		for (const { url, dest, label } of wanted) {
 			if (await fs.exists(dest)) {
 				console.log(`bun ${label} binary already exists, skipping download.`);
 				continue;

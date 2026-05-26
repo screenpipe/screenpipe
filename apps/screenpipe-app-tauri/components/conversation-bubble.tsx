@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Play, Pause, Mic, Speaker, Check as CheckIcon } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
-import { VideoComponent } from "@/components/rewind/video";
+import { MediaComponent } from "@/components/rewind/media";
 
 function formatTime(date: Date): string {
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -215,7 +215,7 @@ export function ConversationBubble({
 					{/* Audio player */}
 					{isPlaying && (
 						<div className="mt-2 overflow-hidden border border-border">
-							<VideoComponent filePath={audioFilePath} startTimeSecs={startOffsetSecs} />
+							<MediaComponent filePath={audioFilePath} startTimeSecs={startOffsetSecs} />
 						</div>
 					)}
 				</div>

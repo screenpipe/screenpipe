@@ -856,7 +856,7 @@ export function PrivacySection() {
         </LockedSetting>
 
         <EncryptDataCard
-          encryptStore={settings.encryptStore ?? false}
+          encryptStore={settings.encryptStore ?? true}
           onEncryptStoreChange={(checked) => {
             handleSettingsChange({ encryptStore: checked });
           }}

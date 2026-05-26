@@ -12,7 +12,7 @@ Automate releasing all components of the screenpipe monorepo.
 
 | Component | Version File | Current Pattern | Workflow |
 |-----------|--------------|-----------------|----------|
-| Desktop App | `screenpipe-app-tauri/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | `release-app.yml` |
+| Desktop App | `apps/screenpipe-app-tauri/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | `release-app.yml` |
 | CLI/Server | `Cargo.toml` (workspace.package) | `version = "0.2.X"` | `release-cli.yml` |
 | MCP | `packages/screenpipe-mcp/package.json` | `"version": "X.Y.Z"` | `release-mcp.yml` |
 
@@ -28,7 +28,7 @@ Automate releasing all components of the screenpipe monorepo.
 - `screenpipe-integrations/`
 
 **App-only release** is fine when changes are only in:
-- `screenpipe-app-tauri/` (UI/frontend changes)
+- `apps/screenpipe-app-tauri/` (UI/frontend changes)
 
 To check what changed since last CLI release:
 ```bash
@@ -43,28 +43,25 @@ git diff <COMMIT>..HEAD --stat -- screenpipe-core screenpipe-vision screenpipe-a
 
 ### 1. Check Current Versions
 ```bash
-echo "=== App ===" && grep '^version' screenpipe-app-tauri/src-tauri/Cargo.toml | head -1
+echo "=== App ===" && grep '^version' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1
 echo "=== CLI ===" && grep '^version' Cargo.toml | head -1
 echo "=== MCP ===" && grep '"version"' packages/screenpipe-mcp/package.json | head -1
 ```
 
 ### 2. Bump Version
 
-Edit `screenpipe-app-tauri/src-tauri/Cargo.toml` to update version.
+Edit `apps/screenpipe-app-tauri/src-tauri/Cargo.toml` and bump the `version = "X.Y.Z"` line at the top of `[package]`.
 
-### 3. Commit & Push
+### 3. Commit & Push (Triggers Release)
 ```bash
 git add -A && git commit -m "Bump app to vX.Y.Z" && git pull --rebase && git push
 ```
 
-### 4. Trigger Release (Draft Only)
-```bash
-gh workflow run release-app.yml
-```
+Pushing a commit whose message starts with `Bump app` or `release-app` to `main` triggers `release-app.yml` automatically (`check_commit` job gates on the prefix). The build is a **draft only** — does NOT auto-publish. Use the `release-app-publish` prefix to auto-publish instead.
 
-**Important**: `workflow_dispatch` creates a **draft only** - does NOT auto-publish. This allows manual testing before publishing.
+**Do NOT also run `gh workflow run release-app.yml`** — it fires a second `workflow_dispatch` run on the same SHA, doubling the build. The push handles it.
 
-### 5. Monitor Build Status
+### 4. Monitor Build Status
 ```bash
 # Get latest run ID
 gh run list --workflow=release-app.yml --limit=1
@@ -73,12 +70,12 @@ gh run list --workflow=release-app.yml --limit=1
 gh run view <RUN_ID> --json status,conclusion,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: (.name | split(",")[0]), status: .status, conclusion: .conclusion}]}'
 ```
 
-### 6. Test the Draft Release
+### 5. Test the Draft Release
 - Download from https://screenpi.pe (requires purchase token)
 - Test on macOS and Windows
 - Verify updater artifacts exist (.tar.gz, .sig files)
 
-### 7. Publish Release
+### 6. Publish Release
 After testing, publish via the Cloudflare R2 / backend dashboard, OR commit with magic words:
 ```bash
 git commit --allow-empty -m "release-app-publish" && git push
@@ -87,14 +84,11 @@ git commit --allow-empty -m "release-app-publish" && git push
 ## Quick Release (App Only)
 
 ```bash
-# 1. Bump version in Cargo.toml
-# 2. Commit and push
+# 1. Bump version in apps/apps/screenpipe-app-tauri/src-tauri/Cargo.toml
+# 2. Commit and push — the "Bump app" prefix triggers release-app.yml automatically
 git add -A && git commit -m "Bump app to vX.Y.Z" && git push
 
-# 3. Trigger release (draft)
-gh workflow run release-app.yml
-
-# 4. Monitor
+# 3. Monitor
 sleep 5 && gh run list --workflow=release-app.yml --limit=1
 ```
 
@@ -139,9 +133,10 @@ The CI copies `tauri.prod.conf.json` to `tauri.conf.json` before building. If ar
 
 CI automatically uses prod config for releases by copying it before build.
 
-### Auto-Publish Behavior
-- `workflow_dispatch` (manual trigger) → Draft only, no publish
-- Commit with "release-app-publish" → Auto-publish after successful build
+### Trigger & Publish Behavior
+- Commit prefix `Bump app` or `release-app` pushed to main → Draft release
+- Commit prefix `release-app-publish` pushed to main → Auto-publish after successful build
+- `workflow_dispatch` (manual `gh workflow run`) → Draft release (redundant with the push trigger; avoid using both)
 
 ## Notes
 

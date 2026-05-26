@@ -1,6 +1,6 @@
 {
   "name": "@screenpipe/sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Screen recording SDK for Electron and Node apps, powered by screenpipe's native capture stack.",
   "main": "index.js",
   "types": "index.d.ts",
@@ -113,10 +113,10 @@
     "registry": "https://registry.npmjs.org/"
   },
   "optionalDependencies": {
-    "@screenpipe/sdk-darwin-arm64": "0.4.0",
-    "@screenpipe/sdk-darwin-x64": "0.4.0",
-    "@screenpipe/sdk-win32-arm64-msvc": "0.4.0",
-    "@screenpipe/sdk-win32-x64-msvc": "0.4.0"
+    "@screenpipe/sdk-darwin-arm64": "0.4.1",
+    "@screenpipe/sdk-darwin-x64": "0.4.1",
+    "@screenpipe/sdk-win32-arm64-msvc": "0.4.1",
+    "@screenpipe/sdk-win32-x64-msvc": "0.4.1"
   },
   "scripts": {
     "artifacts": "napi artifacts",

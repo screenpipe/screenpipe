@@ -709,6 +709,10 @@ export function CollapsedChatSidebarButton({
     !diskHydrated && pinned.length === 0 && recents.length === 0;
 
   useEffect(() => {
+    // Bail when all three sections are empty: every fallback target is also
+    // empty, so each setTab lands on another empty tab and re-triggers this
+    // effect → React #185 ("Maximum update depth exceeded").
+    if (pinned.length === 0 && recents.length === 0 && archived.length === 0) return;
     if (tab === "pinned" && pinned.length === 0) {
       setTab(recents.length > 0 ? "recents" : "archived");
     } else if (tab === "recents" && recents.length === 0) {

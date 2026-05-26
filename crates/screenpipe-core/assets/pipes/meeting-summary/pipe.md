@@ -21,7 +21,7 @@ read the screenpipe skill first so you know the meetings + search endpoints.
 
 step 1 — find the meeting that just ended:
 
-  curl -s -H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" \
+  curl -s -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
     "http://localhost:3030/meetings?limit=1"
 
 the most recent row is the one that just ended. capture its `id`, `meeting_start`, `meeting_end`, `title`, `note`, `meeting_app`, and `attendees`.
@@ -31,7 +31,7 @@ step 2 — search screenpipe for what happened during this meeting and summarize
 step 3 — if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
 
   curl -s -X PATCH "http://localhost:3030/meetings/<MEETING_ID>" \
-    -H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY" \
+    -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
     -H "Content-Type: application/json" \
     -d '{"title": "<NEW_TITLE_OR_OMIT>", "note": "<EXISTING_NOTE>\n\n## Summary\n<YOUR_SUMMARY>"}'
 

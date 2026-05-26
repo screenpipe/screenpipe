@@ -282,7 +282,7 @@ fn emit_meeting_note_route_with_retries(app: &tauri::AppHandle, deeplink_url: &s
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::parse_meeting_deeplink;
+    use super::{fallback_local_api_config, parse_meeting_deeplink};
 
     #[test]
     fn parses_meeting_deeplink_path_id() {
@@ -307,6 +307,35 @@ mod tests {
             None
         );
         assert_eq!(parse_meeting_deeplink("screenpipe://settings"), None);
+    }
+
+    // Regression for b7dc02415: `get_local_api_config` returned {key: null}
+    // during the cold-spawn window between webview load and `spawn_screenpipe`
+    // populating `RecordingState.server`. The privacy panel's `loadLiveApiKey`
+    // runs once on mount and latches, so the input stayed empty until the user
+    // closed and reopened Settings. Fix: fall back to the process-global cache
+    // (`resolved_api_auth_key`) seeded at app start whenever apiAuth is on.
+    //
+    // The integration with `RecordingState` needs a tauri::AppHandle to
+    // exercise end-to-end, so these tests cover the contract of the pure
+    // fallback shape — the part that actually broke. Seeding the static and
+    // reading it back is covered by store.rs tests / the manual repro:
+    // open Settings → Privacy with recording paused; key field must populate.
+
+    #[test]
+    fn fallback_emits_seeded_key_with_auth_enabled() {
+        let v = fallback_local_api_config(Some("sp-cold-spawn-test".to_string()));
+        assert_eq!(v["key"].as_str(), Some("sp-cold-spawn-test"));
+        assert_eq!(v["port"], 3030);
+        assert_eq!(v["auth_enabled"], true);
+    }
+
+    #[test]
+    fn fallback_emits_null_key_with_auth_disabled_when_unseeded() {
+        let v = fallback_local_api_config(None);
+        assert!(v["key"].is_null());
+        assert_eq!(v["port"], 3030);
+        assert_eq!(v["auth_enabled"], false);
     }
 }
 
@@ -471,10 +500,25 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
             });
         }
     }
+    // *guard is None — server hasn't been constructed yet (early-mount race
+    // against spawn_screenpipe, or pause window). The webview's
+    // `loadLiveApiKey` runs once on mount and latches; without this fallback
+    // the privacy panel's API-key input stays empty until the user closes
+    // and reopens Settings, even though the resolver already minted a key
+    // that the spawning server will adopt verbatim.
+    fallback_local_api_config(crate::store::resolved_api_auth_key())
+}
+
+/// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
+/// is covered by a unit test without needing a tauri::AppHandle. Port is the
+/// well-known default because the server hasn't bound yet — the UI will refresh
+/// once the server registers itself in `RecordingState`.
+fn fallback_local_api_config(cached_key: Option<String>) -> serde_json::Value {
+    let auth_enabled = cached_key.is_some();
     serde_json::json!({
-        "key": null,
+        "key": cached_key,
         "port": 3030,
-        "auth_enabled": false,
+        "auth_enabled": auth_enabled,
     })
 }
 
@@ -718,6 +762,34 @@ pub fn get_cloud_token() -> Option<String> {
         .and_then(|t| t.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Push a fresh cloud-auth token into the running sidecar.
+///
+/// The frontend invokes this on every sign-in (after `loadUser` writes
+/// `settings.user`) and on sign-out (passing `None`). Without it, the
+/// `Server.cloud_token` and `PiExecutor.user_token` captured at engine
+/// boot would be permanent for the lifetime of the sidecar process —
+/// users who signed in AFTER the engine started would stay on the
+/// gateway's anonymous tier (allowed_models = haiku/gemini only) on
+/// every pipe run, surfacing as `403 "model_not_allowed"` for any
+/// Sonnet/Opus preset even with an active Pro subscription. Logout +
+/// log-in from the webview alone does NOT restart the sidecar, which
+/// is why the previous user-facing workaround was "fully quit the
+/// app from the tray."
+///
+/// Both the local `/v1/chat/completions` proxy and the pi-agent's
+/// `models.json` apiKey share the same `Arc<ArcSwap<Option<String>>>`,
+/// so one write here updates both readers on the next pipe run.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_cloud_token(
+    token: Option<String>,
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    let normalized = token.filter(|t| !t.is_empty());
+    state.cloud_token.store(std::sync::Arc::new(normalized));
+    Ok(())
 }
 
 /// Persist the user's enterprise admin status + team API token so the
@@ -1369,7 +1441,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         use tauri_plugin_opener::OpenerExt;
         app_handle
             .opener()
-            .open_url("https://screenpi.pe/login", None::<&str>)
+            .open_url("https://screenpipe.com/login", None::<&str>)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
@@ -1390,7 +1462,7 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
-        const LOGIN_URL: &str = "https://screenpi.pe/login";
+        const LOGIN_URL: &str = "https://screenpipe.com/login";
         let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
@@ -3211,4 +3283,22 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+    let manager = app_handle.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    info!(
+        "autostart {}: is_enabled={}",
+        if enabled { "enabled" } else { "disabled" },
+        manager.is_enabled().unwrap_or(false)
+    );
+    Ok(())
 }

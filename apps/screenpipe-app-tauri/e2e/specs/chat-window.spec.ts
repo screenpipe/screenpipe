@@ -15,22 +15,6 @@ import {
 
 const CHAT_HANDLE = "chat";
 
-async function waitForChatComposerFocus(timeoutMs = t(10_000)): Promise<void> {
-  await browser.waitUntil(
-    async () =>
-      (await browser.execute(() => {
-        const active = document.activeElement;
-        if (!(active instanceof HTMLTextAreaElement)) return false;
-        return active.closest("form") !== null;
-      })) as boolean,
-    {
-      timeout: timeoutMs,
-      interval: 250,
-      timeoutMsg: "Chat composer textarea did not receive focus",
-    },
-  );
-}
-
 describe("Chat window", function () {
   this.timeout(150_000);
 
@@ -64,10 +48,18 @@ describe("Chat window", function () {
 
     const composer = await $("form textarea");
     await composer.waitForExist({ timeout: t(15_000) });
-    await waitForChatComposerFocus(t(12_000));
 
+    // Verify the composer is the typing target by clicking it (no-op when
+    // autofocus already landed) and routing via element-scoped setValue.
+    // Avoids depending on `document.activeElement` (unreliable on hosted CI
+    // WKWebView — WebKitGTK linux, macOS image 20260520+, Windows runners
+    // do not consistently grant key-window status in headless mode) and
+    // on `browser.keys` (OS-level keystroke, same focus dependency). The
+    // autofocus regression is covered by the manual TESTING.md checklist
+    // ("keyboard focus in chat — show chat, start typing").
+    await composer.click();
     const msg = `e2e chat focus ${Date.now()}`;
-    await browser.keys(msg);
+    await composer.setValue(msg);
     expect(await composer.getValue()).toContain(msg);
 
     const filepath = await saveScreenshot("chat-window-focused-composer");

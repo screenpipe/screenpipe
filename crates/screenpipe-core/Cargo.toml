@@ -16,6 +16,7 @@ which = "6.0.1"
 ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", branch = "main" }
 log = "0.4.17"
 anyhow = "1.0.86"
+arc-swap = "1"
 
 tokio = { workspace = true }
 
@@ -104,4 +105,3 @@ windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_F
 # Used by sync::client wire-compat test (asserts the PUT request shape
 # stays byte-identical after the upload_to_s3 → HttpPutDirect migration).
 wiremock = "0.6"
-

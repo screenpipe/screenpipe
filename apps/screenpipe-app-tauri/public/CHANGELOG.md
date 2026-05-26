@@ -1,11 +1,11 @@
 ## New Features
 
-- SDK event stream now works across Electron, Tauri, and Swift — real-time recorder/capture events for building integrations
-- Window filters now support App::Title scoped patterns, so you can ignore/include specific tabs or windows inside an app
+- Bring your own MCP servers — register custom MCP servers from your config and route them through the AI agent alongside the built-in ones
+- Microphone capture can now use macOS VoiceProcessingIO (opt-in) for cleaner echo/noise cancellation on Apple silicon
 
 ## Bug Fixes
 
-- ChatGPT connection shows a clear "session expired" warning with a reconnect option instead of failing silently
-- OCR no longer crashes when the model returns non-finite text bounds
+- Electron apps (VS Code, Discord, Slack) now get the full accessibility walk budget — depth counter resets at AXWebArea boundaries instead of cutting off the tree halfway through
+- USB audio devices with mismatched sample rates no longer drop into silence on macOS
 
-#### **Full Changelog:** [b0028398..69a2d1bf](https://github.com/screenpipe/screenpipe/compare/b0028398..69a2d1bf)
+#### **Full Changelog:** [bdf01bdb..2b06b643](https://github.com/screenpipe/screenpipe/compare/bdf01bdb..2b06b643)

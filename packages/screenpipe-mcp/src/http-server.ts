@@ -337,13 +337,15 @@ export function buildHttpServer(config: CliConfig) {
         const server = createMcpServer(fetchAPI);
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            sessions.set(newSessionId, { server, transport });
+          },
+          onsessionclosed: (closedSessionId) => {
+            sessions.delete(closedSessionId);
+          },
         });
 
         await server.connect(transport);
-
-        if (transport.sessionId) {
-          sessions.set(transport.sessionId, { server, transport });
-        }
         session = { server, transport };
       }
 
@@ -358,19 +360,16 @@ export function buildHttpServer(config: CliConfig) {
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
-// Don't auto-start when imported (e.g. by tests). Compare to argv[1] so
-// `node dist/http-server.js` and `npx ts-node src/http-server.ts` both
-// match, but `import "./http-server"` from a test does not.
-const isMain =
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (typeof require !== "undefined" && (require as any).main === module) ||
-  process.argv[1]?.endsWith("http-server.ts") ||
-  process.argv[1]?.endsWith("http-server.js");
-
-if (isMain) {
+/**
+ * Parse argv and start listening. Exported so `cli.ts` can dispatch here
+ * when invoked as `screenpipe-mcp --http …`, in addition to the direct
+ * `screenpipe-mcp-http` bin path which auto-starts via the `isMain` check
+ * below.
+ */
+export function runFromArgv(argv: string[]): void {
   let config: CliConfig;
   try {
-    config = parseArgs(process.argv.slice(2));
+    config = parseArgs(argv);
   } catch (e) {
     if (e instanceof CliError) {
       console.error(e.message);
@@ -389,4 +388,17 @@ if (isMain) {
       console.log("  Auth required for non-loopback requests (Authorization: Bearer …)");
     }
   });
+}
+
+// Don't auto-start when imported (e.g. by tests or cli.ts). Compare to
+// argv[1] so `node dist/http-server.js` and `npx ts-node src/http-server.ts`
+// both match, but `import "./http-server"` from a test does not.
+const isMain =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (typeof require !== "undefined" && (require as any).main === module) ||
+  process.argv[1]?.endsWith("http-server.ts") ||
+  process.argv[1]?.endsWith("http-server.js");
+
+if (isMain) {
+  runFromArgv(process.argv.slice(2));
 }

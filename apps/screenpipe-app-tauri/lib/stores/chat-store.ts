@@ -73,6 +73,10 @@ export interface SessionRecord {
   pinned: boolean;
   /** Archived conversation hidden from recents. */
   hidden?: boolean;
+  /** ms since epoch of the most recent time this chat was actively viewed
+   *  in the current app session. Ephemeral UI signal for recent-switching;
+   *  never persisted to disk and does not affect the sidebar order. */
+  lastViewedAt?: number;
   /** True when there's new assistant activity (delta or completion) that
    *  the user hasn't seen yet. Set by the event router when content lands
    *  for a session that is NOT the currently-viewed one; cleared the
@@ -239,6 +243,7 @@ interface ChatStoreActions {
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
+type ChatSessionsState = Pick<ChatStoreState, "sessions">;
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
@@ -308,16 +313,17 @@ export const useChatStore = create<ChatStore>((set) => ({
 
     setCurrent: (id) =>
       set((s) => {
+        const viewedAt = Date.now();
         // Viewing a session counts as reading it — clear the unread flag
         // for the new current. Same atomic update so the row's unread
         // state can't transiently flicker between the setCurrent call and
         // a follow-up markRead call.
-        if (id && s.sessions[id]?.unread) {
+        if (id && s.sessions[id]) {
           return {
             currentId: id,
             sessions: {
               ...s.sessions,
-              [id]: { ...s.sessions[id], unread: false },
+              [id]: { ...s.sessions[id], unread: false, lastViewedAt: viewedAt },
             },
           };
         }
@@ -615,7 +621,7 @@ export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
  *   // 2. raw: subscribe to the underlying map and memoize per-component
  *   const sessionsMap = useChatStore((s) => s.sessions);
  *   const sessions = useMemo(
- *     () => selectOrderedSessions({ sessions: sessionsMap } as ChatStore),
+ *     () => selectOrderedSessions({ sessions: sessionsMap }),
  *     [sessionsMap]
  *   );
  */
@@ -639,11 +645,23 @@ function compareForSidebar(a: SessionRecord, b: SessionRecord): number {
   return tier(a) - tier(b) || sortKey(b) - sortKey(a);
 }
 
-export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
+export function selectOrderedSessions(state: ChatSessionsState): SessionRecord[] {
   const all = Object.values(state.sessions);
   const pinned = all.filter((s) => s.pinned).sort(compareForSidebar);
   const recents = all.filter((s) => !s.pinned).sort(compareForSidebar);
   return [...pinned, ...recents];
+}
+
+export function selectRecentSwitcherSessions(state: ChatSessionsState): SessionRecord[] {
+  const ordered = selectOrderedSessions(state);
+  const isEligibleSwitcherSession = (session: SessionRecord) =>
+    !session.hidden &&
+    !session.draft &&
+    session.kind !== "pipe-watch" &&
+    session.kind !== "pipe-run";
+  return ordered
+    .filter((session) => isEligibleSwitcherSession(session) && session.lastViewedAt)
+    .sort((a, b) => (b.lastViewedAt ?? 0) - (a.lastViewedAt ?? 0));
 }
 
 /**

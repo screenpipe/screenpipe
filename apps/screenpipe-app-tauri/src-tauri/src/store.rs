@@ -316,7 +316,7 @@ pub fn reencrypt_store_file(app: &AppHandle) {
                     .and_then(|s| s.get("encryptStore"))
                     .and_then(|v| v.as_bool())
             })
-            .unwrap_or(false);
+            .unwrap_or(true);
 
         if encrypt_enabled && !flag_path.exists() {
             let _ = std::fs::write(&flag_path, b"");
@@ -771,7 +771,7 @@ impl Default for AIPreset {
             id: String::new(),
             prompt: String::new(),
             provider: AIProviderType::ScreenpipeCloud,
-            url: "https://api.screenpi.pe/v1".to_string(),
+            url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
             api_key: None,
@@ -952,11 +952,12 @@ impl Default for SettingsStore {
             id: "screenpipe-cloud".to_string(),
             prompt: r#"IMPORTANT: At the start of every conversation, read the files in .pi/skills/ directory (e.g. .pi/skills/screenpipe-api/SKILL.md and .pi/skills/screenpipe-cli/SKILL.md) before responding.
 Rules:
-- Media: use standard markdown ![description](/path/to/file.mp4) for videos and ![description](/path/to/image.jpg) for images
+- Media: use standard markdown with angle-bracket local paths, like ![description](</path/to/file.mp4>) for videos and ![description](</path/to/image.jpg>) for images
+- Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses
 - Always answer my question/intent, do not make up things
 "#.to_string(),
             provider: AIProviderType::ScreenpipeCloud,
-            url: "https://api.screenpi.pe/v1".to_string(),
+            url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
             api_key: None,

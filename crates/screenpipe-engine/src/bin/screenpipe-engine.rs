@@ -30,8 +30,10 @@ use screenpipe_engine::{
         audio::handle_audio_command,
         mcp::handle_mcp_command,
         pipe::handle_pipe_command,
+        search::handle_search_command,
         status::handle_status_command,
         sync::{handle_sync_command, start_sync_service},
+        team::handle_team_command,
         vision::handle_vision_command,
         Cli, Command, RecordArgSources,
     },
@@ -308,6 +310,14 @@ async fn main() -> anyhow::Result<()> {
             let local_data_dir = get_base_dir(data_dir)?;
             let _log_guard = Some(setup_logging(&local_data_dir, false, true)?);
             handle_status_command(json, data_dir, port).await?;
+            return Ok(());
+        }
+        Command::Search(ref args) => {
+            handle_search_command(args).await?;
+            return Ok(());
+        }
+        Command::Team { ref subcommand } => {
+            handle_team_command(subcommand).await?;
             return Ok(());
         }
         Command::Pipe { ref subcommand } => {
@@ -1051,7 +1061,7 @@ async fn main() -> anyhow::Result<()> {
     // SCServer::cloud_token_handle after spawn.
     if let Ok(t) = std::env::var("SCREENPIPE_API_KEY") {
         if !t.is_empty() {
-            let _ = server.cloud_token.try_write().map(|mut g| *g = Some(t));
+            server.cloud_token.store(std::sync::Arc::new(Some(t)));
         }
     }
 
@@ -1137,9 +1147,10 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&pipes_dir).ok();
 
     let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
-    let pi_executor = std::sync::Arc::new(screenpipe_core::agents::pi::PiExecutor::new(
-        user_token.clone(),
-    ));
+    let pi_executor = std::sync::Arc::new(
+        screenpipe_core::agents::pi::PiExecutor::new(user_token.clone())
+            .with_api_auth_key(config.api_auth_key.clone()),
+    );
 
     // Workflow event classifier — opt-in cloud feature. Polls recent activity
     // and emits `WorkflowEvent`s on the bus so pipes with `trigger.events`
@@ -1631,6 +1642,7 @@ async fn main() -> anyhow::Result<()> {
     if config.async_pii_redaction {
         use screenpipe_redact::{
             adapters::{
+                onnx::{OnnxConfig, OnnxRedactor},
                 opf::{OpfAdapter, OpfConfig},
                 tinfoil::TinfoilRedactor,
             },
@@ -1644,50 +1656,78 @@ async fn main() -> anyhow::Result<()> {
 
         // Pipeline: regex pre-pass + AI fallback. Regex catches
         // structural PII deterministically and on-device. AI step
-        // resolves to:
-        //   1. local opf-rs (candle, ~74 ms p50 on Mac CPU, 41 ms on
-        //      Metal). First run downloads ~2.8 GB from
-        //      huggingface.co/screenpipe/pii-text-redactor and verifies
-        //      SHA-256 before landing at ~/.screenpipe/models/opf-v6/.
-        //      Spawned off the boot path so a slow first-run pull
-        //      doesn't block the engine.
-        //   2. Tinfoil confidential-compute enclave when TINFOIL_*
-        //      env vars are set and local opf-rs is unavailable.
-        //   3. regex-only otherwise (still destructive — overwrites
+        // resolves to (preference order):
+        //   1. v45_phase3 ONNX (xlm-roberta-base fine-tune, INT8, ~278 MB,
+        //      9 ms p50 on CPU, CoreML on macOS / DirectML on Windows
+        //      via the redact-onnx-* CI feature). First run downloads
+        //      from huggingface.co/screenpipe/pii-redactor under
+        //      v45_phase3_onnx/. Same checkpoint the Tinfoil container
+        //      and the desktop app's own worker use, so outputs match
+        //      across surfaces.
+        //   2. Legacy opf-rs (candle, OPF v6, ~74 ms p50 on Mac CPU,
+        //      ~2.8 GB) if v45 ONNX isn't compiled in or the download
+        //      fails.
+        //   3. Tinfoil confidential-compute enclave when TINFOIL_*
+        //      env vars are set and both local adapters are unavailable.
+        //   4. Regex-only otherwise (still destructive — overwrites
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
         tokio::spawn(async move {
             info!(
-                "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
-                 ~/.screenpipe/models/opf-v6/)"
+                "fetching v45 phase 3 ONNX text redactor (~278 MB INT8 on first run, \
+                 cached at ~/.screenpipe/models/v45_phase3_onnx/)"
             );
-            let pipeline = match OpfAdapter::load_or_download(OpfConfig::default()).await {
+            let pipeline = match OnnxRedactor::load_or_download(OnnxConfig::default()).await {
                 Ok(adapter) => {
                     info!(
-                        "text-PII AI step: local opf-rs (candle) — lazy load on first \
-                         batch, idle-unload after 60s of no work"
+                        "text-PII AI step: local v45_phase3 ONNX — same checkpoint as the \
+                         desktop app + Tinfoil container, sub-10 ms p50 on CPU"
                     );
-                    // Wrap in Arc first so we can spawn the idle
-                    // unloader (which needs `Arc<Self>`) and still
-                    // hand the same Arc to the Pipeline.
-                    let adapter = Arc::new(adapter);
-                    let _unloader = Arc::clone(&adapter).spawn_idle_unloader();
-                    let ai: Arc<dyn Redactor> = adapter;
+                    let ai: Arc<dyn Redactor> = Arc::new(adapter);
                     Pipeline::regex_then_ai(ai, PipelineConfig::default())
                 }
-                Err(e) => {
-                    if std::env::var("TINFOIL_API_KEY").is_ok()
-                        || std::env::var("TINFOIL_BASE_URL").is_ok()
-                    {
-                        info!("text-PII AI step: tinfoil enclave (local opf-rs unavailable: {e})");
-                        let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
-                        Pipeline::regex_then_ai(ai, PipelineConfig::default())
-                    } else {
-                        tracing::warn!(
-                            "text-PII AI step disabled — local opf-rs unavailable ({e}) and no \
-                             TINFOIL_* env vars set. Worker will run regex-only."
-                        );
-                        Pipeline::regex_only()
+                Err(onnx_err) => {
+                    tracing::warn!(
+                        "couldn't load v45 phase 3 ONNX redactor ({onnx_err}); falling back \
+                         to OPF v6 candle"
+                    );
+                    info!(
+                        "fetching local OPF v6 checkpoint (~2.8 GB on first run, cached at \
+                         ~/.screenpipe/models/opf-v6/)"
+                    );
+                    match OpfAdapter::load_or_download(OpfConfig::default()).await {
+                        Ok(adapter) => {
+                            info!(
+                                "text-PII AI step: local opf-rs (candle) fallback — lazy load \
+                                 on first batch, idle-unload after 60s of no work"
+                            );
+                            // Wrap in Arc first so we can spawn the idle
+                            // unloader (which needs `Arc<Self>`) and still
+                            // hand the same Arc to the Pipeline.
+                            let adapter = Arc::new(adapter);
+                            let _unloader = Arc::clone(&adapter).spawn_idle_unloader();
+                            let ai: Arc<dyn Redactor> = adapter;
+                            Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                        }
+                        Err(e) => {
+                            if std::env::var("TINFOIL_API_KEY").is_ok()
+                                || std::env::var("TINFOIL_BASE_URL").is_ok()
+                            {
+                                info!(
+                                    "text-PII AI step: tinfoil enclave (local adapters \
+                                     unavailable: opf-rs={e})"
+                                );
+                                let ai: Arc<dyn Redactor> = Arc::new(TinfoilRedactor::from_env());
+                                Pipeline::regex_then_ai(ai, PipelineConfig::default())
+                            } else {
+                                tracing::warn!(
+                                    "text-PII AI step disabled — both v45 ONNX and opf-rs \
+                                     unavailable ({e}), and no TINFOIL_* env vars set. Worker \
+                                     will run regex-only."
+                                );
+                                Pipeline::regex_only()
+                            }
+                        }
                     }
                 }
             };

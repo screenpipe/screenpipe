@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-screenpipe-reveal"
+description = "Enables the screenpipe_reveal command without any pre-configured scope."
+commands.allow = ["screenpipe_reveal"]
+
+[[permission]]
+identifier = "deny-screenpipe-reveal"
+description = "Denies the screenpipe_reveal command without any pre-configured scope."
+commands.deny = ["screenpipe_reveal"]

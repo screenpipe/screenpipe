@@ -41,7 +41,7 @@ fn parse_relative_time(s: &str) -> Option<DateTime<Utc>> {
 }
 
 /// Try to parse a string as either ISO 8601 or relative time.
-fn parse_flexible_datetime(s: &str) -> Result<DateTime<Utc>, String> {
+pub fn parse_flexible_datetime(s: &str) -> Result<DateTime<Utc>, String> {
     // Try ISO 8601 / RFC 3339 first
     if let Ok(dt) = s.parse::<DateTime<Utc>>() {
         return Ok(dt);

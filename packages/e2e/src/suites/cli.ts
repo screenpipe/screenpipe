@@ -57,6 +57,56 @@ const tests: TestDef[] = [
       if (stdout.length === 0) throw new Error("empty output");
     },
   },
+  // Regression: f1a7e87a6 added `screenpipe search` — daemon-free local
+  // history query. If the subcommand gets unlinked from the CLI parser
+  // or its module fails to compile, --help silently breaks for users
+  // who do `screenpipe search "thing"` from their shell.
+  {
+    name: "search --help",
+    fn: async (exec, bin) => {
+      const { stdout, exitCode } = await exec(`${bin} search --help`);
+      if (exitCode !== 0) throw new Error(`exit code ${exitCode}`);
+      if (!stdout.toLowerCase().includes("search"))
+        throw new Error("missing 'search' in help output");
+    },
+  },
+  // Regression: `screenpipe search` against a non-existent data dir
+  // must fail loudly with the documented error path, not crash with a
+  // panic or hang. Pre-fix shape of the error: "no screenpipe database
+  // at <path>. run `screenpipe record` first."
+  {
+    name: "search bails clearly on missing db",
+    fn: async (exec, bin) => {
+      // Random tmp dir guaranteed not to contain db.sqlite.
+      const { stdout, exitCode } = await exec(
+        `${bin} search --data-dir /tmp/nonexistent-screenpipe-e2e-${Date.now()} --limit 1 2>&1`
+      );
+      if (exitCode === 0)
+        throw new Error("search exited 0 with no database — should bail");
+      if (!stdout.toLowerCase().includes("no screenpipe database"))
+        throw new Error(`unexpected error shape: ${stdout.slice(0, 200)}`);
+    },
+  },
+  // Regression: a6117b306 added `screenpipe team` — admin queries against
+  // the enterprise cloud API. --help must work without auth so admins can
+  // discover the subcommand without setting SCREENPIPE_TEAM_API_TOKEN first.
+  {
+    name: "team --help",
+    fn: async (exec, bin) => {
+      const { stdout, exitCode } = await exec(`${bin} team --help`);
+      if (exitCode !== 0) throw new Error(`exit code ${exitCode}`);
+      if (!stdout.toLowerCase().includes("team"))
+        throw new Error("missing 'team' in help output");
+      // The three subcommands the skill at
+      // crates/screenpipe-core/assets/skills/screenpipe-team/SKILL.md
+      // documents — if one disappears, agents written against the skill
+      // start failing.
+      for (const sub of ["devices", "search", "records"]) {
+        if (!stdout.includes(sub))
+          throw new Error(`team --help missing subcommand '${sub}'`);
+      }
+    },
+  },
 ];
 
 // ── Runner ───────────────────────────────────────────────────────────

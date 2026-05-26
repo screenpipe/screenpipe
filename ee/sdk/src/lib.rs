@@ -57,9 +57,20 @@ pub struct RecorderOptions {
     /// (case-insensitive). While a matching window is in focus, the recorder
     /// skips writing frames — the MP4 contains a hard cut over the filtered
     /// period.
+    ///
+    /// Each pattern may use an optional `App::Title` scope: `"Slack::#hr"`
+    /// skips only the #hr window inside Slack and leaves other Slack channels
+    /// recording. `"::Confidential"` matches any app whose title contains
+    /// "Confidential". Plain `"Slack"` keeps the legacy "app OR title
+    /// contains" behavior.
     pub ignored_windows: Option<Vec<String>>,
     /// Substring whitelist. If non-empty, frames are written ONLY while the
     /// focused app name or window title matches at least one pattern.
+    ///
+    /// Scoped entries (`"Greenhouse::Candidates"`) create a per-app whitelist
+    /// — other apps stay unaffected, so this whitelists only that window
+    /// without inadvertently blocking Slack/Chrome. Unscoped entries keep
+    /// the legacy "must match app or title" global semantics.
     pub included_windows: Option<Vec<String>>,
     /// URL patterns to skip (case-insensitive, domain-aware matching).
     /// When the focused window is a browser navigated to a matching URL,
@@ -140,6 +151,10 @@ pub struct FilterStatus {
 }
 
 /// Patch passed to `Recorder.setFilters({...})` for live filter updates.
+/// Any field omitted (or sent as `null`) clears that list. All three fields
+/// follow the same matching semantics as the matching `RecorderOptions`
+/// fields — including the `App::Title` scope convention on
+/// `ignored_windows` / `included_windows`.
 #[napi(object)]
 pub struct FilterPatch {
     pub ignored_windows: Option<Vec<String>>,

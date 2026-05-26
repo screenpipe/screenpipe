@@ -247,6 +247,16 @@ fn get_effective_recording_status() -> RecordingStatus {
             *opt = None;
         }
     }
+    drop(opt);
+    // Engine-side full-pause overrides Recording — the capture loop sleeps
+    // and releases the OS stream when capture_paused is set, but the
+    // RecordingState.capture session struct stays alive, so the raw
+    // `real` still reports Recording. Surfacing Paused here keeps the
+    // tray honest. Don't override Stopped/Starting/Error — those reflect
+    // independent conditions the user needs to see.
+    if real == RecordingStatus::Recording && crate::engine_events::is_power_capture_paused() {
+        return RecordingStatus::Paused;
+    }
     real
 }
 

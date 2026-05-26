@@ -1145,6 +1145,18 @@ pub async fn start_device_monitor(
                                     warn!("device check transient error (will retry): {e}");
                                     continue;
                                 }
+                                // User denied TCC (mic / screen capture / etc.) — the 2-second
+                                // monitor loop keeps trying, so without this branch every retry
+                                // hits Sentry. SCREENPIPE-CLI-S8: 4 users × ~50 events/wk of
+                                // identical "declined TCCs" noise. Warn (not Sentry) and let
+                                // the next tick try again so we pick up the moment the user
+                                // grants permission.
+                                if e_str.contains("declined TCCs")
+                                    || e_str.contains("Screen recording permission denied")
+                                {
+                                    warn!("device check: permission not granted (will retry): {e}");
+                                    continue;
+                                }
                                 error!("device check error: {e}");
                             }
                         }

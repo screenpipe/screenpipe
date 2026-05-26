@@ -27,7 +27,10 @@ static OAUTH: OAuthConfig = OAuthConfig {
              https://www.googleapis.com/auth/userinfo.email",
         ),
         ("access_type", "offline"),
-        ("prompt", "consent"),
+        // select_account so the second connect shows Google's account picker
+        // instead of silently consenting under the already-signed-in account —
+        // otherwise the multi-account UI can never reach a different account.
+        ("prompt", "consent select_account"),
     ],
     redirect_uri_override: None,
 };
@@ -47,7 +50,8 @@ static DEF: IntegrationDef = IntegrationDef {
         POST /connections/google-docs/proxy/docs/v1/documents/{documentId}:batchUpdate — edit an existing doc (requests: insertText, updateTextStyle, etc.). \
         GET /connections/google-docs/proxy/drive/v3/files?q=mimeType='application/vnd.google-apps.document' — list Docs the app created or the user opened with screenpipe. \
         GET /connections/google-docs/proxy/drive/v3/files/{fileId}/export?mimeType=text/plain — export a Doc as plain text. \
-        Uses drive.file scope — only files the user explicitly opens with screenpipe (e.g. by pasting a Doc URL) or that screenpipe creates are visible; this is intentional privacy design.",
+        Uses drive.file scope — only files the user explicitly opens with screenpipe (e.g. by pasting a Doc URL) or that screenpipe creates are visible; this is intentional privacy design. \
+        Multi-account: when more than one Google account is connected, append `?instance=<email>` to any proxy URL to pick which one (the `?` becomes `&` if the path already has a query string).",
     fields: &[],
 };
 

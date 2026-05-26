@@ -11,9 +11,9 @@ export async function getMediaFile(
 		return result;
 	} catch (error) {
 		console.error("failed to read media file:", error);
+		const message = error instanceof Error ? error.message : String(error || "unknown error");
 		throw new Error(
-			`failed to read media file: ${error instanceof Error ? error.message : "unknown error"}`,
+			`failed to read media file: ${message}`,
 		);
 	}
 }
-

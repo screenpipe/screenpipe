@@ -242,14 +242,15 @@ pub async fn poll_meetings_events() -> Result<()> {
                             if prewarmed.contains_key(&key) {
                                 continue;
                             }
-                            let join_url = extract_join_url(cal_event);
-                            // Skip events that have no join link AND no
-                            // attendees beyond the organizer — those are
-                            // typically in-person blocks or focus time
-                            // and don't benefit from a prewarm toast.
-                            if join_url.is_none() && cal_event.attendees.len() < 2 {
+                            // Prewarm exists to let the user click "join and
+                            // take notes" before the call starts. Without a
+                            // join URL there's no actionable CTA, so the
+                            // toast would fire with just a header and no
+                            // buttons — skip those (in-person meetings,
+                            // focus blocks, dial-in-only invites).
+                            let Some(join_url) = extract_join_url(cal_event) else {
                                 continue;
-                            }
+                            };
                             prewarmed.insert(key, Instant::now());
                             let _ = send_event(
                                 "meeting_about_to_start",
@@ -257,7 +258,7 @@ pub async fn poll_meetings_events() -> Result<()> {
                                     title: cal_event.title.clone(),
                                     start: cal_event.start.clone(),
                                     end: cal_event.end.clone(),
-                                    meeting_url: join_url,
+                                    meeting_url: Some(join_url),
                                     seconds_until_start,
                                     timestamp: now,
                                 },
