@@ -2196,10 +2196,16 @@ mod tests {
         assert_eq!(exec.current_user_token().await, None);
 
         exec.set_user_token(Some("token-v1".to_string())).await;
-        assert_eq!(exec.current_user_token().await, Some("token-v1".to_string()));
+        assert_eq!(
+            exec.current_user_token().await,
+            Some("token-v1".to_string())
+        );
 
         exec.set_user_token(Some("token-v2".to_string())).await;
-        assert_eq!(exec.current_user_token().await, Some("token-v2".to_string()));
+        assert_eq!(
+            exec.current_user_token().await,
+            Some("token-v2".to_string())
+        );
 
         // Empty strings normalize to None so downstream `is_some()` checks
         // can't be tricked into sending an empty Bearer token.
@@ -2226,8 +2232,14 @@ mod tests {
 
         // Write via executor A — both see it.
         exec_a.set_user_token(Some("fresh-jwt".to_string())).await;
-        assert_eq!(exec_a.current_user_token().await, Some("fresh-jwt".to_string()));
-        assert_eq!(exec_b.current_user_token().await, Some("fresh-jwt".to_string()));
+        assert_eq!(
+            exec_a.current_user_token().await,
+            Some("fresh-jwt".to_string())
+        );
+        assert_eq!(
+            exec_b.current_user_token().await,
+            Some("fresh-jwt".to_string())
+        );
 
         // Write directly through the Arc (simulates the Tauri command
         // path which holds only the Arc, not the executor) — both see it.
@@ -2235,8 +2247,14 @@ mod tests {
             let mut g = shared.write().await;
             *g = Some("from-tauri".to_string());
         }
-        assert_eq!(exec_a.current_user_token().await, Some("from-tauri".to_string()));
-        assert_eq!(exec_b.current_user_token().await, Some("from-tauri".to_string()));
+        assert_eq!(
+            exec_a.current_user_token().await,
+            Some("from-tauri".to_string())
+        );
+        assert_eq!(
+            exec_b.current_user_token().await,
+            Some("from-tauri".to_string())
+        );
 
         // Sign-out path.
         exec_b.set_user_token(None).await;
