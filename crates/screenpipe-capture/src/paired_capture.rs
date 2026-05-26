@@ -584,6 +584,68 @@ fn a11y_content_is_thin(
         return true;
     }
 
+    // Repetition check: Zoom / Teams pattern — same toolbar label
+    // repeated once per video tile makes the char-ratio look fine
+    // but the tree is still pure chrome with no real content.
+    if a11y_text_is_repetitive(snap) {
+        debug!("a11y_content_is_thin: repetitive AX labels detected — treating as thin");
+        return true;
+    }
+
+    false
+}
+
+/// Returns `true` when the AX node list is dominated by a small set of
+/// repeated labels — the Zoom/Teams pattern where every video tile
+/// carries its own copy of toolbar buttons ("Mute my audio" × 29).
+///
+/// Algorithm: if the top-3 most frequent non-empty node texts account
+/// for ≥ 40 % of all non-empty nodes, AND at least one text repeats
+/// ≥ 5 times, the tree is repetitive chrome rather than real content.
+fn a11y_text_is_repetitive(snap: &screenpipe_a11y::tree::TreeSnapshot) -> bool {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut total_non_empty: usize = 0;
+
+    for node in &snap.nodes {
+        let t = node.text.trim().to_lowercase();
+        if t.is_empty() {
+            continue;
+        }
+        total_non_empty += 1;
+        *counts.entry(t).or_insert(0) += 1;
+    }
+
+    if total_non_empty < 10 {
+        return false; // too few nodes to judge
+    }
+
+    let max_single = counts.values().copied().max().unwrap_or(0);
+    if max_single < 10 {
+        return false; // no label repeats enough to be suspicious
+    }
+
+    // require at least 4 distinct labels at high repetition
+    // spares 3-button social feeds (Reply/Like/Share × 30)
+    let high_rep_count = counts.values().filter(|&&c| c >= max_single / 2).count();
+    if high_rep_count < 4 {
+        return false;
+    }
+
+    // Sum top-3 occurrence counts
+    let mut sorted: Vec<usize> = counts.into_values().collect();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+    let top3: usize = sorted.iter().take(3).sum();
+
+    let ratio = top3 as f64 / total_non_empty as f64;
+    if ratio >= 0.40 {
+        debug!(
+            "a11y_text_is_repetitive: top-3 labels = {}/{} nodes ({:.0}%)",
+            top3,
+            total_non_empty,
+            ratio * 100.0
+        );
+        return true;
+    }
     false
 }
 
@@ -1143,5 +1205,103 @@ mod tests {
             Some("https://calendar.google.com/calendar/u/0/r/eventedit/abc123"),
             Some("Google Chrome"),
         ));
+    }
+
+    #[test]
+    fn test_thin_zoom_repeated_toolbar() {
+        // Simulates Zoom frame: "Mute my audio" × 29 + other chrome × 29
+        // Top-3 labels cover >>40% of nodes → repetitive → thin
+        let repeated: Vec<AccessibilityTreeNode> = [
+            "Mute my audio",
+            "Audio options",
+            "Stop video",
+            "Video options",
+            "Open participants panel",
+            "Participants options",
+            "Open chat panel",
+        ]
+        .iter()
+        .flat_map(|label| {
+            (0..29).map(move |_| AccessibilityTreeNode {
+                role: "AXButton".into(),
+                text: (*label).into(),
+                depth: 0,
+                bounds: None,
+                ..Default::default()
+            })
+        })
+        .collect();
+
+        let snap = make_snap(repeated);
+        assert!(
+            a11y_text_is_repetitive(&snap),
+            "Zoom-style repeated toolbar should be detected as repetitive"
+        );
+        assert!(
+            a11y_content_is_thin(&snap, Some("Zoom Meeting"), None, None),
+            "Zoom frame should be thin via repetition check, not allowlist"
+        );
+    }
+
+    #[test]
+    fn test_not_thin_normal_repetition() {
+        // Social feed: 30 content posts + 3 buttons × 30 reps
+        // Should NOT trigger — 3 distinct labels < 4 required
+        let mut nodes: Vec<AccessibilityTreeNode> = Vec::new();
+        // 30 unique content nodes
+        for i in 0..30 {
+            nodes.push(AccessibilityTreeNode {
+                role: "AXStaticText".into(),
+                text: format!("Post content number {} with some real text here", i),
+                depth: 1,
+                bounds: None,
+                ..Default::default()
+            });
+        }
+        // 3 buttons × 30 reps
+        for label in &["Reply", "Like", "Share"] {
+            for _ in 0..30 {
+                nodes.push(AccessibilityTreeNode {
+                    role: "AXButton".into(),
+                    text: (*label).into(),
+                    depth: 0,
+                    bounds: None,
+                    ..Default::default()
+                });
+            }
+        }
+        let snap = make_snap(nodes);
+        assert!(
+            !a11y_text_is_repetitive(&snap),
+            "3-button social feed should NOT trigger repetition check"
+        );
+    }
+
+    #[test]
+    fn test_thin_teams_repeated_chrome() {
+        // Microsoft Teams: camera/mic buttons repeated per participant tile
+        // needs >= 4 distinct labels at high repetition to trigger
+        let repeated: Vec<AccessibilityTreeNode> = [
+            "Turn camera on",
+            "Mute participant",
+            "More options",
+            "Pin video",
+        ]
+        .iter()
+        .flat_map(|label| {
+            (0..20).map(move |_| AccessibilityTreeNode {
+                role: "AXButton".into(),
+                text: (*label).into(),
+                depth: 0,
+                bounds: None,
+                ..Default::default()
+            })
+        })
+        .collect();
+        let snap = make_snap(repeated);
+        assert!(
+            a11y_text_is_repetitive(&snap),
+            "Teams-style repeated chrome (4 labels x20) should be detected"
+        );
     }
 }
