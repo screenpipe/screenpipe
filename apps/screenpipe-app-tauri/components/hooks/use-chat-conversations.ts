@@ -15,7 +15,8 @@ import {
 } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { ChatConversation } from "@/lib/hooks/use-settings";
-import { commands } from "@/lib/utils/tauri";
+import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
+import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   saveConversationFile,
   loadConversationFile,
@@ -83,12 +84,23 @@ interface UseChatConversationsOpts {
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
   settings: any;
+  selectedPreset?: AIPreset | null;
   inlineHistoryEnabled?: boolean;
 }
 
 interface SaveConversationOptions {
   refreshHistory?: boolean;
   syncActiveConversation?: boolean;
+}
+
+// Filters app-injected metadata from title derivation.
+// Duplicated from chat-utils.ts for hot-path performance.
+function isInjectedTitleSourcePrompt(content?: string | null): boolean {
+  if (typeof content !== "string") return false;
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith("<conversation_history>")) return true;
+  const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
+  return bareMetadataOnly.test(trimmed);
 }
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
@@ -111,8 +123,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsStreaming,
     setPastedImages,
     settings,
+    selectedPreset,
     inlineHistoryEnabled = true,
   } = opts;
+  const aiTitleAttemptedRef = useRef<Set<string>>(new Set());
+  const componentUnmountedRef = useRef(false);
 
   const [showHistory, setShowHistoryRaw] = useState(() => {
     try { return localStorage.getItem("screenpipe:chat-history-open") === "true"; } catch { return false; }
@@ -126,6 +141,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   }, []);
   const [historySearch, setHistorySearch] = useState("");
   const [fileConversations, setFileConversations] = useState<ConversationMeta[]>([]);
+
+  // Track component unmount to prevent post-unmount work in async AI title callback
+  useEffect(() => {
+    return () => {
+      componentUnmountedRef.current = true;
+    };
+  }, []);
 
   // Run migration from store.bin on mount, then load conversations from files
   const migrationDoneRef = useRef(false);
@@ -306,9 +328,25 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         "chat-conversation-saved",
         async (event) => {
           if (cancelled) return;
-          const { id } = event.payload ?? {};
+          const { id, title } = event.payload ?? {};
           if (!id) return;
-          if (id === conversationId || id === piSessionIdRef.current) return;
+
+          // Special case: If this event is for the CURRENT conversation,
+          // update the in-memory store (for cross-window title sync) but
+          // skip reloading from disk (we're already viewing it).
+          if (id === conversationId || id === piSessionIdRef.current) {
+            if (title) {
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(id, { title });
+              } catch (e) {
+                console.warn("[chat-title] cross-window sync failed", { conversationId: id, error: e });
+              }
+            }
+            return;  // Don't reload from disk
+          }
+
+          // For other conversations, reload from disk as before
           try {
             await markConversationFileChanged(id);
             const conv = await loadConversationFile(id);
@@ -356,19 +394,96 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const { loadConversationFile } = await import("@/lib/chat-storage");
     const existing = await loadConversationFile(convId);
 
-    // Derive a title from the first user message, but skip messages that are
-    // the chat panel's own injected `<conversation_history>...` sync prompt
-    // (Pi can echo that back as a message_start (user) event, leaking it into
-    // the messages array — see the prompt construction at the piPrompt call).
+    // Find first real user message, skipping injected metadata
     const firstUserMsg = msgs.find(
-      (m) => m.role === "user" && !m.content.startsWith("<conversation_history>")
+      (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
     );
-    const derivedTitle = firstUserMsg?.content.slice(0, 50) || "New Chat";
-    // Preserve any previously-persisted title (user renames, pipe-run titles
-    // like `pipe-opportunity-scout-gpt55 #8209`). Only fall through to the
-    // derived title when the file has no title yet. Mirrors the router's
-    // background-save logic in pi-event-router.ts.
-    const title = existing?.title || derivedTitle;
+    const contentFallbackTitle = (firstUserMsg?.content.slice(0, 50) || "New Chat").trim();
+    const fallbackTitle = selectedPreset ? contentFallbackTitle : "New Chat";
+    const existingTitle = existing?.title?.trim() || null;
+    const isFallbackLikeTitle =
+      existingTitle === null ||
+      existingTitle === fallbackTitle ||
+      existingTitle === contentFallbackTitle ||
+      existingTitle === "New Chat" ||
+      existingTitle === "new chat" ||
+      existingTitle === "untitled" ||
+      (firstUserMsg && existingTitle === firstUserMsg.content.slice(0, 50).trim());
+
+    const hasValidPreset =
+      selectedPreset &&
+      selectedPreset.provider &&
+      selectedPreset.model?.trim();
+
+    // Preserve user renames; use fallback for new conversations
+    const title = (!isFallbackLikeTitle && existingTitle) ? existingTitle : existingTitle || fallbackTitle;
+
+    // Start AI title generation in background (once per conversation)
+    if (
+      isFallbackLikeTitle &&
+      firstUserMsg &&
+      hasValidPreset &&
+      !aiTitleAttemptedRef.current.has(convId)
+    ) {
+      aiTitleAttemptedRef.current.add(convId);
+      // Capture initial title to detect user renames during generation
+      const initialTitle = title;
+
+      // Generate title in background (non-blocking)
+      void (async () => {
+        try {
+          const aiTitle = await titleCreatedByAI(
+            firstUserMsg.content,
+            selectedPreset,
+            settings?.user?.token ?? null,
+          );
+
+          if (aiTitle) {
+            // Reload conversation to check if user renamed it while we were generating
+            const existingConv = await loadConversationFile(convId);
+            if (!existingConv) {
+              return; // Conversation deleted - expected for this best-effort feature
+            }
+
+            const currentTitle = existingConv.title?.trim() || "";
+
+            // Only replace title if unchanged since generation started
+            const titleUnchanged = currentTitle === initialTitle;
+
+            if (titleUnchanged) {
+              existingConv.title = aiTitle;
+              await saveConversationFile(existingConv);
+
+              if (componentUnmountedRef.current) return;
+
+              upsertFileConversationMeta(existingConv);
+
+              // Update in-memory store and emit cross-window event
+              try {
+                const { useChatStore } = await import("@/lib/stores/chat-store");
+                useChatStore.getState().actions.patch(convId, { title: aiTitle });
+              } catch (e) {
+                console.warn("[chat-title] failed to update chat store", { convId, error: e });
+              }
+
+              try {
+                await emit("chat-conversation-saved", {
+                  id: convId,
+                  title: existingConv.title,
+                });
+              } catch {
+                // Ignore - webview may have reloaded
+              }
+            }
+          }
+        } catch (error) {
+          console.warn("[chat-title] background title generation failed", {
+            convId,
+            error,
+          });
+        }
+      })();
+    }
 
     const conversation: ChatConversation = {
       id: convId,

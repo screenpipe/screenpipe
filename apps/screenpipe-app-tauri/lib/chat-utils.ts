@@ -11,8 +11,45 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
 
+/**
+ * Detect if content is app-injected metadata (not real user content).
+ * Used to filter when deriving conversation titles and sanitizing display.
+ *
+ * This is the canonical implementation used across save paths and display.
+ * IMPORTANT: Duplicated in pi-event-router.ts and use-chat-conversations.ts
+ * for performance. If you change this logic, update all three locations.
+ *
+ * Returns true for:
+ * - <conversation_history>...</conversation_history> (sync prompts)
+ * - <role>...</role> (bare metadata with no user content)
+ * - <role>...</role><system>...</system> (bare metadata)
+ *
+ * Returns false for:
+ * - <role>expert</role> analyze this (has user content after tags)
+ * - Normal user messages
+ */
+export function isInjectedTitleSourcePrompt(content?: string | null): boolean {
+  if (typeof content !== "string") return false;
+  const trimmed = content.trimStart();
+
+  // Skip <conversation_history> sync prompts
+  if (trimmed.startsWith("<conversation_history>")) return true;
+
+  // Skip ONLY bare role/system tags with no actual user content
+  // Pattern: <role>...</role> optionally followed by <system>...</system>, nothing else
+  const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
+  if (bareMetadataOnly.test(trimmed)) return true;
+
+  // Any other content (including <role> with user text after it) is real
+  return false;
+}
+
+/**
+ * Legacy alias for backward compatibility.
+ * @deprecated Use isInjectedTitleSourcePrompt for consistent filtering.
+ */
 export function isConversationHistorySyncPrompt(value?: string | null): boolean {
-  return typeof value === "string" && value.startsWith("<conversation_history>");
+  return isInjectedTitleSourcePrompt(value);
 }
 
 // ============================================================================

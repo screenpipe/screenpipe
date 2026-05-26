@@ -3472,6 +3472,7 @@ export function StandaloneChat({
     setIsStreaming,
     setPastedImages,
     settings,
+    selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
   });
 

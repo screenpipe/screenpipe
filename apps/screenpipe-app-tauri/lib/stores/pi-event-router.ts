@@ -649,15 +649,23 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
-      // Skip injected <conversation_history> sync prompts — Pi echoes them back
-      // as user events and their first 50 chars would corrupt the title.
+
+      // Duplicated from chat-utils.ts for hot-path performance
+      function isInjectedTitleSourcePrompt(content?: string | null): boolean {
+        if (typeof content !== "string") return false;
+        const trimmed = content.trimStart();
+        if (trimmed.startsWith("<conversation_history>")) return true;
+        const bareMetadataOnly = /^<role>[^<]*<\/role>\s*(<system>[^<]*<\/system>)?\s*$/;
+        return bareMetadataOnly.test(trimmed);
+      }
+
       const firstUserMsg = messages.find(
-        (m: any) => m.role === "user" && !m.content?.startsWith("<conversation_history>")
+        (m: any) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
       ) as any;
       const derivedTitle: string =
-        firstUserMsg?.content?.slice(0, 50) || "New Chat";
-      // Prefer a previously-persisted title (user may have renamed it),
-      // but only if that title isn't itself a stale derivation.
+        (firstUserMsg?.content?.slice(0, 50) || "New Chat").trim();
+
+      // Background saves use fallback titles; AI titles generated in foreground
       const title = existing?.title || derivedTitle;
 
       const lastUserMessageAt =
