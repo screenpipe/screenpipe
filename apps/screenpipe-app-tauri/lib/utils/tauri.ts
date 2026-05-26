@@ -361,17 +361,6 @@ async getCloudToken() : Promise<string | null> {
     return await TAURI_INVOKE("get_cloud_token");
 },
 /**
- * Push a fresh cloud-auth token into the running sidecar.
- */
-async setCloudToken(token: string | null) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_cloud_token", { token }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Read the enterprise admin API token from
  * `~/.screenpipe/enterprise.json.team_api_token`. Returns null when
  * missing/empty. Used by Settings → Admin API token to render

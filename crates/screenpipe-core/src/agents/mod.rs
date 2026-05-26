@@ -121,7 +121,7 @@ pub trait AgentExecutor: Send + Sync {
     /// `Arc<RwLock>`) without holding a lock across the caller's borrow.
     /// This lets the desktop app refresh the token at runtime without
     /// restarting the engine.
-    async fn user_token(&self) -> Option<String> {
+    fn user_token(&self) -> Option<String> {
         None
     }
 }

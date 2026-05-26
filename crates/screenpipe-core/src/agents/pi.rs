@@ -146,11 +146,15 @@ impl PiExecutor {
 
     /// Read the current cloud token. Returns an owned `Option<String>` so
     /// callers don't hold the lock across later awaits.
-    pub async fn current_user_token(&self) -> Option<String> {
+    ///
+    /// If the lock is briefly contended, return `None` instead of blocking;
+    /// the next pipe run falls back to the env-var path and a later run can
+    /// pick up the refreshed token.
+    pub fn current_user_token(&self) -> Option<String> {
         self.user_token
-            .read()
-            .await
-            .clone()
+            .try_read()
+            .ok()
+            .and_then(|g| g.clone())
             .filter(|s| !s.is_empty())
     }
 
@@ -842,7 +846,7 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        let cloud_token = self.current_user_token().await;
+        let cloud_token = self.current_user_token();
         if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
@@ -969,7 +973,7 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        let cloud_token = self.current_user_token().await;
+        let cloud_token = self.current_user_token();
         if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
@@ -1141,7 +1145,7 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
-        let cloud_token = self.current_user_token().await;
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -1202,7 +1206,7 @@ impl AgentExecutor for PiExecutor {
             // `set_user_token` since the run started (e.g. user signed in
             // mid-pipe). Picking up the fresh value avoids re-running with
             // the same stale token that triggered the not-found.
-            let cloud_token = self.current_user_token().await;
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
@@ -1245,7 +1249,7 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
-        let cloud_token = self.current_user_token().await;
+        let cloud_token = self.current_user_token();
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -1295,7 +1299,7 @@ impl AgentExecutor for PiExecutor {
                 output.stderr.trim()
             );
             // Re-read cloud token (see comment in `run` above).
-            let cloud_token = self.current_user_token().await;
+            let cloud_token = self.current_user_token();
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
@@ -1382,8 +1386,8 @@ impl AgentExecutor for PiExecutor {
         "pi"
     }
 
-    async fn user_token(&self) -> Option<String> {
-        self.current_user_token().await
+    fn user_token(&self) -> Option<String> {
+        self.current_user_token()
     }
 }
 
@@ -2193,27 +2197,21 @@ mod tests {
     #[tokio::test]
     async fn set_user_token_updates_subsequent_reads() {
         let exec = PiExecutor::new(None);
-        assert_eq!(exec.current_user_token().await, None);
+        assert_eq!(exec.current_user_token(), None);
 
         exec.set_user_token(Some("token-v1".to_string())).await;
-        assert_eq!(
-            exec.current_user_token().await,
-            Some("token-v1".to_string())
-        );
+        assert_eq!(exec.current_user_token(), Some("token-v1".to_string()));
 
         exec.set_user_token(Some("token-v2".to_string())).await;
-        assert_eq!(
-            exec.current_user_token().await,
-            Some("token-v2".to_string())
-        );
+        assert_eq!(exec.current_user_token(), Some("token-v2".to_string()));
 
         // Empty strings normalize to None so downstream `is_some()` checks
         // can't be tricked into sending an empty Bearer token.
         exec.set_user_token(Some("".to_string())).await;
-        assert_eq!(exec.current_user_token().await, None);
+        assert_eq!(exec.current_user_token(), None);
 
         exec.set_user_token(None).await;
-        assert_eq!(exec.current_user_token().await, None);
+        assert_eq!(exec.current_user_token(), None);
     }
 
     /// Confirms the design promise: a single shared `Arc<RwLock>` written
@@ -2227,19 +2225,13 @@ mod tests {
         let exec_a = PiExecutor::with_shared_user_token(shared.clone());
         let exec_b = PiExecutor::with_shared_user_token(shared.clone());
 
-        assert_eq!(exec_a.current_user_token().await, None);
-        assert_eq!(exec_b.current_user_token().await, None);
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
 
         // Write via executor A — both see it.
         exec_a.set_user_token(Some("fresh-jwt".to_string())).await;
-        assert_eq!(
-            exec_a.current_user_token().await,
-            Some("fresh-jwt".to_string())
-        );
-        assert_eq!(
-            exec_b.current_user_token().await,
-            Some("fresh-jwt".to_string())
-        );
+        assert_eq!(exec_a.current_user_token(), Some("fresh-jwt".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("fresh-jwt".to_string()));
 
         // Write directly through the Arc (simulates the Tauri command
         // path which holds only the Arc, not the executor) — both see it.
@@ -2247,18 +2239,12 @@ mod tests {
             let mut g = shared.write().await;
             *g = Some("from-tauri".to_string());
         }
-        assert_eq!(
-            exec_a.current_user_token().await,
-            Some("from-tauri".to_string())
-        );
-        assert_eq!(
-            exec_b.current_user_token().await,
-            Some("from-tauri".to_string())
-        );
+        assert_eq!(exec_a.current_user_token(), Some("from-tauri".to_string()));
+        assert_eq!(exec_b.current_user_token(), Some("from-tauri".to_string()));
 
         // Sign-out path.
         exec_b.set_user_token(None).await;
-        assert_eq!(exec_a.current_user_token().await, None);
-        assert_eq!(exec_b.current_user_token().await, None);
+        assert_eq!(exec_a.current_user_token(), None);
+        assert_eq!(exec_b.current_user_token(), None);
     }
 }
