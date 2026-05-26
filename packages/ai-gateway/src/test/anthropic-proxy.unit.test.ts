@@ -472,6 +472,65 @@ describe('createProvider routing', () => {
 });
 
 // ============================================================================
+// AnthropicProvider.createStreamingCompletion — OpenAI-compatible SSE
+// ============================================================================
+describe('AnthropicProvider.createStreamingCompletion', () => {
+	async function readStream(stream: ReadableStream): Promise<string> {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		let fullText = '';
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			fullText += decoder.decode(value, { stream: true });
+		}
+		return fullText;
+	}
+
+	it('emits finish_reason before [DONE] for text streams', async () => {
+		const provider = new AnthropicProvider('sk-test') as any;
+		provider.client.messages.create = async function* () {
+			yield { type: 'message_start', message: { usage: { input_tokens: 3 } } };
+			yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } };
+			yield { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } };
+			yield { type: 'message_stop' };
+		};
+
+		const out = await readStream(await provider.createStreamingCompletion({
+			model: 'claude-opus-4-7',
+			messages: [{ role: 'user', content: 'hi' }],
+			stream: true,
+		}));
+
+		expect(out).toContain('"content":"Hi"');
+		expect(out).toContain('"finish_reason":"stop"');
+		expect(out.indexOf('"finish_reason":"stop"')).toBeLessThan(out.indexOf('[DONE]'));
+	});
+
+	it('maps Anthropic tool_use stop_reason to OpenAI tool_calls', async () => {
+		const provider = new AnthropicProvider('sk-test') as any;
+		provider.client.messages.create = async function* () {
+			yield { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_1', name: 'search' } };
+			yield { type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{"q":"x"}' } };
+			yield { type: 'content_block_stop' };
+			yield { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } };
+			yield { type: 'message_stop' };
+		};
+
+		const out = await readStream(await provider.createStreamingCompletion({
+			model: 'claude-opus-4-7',
+			messages: [{ role: 'user', content: 'search' }],
+			stream: true,
+			tools: [{ name: 'search', input_schema: { type: 'object' } } as any],
+		}));
+
+		expect(out).toContain('"tool_calls"');
+		expect(out).toContain('"finish_reason":"tool_calls"');
+		expect(out.indexOf('"finish_reason":"tool_calls"')).toBeLessThan(out.indexOf('[DONE]'));
+	});
+});
+
+// ============================================================================
 // AnthropicProvider.formatMessages — OpenAI ↔ Anthropic conversion
 // ============================================================================
 describe('AnthropicProvider.formatMessages', () => {

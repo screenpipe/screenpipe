@@ -87,6 +87,18 @@ describe('OpenAI API model catalog', () => {
 });
 
 describe('OpenAI API accounting and routing', () => {
+	async function readStream(stream: ReadableStream): Promise<string> {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		let fullText = '';
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			fullText += decoder.decode(value, { stream: true });
+		}
+		return fullText;
+	}
+
 	it('routes GPT models through the direct OpenAI provider', () => {
 		const provider = createProvider('gpt-5.5', env());
 		expect(provider).toBeInstanceOf(OpenAIProvider);
@@ -136,7 +148,7 @@ describe('OpenAI API accounting and routing', () => {
 		});
 
 		expect(capturedParams).not.toBeNull();
-		const params = capturedParams as Record<string, unknown>;
+		const params = capturedParams!;
 		expect(params['max_completion_tokens']).toBe(32);
 		expect(params['max_tokens']).toBeUndefined();
 	});
@@ -157,7 +169,7 @@ describe('OpenAI API accounting and routing', () => {
 		});
 
 		expect(capturedParams).not.toBeNull();
-		const params = capturedParams as Record<string, unknown>;
+		const params = capturedParams!;
 		expect(params['temperature']).toBeUndefined();
 		expect(params['max_completion_tokens']).toBe(32);
 	});
@@ -178,9 +190,27 @@ describe('OpenAI API accounting and routing', () => {
 		});
 
 		expect(capturedParams).not.toBeNull();
-		const params = capturedParams as Record<string, unknown>;
+		const params = capturedParams!;
 		expect(params['temperature']).toBe(0.7);
 		expect(params['max_tokens']).toBe(32);
+	});
+
+	it('emits finish_reason before [DONE] for streaming GPT models', async () => {
+		const provider = new OpenAIProvider('sk-test') as any;
+		provider.client.chat.completions.create = async function* () {
+			yield { choices: [{ delta: { content: 'Hi' }, finish_reason: null }] };
+			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+		};
+
+		const out = await readStream(await provider.createStreamingCompletion({
+			model: 'gpt-5.4-nano',
+			messages: [{ role: 'user', content: 'hi' }],
+			stream: true,
+		}));
+
+		expect(out).toContain('"content":"Hi"');
+		expect(out).toContain('"finish_reason":"stop"');
+		expect(out.indexOf('"finish_reason":"stop"')).toBeLessThan(out.indexOf('[DONE]'));
 	});
 
 	// Sentry SCREENPIPE-AI-PROXY-Z + -X: OpenAI 400 "Unknown parameter:
@@ -257,7 +287,7 @@ describe('OpenAI API accounting and routing', () => {
 
 		expect(attempts).toBe(2);
 		expect(lastParams).not.toBeNull();
-		expect((lastParams as Record<string, unknown>)['temperature']).toBeUndefined();
+		expect(lastParams!['temperature']).toBeUndefined();
 	});
 
 	it('does not retry when the 400 is about a different param than what was set', async () => {

@@ -39,6 +39,22 @@ function safeToolInput(value: unknown): Record<string, any> {
 	return (value && typeof value === 'object') ? value as Record<string, any> : {};
 }
 
+function anthropicStopReasonToOpenAI(reason: unknown): string {
+	switch (reason) {
+		case 'tool_use':
+			return 'tool_calls';
+		case 'max_tokens':
+			return 'length';
+		case 'refusal':
+			return 'content_filter';
+		case 'end_turn':
+		case 'stop_sequence':
+		case 'pause_turn':
+		default:
+			return 'stop';
+	}
+}
+
 export class AnthropicProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -135,6 +151,7 @@ export class AnthropicProvider implements AIProvider {
 					let toolCallIndex = 0;
 					let inputTokens = 0;
 					let outputTokens = 0;
+					let finishReason: string | null = null;
 
 					for await (const chunk of stream) {
 						// Capture usage from message_start and message_delta events
@@ -143,6 +160,9 @@ export class AnthropicProvider implements AIProvider {
 						}
 						if (chunk.type === 'message_delta' && (chunk as any).usage) {
 							outputTokens = (chunk as any).usage.output_tokens || 0;
+						}
+						if (chunk.type === 'message_delta' && (chunk as any).delta?.stop_reason) {
+							finishReason = anthropicStopReasonToOpenAI((chunk as any).delta.stop_reason);
 						}
 
 						// Handle text content
@@ -213,6 +233,17 @@ export class AnthropicProvider implements AIProvider {
 							currentToolCall = null;
 						}
 					}
+					// Pi consumes this endpoint through its OpenAI-compatible
+					// streaming provider and requires a terminal finish_reason
+					// before [DONE]. Anthropic reports the equivalent as
+					// message_delta.delta.stop_reason.
+					controller.enqueue(
+						new TextEncoder().encode(
+							`data: ${JSON.stringify({
+								choices: [{ delta: {}, finish_reason: finishReason || 'stop' }],
+							})}\n\n`
+						)
+					);
 					// Emit usage data in OpenAI format before [DONE]
 					controller.enqueue(
 						new TextEncoder().encode(
@@ -241,6 +272,7 @@ export class AnthropicProvider implements AIProvider {
 										type: error?.error?.type || 'api_error',
 										code: String(errorStatus),
 									},
+									choices: [{ delta: {}, finish_reason: 'network_error' }],
 								})}\n\n`
 							)
 						);
