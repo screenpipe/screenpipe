@@ -87,19 +87,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { Skeleton } from "@/components/ui/skeleton";
-
-type SidebarItem =
-  | { kind: "single"; session: SessionRecord }
-  | { kind: "group"; key: string; title: string; sessions: SessionRecord[] };
-
-function sessionGroupKey(s: SessionRecord): string {
-  if (s.pipeContext?.pipeName) return `pipe:${s.pipeContext.pipeName}`;
-  return `title:${s.title.replace(/\s*#\d+$/, "").trim()}`;
-}
-
-function sessionGroupTitle(s: SessionRecord): string {
-  return s.pipeContext?.pipeName ?? s.title.replace(/\s*#\d+$/, "").trim();
-}
+import {
+  type SidebarItem,
+  buildGroupedRecents,
+} from "@/lib/utils/chat-sidebar-grouping";
 
 interface ChatSidebarProps {
   className?: string;
@@ -263,31 +254,21 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
-  const groupedRecents = useMemo((): SidebarItem[] => {
-    const keyCounts = new Map<string, number>();
-    for (const s of recents) {
-      const key = sessionGroupKey(s);
-      keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
+  const groupedRecents = useMemo(() => buildGroupedRecents(recents), [recents]);
+
+  // O(1) lookup used by ScheduledRow's kebab menu (Pin / Rename / Archive / Delete).
+  // Keyed by pipeName so the render site can do runningPipeSessions.get(p.pipeName).
+  const allSessions = useChatStore((s) => s.sessions);
+  const runningPipeSessions = useMemo(() => {
+    const map = new Map<string, SessionRecord>();
+    for (const p of runningPipes) {
+      if (p.executionId === undefined) continue;
+      const sid = pipeSessionId(p.pipeName, p.executionId);
+      const session = allSessions[sid];
+      if (session) map.set(p.pipeName, session);
     }
-    const seen = new Map<string, SessionRecord[]>();
-    const result: SidebarItem[] = [];
-    for (const s of recents) {
-      const key = sessionGroupKey(s);
-      if ((keyCounts.get(key) ?? 1) < 2) {
-        result.push({ kind: "single", session: s });
-      } else {
-        if (!seen.has(key)) {
-          const group: SessionRecord[] = [];
-          seen.set(key, group);
-          result.push({ kind: "group", key, title: sessionGroupTitle(s), sessions: group });
-        }
-        seen.get(key)!.push(s);
-      }
-      // cap at 15 visible items (groups count as 1)
-      if (result.length === 15) break;
-    }
-    return result;
-  }, [recents]);
+    return map;
+  }, [runningPipes, allSessions]);
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
     try {
@@ -316,6 +297,26 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       return next;
     });
   };
+
+  // GC stale screenpipe:group-expanded:* keys whose group no longer exists
+  // (renamed or retired pipes produce orphaned keys that otherwise persist).
+  useEffect(() => {
+    try {
+      const currentKeys = new Set(
+        groupedRecents
+          .filter((item): item is Extract<SidebarItem, { kind: "group" }> => item.kind === "group")
+          .map((item) => item.key)
+      );
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith("screenpipe:group-expanded:")) {
+          if (!currentKeys.has(k.slice("screenpipe:group-expanded:".length))) toRemove.push(k);
+        }
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch {}
+  }, [groupedRecents]);
 
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
