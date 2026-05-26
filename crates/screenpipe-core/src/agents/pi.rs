@@ -145,30 +145,21 @@ impl PiExecutor {
     }
 
     /// Read the current cloud token. Returns an owned `Option<String>` so
-    /// callers don't have to hold the lock across awaits.
-    ///
-    /// Uses `try_read` to keep the read path sync — under normal operation
-    /// writes are extremely rare (auth state changes) so contention is
-    /// effectively zero. On the off chance of a concurrent writer we return
-    /// `None`, which downgrades the next pipe run to the env-var fallback
-    /// rather than blocking.
-    pub fn current_user_token(&self) -> Option<String> {
+    /// callers don't hold the lock across later awaits.
+    pub async fn current_user_token(&self) -> Option<String> {
         self.user_token
-            .try_read()
-            .ok()
-            .and_then(|g| g.clone())
+            .read()
+            .await
+            .clone()
             .filter(|s| !s.is_empty())
     }
 
     /// Push a new cloud token. Called by the desktop app on login/logout so
     /// the next pipe run picks up the fresh token instead of using whatever
     /// was present at engine boot.
-    pub fn set_user_token(&self, token: Option<String>) {
-        if let Ok(mut g) = self.user_token.try_write() {
-            *g = token.filter(|s| !s.is_empty());
-        } else {
-            warn!("pi: set_user_token contended; cloud token update dropped");
-        }
+    pub async fn set_user_token(&self, token: Option<String>) {
+        let mut g = self.user_token.write().await;
+        *g = token.filter(|s| !s.is_empty());
     }
 
     /// Expose the underlying `Arc` so it can be shared with other components
@@ -851,7 +842,7 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        let cloud_token = self.current_user_token();
+        let cloud_token = self.current_user_token().await;
         if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
@@ -978,7 +969,7 @@ impl PiExecutor {
         }
         cmd.arg("-p").arg(prompt);
 
-        let cloud_token = self.current_user_token();
+        let cloud_token = self.current_user_token().await;
         if let Some(ref token) = cloud_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
@@ -1150,7 +1141,7 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         continue_session: bool,
     ) -> Result<AgentOutput> {
-        let cloud_token = self.current_user_token();
+        let cloud_token = self.current_user_token().await;
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -1211,7 +1202,7 @@ impl AgentExecutor for PiExecutor {
             // `set_user_token` since the run started (e.g. user signed in
             // mid-pipe). Picking up the fresh value avoids re-running with
             // the same stale token that triggered the not-found.
-            let cloud_token = self.current_user_token();
+            let cloud_token = self.current_user_token().await;
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
@@ -1254,7 +1245,7 @@ impl AgentExecutor for PiExecutor {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let resolved_model = Self::resolve_model(model, &resolved_provider);
 
-        let cloud_token = self.current_user_token();
+        let cloud_token = self.current_user_token().await;
         Self::ensure_pi_config(
             cloud_token.as_deref(),
             &self.api_url,
@@ -1304,7 +1295,7 @@ impl AgentExecutor for PiExecutor {
                 output.stderr.trim()
             );
             // Re-read cloud token (see comment in `run` above).
-            let cloud_token = self.current_user_token();
+            let cloud_token = self.current_user_token().await;
             Self::ensure_pi_config(
                 cloud_token.as_deref(),
                 &self.api_url,
@@ -1391,8 +1382,8 @@ impl AgentExecutor for PiExecutor {
         "pi"
     }
 
-    fn user_token(&self) -> Option<String> {
-        self.current_user_token()
+    async fn user_token(&self) -> Option<String> {
+        self.current_user_token().await
     }
 }
 
@@ -2199,24 +2190,24 @@ mod tests {
     /// who signed in AFTER the sidecar started stayed on tier=anonymous
     /// until they fully quit + relaunched. The fix is `set_user_token` +
     /// `with_shared_user_token` — verify both work end-to-end.
-    #[test]
-    fn set_user_token_updates_subsequent_reads() {
+    #[tokio::test]
+    async fn set_user_token_updates_subsequent_reads() {
         let exec = PiExecutor::new(None);
-        assert_eq!(exec.current_user_token(), None);
+        assert_eq!(exec.current_user_token().await, None);
 
-        exec.set_user_token(Some("token-v1".to_string()));
-        assert_eq!(exec.current_user_token(), Some("token-v1".to_string()));
+        exec.set_user_token(Some("token-v1".to_string())).await;
+        assert_eq!(exec.current_user_token().await, Some("token-v1".to_string()));
 
-        exec.set_user_token(Some("token-v2".to_string()));
-        assert_eq!(exec.current_user_token(), Some("token-v2".to_string()));
+        exec.set_user_token(Some("token-v2".to_string())).await;
+        assert_eq!(exec.current_user_token().await, Some("token-v2".to_string()));
 
         // Empty strings normalize to None so downstream `is_some()` checks
         // can't be tricked into sending an empty Bearer token.
-        exec.set_user_token(Some("".to_string()));
-        assert_eq!(exec.current_user_token(), None);
+        exec.set_user_token(Some("".to_string())).await;
+        assert_eq!(exec.current_user_token().await, None);
 
-        exec.set_user_token(None);
-        assert_eq!(exec.current_user_token(), None);
+        exec.set_user_token(None).await;
+        assert_eq!(exec.current_user_token().await, None);
     }
 
     /// Confirms the design promise: a single shared `Arc<RwLock>` written
@@ -2224,32 +2215,32 @@ mod tests {
     /// with `with_shared_user_token` against that same Arc. This is what
     /// lets the Tauri `set_cloud_token` command update the running
     /// pi-agent's apiKey AND the cloud_proxy.rs forwarder in one write.
-    #[test]
-    fn shared_arc_propagates_token_writes_across_executors() {
+    #[tokio::test]
+    async fn shared_arc_propagates_token_writes_across_executors() {
         let shared = Arc::new(RwLock::new(None::<String>));
         let exec_a = PiExecutor::with_shared_user_token(shared.clone());
         let exec_b = PiExecutor::with_shared_user_token(shared.clone());
 
-        assert_eq!(exec_a.current_user_token(), None);
-        assert_eq!(exec_b.current_user_token(), None);
+        assert_eq!(exec_a.current_user_token().await, None);
+        assert_eq!(exec_b.current_user_token().await, None);
 
         // Write via executor A — both see it.
-        exec_a.set_user_token(Some("fresh-jwt".to_string()));
-        assert_eq!(exec_a.current_user_token(), Some("fresh-jwt".to_string()));
-        assert_eq!(exec_b.current_user_token(), Some("fresh-jwt".to_string()));
+        exec_a.set_user_token(Some("fresh-jwt".to_string())).await;
+        assert_eq!(exec_a.current_user_token().await, Some("fresh-jwt".to_string()));
+        assert_eq!(exec_b.current_user_token().await, Some("fresh-jwt".to_string()));
 
         // Write directly through the Arc (simulates the Tauri command
         // path which holds only the Arc, not the executor) — both see it.
         {
-            let mut g = shared.try_write().expect("uncontended");
+            let mut g = shared.write().await;
             *g = Some("from-tauri".to_string());
         }
-        assert_eq!(exec_a.current_user_token(), Some("from-tauri".to_string()));
-        assert_eq!(exec_b.current_user_token(), Some("from-tauri".to_string()));
+        assert_eq!(exec_a.current_user_token().await, Some("from-tauri".to_string()));
+        assert_eq!(exec_b.current_user_token().await, Some("from-tauri".to_string()));
 
         // Sign-out path.
-        exec_b.set_user_token(None);
-        assert_eq!(exec_a.current_user_token(), None);
-        assert_eq!(exec_b.current_user_token(), None);
+        exec_b.set_user_token(None).await;
+        assert_eq!(exec_a.current_user_token().await, None);
+        assert_eq!(exec_b.current_user_token().await, None);
     }
 }
