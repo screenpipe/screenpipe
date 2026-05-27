@@ -295,13 +295,13 @@ describe("AI title generation integration logic", () => {
 
   it("titleSource 'fallback' allows AI overwrite", () => {
     const existingSource = "fallback" as const;
-    const shouldApplyAiTitle = existingSource !== "user";
+    const shouldApplyAiTitle = existingSource === "fallback" || !existingSource;
     expect(shouldApplyAiTitle).toBe(true);
   });
 
-  it("titleSource 'ai' allows AI overwrite (re-generation)", () => {
+  it("titleSource 'ai' blocks AI overwrite (prevents duplicate titles)", () => {
     const existingSource = "ai" as const;
-    const shouldApplyAiTitle = existingSource !== "user";
-    expect(shouldApplyAiTitle).toBe(true);
+    const shouldApplyAiTitle = existingSource === "fallback" || !existingSource;
+    expect(shouldApplyAiTitle).toBe(false);
   });
 });
